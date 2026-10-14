@@ -77,12 +77,12 @@ async function check() {
 
     await fs.mkdir(full)
     await drizzle(temporary, full, "schema")
-    if ((await Bun.file(schema).text()) !== (await formatTypescript(renderSchema(await generatedSql(full))))) {
+    if (lf(await Bun.file(schema).text()) !== (await formatTypescript(renderSchema(await generatedSql(full))))) {
       throw new Error("Current database schema is stale. Run `bun script/migration.ts` from packages/core.")
     }
 
     const migrations = await typescriptMigrations()
-    if ((await Bun.file(registry).text()) !== (await formatTypescript(renderRegistry(migrations)))) {
+    if (lf(await Bun.file(registry).text()) !== (await formatTypescript(renderRegistry(migrations)))) {
       throw new Error("Database migration registry is stale. Run `bun script/migration.ts` from packages/core.")
     }
   } finally {
@@ -203,6 +203,11 @@ async function formatJson(input: string) {
     plugins: [babel.default, estree.default],
     printWidth: 120,
   })
+}
+
+// A Windows checkout with core.autocrlf turns the generated files into CRLF, while the generator writes LF.
+function lf(input: string) {
+  return input.replaceAll("\r\n", "\n")
 }
 
 function renderRegistry(names: string[]) {

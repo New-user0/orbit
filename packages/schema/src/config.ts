@@ -19,8 +19,10 @@ import { ConfigPlugin } from "./config/plugin.js"
 import { ConfigProvider } from "./config/provider.js"
 import { ConfigReference } from "./config/reference.js"
 import { ConfigSandbox } from "./config/sandbox.js"
+import { ConfigWebFetch } from "./config/webfetch.js"
 import { ConfigWebSearch } from "./config/websearch.js"
 import { ConfigToolExecution } from "./config/tool-execution.js"
+import { ConfigShellTool } from "./config/shell-tool.js"
 import { ConfigToolOutput } from "./config/tool-output.js"
 import { ConfigWatcher } from "./config/watcher.js"
 import { ConfigWarming } from "./config/warming.js"
@@ -33,6 +35,13 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   shell: Schema.String.pipe(optional).annotate({
     description: "Default shell to use for terminal and shell tool execution",
+  }),
+  env: Schema.Record(
+    Schema.String.check(Schema.isPattern(/^[^=\u0000]+$/)),
+    Schema.String.check(Schema.isPattern(/^[^\u0000]*$/)),
+  ).pipe(optional).annotate({
+    description:
+      "Variables added to the environment of the programs Orbit starts for a project: the shell, terminals, hooks, MCP servers, language servers and formatters. A program's own variables and Orbit's win over these. Set in every scope; a project's or local file's env waits until the folder is trusted, and the organization's managed value wins. A number or boolean is kept as its text; a name that is empty or holds an equals sign is ignored",
   }),
   model: ConfigModel.Selection.pipe(optional).annotate({
     description: "Default model to use when no session or agent model is selected",
@@ -95,6 +104,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   sandbox: ConfigSandbox.Info.pipe(optional).annotate({
     description: "Run shell commands in an operating system sandbox",
   }),
+  shell_tool: ConfigShellTool.Info.pipe(optional).annotate({
+    description: "Shell command timeouts",
+  }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
     description: "Tool output truncation thresholds",
   }),
@@ -125,6 +137,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   websearch: ConfigWebSearch.Selection.pipe(optional).annotate({
     description: "Web search provider selection",
   }),
+  webfetch: ConfigWebFetch.Info.pipe(optional).annotate({
+    description: "WebFetch behavior",
+  }),
   plugins: ConfigPlugin.Plugins.pipe(optional).annotate({
     description: "Ordered plugin enablement directives and external package declarations",
   }),
@@ -149,6 +164,57 @@ export const Effective = Schema.Struct({
     description:
       "Whether Orbit reads other agent products' settings, skills, output styles and instruction files. Only your own config, ORBIT_CONFIG or ORBIT_CONFIG_CONTENT, organization-managed settings and ORBIT_DISABLE_COMPAT in the server's environment decide this; a repository's files cannot.",
   }),
+  permissions: Schema.optionalKey(
+    Schema.Struct({
+      bypass: Schema.Boolean.annotate({
+        description:
+          "Whether the mode that skips permission prompts may be selected. False when organization-managed settings set disable_bypass_permissions.",
+      }),
+      always: Schema.Boolean.annotate({
+        description:
+          "Whether an 'always' reply may save a grant. False when organization-managed settings set managed_permissions_only.",
+      }),
+    }).annotate({
+      description:
+        "What organization-managed settings leave open about permission prompts. Absent from a server that predates it, which clients read as bypass refused.",
+    }),
+  ),
+  plugins: Schema.optionalKey(
+    Schema.Struct({
+      allow: Schema.optionalKey(Schema.Array(Schema.String)),
+      block: Schema.optionalKey(Schema.Array(Schema.String)),
+      organization: Schema.optionalKey(Schema.String),
+    }).annotate({
+      description:
+        "Which plugins organization-managed settings allow or block, as selectors that match a package name, an absolute path or a plugin ID. An empty object means no restriction. Absent from a server that predates it, which clients read as no external plugin may load.",
+    }),
+  ),
+  hooks: Schema.optionalKey(
+    Schema.Struct({
+      disabled: Schema.Boolean.annotate({
+        description:
+          "Whether organization-managed settings turn hooks off (disable_hooks, or hooks.disabled in the managed file). A client that runs a command in a hook's place, such as the status line, does not run it.",
+      }),
+      managed_only: Schema.Boolean.annotate({
+        description:
+          "Whether organization-managed settings allow only managed hooks (managed_hooks_only, or hooks.managed_only in the managed file). Orbit has no managed status line, so a client does not run its own command either.",
+      }),
+    }).annotate({
+      description:
+        "What organization-managed settings say about hooks. Absent from a server that predates it, which clients read as unknown: a client does not run a command in a hook's place until it knows.",
+    }),
+  ),
+  mcp: Schema.optionalKey(
+    Schema.Struct({
+      managed_only: Schema.Boolean.annotate({
+        description:
+          "Whether organization-managed settings run only the MCP servers they define. When true, adding a server is refused and servers from every other source are ignored.",
+      }),
+    }).annotate({
+      description:
+        "What organization-managed settings say about MCP servers. Absent from a server that predates it, which clients read as unknown.",
+    }),
+  ),
 }).annotate({
   identifier: "Config.Effective",
   description:
@@ -160,7 +226,7 @@ export type Scope = typeof Scope.Type
 export const Scope = Schema.Literals(["remote", "user", "project", "local", "flag", "managed"]).annotate({
   identifier: "Config.Scope",
   description:
-    "Where a configuration entry came from, listed from lowest to highest precedence: remote (well-known), user (global config directory and home directory), project (orbit.json files and .orbit directories up the tree), local (orbit.local.json files), flag (ORBIT_CONFIG and ORBIT_CONFIG_CONTENT), managed (organization-managed settings).",
+    "Where a configuration entry came from, listed from lowest to highest precedence: remote (well-known), user (global config directory and home directory), project (orbit.json files and .orbit directories up the tree), local (orbit.local.json files), flag (ORBIT_CONFIG, ORBIT_CONFIG_CONTENT and the run's --settings, --mcp-config and --agents), managed (organization-managed settings).",
 })
 
 const trusted = Schema.Boolean.pipe(optional).annotate({
@@ -176,7 +242,7 @@ export class Document extends Schema.Class<Document>("Config.Document")({
   trusted,
   withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
     description:
-      "The kinds of configuration removed from info because the folder is not trusted. Present only when trusted is false.",
+      "The kinds of configuration removed from info: all that the folder may not supply while it is not trusted, or only the kinds whose executable parts changed since the folder was trusted. Unset when nothing was removed.",
   }),
   info: Info,
 }) {}
@@ -186,6 +252,10 @@ export class Directory extends Schema.Class<Directory>("Config.Directory")({
   path: AbsolutePath,
   scope: Scope.pipe(optional),
   trusted,
+  withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
+    description:
+      "The kinds of what the directory holds that are off although its folder is trusted, because their files changed since the folder was trusted. Unset when nothing is held back.",
+  }),
 }) {}
 
 export const Entry = Schema.Union([Document, Directory]).annotate({

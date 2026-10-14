@@ -3,7 +3,7 @@ import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
-import { which } from "../util/which.js"
+import { which } from "@orbit/util/which"
 
 export namespace RipgrepBinary {
   interface Interface {

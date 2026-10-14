@@ -19,6 +19,7 @@ export const Option = Schema.Struct({
   value: Schema.String,
   label: Schema.String,
   description: Schema.String.pipe(optional),
+  preview: Schema.String.pipe(optional),
 }).annotate({ identifier: "Form.Option" })
 export interface Option extends Schema.Schema.Type<typeof Option> {}
 

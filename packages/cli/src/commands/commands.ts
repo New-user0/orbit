@@ -56,7 +56,7 @@ const HeadlessParams = {
   ),
   jsonSchema: Flag.string("json-schema").pipe(
     Flag.withDescription(
-      "JSON Schema file the final answer must follow; the result carries the parsed answer as structured_output, and text output prints only the parsed JSON",
+      "JSON Schema the final answer must follow, as JSON text (when it starts with {) or the path of a file. The model hands the answer in through a tool that checks it, and the result carries it as structured_output; text output prints only that JSON. Set ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES (1 to 20, default 5) to change how many wrong answers are allowed",
     ),
     Flag.optional,
   ),
@@ -64,6 +64,12 @@ const HeadlessParams = {
     Flag.withAlias("f"),
     Flag.withDescription("File to attach to the message"),
     Flag.atMost(100),
+  ),
+  inputFormat: Flag.choice("input-format", ["text", "stream-json"]).pipe(
+    Flag.withDescription(
+      'Input format: "text" (the default) sends the words after the flags and anything piped in as one message; "stream-json" reads one JSON input per line from standard input while the run goes on, and needs --output-format stream-json (--format stream-json for orb run). Inputs: {"type":"user","text":"...","files":["path"],"delivery":"steer"|"queue","id":"msg_..."}, {"type":"interrupt"}, {"type":"permission_reply","requestID":"per_...","decision":"once"|"always"|"reject","message":"..."}, {"type":"form_reply","formID":"frm_...","answer":{...}}, {"type":"form_cancel","formID":"frm_...","message":"..."}, {"type":"set_model","model":"provider/model#variant"} and {"type":"end"}. Asks and questions are written as permission_request and form_request lines for the program to answer; the run ends when standard input closes and every message has a result line. Words after the flags are sent as the first message',
+    ),
+    Flag.optional,
   ),
   title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
   thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
@@ -111,6 +117,34 @@ const PrintParams = {
       "With the text format: show thinking and tool output, and print one usage line per step on stderr",
     ),
     Flag.withDefault(false),
+  ),
+}
+
+// A config file for this run only. Every command that starts or reads a server takes it, and starts a private server.
+// Up to twenty values are read, like --mcp-config, so that a repeat always reaches the handler and gets its one-line refusal.
+const SettingsParams = {
+  settings: Flag.string("settings").pipe(
+    Flag.withDescription(
+      "A config file, or the JSON itself, in the orbit.json shape, for this run only. It ranks above project and local config and below managed settings. A relative file name is taken from the folder you typed the command in. Starts a private server for the run, separate from the background service, which takes a moment to start; cannot be combined with --server",
+    ),
+    Flag.atMost(20),
+  ),
+}
+
+// Config for this run only, which the interface takes as well as `orb -p` and `orb run`. They start a private server.
+const OverlayParams = {
+  ...SettingsParams,
+  mcpConfig: Flag.string("mcp-config").pipe(
+    Flag.withDescription(
+      'MCP servers for this run only: a JSON file, or the JSON itself, shaped {"servers": {"<name>": {"type": "local", "command": ["<program>"]}}}. Repeat the flag to add more. Relative program and cwd paths in a file are taken from that file\'s folder. Runs on a private server and cannot be combined with --server',
+    ),
+    Flag.atMost(20),
+  ),
+  agents: Flag.string("agents").pipe(
+    Flag.withDescription(
+      'Agents for this run only: a JSON file, or the JSON itself, shaped {"<name>": {"system": "...", "description": "..."}}, applied over the config. Runs on a private server and cannot be combined with --server',
+    ),
+    Flag.optional,
   ),
 }
 
@@ -190,6 +224,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
     ...SessionParams,
     ...PrintParams,
     ...ModelParams,
+    ...OverlayParams,
     prompt: Flag.string("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
   },
   commands: [
@@ -215,7 +250,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Debugging and troubleshooting tools",
       commands: [
         Spec.make("agents", { description: "List all agents" }),
-        Spec.make("config", { description: "List configuration sources" }),
+        Spec.make("config", { description: "List configuration sources", params: { ...SettingsParams } }),
         Spec.make("paths", {
           description: "Show global paths (data, config, cache, state)",
           params: {
@@ -230,9 +265,10 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
               "bin",
               "log",
               "repos",
+              "managed",
             ]).pipe(
               Argument.withDescription(
-                "Print only one path: db, home, data, config, cache, state, tmp, bin, log, repos",
+                "Print only one path: db, home, data, config, cache, state, tmp, bin, log, repos, managed",
               ),
               Argument.optional,
             ),
@@ -617,6 +653,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Start the minimal interactive interface",
       params: {
         ...ServerParams,
+        ...SettingsParams,
         continue: Flag.boolean("continue").pipe(
           Flag.withAlias("c"),
           Flag.withDescription("Continue the last session"),
@@ -654,6 +691,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       params: {
         ...ServerParams,
         ...TrustParams,
+        ...SettingsParams,
         interval: Argument.string("interval").pipe(
           Argument.withDescription('Time between runs, such as "30s", "10m" or "1h" (at least 10s)'),
         ),
@@ -718,6 +756,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           Flag.withDefault("default"),
         ),
         ...HeadlessParams,
+        ...OverlayParams,
         ...PermissionParams,
       },
     }),
@@ -846,6 +885,12 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           Flag.withDescription("List the folders that are trusted for good"),
           Flag.withDefault(false),
         ),
+        for: Flag.string("for").pipe(
+          Flag.withDescription(
+            "Trust the folder through this location: the folder is above the project of that location and holds back config for it, which the refusal that names the command says",
+          ),
+          Flag.optional,
+        ),
       },
     }),
     Spec.make("pair", {
@@ -896,6 +941,7 @@ export const Print = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NA
     ...HeadlessResumeParams,
     ...PrintParams,
     ...ModelParams,
+    ...OverlayParams,
     print: PrintFlag,
     message: Argument.string("message").pipe(
       Argument.withDescription("Message to send"),
@@ -913,7 +959,11 @@ export const RootValueFlags = {
     "prompt",
     "model",
     "agent",
+    "settings",
+    "mcp-config",
+    "agents",
     "output-format",
+    "input-format",
     "json-schema",
     "max-steps",
     "max-turns",

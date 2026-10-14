@@ -10,6 +10,8 @@ export default Runtime.handler(Print, (input) => {
   if (input.includePartialMessages && output !== "stream-json")
     return Effect.fail(new Error("--include-partial-messages requires --output-format stream-json"))
   if (input.verbose && output !== "text") return Effect.fail(new Error("--verbose requires --output-format text"))
+  if (Option.getOrUndefined(input.inputFormat) === "stream-json" && output !== "stream-json")
+    return Effect.fail(new Error("--input-format stream-json requires --output-format stream-json"))
   return headlessInput({
     ...input,
     format: output === "json" ? "result" : output === "stream-json" ? "stream-json" : "default",

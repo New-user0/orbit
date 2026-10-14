@@ -34,9 +34,15 @@ const imageStore = Layer.mock(Image.Service, {
         }),
       )
     return Effect.succeed({
-      ...content,
-      content: Buffer.from(`${Buffer.from(content.content, "base64").toString()} normalized`).toString("base64"),
-      mime: "image/jpeg",
+      content: {
+        ...content,
+        content: Buffer.from(`${Buffer.from(content.content, "base64").toString()} normalized`).toString("base64"),
+        mime: "image/jpeg",
+      },
+      // A second pass over bytes this mock already rewrote sees an image that fits, as the real resizer does.
+      ...(resource.startsWith("scaled") && !Buffer.from(content.content, "base64").toString().endsWith("normalized")
+        ? { resized: { from: { width: 1_000, height: 7 }, to: { width: 300, height: 2 } } }
+        : {}),
     })
   },
 })
@@ -1322,6 +1328,82 @@ describe("Tool", () => {
         { type: "text", text: "[1 image omitted: could not be decoded.]" },
         { type: "text", text: "[1 image omitted: could not be resized below the image size limit.]" },
       ])
+    }),
+  )
+
+  it.effect("adds a resize note after each resized image of any tool and keeps file items to their own keys", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const png = (name?: string) => ({
+        type: "file" as const,
+        uri: "data:image/png;base64,aW1hZ2U=",
+        mime: "image/png",
+        ...(name === undefined ? {} : { name }),
+      })
+      yield* transform(
+        service,
+        {
+          shots: {
+            name: "shots",
+            description: "Return images",
+            input: Schema.Struct({ text: Schema.String }),
+            output: Schema.Struct({ text: Schema.String }),
+            execute: ({ text }) =>
+              Effect.succeed({
+                output: { text },
+                content: [png("scaled-a.png"), png("frame.png"), png("scaled-b.png"), png("corrupt.png"), png()],
+              }),
+          },
+        },
+        { codemode: false },
+      )
+
+      const note =
+        "[Shown at 300×2 px; the file itself is 1000×7 px. Scale positions on the shown image by 3.33 to map them onto the file.]"
+      const shown = (name?: string) => ({
+        type: "file" as const,
+        uri: "data:image/jpeg;base64,aW1hZ2Ugbm9ybWFsaXplZA==",
+        mime: "image/jpeg",
+        ...(name === undefined ? {} : { name }),
+      })
+      expect((yield* executeTool(service, call("shots"))).content).toEqual([
+        shown("scaled-a.png"),
+        { type: "text", text: note },
+        shown("frame.png"),
+        shown("scaled-b.png"),
+        { type: "text", text: note },
+        { type: "file", uri: "data:image/jpeg;base64,aW1hZ2Ugbm9ybWFsaXplZA==", mime: "image/jpeg" },
+        { type: "text", text: "[1 image omitted: could not be decoded.]" },
+      ])
+    }),
+  )
+
+  it.effect("gives no resize note to an image a Code Mode tool returns (left for a follow-up)", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(
+        service,
+        {
+          shot: {
+            name: "shot",
+            description: "Return an image",
+            input: Schema.Struct({}),
+            output: Schema.Struct({ text: Schema.String }),
+            execute: () =>
+              Effect.succeed({
+                output: { text: "done" },
+                content: [{ type: "file" as const, uri: "data:image/png;base64,aW1hZ2U=", mime: "image/png", name: "scaled.png" }],
+              }),
+          },
+        },
+        { codemode: true },
+      )
+      const result = yield* (yield* service.snapshot()).execute({
+        ...call("Execute"),
+        call: { type: "tool-call", id: "call-codemode-image", name: "Execute", input: { code: "return (await tools.shot({})).text" } },
+      })
+      expect(result.content?.some((item) => item.type === "text" && item.text.startsWith("[Shown at"))).toBe(false)
+      expect(result.content?.filter((item) => item.type === "file")).toHaveLength(1)
     }),
   )
 

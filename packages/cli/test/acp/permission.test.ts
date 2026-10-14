@@ -38,6 +38,26 @@ const unified = (file: string, before: string, after: string) =>
 const allowOnce = () => ({ outcome: { outcome: "selected", optionId: "once" } }) as const
 
 describe("acp permissions over the wire", () => {
+  test("offers no allow-always for a request that has nothing to save", async () => {
+    await using acp = await startSession({
+      onPrompt: ({ sessionID, id }) =>
+        turn(
+          sessionID,
+          id,
+          permissionAsked(sessionID, "perm_nosave", {
+            action: "shell",
+            save: [],
+            source: { type: "tool", messageID: "msg_allow", id: "call_nosave" },
+          }),
+        ),
+      permission: allowOnce,
+    })
+
+    await acp.prompt(acp.sessionId, "hello")
+
+    expect(acp.permissions[0]?.options.map((option) => option.optionId)).toEqual(["once", "reject"])
+  })
+
   test("forwards allow-once and allow-always selections to the server", async () => {
     await using acp = await startSession({
       onPrompt: ({ sessionID, id }) =>
@@ -51,7 +71,7 @@ describe("acp permissions over the wire", () => {
           }),
           permissionAsked(sessionID, "perm_always", {
             action: "read",
-            metadata: { path: "/workspace/file.ts" },
+            metadata: { paths: ["/workspace/file.ts"] },
             source: { type: "tool", messageID: "msg_allow", id: "call_always" },
           }),
         ),
@@ -85,8 +105,9 @@ describe("acp permissions over the wire", () => {
         status: "pending",
         title: "/workspace/file.ts",
         kind: "read",
-        locations: [{ path: path.resolve("/workspace/file.ts") }],
-        rawInput: { path: "/workspace/file.ts" },
+        // The place the server resolved, as it named it.
+        locations: [{ path: "/workspace/file.ts" }],
+        rawInput: { paths: ["/workspace/file.ts"] },
       },
     })
     expect(decisions(acp)).toEqual([
@@ -403,6 +424,11 @@ describe("acp edit previews over the wire", () => {
         toolCalled(sessionID, "call_edit", { path: "file.ts", oldString: "before", newString: "after" }),
         permissionAsked(sessionID, "perm_edit", {
           action: "edit",
+          resources: ["file.ts"],
+          metadata: {
+            paths: [file],
+            files: [{ file: "file.ts", place: file, patch: "@@ -1 +1 @@\n-before\n+after\n" }],
+          },
           source: { type: "tool", messageID: "msg_edit", id: "call_edit" },
         }),
       ],
@@ -601,7 +627,8 @@ describe("acp edit previews over the wire", () => {
           : [],
       ),
     ).toEqual([
-      ["in_progress", locations],
+      // Nothing is named until the tool reports its places; the finished call has the ones the request served.
+      ["in_progress", []],
       ["completed", locations],
     ])
   })
@@ -909,8 +936,8 @@ describe("an approval about a file names the file its request resolved", () => {
       for (const item of call?.content ?? []) if (item.type === "diff") expect(item.path).toBe(row.file(dir.path))
     })
 
-  // A server that sends no diff leaves the client to work one out, from the file the request names.
-  test("an Edit whose request carries no diff is previewed on the file the request names", async () => {
+  // The diff is the server's: a request without one gets none, and the calling input's old_string and new_string draw none.
+  test("an Edit whose request carries no diff is not previewed from the calling input", async () => {
     await using dir = await tmpdir()
     await fs.mkdir(path.join(dir.path, "src"))
     await fs.writeFile(path.join(dir.path, "src", "notes.md"), "a")
@@ -934,9 +961,8 @@ describe("an approval about a file names the file its request resolved", () => {
 
     await acp.prompt(session.sessionId, "hello")
 
-    expect(acp.permissions[0]?.toolCall.content).toEqual([
-      { type: "diff", path: path.join(dir.path, "src", "notes.md"), oldText: "a", newText: "b" },
-    ])
+    expect(acp.permissions[0]?.toolCall.content).toBeUndefined()
+    expect(acp.permissions[0]?.toolCall.locations).toEqual([{ path: path.join(dir.path, "src", "notes.md") }])
   })
 })
 

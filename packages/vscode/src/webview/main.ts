@@ -11,7 +11,8 @@ import type {
   WorkflowAgent,
   Workspace,
 } from "../protocol.js"
-import { agentsOf, describe, duration, excerpt, phases, segments, tokens } from "./present.js"
+import { approvalCard } from "./approval.js"
+import { agentsOf, describe, duration, phases, segments, tokens } from "./present.js"
 import { legacyToolName } from "../tool-name.js"
 
 // Runs inside the webview. Every string from the model or the server is set as text, never parsed as HTML.
@@ -392,10 +393,9 @@ function tool(item: Extract<Item, { type: "tool" }>) {
 
 function permission(item: Extract<Item, { type: "permission" }>) {
   const files = item.files
-  const title =
-    files.length > 0
-      ? `${verb(item.action)} ${files.map((file) => basename(file.file)).join(", ")}`
-      : `${verb(item.action)} ${item.resources.join(", ")}`
+  // The card draws the request's own values: the places, folder, method, URL, arguments and diffs the server resolved.
+  const shown = approvalCard(item)
+  const title = shown.title
   if (item.status !== "pending") {
     const label = { once: "Allowed", always: "Always allowed", reject: "Rejected" }[item.status]
     return element("div", item.status === "reject" ? "note error" : "note muted", `${label} · ${title}`)
@@ -407,20 +407,18 @@ function permission(item: Extract<Item, { type: "permission" }>) {
   if (totals.additions) head.append(element("span", "add", `+${totals.additions}`))
   if (totals.deletions) head.append(element("span", "del", `−${totals.deletions}`))
   card.append(head)
-  const lines = files.flatMap((file) => excerpt(file.patch, 6))
-  if (lines.length > 0) {
+  if (shown.changes.length > 0) {
     const diff = element("div", "mini-diff")
-    lines.forEach((line) => diff.append(element("div", line.kind, `${line.kind === "add" ? "+" : "−"} ${line.text}`)))
+    shown.changes.forEach((line) => diff.append(element("div", line.kind, `${line.kind === "add" ? "+" : "−"} ${line.text}`)))
     card.append(diff)
   }
-  if (files.length === 0 && item.resources.length > 0)
-    card.append(element("pre", "resources", item.resources.join("\n")))
+  if (shown.lines.length > 0) card.append(element("pre", "resources", shown.lines.join("\n")))
   const actions = element("div", "actions")
   const reply = (decision: "once" | "always" | "reject") => () =>
     vscode.postMessage({ type: "permission", id: item.id, decision })
   actions.append(
     button("Allow", reply("once"), "primary"),
-    button("Always allow", reply("always")),
+    ...(item.canSave ? [button("Always allow", reply("always"))] : []),
     button("Reject", reply("reject")),
     element("span", "spacer"),
   )
@@ -519,7 +517,10 @@ function paintTrust(trust: TrustView | undefined) {
   banner.hidden = trust === undefined
   if (!trust) return banner.replaceChildren()
   const head = element("div", "trust-head")
-  head.append(element("span", "strong", "⊙ Untrusted"), element("span", "muted grow trust-folder", trust.directory))
+  head.append(
+    element("span", "strong", trust.changed === true ? "⊙ Changed" : "⊙ Untrusted"),
+    element("span", "muted grow trust-folder", trust.directory),
+  )
   const files = element("details", "trust-files")
   files.append(
     element("summary", undefined, `${trust.held.length} ${trust.held.length === 1 ? "file" : "files"} held back`),
@@ -531,7 +532,13 @@ function paintTrust(trust: TrustView | undefined) {
   )
   banner.replaceChildren(
     head,
-    element("div", undefined, `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`),
+    element(
+      "div",
+      undefined,
+      trust.changed === true
+        ? `This folder's config changed since you trusted it, and Orbit is leaving out what changed: ${trust.summary}.`
+        : `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`,
+    ),
     files,
     ...(trust.opened === undefined
       ? []
@@ -629,10 +636,6 @@ function button(label: string, onClick: () => void, className?: string) {
   node.type = "button"
   node.addEventListener("click", onClick)
   return node
-}
-
-function verb(action: string) {
-  return { edit: "Edit", write: "Write", shell: "Run", read: "Read", webfetch: "Fetch" }[action] ?? action
 }
 
 function basename(file: string) {

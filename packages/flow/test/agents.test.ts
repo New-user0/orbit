@@ -37,6 +37,7 @@ function recording(edit?: (directory: string) => Promise<unknown>) {
     return "ok"
   }
   const client = {
+    config: { effective: async () => ({ permissions: { bypass: true } }) },
     session: {
       create: async (input: {
         readonly agent?: string
@@ -57,6 +58,7 @@ function recording(edit?: (directory: string) => Promise<unknown>) {
       get: async () => undefined,
     },
     // Every call answers with a message of its own, so a session that continues sees the reply to its latest prompt as new.
+    shell: { list: async () => ({ data: [] }) },
     message: {
       list: async (input: { readonly sessionID: string }) => ({
         data: [

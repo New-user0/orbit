@@ -17,6 +17,8 @@ const POWERSHELL_PATH_FLAGS = new Set(["-literalpath", "-path"])
 export type Result = {
   commands: Array<{ resource: string; save: string }>
   directories: string[]
+  /** Set by the caller from `bare`, not by `scan`: the redirected statements that have no command (`> file`). */
+  bare?: string[]
 }
 
 const ARITY: Record<string, number> = {
@@ -159,6 +161,8 @@ const ARITY: Record<string, number> = {
   "yarn run": 3,
 }
 const PREFIX_LENGTH = Math.max(...Object.values(ARITY))
+/** How long the legacy scan may parse before it gives up; the analysis allows 50 ms, so this leaves room for a slow machine. */
+const SCAN_MS = 500
 
 export const scan = Effect.fnUntraced(function* (
   command: string,
@@ -173,7 +177,11 @@ export const scan = Effect.fnUntraced(function* (
 const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, cwd: string) {
   const parsers = yield* Effect.promise(load)
   const powershell = ShellSelect.ps(shell)
-  const tree = (powershell ? parsers.ps : parsers.bash).parse(command)
+  // A scan that runs long is abandoned: the input is then asked about as a whole.
+  const deadline = performance.now() + SCAN_MS
+  const tree = (powershell ? parsers.ps : parsers.bash).parse(command, null, {
+    progressCallback: () => performance.now() > deadline,
+  })
   if (!tree) return yield* Effect.fail(new Error("Failed to parse shell command"))
 
   return yield* Effect.acquireUseRelease(
@@ -199,6 +207,27 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
           },
           { commands: [] as Array<{ resource: string; save: string }>, directories: [] as string[] },
         ),
+      ),
+    (tree) => Effect.sync(() => tree.delete()),
+  )
+})
+
+/**
+ * The text of each redirected statement of a bash input that has no command (`> file`): it creates or truncates a file and
+ * has no command node, so `scan` lists nothing for it. A scan that runs long gives up and lists none.
+ */
+export const bare = Effect.fnUntraced(function* (command: string) {
+  const parsers = yield* Effect.promise(load)
+  const deadline = performance.now() + SCAN_MS
+  const tree = parsers.bash.parse(command, null, { progressCallback: () => performance.now() > deadline })
+  if (!tree) return []
+  return yield* Effect.acquireUseRelease(
+    Effect.succeed(tree),
+    (tree) =>
+      Effect.sync(() =>
+        tree.rootNode
+          .descendantsOfType("redirected_statement")
+          .flatMap((node) => (node && node.childForFieldName("body") === null ? [node.text.trim()] : [])),
       ),
     (tree) => Effect.sync(() => tree.delete()),
   )
@@ -274,7 +303,10 @@ export const scanPortable = Effect.fnUntraced(function* (command: string, shell:
 export const operands = Effect.fnUntraced(function* (command: string, shell: string) {
   const parsers = yield* Effect.promise(load)
   const powershell = ShellSelect.ps(shell)
-  const tree = (powershell ? parsers.ps : parsers.bash).parse(command)
+  const deadline = performance.now() + SCAN_MS
+  const tree = (powershell ? parsers.ps : parsers.bash).parse(command, null, {
+    progressCallback: () => performance.now() > deadline,
+  })
   if (!tree) return []
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),
@@ -348,23 +380,29 @@ function directoryArgs(command: Part[], powershell: boolean, cwd: string, shell:
   return directories
 }
 
-function directoryArgument(value: string, powershell: boolean, cwd: string, shell: string) {
+/**
+ * The folder a `cd` or `Set-Location` argument names when that is known before the command runs: quotes removed, `~` and the
+ * environment variables and automatic variables PowerShell defines for folders expanded. Undefined for anything else.
+ */
+export function directoryArgument(value: string, powershell: boolean, cwd: string, shell: string) {
   const quote = value[0]
   const text = (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value
   if (!powershell) return expandKnownDirectory(text)
 
   // PowerShell exposes environment variables through $env:NAME and provides these
   // automatic directory variables. Expand only values we can determine without executing code.
-  return expandKnownDirectory(
-    text
-      .replace(/\$\{env:([^}]+)\}/gi, (_, key: string) => environment(key) ?? "")
-      .replace(/\$env:([A-Za-z_][A-Za-z0-9_]*)/gi, (_, key: string) => environment(key) ?? "")
-      .replace(/\$(HOME|PWD|PSHOME)(?=$|[\\/])/gi, (_, key: string) => {
-        if (key.toUpperCase() === "HOME") return os.homedir()
-        if (key.toUpperCase() === "PWD") return cwd
-        return path.dirname(shell)
-      }),
-  )
+  // PowerShell 7 goes home for a location change to nothing: `$null`, or a variable that is unset or empty. Windows
+  // PowerShell 5.1 fails there, so the home folder is the stricter answer on every host.
+  if (/^\$null$/i.test(text)) return os.homedir()
+  const expanded = text
+    .replace(/\$\{env:([^}]+)\}/gi, (_, key: string) => environment(key) ?? "")
+    .replace(/\$env:([A-Za-z_][A-Za-z0-9_]*)/gi, (_, key: string) => environment(key) ?? "")
+    .replace(/\$(HOME|PWD|PSHOME)(?=$|[\\/])/gi, (_, key: string) => {
+      if (key.toUpperCase() === "HOME") return os.homedir()
+      if (key.toUpperCase() === "PWD") return cwd
+      return path.dirname(shell)
+    })
+  return expanded === "" ? os.homedir() : expandKnownDirectory(expanded)
 }
 
 function expandKnownDirectory(value: string) {
@@ -383,7 +421,8 @@ function environment(key: string) {
   return name ? process.env[name] : undefined
 }
 
-function prefix(tokens: string[]) {
+/** The words of a command that an "always" grant names: the program, plus the subcommand words its arity covers. */
+export function prefix(tokens: string[]) {
   for (let length = tokens.length; length > 0; length--) {
     const arity = ARITY[tokens.slice(0, length).join(" ")]
     if (arity !== undefined) return tokens.slice(0, arity)
@@ -398,6 +437,9 @@ function resolve(asset: string) {
 }
 
 const load = lazy(initialize)
+
+/** The tree-sitter parsers that `scan` uses, loaded once. Shared with ShellAnalysis so both read the same instances. */
+export const parsers = load
 
 async function initialize() {
   const { Parser, Language } = await import("web-tree-sitter")

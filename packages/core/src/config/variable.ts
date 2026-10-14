@@ -4,6 +4,7 @@ import os from "os"
 import path from "path"
 import { Effect } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import { InvalidError } from "../v1/config/error.js"
 
 type ParseSource =
@@ -47,7 +48,7 @@ const substituteFiles = Effect.fnUntraced(function* (input: SubstituteInput, tex
   const configSource = input.type === "path" ? input.path : input.source
   const sourceDir = input.type === "path" ? path.dirname(input.path) : input.dir
   // Real paths on both sides, so that a folder reached through a link is still inside the folders it was checked against.
-  const configDir = input.within ? yield* fs.resolve(sourceDir) : sourceDir
+  const configDir = input.within ? (yield* LinkShare.resolve(fs, sourceDir)) ?? sourceDir : sourceDir
   let out = ""
   let cursor = 0
 
@@ -112,5 +113,6 @@ const reachable = Effect.fnUntraced(function* (
 ) {
   if (/^[\\/]{2}/.test(reference)) return false
   const inside = (candidate: string) => within.some((folder) => FSUtil.contains(folder, candidate))
-  return inside(file) && inside(yield* fs.resolve(file))
+  if (!inside(file) || (yield* LinkShare.blocked(fs, file))) return false
+  return inside(yield* fs.resolve(file))
 })

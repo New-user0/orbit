@@ -99,7 +99,7 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
-async function orb(args: string[], input?: string, home = root) {
+async function orb(args: string[], input?: string, home = root, extraEnv: Record<string, string> = {}) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
     env: isolatedEnv(home, {
@@ -108,6 +108,7 @@ async function orb(args: string[], input?: string, home = root) {
       ORBIT_CONFIG: undefined,
       ORBIT_CONFIG_CONTENT: undefined,
       OLLAMA_CONTEXT_LENGTH: undefined,
+      ...extraEnv,
     }),
     stdin: input === undefined ? "ignore" : new Response(input),
     stdout: "pipe",
@@ -173,23 +174,87 @@ test("-p --bare runs as orb run --bare does: on a private server, with no projec
   expect(plain.requests.map((request) => request.system).join("")).toContain(instructions)
 }, 180_000)
 
-test("--json-schema: text prints only the JSON, json and stream-json carry structured_output, run keeps its result object", async () => {
-  const text = await sent(["-p", ...base, "--json-schema", schema, "say ok"])
-  const json = await sent(["-p", ...base, "--json-schema", schema, "--output-format", "json", "say ok"])
-  const stream = await sent(["-p", ...base, "--json-schema", schema, "--output-format", "stream-json", "say ok"])
-  const run = await sent(["run", ...base, "--json-schema", schema, "say ok"])
+// The model hands its answer in through the tool the runner adds, then stops with nothing more to say.
+const handIn = (input: unknown): ScriptedReply => ({ tool: { name: "StructuredOutput", input } })
+const accepted = [handIn({ answer: "ok" }), ""]
 
-  expect(text.stdout.trim()).toBe('{"answer":"ok"}')
-  expect(JSON.parse(json.stdout)).toMatchObject({
-    type: "result",
-    is_error: false,
-    structured_output: { answer: "ok" },
+test("--json-schema: text prints only the JSON, json and stream-json carry structured_output, run keeps its result object", async () => {
+  await scripted([...accepted, ...accepted, ...accepted, ...accepted], async (own, home) => {
+    const text = await orb(["-p", "--standalone", "--model", own.model, "--json-schema", schema, "say ok"], undefined, home)
+    const json = await print(own, home, ["--json-schema", schema, "say ok"])
+    const stream = await print(own, home, ["--json-schema", schema, "say ok"], "stream-json")
+    const run = await orb(["run", "--standalone", "--model", own.model, "--json-schema", schema, "say ok"], undefined, home)
+
+    expect(text.stdout.trim()).toBe('{"answer":"ok"}')
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      type: "result",
+      is_error: false,
+      subtype: "success",
+      structured_output: { answer: "ok" },
+    })
+    const lines = parseLines(stream.stdout)
+    expect(lines.at(-1)).toMatchObject({ type: "result", structured_output: { answer: "ok" } })
+    expect(lines.some((line) => line.type === "tool_use")).toBe(true)
+    // `orb run` prints the result it always printed, without the fields of the envelope.
+    expect(JSON.parse(run.stdout)).toMatchObject({ type: "result", is_error: false, structured_output: { answer: "ok" } })
+    expect(Object.keys(JSON.parse(run.stdout))).not.toContain("outcome")
+    expect([text.code, json.code, stream.code, run.code]).toEqual([0, 0, 0, 0])
+    // The prompt is the message and nothing else, and the tool is offered beside the others with the schema as given.
+    // Each run makes two steps: the hand-in, then the empty follow-up that reads its result.
+    expect(own.steps).toHaveLength(8)
+    expect(own.steps.filter((_, index) => index % 2 === 0).map((step) => step.user)).toEqual(Array(4).fill("say ok"))
+    const tools = (own.steps[0].body as { tools?: Array<{ function: { name: string; parameters: unknown } }> }).tools ?? []
+    expect(tools.at(-1)?.function.name).toBe("StructuredOutput")
+    expect(tools.at(-1)?.function.parameters).toMatchObject({ type: "object", required: ["answer"] })
   })
-  expect(parseLines(stream.stdout).at(-1)).toMatchObject({ type: "result", structured_output: { answer: "ok" } })
-  // `orb run` prints the result it always printed, without the fields of the envelope.
-  expect(JSON.parse(run.stdout)).toMatchObject({ type: "result", is_error: false, structured_output: { answer: "ok" } })
-  expect(Object.keys(JSON.parse(run.stdout))).not.toContain("outcome")
 }, 240_000)
+
+test("--json-schema takes inline JSON, and files with a byte order mark or in UTF-16", async () => {
+  const inline = JSON.stringify({ type: "object", properties: { answer: { type: "string" } } })
+  const bom = path.join(root, "schema-bom.json")
+  const utf16 = path.join(root, "schema-utf16.json")
+  await Bun.write(bom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(inline)]))
+  await Bun.write(utf16, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(inline, "utf16le")]))
+  await scripted([...accepted, ...accepted, ...accepted], async (own, home) => {
+    const runs = [
+      await print(own, home, ["--json-schema", inline, "say ok"]),
+      await print(own, home, ["--json-schema", bom, "say ok"]),
+      await print(own, home, ["--json-schema", utf16, "say ok"]),
+    ]
+
+    runs.forEach((result) => {
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.stdout)).toMatchObject({ is_error: false, structured_output: { answer: "ok" } })
+    })
+  })
+}, 240_000)
+
+// A schema that cannot be used is a usage error in the requested format, before any session or model request exists.
+test.each([
+  ["a missing file", () => path.join(root, "no-such-schema.json"), "does not exist"],
+  ["inline JSON that lost its quotes", () => "{type:object}", "PowerShell"],
+  ["a file that is not JSON", () => path.join(root, "not-json.txt"), "not valid JSON"],
+  ["an array in a file", () => path.join(root, "array.json"), 'declares "type": "object"'],
+  ["a root that is not an object type", () => '{"type":"array"}', 'declares "type": "object"'],
+])("--json-schema with %s is a usage error in every format", async (_name, value, message) => {
+  await Bun.write(path.join(root, "not-json.txt"), "{ nope")
+  await Bun.write(path.join(root, "array.json"), "[1, 2]")
+  const before = model.requests.length
+
+  for (const format of ["text", "json", "stream-json"]) {
+    const result = await orb(["-p", ...base, "--output-format", format, "--json-schema", value(), "say ok"])
+    expect(result.code).toBe(1)
+    if (format === "text") {
+      expect(result.stdout).toBe("")
+      expect(result.stderr).toContain(message)
+    } else {
+      expect(result.stdout.trim().split(/\r?\n/)).toHaveLength(1)
+      expect(parseLines(result.stdout)[0]).toMatchObject({ type: "result", is_error: true })
+      expect(String(parseLines(result.stdout)[0].error)).toContain(message)
+    }
+  }
+  expect(model.requests.length).toBe(before)
+}, 180_000)
 
 // Runs with its own scripted model and its own home, so that each script starts at its first step.
 async function scripted<T>(
@@ -323,18 +388,66 @@ test("--verbose outside the text format is a usage error", async () => {
   expect(model.requests.length).toBe(before)
 }, 60_000)
 
-test("an answer that is not JSON under --json-schema is an error in every format", async () => {
-  await scripted(["not json"], async (own, home) => {
+test("JSON in the prose of the answer is not the structured answer: the turn is pushed to hand one in, then fails", async () => {
+  // A model that only ever writes prose, whatever the turn asks of it.
+  await scripted(['{"answer":"ok"}'], async (own, home) => {
     const text = await print(own, home, ["--json-schema", schema, "say ok"], "text")
     const json = await print(own, home, ["--json-schema", schema, "say ok"])
 
     expect(text.code).toBe(1)
     expect(text.stdout).toBe("")
-    expect(text.stderr).toContain("The answer was not valid JSON.")
     expect(json.code).toBe(1)
     expect(JSON.parse(json.stdout)).toMatchObject({ is_error: true, outcome: "failed", reason: "invalid_output" })
+    expect(JSON.parse(json.stdout)).not.toHaveProperty("structured_output")
+    // One request, then the turn-end notice asks again up to the cap, for each of the two runs.
+    expect(own.steps.length).toBe(18)
   })
-}, 180_000)
+}, 240_000)
+
+test("five wrong hand-ins fail the run with the retry subtype, and the override changes the count", async () => {
+  const wrong = handIn({ answer: 7 })
+  await scripted([wrong], async (own, home) => {
+    const text = await print(own, home, ["--json-schema", schema, "say ok"], "text")
+    expect(text.code).toBe(1)
+    expect(text.stdout).toBe("")
+    expect(text.stderr.match(/within 5 attempts/g)).toHaveLength(1)
+    expect(own.steps).toHaveLength(5)
+
+    const json = await print(own, home, ["--json-schema", schema, "say ok"])
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      type: "result",
+      is_error: true,
+      subtype: "error_max_structured_output_retries",
+    })
+    expect(JSON.parse(json.stdout)).not.toHaveProperty("structured_output")
+    expect(own.steps).toHaveLength(10)
+
+    const two = await orb(
+      ["-p", "--standalone", "--model", own.model, "--output-format", "json", "--json-schema", schema, "say ok"],
+      undefined,
+      home,
+      { ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES: "2" },
+    )
+    expect(JSON.parse(two.stdout)).toMatchObject({ subtype: "error_max_structured_output_retries" })
+    expect(own.steps).toHaveLength(12)
+  })
+}, 240_000)
+
+test.each(["abc", "0", "21", "1.5"])("ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES=%s is a usage error", async (value) => {
+  const before = model.requests.length
+
+  const result = await orb(
+    ["-p", ...base, "--output-format", "json", "--json-schema", schema, "say ok"],
+    undefined,
+    root,
+    { ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES: value },
+  )
+
+  expect(result.code).toBe(1)
+  expect(JSON.parse(result.stdout)).toMatchObject({ is_error: true })
+  expect(result.stdout).toContain("ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES")
+  expect(model.requests.length).toBe(before)
+}, 120_000)
 
 test("a run whose write was rejected prints one summary on stderr and exits 0", async () => {
   // A file outside the folder of the run needs a permission that nobody can give.
@@ -439,6 +552,7 @@ test("-p reads a piped message, and with no message at all it fails", async () =
 // handler runs the interface with no limit and no warning, so this list is the one to extend.
 const printedRunFlags: ReadonlyArray<readonly [string, ...string[]]> = [
   ["--output-format", "json"],
+  ["--input-format", "stream-json"],
   ["--json-schema", "schema.json"],
   ["--file", "a.txt"],
   ["--title", "x"],

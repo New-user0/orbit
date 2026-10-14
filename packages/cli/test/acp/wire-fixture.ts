@@ -371,6 +371,7 @@ export function permissionAsked(
   input: {
     readonly action?: string
     readonly resources?: string[]
+    readonly save?: string[]
     readonly metadata?: EventData<"permission.asked">["metadata"]
     readonly source?: { readonly type: "tool"; readonly messageID: string; readonly id: string }
   } = {},
@@ -380,6 +381,7 @@ export function permissionAsked(
     sessionID,
     action: input.action ?? "shell",
     resources: input.resources ?? ["*"],
+    save: input.save ?? input.resources ?? ["*"],
     metadata: input.metadata ?? { command: "printf hello" },
     ...(input.source ? { source: input.source } : {}),
   })
@@ -409,10 +411,7 @@ export async function startWire(options: WireOptions = {}) {
   const logs: Array<Pick<Logger.Options<unknown>, "message" | "cause">> = []
   const agentScope = Scope.makeUnsafe()
   const agentConnection = await Effect.runPromise(
-    ACP.connect(
-      Orbit.make({ baseUrl: server.url }),
-      ndJsonStream(agentToClient.writable, clientToAgent.readable),
-    ).pipe(
+    ACP.connect(Orbit.make({ baseUrl: server.url }), ndJsonStream(agentToClient.writable, clientToAgent.readable)).pipe(
       Scope.provide(agentScope),
       (effect) =>
         options.cancelDrainTimeout === undefined

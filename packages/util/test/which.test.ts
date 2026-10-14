@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { which } from "@orbit/core/util/which"
-import { tmpdir } from "../fixture/tmpdir"
+import { which } from "@orbit/util/which"
+import os from "os"
+
+async function tmpdir() {
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-which-test-")))
+  return { path: dir, [Symbol.asyncDispose]: () => fs.rm(dir, { recursive: true, force: true }) }
+}
 
 async function cmd(dir: string, name: string, exec = true) {
   const ext = process.platform === "win32" ? ".cmd" : ""
@@ -148,6 +153,58 @@ describe("util.which", () => {
     const file = await cmd(tmp.path, "quoted")
 
     same(which("quoted", env(`"${tmp.path}"`)), file)
+  })
+
+  describe("a relative PATH entry", () => {
+    // A decoy in the working folder and in the folders a relative entry can reach from it.
+    const plant = async (root: string) => {
+      const folders = [root, path.join(root, "bin"), path.join(root, "node_modules", ".bin")]
+      await Promise.all(folders.map((folder) => fs.mkdir(folder, { recursive: true })))
+      return Promise.all(folders.map((folder) => cmd(folder, "relhit")))
+    }
+    const relative = [".", "./", "bin", "node_modules/.bin", "node_modules/.bin/"].map((entry) => ({
+      name: JSON.stringify(entry),
+      spell: () => entry,
+    }))
+    // Spelled from the test folder so that they reach its `bin` from the working folder, where the decoy is: `D:bin` is
+    // the working folder's `bin` on its drive, and `\path\to\bin` is the same folder without a drive.
+    const windowsOnly = [
+      { name: "a drive-relative entry", spell: (root: string) => `${path.parse(root).root.slice(0, 2)}bin` },
+      { name: "a root-relative entry", spell: (root: string) => path.join(root, "bin").slice(2) },
+    ]
+
+    for (const { name, spell } of [...relative, ...(process.platform === "win32" ? windowsOnly : [])]) {
+      test(`skips ${name}`, async () => {
+        await using tmp = await tmpdir()
+        const entry = spell(tmp.path)
+        await plant(tmp.path)
+
+        expect(inside(tmp.path, () => which("relhit", env(entry)))).toBeNull()
+        // Behind an entry that does not resolve, the lookup goes on to the next one.
+        const real = path.join(tmp.path, "real")
+        await fs.mkdir(real)
+        const installed = await cmd(real, "relhit")
+        same(
+          inside(tmp.path, () => which("relhit", env([entry, real].join(path.delimiter)))),
+          installed,
+        )
+      })
+    }
+
+    test("skips .. from a subfolder", async () => {
+      await using tmp = await tmpdir()
+      await plant(tmp.path)
+
+      expect(inside(path.join(tmp.path, "bin"), () => which("relhit", env("..")))).toBeNull()
+    })
+
+    test("still finds the same program through an absolute or quoted entry (control)", async () => {
+      await using tmp = await tmpdir()
+      const [decoy] = await plant(tmp.path)
+
+      same(inside(tmp.path, () => which("relhit", env(tmp.path))), decoy!)
+      same(inside(tmp.path, () => which("relhit", env(`"${tmp.path}"`))), decoy!)
+    })
   })
 
   test("checks a command that names a directory as given", async () => {

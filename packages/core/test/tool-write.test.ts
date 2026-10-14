@@ -1,9 +1,10 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { FileMutation } from "@orbit/core/file-mutation"
 import { FileLedger } from "@orbit/core/file-ledger"
+import { readNow } from "./fixture/ledger"
 import { Formatter } from "@orbit/core/formatter"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -34,6 +35,7 @@ const writeToolNode = makeLocationNode({
     FileMutation.node,
     Environment.node,
     Formatter.node,
+    Location.node,
     Permission.node,
   ],
 })
@@ -44,16 +46,20 @@ const makeWriteFixture = () => {
     assertions: Permission.AssertInput[]
     writes: string[]
     denyAction?: string
+    // Runs inside the Edit permission assert, so it stands for a write that lands while the person is deciding.
+    afterApproval: () => Effect.Effect<void>
     formatFile: (target: string) => Effect.Effect<boolean>
   } = {
     assertions: [],
     writes: [],
+    afterApproval: () => Effect.void,
     formatFile: () => Effect.succeed(false),
   }
 
   const permission = permissionLayer({
     assert: (input) =>
       Effect.sync(() => fixture.assertions.push(input)).pipe(
+        Effect.andThen(input.action === "Edit" ? Effect.suspend(() => fixture.afterApproval()) : Effect.void),
         Effect.andThen(
           input.action === fixture.denyAction
             ? Effect.fail(
@@ -284,7 +290,7 @@ describe("WriteTool", () => {
     }),
   )
 
-  it.live("writes an external symlink target with only its in-location permission", () =>
+  it.live("writes an external symlink target after asking about the folder it leads to", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       ([active, outside]) => {
@@ -304,8 +310,8 @@ describe("WriteTool", () => {
           Effect.andThen((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(fixture.assertions.map((input) => input.action)).toEqual(["Edit"])
-              expect(fixture.assertions[0]?.resources).toEqual(["link.txt"])
+              expect(fixture.assertions.map((input) => input.action)).toEqual(["external_directory", "Edit"])
+              expect(fixture.assertions[1]?.resources).toEqual(["link.txt"])
             }),
           ),
           Effect.andThen(Effect.promise(() => fs.readFile(target, "utf8"))),
@@ -316,6 +322,33 @@ describe("WriteTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("Write to a symlink loop fails as a tool error", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (active) => {
+        const fixture = makeWriteFixture()
+        return Effect.promise(() =>
+          fs
+            .symlink("loopb", path.join(active.path, "loopa"))
+            .then(() => fs.symlink("loopa", path.join(active.path, "loopb")))
+            .then(
+              () => true,
+              () => false,
+            ),
+        ).pipe(
+          Effect.flatMap((linked) =>
+            !linked
+              ? Effect.void
+              : withTool(active.path, fixture, (registry) =>
+                  executeTool(registry, call({ file_path: "loopa", content: "x" })),
+                ).pipe(Effect.tap((result) => Effect.sync(() => expect(result.status).toBe("error")))),
+          ),
+        )
+      },
+      (active) => Effect.promise(() => active[Symbol.asyncDispose]()),
     ),
   )
 
@@ -396,13 +429,14 @@ describe("WriteTool", () => {
 
   // The repository ships its links, and a clone recreates them. In a project that is not trusted a link that leads out
   // of it is outside like any other path, so the write asks about the folder it would reach and creates nothing when
-  // that is refused. A junction stands for the link, since it needs no privilege on Windows.
+  // that is refused. A trusted project's link is asked about too, as the shell asks, but without the mark that stops
+  // Orbit's own allows. A junction stands for the link, since it needs no privilege on Windows.
   for (const item of [
     { project: "untrusted", untrusted: true, actions: ["external_directory", "Edit"] },
-    { project: "trusted", untrusted: false, actions: ["Edit"] },
+    { project: "trusted", untrusted: false, actions: ["external_directory", "Edit"] },
   ])
     it.live(
-      `${item.untrusted ? "asks" : "does not ask"} about the folder a link leads to in a ${item.project} project`,
+      `asks about the folder a link leads to in a ${item.project} project`,
       () =>
         Effect.acquireUseRelease(
           Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -419,10 +453,9 @@ describe("WriteTool", () => {
               )
               expect(settled.status).toBe("completed")
               expect(fixture.assertions.map((input) => input.action)).toEqual(item.actions)
-              if (item.untrusted) {
-                const real = yield* Effect.promise(() => fs.realpath(outside.path))
-                expect(fixture.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
-              }
+              const real = yield* Effect.promise(() => fs.realpath(outside.path))
+              expect(fixture.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
+              if (!item.untrusted) expect(fixture.assertions[0]).not.toHaveProperty("escaped")
               expect(yield* Effect.promise(() => fs.readFile(created, "utf8"))).toBe("pwned")
             }),
           ([active, outside]) =>
@@ -520,9 +553,12 @@ describe("WriteTool", () => {
                   },
                 })
 
-                yield* (yield* FileLedger.Service).record(sessionID, target)
+                yield* readNow(sessionID, target)
                 const later = new Date(Date.now() + 60_000)
-                yield* Effect.promise(() => fs.utimes(target, later, later))
+                yield* Effect.promise(async () => {
+                  await fs.appendFile(target, "!")
+                  await fs.utimes(target, later, later)
+                })
                 expect(yield* executeTool(registry, call({ file_path: "ledger.txt", content: "after" }))).toEqual({
                   status: "error",
                   error: {
@@ -532,11 +568,139 @@ describe("WriteTool", () => {
                 })
                 expect(fixture.assertions).toEqual([])
                 expect(fixture.writes).toEqual([])
-                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before!")
               }),
             false,
             "real",
           ),
+        ),
+      )
+    }),
+  )
+
+  it.live("lets a file that was only touched since the session read it be written, and records the write", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "touched.txt")
+      return Effect.promise(() => fs.writeFile(target, "before")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            fixture,
+            (registry) =>
+              Effect.gen(function* () {
+                yield* readNow(sessionID, target)
+                const later = new Date(Date.now() + 60_000)
+                yield* Effect.promise(() => fs.utimes(target, later, later))
+                const input = { file_path: "touched.txt", content: "after" }
+                expect(yield* executeTool(registry, call(input))).toMatchObject({ status: "completed" })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after")
+
+                // The write recorded the file with its digest, so touching it again does not block the next write.
+                const much = new Date(Date.now() + 120_000)
+                yield* Effect.promise(() => fs.utimes(target, much, much))
+                expect(yield* executeTool(registry, call({ ...input, content: "again" }))).toMatchObject({
+                  status: "completed",
+                })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("again")
+              }),
+            false,
+            "real",
+          ),
+        ),
+      )
+    }),
+  )
+
+  // An external write while the person decides. Whatever the other writer left must stay.
+  const stale: ReadonlyArray<{
+    readonly name: string
+    readonly before: string | undefined
+    readonly during: (target: string) => Promise<unknown>
+    readonly bytes: string | undefined
+  }> = [
+    { name: "an existing file changes", before: "old", during: (t) => fs.writeFile(t, "external"), bytes: "external" },
+    { name: "a new file appears", before: undefined, during: (t) => fs.writeFile(t, "external"), bytes: "external" },
+    { name: "an existing file is deleted", before: "old", during: (t) => fs.rm(t), bytes: undefined },
+  ]
+  for (const item of stale)
+    it.live(`fails edit.stale and writes nothing when ${item.name} during approval`, () =>
+      withTempDir((tmp) => {
+        const fixture = makeWriteFixture()
+        const target = path.join(tmp.path, "target.txt")
+        fixture.afterApproval = () => Effect.promise(() => item.during(target))
+        return Effect.promise(async () => item.before !== undefined && fs.writeFile(target, item.before)).pipe(
+          Effect.andThen(
+            withTool(tmp.path, fixture, (registry) =>
+              executeTool(registry, call({ file_path: "target.txt", content: "mine" })),
+            ),
+          ),
+          Effect.andThen((result) =>
+            Effect.gen(function* () {
+              expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+              expect(fixture.writes).toEqual([])
+              expect(yield* Effect.promise(() => fs.readFile(target, "utf8").catch(() => undefined))).toBe(item.bytes)
+            }),
+          ),
+        )
+      }),
+    )
+
+  it.live("completes when the file is touched during approval", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "target.txt")
+      fixture.afterApproval = () =>
+        Effect.promise(() => fs.utimes(target, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000)))
+      return Effect.promise(() => fs.writeFile(target, "old")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) =>
+            executeTool(registry, call({ file_path: "target.txt", content: "mine" })),
+          ),
+        ),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result).toMatchObject({ status: "completed" })
+            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("mine")
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("holds the transaction lock, so a second write waits for the first one's approval", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      return Effect.gen(function* () {
+        const release = yield* Deferred.make<void>()
+        const entered = yield* Deferred.make<void>()
+        fixture.afterApproval = () =>
+          fixture.assertions.length === 1
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void
+        return yield* withTool(tmp.path, fixture, (registry) =>
+          Effect.gen(function* () {
+            const first = yield* executeTool(registry, call({ file_path: "f.txt", content: "first" }, "call-1")).pipe(
+              Effect.forkChild,
+            )
+            // The second call starts only once the first holds the lock and waits in its approval.
+            yield* Deferred.await(entered)
+            const second = yield* executeTool(registry, call({ file_path: "f.txt", content: "second" }, "call-2")).pipe(
+              Effect.forkChild,
+            )
+            yield* Effect.sleep("200 millis")
+            const waiting = fixture.assertions.length
+            yield* Deferred.succeed(release, undefined)
+            return { waiting, results: [yield* Fiber.join(first), yield* Fiber.join(second)] }
+          }),
+        )
+      }).pipe(
+        Effect.andThen((outcome) =>
+          Effect.gen(function* () {
+            expect(outcome.waiting).toBe(1)
+            expect(outcome.results.map((result) => result.status)).toEqual(["completed", "completed"])
+            expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "f.txt"), "utf8"))).toBe("second")
+          }),
         ),
       )
     }),

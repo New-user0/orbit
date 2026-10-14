@@ -16,6 +16,7 @@ import { Session } from "@orbit/core/session"
 import { GlobTool } from "@orbit/core/tool/plugin/glob"
 import { GrepTool } from "@orbit/core/tool/plugin/grep"
 import { Tool } from "@orbit/core/tool"
+import { Token } from "@orbit/core/util/token"
 import { Global } from "@orbit/util/global"
 import { FSUtil } from "@orbit/util/fs-util"
 import { location } from "./fixture/location"
@@ -142,7 +143,7 @@ describe("search tools", () => {
         Effect.gen(function* () {
           yield* Effect.promise(() =>
             Promise.all(
-              Array.from({ length: FileSystem.DEFAULT_SEARCH_LIMIT + 1 }, (_, index) =>
+              Array.from({ length: FileSystem.DEFAULT_GREP_LIMIT + 10 }, (_, index) =>
                 fs.writeFile(path.join(tmp.path, `${index}.txt`), "needle\n"),
               ),
             ),
@@ -153,7 +154,7 @@ describe("search tools", () => {
               const grep = yield* executeTool(registry, call("Grep", { pattern: "needle" }))
 
               expect(glob.metadata).toEqual({ count: FileSystem.DEFAULT_SEARCH_LIMIT, truncated: true })
-              expect(grep.metadata).toEqual({ matches: FileSystem.DEFAULT_SEARCH_LIMIT, truncated: true })
+              expect(grep.metadata).toEqual({ matches: FileSystem.DEFAULT_GREP_LIMIT, truncated: true })
               expect(glob.content).toHaveLength(1)
               expect(grep.content).toHaveLength(1)
               const globText = glob.content?.[0]?.type === "text" ? glob.content[0].text : ""
@@ -162,15 +163,250 @@ describe("search tools", () => {
               expect(globText).toEndWith(
                 `(Results are truncated: showing first ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Consider using a more specific path or pattern.)`,
               )
-              expect(grepText).toStartWith(`Found ${FileSystem.DEFAULT_SEARCH_LIMIT} matches\n`)
-              expect(grepText).toEndWith(
-                `(Results are truncated: showing first ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Consider using a more specific path or pattern.)`,
-              )
+              expect(FileSystem.DEFAULT_GREP_LIMIT).toBe(250)
+              expect(grepText).toStartWith("Found 250 matches\n")
+              expect(grepText).toContain("showing matches 1-250. Use `offset: 250`")
             }),
           )
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
+  )
+
+  it.live("pages context-heavy grep results by token budget with no gaps or repeats", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const filler = "x".repeat(300)
+      const lines = Array.from({ length: 60 * 60 }, (_, index) => (index % 60 === 0 ? `needle ${index}` : filler))
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, "big.txt"), lines.join("\n") + "\n"))
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const seen: number[] = []
+          let offset = 0
+          let pages = 0
+          while (true) {
+            const result = yield* executeTool(registry, call("Grep", { pattern: "needle", context: 20, offset }))
+            const text = result.content?.[0]?.type === "text" ? result.content[0].text : ""
+            const found = (result.output as { line: number; submatches: unknown[] }[])
+              .filter((row) => row.submatches.length > 0)
+              .map((row) => row.line)
+            expect(found.length).toBeGreaterThan(0)
+            expect(text.length).toBeLessThan(100_000 + 1_000)
+            seen.push(...found)
+            pages++
+            if (!(result.metadata as { truncated: boolean }).truncated) break
+            offset += found.length
+            expect(text).toContain(`showing matches ${offset - found.length + 1}-${offset}`)
+            expect(text).toContain(`offset: ${offset}`)
+          }
+          expect(pages).toBeGreaterThan(1)
+          expect(seen).toEqual(Array.from({ length: 60 }, (_, index) => index * 60 + 1))
+        }),
+      )
+    }),
+  )
+
+  for (const outputMode of ["content", "count"] as const) {
+    it.live(`${outputMode} pages across many folders in path order with no gaps or repeats`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const names = Array.from({ length: 8 }, (_, d) => d).flatMap((d) =>
+          Array.from({ length: 40 }, (_, f) => `d${d}/f${String(f).padStart(2, "0")}.txt`),
+        )
+        yield* Effect.promise(() =>
+          Promise.all(names.map((name) => Bun.write(path.join(tmp.path, name), "needle\n"))),
+        )
+        yield* withTools(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const tail = (file: string) => file.replaceAll("\\", "/").split("/").slice(-2).join("/")
+            const paths = (result: { output?: unknown }) =>
+              outputMode === "content"
+                ? (result.output as { entry: { path: string } }[]).map((row) => tail(row.entry.path))
+                : (result.output as { counts: { path: string }[] }).counts.map((row) => tail(row.path))
+            const seen: string[] = []
+            let first: string[] = []
+            let offset = 0
+            while (true) {
+              const result = yield* executeTool(
+                registry,
+                call("Grep", { pattern: "needle", outputMode, offset, ...(outputMode === "count" ? { limit: 250 } : {}) }),
+              )
+              const page = paths(result)
+              if (offset === 0) first = page
+              seen.push(...page)
+              if (!(result.metadata as { truncated: boolean }).truncated) break
+              offset += page.length
+            }
+            expect(first).toEqual(names.toSorted().slice(0, 250))
+            expect(seen).toEqual(names.toSorted())
+          }),
+        )
+      }),
+    )
+  }
+
+  for (const outputMode of ["files_with_matches", "count"] as const) {
+    it.live(`${outputMode} names the exact next offset and paging from it neither skips nor repeats`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const limit = 4
+        const names = Array.from({ length: limit + 5 }, (_, index) => `f${index}.txt`)
+        yield* Effect.promise(() =>
+          Promise.all(names.map((name) => Bun.write(path.join(tmp.path, name), "needle\n"))),
+        )
+        yield* withTools(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const page = (offset: number) =>
+              executeTool(registry, call("Grep", { pattern: "needle", outputMode, limit, offset }))
+            const names1 = (result: { output?: unknown }) => {
+              const output = result.output as { files?: string[]; counts?: { path: string }[] }
+              return output.files ?? output.counts!.map((row) => row.path)
+            }
+            const seen: string[] = []
+            let offset = 0
+            const first = yield* page(0)
+            const text = first.content?.[0]?.type === "text" ? first.content[0].text : ""
+            expect(text).toContain(`offset: ${limit}`)
+            expect(text).not.toContain(`offset: ${limit + 1}`)
+            while (true) {
+              const result = yield* page(offset)
+              seen.push(...names1(result))
+              if (!(result.metadata as { truncated: boolean }).truncated) break
+              offset += limit
+            }
+            expect(seen.toSorted()).toEqual(names.toSorted())
+            expect(seen).toHaveLength(names.length)
+            // Paging from the noted offset returns the next full page.
+            expect(names1(yield* page(limit))).toEqual(seen.slice(limit, limit * 2))
+          }),
+        )
+      }),
+    )
+  }
+
+  it.live("reports a match longer than the clipping window as one match", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Promise.all([
+          Bun.write(path.join(tmp.path, "min.js"), `import ${"a, ".repeat(400)}b from "x"\n`),
+          Bun.write(path.join(tmp.path, "fn.js"), `function big() {\n${"  call()\n".repeat(200)}}\n`),
+        ]),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const text = (result: { content?: readonly { type: string; text?: string }[] }) =>
+            result.content?.[0]?.type === "text" ? (result.content[0].text ?? "") : ""
+          const single = yield* executeTool(registry, call("Grep", { pattern: "import.*from", path: "min.js" }))
+          expect(text(single)).toContain("Found 1 matches")
+          expect(single.metadata).toMatchObject({ matches: 1 })
+          const multi = yield* executeTool(
+            registry,
+            call("Grep", { pattern: "function \\w+\\(\\) \\{.*?\\n\\}", multiline: true, path: "fn.js" }),
+          )
+          expect(text(multi)).toContain("Found 1 matches")
+          expect(multi.metadata).toMatchObject({ matches: 1 })
+        }),
+      )
+    }),
+  )
+
+  it.live("excludes version-control folders from grep and from glob with hidden", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const dirs = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"]
+      yield* Effect.promise(() =>
+        Promise.all(
+          ["src/visible.ts", ...dirs.map((dir) => `${dir}/nested/inner.ts`)].map((file) =>
+            Bun.write(path.join(tmp.path, file), "needle\n"),
+          ),
+        ),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const grep = yield* executeTool(registry, call("Grep", { pattern: "needle", outputMode: "files_with_matches" }))
+          expect(grep.output).toEqual({ files: [path.normalize("src/visible.ts")] })
+          const glob = yield* executeTool(registry, call("Glob", { pattern: "**/*.ts", hidden: true }))
+          expect(glob.output).toEqual([{ path: path.normalize("src/visible.ts"), type: "file" }])
+        }),
+      )
+    }),
+  )
+
+  for (const [name, prefix] of [
+    ["ASCII", "a"],
+    ["two-byte", "é"],
+    ["astral", "\u{1F600}"],
+  ] as const) {
+    it.live(`clips a long ${name} line around the first match with offsets into the clipped text`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const line = prefix.repeat(3_000) + "needle" + prefix.repeat(2_000)
+        yield* Effect.promise(() => Bun.write(path.join(tmp.path, "long.txt"), line + "\n"))
+        yield* withTools(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const result = yield* executeTool(registry, call("Grep", { pattern: "needle" }))
+            const rows = result.output as { text: string; submatches: { text: string; start: number; end: number }[] }[]
+            expect(rows).toHaveLength(1)
+            const row = rows[0]!
+            expect(row.text.length).toBeGreaterThan(500)
+            expect(row.text.length).toBeLessThan(560)
+            expect(row.text).toContain("[line truncated: ")
+            expect(row.text).toContain(`${line.length} chars]`)
+            expect(row.submatches).toHaveLength(1)
+            expect(row.text.slice(row.submatches[0]!.start, row.submatches[0]!.end)).toBe("needle")
+            expect(row.text.includes("�")).toBe(false)
+          }),
+        )
+      }),
+    )
+  }
+
+  it.live("returns a multiline match of short lines whole and budgets a huge one", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const fields = Array.from({ length: 30 }, (_, index) => `  field_${index}: Some<${"x".repeat(30)}>,`)
+      const record = `struct S {\n${fields.join("\n")}\n}`
+      yield* Effect.promise(() =>
+        Promise.all([
+          Bun.write(path.join(tmp.path, "s.rs"), `${record}\n`),
+          Bun.write(path.join(tmp.path, "big.txt"), `start\n${"line of text\n".repeat(20_000)}end\n`),
+        ]),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const text = (result: { content?: readonly { type: string; text?: string }[] }) =>
+            result.content?.[0]?.type === "text" ? (result.content[0].text ?? "") : ""
+          const struct = yield* executeTool(
+            registry,
+            call("Grep", { pattern: "struct S \\{.*?\\n\\}", multiline: true, path: "s.rs" }),
+          )
+          expect(text(struct)).toContain("field_29: Some<")
+          expect(text(struct)).not.toContain("[line truncated")
+          const big = yield* executeTool(registry, call("Grep", { pattern: "start.*end", multiline: true, path: "big.txt" }))
+          expect(text(big)).toContain("[match continues for")
+          expect(Token.estimate(text(big))).toBeLessThanOrEqual(GrepTool.MAX_OUTPUT_TOKENS)
+        }),
+      )
+    }),
+  )
+
+  it.live("finds matches next to files that are not valid UTF-8", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Promise.all([
+          Bun.write(path.join(tmp.path, "a-latin.txt"), Buffer.from([...Buffer.from("ab "), 0xff, ...Buffer.from(" needle\n")])),
+          Bun.write(path.join(tmp.path, "b-clean.txt"), "clean needle\n"),
+        ]),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const result = yield* executeTool(registry, call("Grep", { pattern: "needle" }))
+          expect(result.content?.[0]?.type === "text" ? result.content[0].text : "").toContain("Found 2 matches")
+        }),
+      )
+    }),
   )
 
   it.live("rejects an empty grep pattern", () =>
@@ -345,6 +581,28 @@ describe("search tools", () => {
     )
   }
 
+  for (const name of ["Glob", "Grep"] as const) {
+    it.live(`${name} tells the model that a device path is a device`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          withTools(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const result = yield* executeTool(
+                registry,
+                call(name, { path: process.platform === "win32" ? "NUL" : "/dev/zero", pattern: "x" }),
+              )
+              expect(result).toMatchObject({
+                status: "error",
+                error: { type: "file.device", message: expect.stringContaining("is a device or stream") },
+              })
+            }),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ),
+    )
+  }
+
   it.live("reports a file used as the glob search path", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -451,7 +709,7 @@ describe("search tools", () => {
   for (const name of ["Glob", "Grep"] as const)
     for (const trusted of [false, true])
       it.live(
-        `${name} through a link in ${trusted ? "a trusted project searches the project's own folder" : "an untrusted project names the real folder"}`,
+        `${name} through a link in ${trusted ? "a trusted project asks about the folder it leads to" : "an untrusted project names the real folder"}`,
         () =>
           Effect.acquireUseRelease(
             Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -479,12 +737,13 @@ describe("search tools", () => {
                     const folder = path.join(real, "*").replaceAll("\\", "/")
                     expect(result.status).toBe("completed")
                     expect(assertions.map((item) => item.action)).toEqual(
-                      trusted ? ["Read", name] : ["external_directory", "Read", name],
+                      ["external_directory", "Read", name],
                     )
-                    if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
-                    expect(assertions.find((item) => item.action === name)?.metadata?.path).toBe(
-                      trusted ? path.join(active.path, "linked") : real,
-                    )
+                    expect(assertions[0]).toMatchObject({ resources: [folder] })
+                    // Only a project that is not trusted marks the folder as one a link leads to.
+                    if (trusted) expect(assertions[0]).not.toHaveProperty("escaped")
+                    else expect(assertions[0]).toMatchObject({ escaped: [folder] })
+                    expect(assertions.find((item) => item.action === name)?.metadata?.path).toBe(real)
                   }),
                 ),
               )
@@ -559,7 +818,7 @@ describe("search tools", () => {
         ),
     )
 
-  it.live("globs through an in-location external symlink without external approval", () =>
+  it.live("globs through an in-location external symlink after asking about the folder it leads to", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       ([active, outside]) => {
@@ -579,7 +838,7 @@ describe("search tools", () => {
           Effect.tap((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(assertions.map((input) => input.action)).toEqual(["Read", "Glob"])
+              expect(assertions.map((input) => input.action)).toEqual(["external_directory", "Read", "Glob"])
               expect(result).toMatchObject({
                 output: [{ path: path.join("linked", "outside.txt"), type: "file" }],
                 content: [{ type: "text", text: path.join(active.path, "linked", "outside.txt") }],

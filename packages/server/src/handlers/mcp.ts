@@ -1,5 +1,5 @@
 import { Mcp } from "@orbit/core/mcp/index"
-import { McpServerNotFoundError } from "@orbit/protocol/errors"
+import { ForbiddenError, McpServerNotFoundError } from "@orbit/protocol/errors"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -30,7 +30,9 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
         "mcp.add",
         Effect.fn(function* (ctx) {
           const service = yield* Mcp.Service
-          yield* service.add(ctx.params.server, ctx.payload.config)
+          yield* service
+            .add(ctx.params.server, ctx.payload.config)
+            .pipe(Effect.mapError((error) => new ForbiddenError({ message: error.message })))
           return HttpApiSchema.NoContent.make()
         }),
       )

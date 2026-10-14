@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "bun test --timeout 5000 --only-failures",
+    "test": "bun ../../tools/test/run.ts --serial --timeout 5000 --only-failures",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {

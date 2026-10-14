@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { expect } from "bun:test"
 import { Config } from "@orbit/schema/config"
-import { Effect, Schema } from "effect"
+import { Effect, Schedule, Schema } from "effect"
 import { withEnv } from "../../core/test/fixture/env"
 import { tmpdir, tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
@@ -210,7 +210,7 @@ function assign(values: Record<string, string | undefined>) {
 // What the server reports as the effective configuration of a project, given the config files each scope holds. The
 // home directory is a fresh one, so the developer's own ~/.orbit cannot decide the outcome.
 const effective = (
-  files: { user?: unknown; project?: unknown; local?: unknown } = {},
+  files: { user?: unknown; project?: unknown; local?: unknown; managed?: unknown } = {},
   env: Record<string, string | undefined> = {},
 ) =>
   Effect.scoped(
@@ -219,8 +219,11 @@ const effective = (
       const home = path.join(tmp.path, "home")
       const global = path.join(tmp.path, "global")
       const project = path.join(tmp.path, "project")
+      const managedDirectory = path.join(tmp.path, "managed")
       yield* Effect.promise(() =>
-        Promise.all([home, global, project].map((directory) => fs.mkdir(directory, { recursive: true }))),
+        Promise.all(
+          [home, global, project, managedDirectory].map((directory) => fs.mkdir(directory, { recursive: true })),
+        ),
       )
       const write = (file: string, value: unknown) =>
         value === undefined ? Effect.void : Effect.promise(() => fs.writeFile(file, JSON.stringify(value)))
@@ -228,15 +231,16 @@ const effective = (
         write(path.join(global, "orbit.json"), files.user),
         write(path.join(project, "orbit.json"), files.project),
         write(path.join(project, "orbit.local.json"), files.local),
+        write(path.join(managedDirectory, "managed-settings.json"), files.managed),
       ])
       yield* environment({ ORBIT_TEST_HOME: home, ORBIT_DISABLE_COMPAT: undefined, ...env })
-      const server = yield* startServer(global)
+      const server = yield* startServer(global, { managed: managedDirectory })
       const url = new URL("/api/config/effective", server.base)
       url.searchParams.set("location[directory]", project)
       const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
       expect(response.status).toBe(200)
       const body: unknown = yield* Effect.promise(() => response.json())
-      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility"])
+      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility", "permissions", "plugins", "hooks", "mcp"])
       return Schema.decodeUnknownSync(Config.Effective)(body)
     }),
   )
@@ -246,32 +250,207 @@ const on = { compatibility: { enabled: true } }
 
 it.live("reports compatibility as on unless something that may turn it off says so", () =>
   Effect.gen(function* () {
-    expect(yield* effective()).toEqual({ compatibility: true })
-    expect(yield* effective({ user: on })).toEqual({ compatibility: true })
+    expect(yield* effective()).toMatchObject({ compatibility: true })
+    expect(yield* effective({ user: on })).toMatchObject({ compatibility: true })
   }),
 )
 
 it.live("reports the compatibility switch the user's config sets, whatever the project says", () =>
   Effect.gen(function* () {
-    expect(yield* effective({ user: off })).toEqual({ compatibility: false })
-    expect(yield* effective({ user: off, project: on, local: on })).toEqual({ compatibility: false })
+    expect(yield* effective({ user: off })).toMatchObject({ compatibility: false })
+    expect(yield* effective({ user: off, project: on, local: on })).toMatchObject({ compatibility: false })
   }),
 )
 
 it.live("ignores a compatibility switch in the project's own files", () =>
   Effect.gen(function* () {
-    expect(yield* effective({ project: off })).toEqual({ compatibility: true })
-    expect(yield* effective({ local: off })).toEqual({ compatibility: true })
-    expect(yield* effective({ user: on, project: off, local: off })).toEqual({ compatibility: true })
+    expect(yield* effective({ project: off })).toMatchObject({ compatibility: true })
+    expect(yield* effective({ local: off })).toMatchObject({ compatibility: true })
+    expect(yield* effective({ user: on, project: off, local: off })).toMatchObject({ compatibility: true })
   }),
 )
 
 it.live("reports compatibility as off when the server's environment disables it", () =>
   Effect.gen(function* () {
-    expect(yield* effective({}, { ORBIT_DISABLE_COMPAT: "1" })).toEqual({ compatibility: false })
+    expect(yield* effective({}, { ORBIT_DISABLE_COMPAT: "1" })).toMatchObject({ compatibility: false })
     // The environment outranks a user config that turns it on.
-    expect(yield* effective({ user: on }, { ORBIT_DISABLE_COMPAT: "true" })).toEqual({ compatibility: false })
+    expect(yield* effective({ user: on }, { ORBIT_DISABLE_COMPAT: "true" })).toMatchObject({ compatibility: false })
   }),
+)
+
+it.live("reports what managed settings leave open about permission prompts", () =>
+  Effect.gen(function* () {
+    expect((yield* effective()).permissions).toEqual({ bypass: true, always: true })
+    expect((yield* effective({ managed: { managed: {} } })).permissions).toEqual({ bypass: true, always: true })
+    expect((yield* effective({ managed: { managed: { disable_bypass_permissions: true } } })).permissions).toEqual({
+      bypass: false,
+      always: true,
+    })
+    expect((yield* effective({ managed: { managed: { managed_permissions_only: true } } })).permissions).toEqual({
+      bypass: true,
+      always: false,
+    })
+    // A project's own file cannot lift or set either one.
+    expect((yield* effective({ project: { managed: { disable_bypass_permissions: true } } })).permissions).toEqual({
+      bypass: true,
+      always: true,
+    })
+  }),
+)
+
+it.live("reports the plugin lists managed settings set, and an empty object when there are none", () =>
+  Effect.gen(function* () {
+    expect((yield* effective()).plugins).toEqual({})
+    expect((yield* effective({ managed: { managed: { plugins: { block: [] } } } })).plugins).toEqual({ block: [] })
+    // The marketplaces list stays on the server for the extensibility work.
+    expect(
+      (yield* effective({
+        managed: { managed: { plugins: { allow: ["@corp/x"], block: ["acme.*"], marketplaces: ["https://m.example"] } } },
+      })).plugins,
+    ).toEqual({ allow: ["@corp/x"], block: ["acme.*"] })
+    // The organization's name rides along so a client can say whose settings blocked a plugin.
+    expect(
+      (yield* effective({ managed: { managed: { organization: "Acme", plugins: { block: ["acme.*"] } } } })).plugins,
+    ).toEqual({ block: ["acme.*"], organization: "Acme" })
+    // A project's own file cannot set them.
+    expect((yield* effective({ project: { managed: { plugins: { allow: [] } } } })).plugins).toEqual({})
+  }),
+)
+
+it.live("reports whether managed settings run only the MCP servers they define", () =>
+  Effect.gen(function* () {
+    expect((yield* effective()).mcp).toEqual({ managed_only: false })
+    expect((yield* effective({ managed: { managed: { mcp: { deny: ["x"] } } } })).mcp).toEqual({ managed_only: false })
+    expect((yield* effective({ managed: { managed: { mcp: { managed_only: true } } } })).mcp).toEqual({
+      managed_only: true,
+    })
+    // A project's own file cannot set it.
+    expect((yield* effective({ project: { managed: { mcp: { managed_only: true } } } })).mcp).toEqual({
+      managed_only: false,
+    })
+  }),
+)
+
+// A client that runs a command in a hook's place (the status line) asks here, so it follows the same two restrictions
+// the hook runners do, in both spellings. A project's own file cannot set either one.
+it.live("reports whether managed settings turn hooks off or allow only managed hooks", () =>
+  Effect.gen(function* () {
+    const open = { disabled: false, managed_only: false }
+    expect((yield* effective()).hooks).toEqual(open)
+    expect((yield* effective({ managed: { managed: {} } })).hooks).toEqual(open)
+    expect((yield* effective({ managed: { managed: { disable_hooks: true } } })).hooks).toEqual({
+      disabled: true,
+      managed_only: false,
+    })
+    expect((yield* effective({ managed: { managed: { managed_hooks_only: true } } })).hooks).toEqual({
+      disabled: false,
+      managed_only: true,
+    })
+    expect((yield* effective({ managed: { hooks: { disabled: true } } })).hooks).toEqual({
+      disabled: true,
+      managed_only: false,
+    })
+    expect((yield* effective({ managed: { hooks: { managed_only: true } } })).hooks).toEqual({
+      disabled: false,
+      managed_only: true,
+    })
+    expect((yield* effective({ managed: { hooks: { disabled: false } } })).hooks).toEqual(open)
+    expect((yield* effective({ project: { managed: { disable_hooks: true } } })).hooks).toEqual(open)
+    expect((yield* effective({ project: { hooks: { disabled: true } } })).hooks).toEqual(open)
+  }),
+)
+
+it.live("refuses with a 403 to add any MCP server when managed settings run only their own, and lists none else", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped("orbit-mcp-managed-only-")
+      const global = path.join(tmp.path, "global")
+      const project = path.join(tmp.path, "project")
+      const managed = path.join(tmp.path, "managed")
+      yield* Effect.promise(() =>
+        Promise.all([global, project, managed].map((directory) => fs.mkdir(directory, { recursive: true }))),
+      )
+      const idle = { type: "local", command: ["unused"], disabled: true }
+      yield* Effect.promise(() =>
+        Promise.all([
+          fs.writeFile(
+            path.join(managed, "managed-settings.json"),
+            JSON.stringify({ managed: { mcp: { managed_only: true } }, mcp: { servers: { org: idle } } }),
+          ),
+          fs.writeFile(path.join(global, "orbit.json"), JSON.stringify({ mcp: { servers: { person: idle } } })),
+        ]),
+      )
+      yield* environment({ ORBIT_TEST_HOME: path.join(tmp.path, "home") })
+      const server = yield* startServer(global, { managed })
+      const url = (name: string) => {
+        const target = new URL(`/api/experimental/mcp/${name}`, server.base)
+        target.searchParams.set("location[directory]", project)
+        return target
+      }
+      for (const name of ["stranger", "org"]) {
+        const response = yield* Effect.promise(() =>
+          fetch(url(name), {
+            method: "PUT",
+            headers: { ...server.headers, "content-type": "application/json" },
+            body: JSON.stringify({ config: idle }),
+          }),
+        )
+        expect(response.status).toBe(403)
+        expect(yield* Effect.promise(() => response.json())).toMatchObject({ _tag: "ForbiddenError" })
+      }
+      const list = new URL("/api/mcp", server.base)
+      list.searchParams.set("location[directory]", project)
+      // Startup reconciles in the background. Waiting for the managed server is the control for the absences below: the
+      // person's server and the refused ones had the same chance to be listed.
+      const listed = yield* Effect.promise(() =>
+        fetch(list, { headers: server.headers }).then((response) => response.json()),
+      ).pipe(
+        Effect.filterOrFail((body) => JSON.stringify(body).includes("org")),
+        Effect.retry({ times: 100, schedule: Schedule.spaced("50 millis") }),
+      )
+      expect(JSON.stringify(listed)).not.toContain("person")
+      expect(JSON.stringify(listed)).not.toContain("stranger")
+    }),
+  ),
+)
+
+it.live("refuses with a 403 to add an MCP server that managed settings block, and stores nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped("orbit-mcp-blocked-")
+      const global = path.join(tmp.path, "global")
+      const project = path.join(tmp.path, "project")
+      const managed = path.join(tmp.path, "managed")
+      yield* Effect.promise(() =>
+        Promise.all([global, project, managed].map((directory) => fs.mkdir(directory, { recursive: true }))),
+      )
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          path.join(managed, "managed-settings.json"),
+          JSON.stringify({ managed: { mcp: { deny: ["blocked"], allow: ["blocked", "fine"] } } }),
+        ),
+      )
+      yield* environment({ ORBIT_TEST_HOME: path.join(tmp.path, "home") })
+      const server = yield* startServer(global, { managed })
+      const put = (name: string) => {
+        const url = new URL(`/api/experimental/mcp/${name}`, server.base)
+        url.searchParams.set("location[directory]", project)
+        return Effect.promise(() =>
+          fetch(url, {
+            method: "PUT",
+            headers: { ...server.headers, "content-type": "application/json" },
+            body: JSON.stringify({ config: { type: "local", command: ["unused"], disabled: true } }),
+          }),
+        )
+      }
+      for (const name of ["blocked", "stranger"]) {
+        const response = yield* put(name)
+        expect(response.status).toBe(403)
+        expect(yield* Effect.promise(() => response.json())).toMatchObject({ _tag: "ForbiddenError" })
+      }
+      expect((yield* put("fine")).status).toBe(204)
+    }),
+  ),
 )
 
 function isRecord(value: unknown): value is Record<string, unknown> {

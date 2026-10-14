@@ -3,10 +3,12 @@ export * as CompatSettings from "./settings.js"
 import path from "path"
 import { Effect, Option, Schema } from "effect"
 import { Document, Info, type Scope } from "@orbit/schema/config"
+import { EnvConfig } from "@orbit/schema/config/env-config"
 import { HookConfig } from "@orbit/schema/config/hook-config"
 import type { Permission } from "@orbit/schema/permission"
 import { AbsolutePath, optional } from "@orbit/schema/schema"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import type { CompatDiagnostic } from "./diagnostic.js"
 import { CompatNames } from "./names.js"
 import type { CompatRoots } from "./roots.js"
@@ -35,6 +37,7 @@ export interface File {
 const Settings = Schema.Struct({
   hooks: Schema.optionalKey(Schema.Unknown),
   permissions: Schema.optionalKey(Schema.Unknown),
+  env: Schema.optionalKey(Schema.Unknown),
 })
 const decodeSettings = Schema.decodeUnknownOption(Schema.fromJsonString(Settings))
 const decodePermissions = Schema.decodeUnknownOption(ForeignPermissions)
@@ -72,7 +75,9 @@ export function files(roots: readonly CompatRoots.Root[]): readonly File[] {
 export const read = Effect.fn("CompatSettings.read")(function* (roots: readonly CompatRoots.Root[]) {
   const fs = yield* FSUtil.Service
   const results = yield* Effect.forEach(files(roots), (file) =>
-    fs.readFileStringSafe(file.path).pipe(
+    // A settings file of a project that a link leads to a share is not read: reading connects.
+    LinkShare.blocked(fs, file.path).pipe(
+      Effect.flatMap((stop) => (stop ? Effect.succeed(undefined) : fs.readFileStringSafe(file.path))),
       Effect.orElseSucceed(() => undefined),
       Effect.map((text) => (text === undefined ? empty : parse(text, file))),
     ),
@@ -123,6 +128,7 @@ function parse(text: string, file: File): CompatDiagnostic.Result {
     return { documents: [], diagnostics: [problem(file, "invalid", ["$"], "rejected malformed JSON document")] }
 
   const hooks = settings.value.hooks === undefined ? undefined : HookConfig.decode(settings.value.hooks)
+  const env = settings.value.env === undefined ? undefined : EnvConfig.decode(settings.value.env)
   const permissions =
     settings.value.permissions === undefined ? undefined : decodePermissions(settings.value.permissions)
   const rules = permissions !== undefined && Option.isSome(permissions) ? translatePermissions(permissions.value) : []
@@ -130,6 +136,7 @@ function parse(text: string, file: File): CompatDiagnostic.Result {
     ...(hooks?.diagnostics ?? []).map((diagnostic) =>
       problem(file, diagnostic.kind, diagnostic.path, diagnostic.message),
     ),
+    ...(env?.diagnostics ?? []).map((diagnostic) => problem(file, diagnostic.kind, diagnostic.path, diagnostic.message)),
     ...(permissions !== undefined && Option.isNone(permissions)
       ? [problem(file, "invalid", ["permissions"], "skipped malformed recognized value")]
       : []),
@@ -138,6 +145,7 @@ function parse(text: string, file: File): CompatDiagnostic.Result {
   const encoded = {
     ...(hooks?.hooks !== undefined && Object.keys(hooks.hooks).length > 0 ? { hooks: hooks.hooks } : {}),
     ...(rules.length > 0 ? { permissions: rules } : {}),
+    ...(env?.env !== undefined && Object.keys(env.env).length > 0 ? { env: env.env } : {}),
   }
   if (Object.keys(encoded).length === 0) return { documents: [], diagnostics }
 

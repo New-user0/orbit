@@ -117,16 +117,19 @@ export function make(
       const discover = Effect.fn("OllamaPlugin.discover")(function* () {
         const current = source.current
         if (!current.tagsEndpoint || !current.showEndpoint) return undefined
+        const marks: { prior?: Discovery; written?: Discovery } = {}
         return yield* discoveryLock.withPermit(
           Effect.gen(function* () {
             const cached = discovery.get(current.tagsEndpoint)
+            marks.prior = cached
             if (cached && cached.apiKey === current.apiKey && Date.now() - cached.checked < Duration.toMillis(interval))
               return { source: current, models: cached.models }
             const previous: Discovery =
               cached && cached.apiKey === current.apiKey
                 ? cached
                 : { checked: 0, apiKey: current.apiKey, shows: new Map() }
-            discovery.set(current.tagsEndpoint, { ...previous, checked: Date.now(), apiKey: current.apiKey })
+            marks.written = { ...previous, checked: Date.now(), apiKey: current.apiKey }
+            discovery.set(current.tagsEndpoint, marks.written)
             const tagsRequest = current.apiKey
               ? HttpClientRequest.get(current.tagsEndpoint).pipe(
                   HttpClientRequest.acceptJson,
@@ -172,7 +175,15 @@ export function make(
               shows,
             })
             return { source: current, models: filtered }
-          }),
+          }).pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                if (!marks.written || discovery.get(current.tagsEndpoint) !== marks.written) return
+                if (marks.prior) discovery.set(current.tagsEndpoint, marks.prior)
+                else discovery.delete(current.tagsEndpoint)
+              }),
+            ),
+          ),
         )
       })
 
@@ -187,6 +198,9 @@ export function make(
         yield* ctx.provider.reload()
       })
 
+      // The first run is awaited, so a session that starts right after the location resolves its default model from
+      // the discovered catalog instead of finding it empty. Each request has its own 1 second limit.
+      yield* refresh().pipe(Effect.ignore)
       // Keep the last successful inventory through transient outages instead of flickering model availability.
       yield* refresh().pipe(Effect.ignore, Effect.repeat(Schedule.spaced(interval)), Effect.forkScoped)
       const reload = Effect.fn("OllamaPlugin.reload")(function* () {

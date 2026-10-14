@@ -14,8 +14,16 @@ export function which(cmd: string, env?: NodeJS.ProcessEnv, bin?: string) {
     // Windows allows quotes around a PATH entry. An empty entry means the working folder, which is never searched.
     const directory = entry.replace(/^"(.*)"$/, "$1")
     if (!directory) continue
+    // A relative entry (`.`, `bin`, `node_modules/.bin`) resolves against the working folder, which may be a repository
+    // that is not trusted, so it is skipped like an empty one. On Windows `C:x` and `\x` are not absolute either.
+    if (!absolute(directory)) continue
     const found = whichPkg.sync(path.resolve(directory, cmd), { nothrow: true, pathExt })
     if (found) return found
   }
   return null
+}
+
+function absolute(directory: string) {
+  if (process.platform === "win32") return /^([a-zA-Z]:[\\/]|\\\\|\/\/)/.test(directory)
+  return path.isAbsolute(directory)
 }

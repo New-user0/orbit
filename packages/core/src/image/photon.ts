@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { FileSystem } from "../filesystem.js"
-import { DecodeError, ResizerUnavailableError, SizeError, type Limits } from "../image.js"
+import { DecodeError, ResizerUnavailableError, SizeError, type Limits, type Normalized } from "../image.js"
 
 const JPEG_QUALITIES = [80, 85, 70, 55, 40]
 
@@ -34,7 +34,7 @@ export const make = Effect.gen(function* () {
     resource: string,
     content: FileSystem.Content & { readonly encoding: "base64" },
     limits: Readonly<Limits>,
-  ) {
+  ): Effect.fn.Return<Normalized, DecodeError | ResizerUnavailableError | SizeError> {
     const photon = yield* loadPhoton
     const decoded = yield* Effect.try({
       try: () => photon.PhotonImage.new_from_byteslice(Buffer.from(content.content, "base64")),
@@ -44,7 +44,7 @@ export const make = Effect.gen(function* () {
       const width = decoded.get_width()
       const height = decoded.get_height()
       const bytes = Buffer.byteLength(content.content, "utf-8")
-      if (width <= limits.maxWidth && height <= limits.maxHeight && bytes <= limits.maxBase64Bytes) return content
+      if (width <= limits.maxWidth && height <= limits.maxHeight && bytes <= limits.maxBase64Bytes) return { content }
       if (!limits.autoResize)
         return yield* new SizeError({
           resource,
@@ -82,10 +82,17 @@ export const make = Effect.gen(function* () {
             // Base64 uses four bytes per three input bytes, including padding.
             if (Math.ceil(candidate.length / 3) * 4 <= limits.maxBase64Bytes)
               return {
-                ...content,
-                content: Buffer.from(candidate).toString("base64"),
-                encoding: "base64" as const,
-                mime,
+                content: {
+                  ...content,
+                  content: Buffer.from(candidate).toString("base64"),
+                  encoding: "base64" as const,
+                  mime,
+                },
+                // The first candidate keeps the decoded size, so accepting it is a re-encode, not a resize. A decoded
+                // size of zero (a GIF whose screen is 0x0) has no scale to report either.
+                ...(width === 0 || height === 0 || (size.width === width && size.height === height)
+                  ? {}
+                  : { resized: { from: { width, height }, to: size } }),
               }
           }
         } finally {

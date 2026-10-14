@@ -15,6 +15,7 @@ import { Credential } from "./credential.js"
 import { Bus } from "./bus.js"
 import { Watcher } from "./filesystem/watcher.js"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import { Global } from "@orbit/util/global"
 import { Location } from "./location.js"
 import { AbsolutePath } from "./schema.js"
@@ -23,8 +24,13 @@ import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigDiscovery } from "./config/discovery.js"
 import { ConfigWatch } from "./config/watch.js"
 import { ConfigTrust } from "./config/trust.js"
+import { Fingerprint } from "./config/fingerprint.js"
+import { ManagedSettings } from "./managed-settings.js"
 import { WellKnown } from "./wellknown.js"
 import { WorkspaceTrust } from "./workspace-trust.js"
+
+// What differs from a grant, as one comparable string.
+const signature = (item: WorkspaceTrust.Difference) => `${item.path}:${item.kinds.join(",")}`
 
 export function latest<K extends keyof Info>(entries: readonly Entry[], key: K): Info[K] | undefined {
   return entries.findLast((entry): entry is Document => entry.type === "document" && entry.info[key] !== undefined)
@@ -84,6 +90,24 @@ export interface Interface {
   readonly changes: () => Stream.Stream<Watcher.Update>
   /** Updates supported global config fields while preserving unrelated JSONC content. */
   readonly update?: (patch: Patch) => Effect.Effect<void, FSUtil.Error>
+  /**
+   * The executable config of every project and local source the last load read, wherever the folder is not trusted
+   * implicitly: what a grant records, and what `WorkspaceTrust.compare` is asked about. Empty when the server trusts
+   * every folder.
+   */
+  readonly fingerprints: () => Effect.Effect<readonly Observed[]>
+  /**
+   * Whether the plugins that a config directory keeps differ now from what its folder's grant recorded. This reads the
+   * disk: the supervisor asks it when a file under the directory changes, which is before the config reloads and so
+   * before the directory's entry says so.
+   */
+  readonly pluginsChanged: (directory: string) => Effect.Effect<boolean>
+}
+
+/** A source's observation, and the folder whose grant it belongs to. */
+export interface Observed extends WorkspaceTrust.Observation {
+  /** The real path of the folder the grant is for: the project's canonical root, or the folder that holds the source. */
+  readonly root: string
 }
 
 export const Options = Schema.Struct({
@@ -122,6 +146,8 @@ export const testLayer = (initial: Entry[] = [], compat: Compat = defaultCompat)
         compatEnabled: () => Effect.succeed(compat.enabled),
         compat: () => Effect.succeed(compat),
         changes: () => Stream.fromPubSub(updates),
+        fingerprints: () => Effect.succeed([]),
+        pluginsChanged: () => Effect.succeed(false),
         setEntries: (next) => Ref.set(entries, next),
         emitChange: (update) => PubSub.publish(updates, update).pipe(Effect.asVoid),
       })
@@ -147,12 +173,25 @@ export const layer = (options?: Options) =>
       const globalService = yield* Global.Service
       const wellknown = yield* WellKnown.Service
       const trust = yield* WorkspaceTrust.Service
+      const managedSettings = yield* ManagedSettings.Service
       // How each folder was decided in the load that is running or ran last: the project's, and the ones that hold the
       // config found above it. A trust change that moves none of them leaves the config as it is.
       const decisions = new Map<string, boolean>()
+      const states = new Map<string, WorkspaceTrust.State>()
+      // What the executable config of each source was when the load that is running or ran last read it, and which
+      // sources of each folder differed from its grant then. A grant or a revoke that moves neither the decision nor
+      // what differs leaves the config as it is.
+      let observed: readonly Observed[] = []
+      const applied = new Map<string, string>()
       // The folders that the project's own decision covers: its own, and the main checkout when it is a linked worktree.
+      // They are the folders `ProjectTrust` holds the project's config to, so that both bound a read the same way.
       const projectFolders = [
-        ...new Set(yield* Effect.forEach([location.project.directory, location.project.canonical], fs.resolve)),
+        ...new Set(
+          yield* Effect.forEach(
+            [location.directory, location.project.directory, location.project.canonical],
+            fs.resolve,
+          ),
+        ),
       ]
       const reloadLock = Semaphore.makeUnsafe(1)
       const updateLock = Semaphore.makeUnsafe(1)
@@ -191,13 +230,15 @@ export const layer = (options?: Options) =>
       })
 
       // Asks the store once per folder in a load, so the files of one load never disagree about a folder.
-      const decide = Effect.fnUntraced(function* (root: string) {
-        const known = decisions.get(root)
+      const stateOf = Effect.fnUntraced(function* (root: string) {
+        const known = states.get(root)
         if (known !== undefined) return known
         const status = yield* trust.status(root)
+        states.set(root, status)
         decisions.set(root, status.trusted)
-        return status.trusted
+        return status
       })
+      const decide = (root: string) => stateOf(root).pipe(Effect.map((state) => state.trusted))
 
       // Asks the store every time, for what is wanted outside a load.
       const decideNow = (root: string) => trust.status(root).pipe(Effect.map((status) => status.trusted))
@@ -208,13 +249,21 @@ export const layer = (options?: Options) =>
       const standing = Effect.fnUntraced(function* (folder: string, ask: (root: string) => Effect.Effect<boolean>) {
         const directory = yield* fs.resolve(folder)
         if (projectFolders.some((project) => FSUtil.contains(project, directory))) {
-          return { roots: projectFolders, directory, trusted: yield* ask(location.project.canonical) }
+          const root = location.project.canonical
+          return { roots: projectFolders, directory, root, trusted: yield* ask(root) }
         }
         const holder = yield* fs.resolve(ConfigTrust.holder(folder))
-        return { roots: [holder], directory, trusted: yield* ask(holder) }
+        // A holder that is the home directory or a filesystem root contains everything below it, so it cannot stand for
+        // what a file reference may reach: only the config container does, and a document that sits directly in the
+        // root reaches nothing.
+        const persistent = (yield* trust.status(holder)).persistent
+        const roots = ConfigTrust.reach({ holder, container: directory, persistent })
+        return { roots, directory, root: holder, trusted: yield* ask(holder) }
       })
 
       const loadFile = Effect.fnUntraced(function* (filepath: string, scope: Scope) {
+        // A file of a project that a link leads to a share is not read: reading connects, before any trust check.
+        if ((scope === "project" || scope === "local") && (yield* LinkShare.blocked(fs, filepath))) return
         const text = yield* fs.readFileStringSafe(filepath)
         if (text === undefined) return
         // What the file of an untrusted folder refers to is read before anything decides what to keep of it, so it is
@@ -329,7 +378,9 @@ export const layer = (options?: Options) =>
 
       // The entry as it applies: unchanged unless the folder that holds it is untrusted and it is a project's or a local
       // one. Nothing here waits for a person: an untrusted folder just loads with what it may not supply taken out.
-      const stampEntry = Effect.fnUntraced(function* (entry: Entry) {
+      // A trusted folder's entry whose executable config differs from what the grant recorded loses those kinds only.
+      // What is read is kept for the grant that records it, so a first grant records exactly what was shown.
+      const stampEntry = Effect.fnUntraced(function* (entry: Entry, seen: Observed[], differences: Map<string, string[]>) {
         if (entry.scope !== "project" && entry.scope !== "local") return entry
         const folder =
           entry.type === "directory"
@@ -338,7 +389,33 @@ export const layer = (options?: Options) =>
               ? location.project.directory
               : path.dirname(entry.path)
         const place = yield* standing(folder, decide)
-        return place.trusted ? entry : ConfigTrust.stamp(entry, place)
+        const state = yield* stateOf(place.root)
+        // The server trusts every folder: nothing is recorded and nothing counts as changed.
+        if (state.source === "implicit") return entry
+        const observation = yield* observe(entry, place.roots)
+        if (observation !== undefined) seen.push({ ...observation, root: place.root })
+        if (!place.trusted) return ConfigTrust.stamp(entry, place)
+        if (observation === undefined) return entry
+        const changed = yield* trust.compare(place.root, [observation])
+        differences.set(place.root, [...(differences.get(place.root) ?? []), ...changed.map(signature)])
+        return changed.length === 0 ? entry : ConfigTrust.partial(entry, place, changed.flatMap((item) => item.kinds))
+      })
+
+      // The paths a document's `skills` names on disk, as the skill plugin resolves them.
+      const skillRoots = (info: Info) =>
+        (info.skills ?? []).flatMap((item) => {
+          if (URL.canParse(item) && /^https?:$/.test(new URL(item).protocol)) return []
+          const expanded = item.startsWith("~/") ? path.join(globalService.home, item.slice(2)) : item
+          return [path.isAbsolute(expanded) ? expanded : path.join(location.directory, expanded)]
+        })
+
+      const observe = Effect.fnUntraced(function* (entry: Entry, within: readonly string[]) {
+        if (entry.path === undefined) return undefined
+        const digests =
+          entry.type === "directory"
+            ? yield* Fingerprint.directory(fs, entry.path, within)
+            : yield* Fingerprint.document(fs, entry.path, entry.info, skillRoots(entry.info), within)
+        return { path: entry.path, identity: yield* fs.resolve(entry.path), digests } satisfies WorkspaceTrust.Observation
       })
 
       // A root of another product carries the verdict for the folder that holds it, unless it is the user's own, which is
@@ -353,16 +430,39 @@ export const layer = (options?: Options) =>
 
       const load = Effect.fn("Config.load")(function* (sources: ConfigDiscovery.Sources) {
         decisions.clear()
+        states.clear()
         const globalEntries = sources.global
           ? yield* loadDirectory(sources.global, userScopes).pipe(Effect.orDie)
           : undefined
         const homeEntries = sources.home ? yield* loadLevel(sources.home, userScopes).pipe(Effect.orDie) : undefined
         const projectEntries = yield* loadLevel(sources, projectScopes).pipe(Effect.orDie)
-        const explicit = sources.explicit
-          ? yield* loadFile(sources.explicit, "flag").pipe(
-              Effect.map((config) => (config ? [config] : [])),
-              Effect.orDie,
-            )
+        // A file loads once, at the first scope that reached it: naming a project's own file as the explicit file must
+        // not load it a second time, unstamped, in the flag scope, where an untrusted folder's trust no longer applies.
+        // Compared by real path, folding case where the file system does. On Windows the runtime's own link resolution
+        // leaves an 8.3 short name (PROGRA~1) as typed, so the native real path, which expands it, is taken as well.
+        // A real path that cannot be read (a folder without search permission) falls back to the lexical path: the read
+        // that follows fails the same way and is skipped, so nothing loads twice and nothing dies here.
+        const identity = (file: string) =>
+          fs.resolve(file).pipe(
+            Effect.catchDefect(() => Effect.succeed(path.resolve(file))),
+            Effect.map((real) => (process.platform === "win32" ? FSUtil.normalizePath(real).toLowerCase() : real)),
+          )
+        const explicitFile = sources.explicit
+        const explicit = explicitFile
+          ? yield* Effect.gen(function* () {
+              const explicitIdentity = yield* identity(explicitFile)
+              const claimed = yield* Effect.forEach(
+                [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
+                  entries ? [...entries.base, ...entries.local] : [],
+                ),
+                (entry) => (entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined)),
+              )
+              if (claimed.includes(explicitIdentity)) return []
+              return yield* loadFile(explicitFile, "flag").pipe(
+                Effect.map((config) => (config ? [config] : [])),
+                Effect.orDie,
+              )
+            })
           : []
         const content =
           options?.content !== undefined
@@ -382,6 +482,19 @@ export const layer = (options?: Options) =>
         const user = [globalEntries, homeEntries].flatMap((entries) =>
           entries ? [...entries.base, ...entries.local] : [],
         )
+        // The managed document exists only when a managed settings file was read.
+        const managedSnapshot = managedSettings.current()
+        const organization =
+          managedSnapshot.sources.length > 0
+            ? [
+                new Document({
+                  type: "document",
+                  path: AbsolutePath.make(path.join(managedSnapshot.directory, "managed-settings.json")),
+                  scope: "managed",
+                  info: managedSnapshot.info,
+                }),
+              ]
+            : []
         // Other products' files load only while compatibility is on, and only the native documents decide that, so
         // the switch is read before any of them is.
         const compat = compatOn([
@@ -391,15 +504,18 @@ export const layer = (options?: Options) =>
           ...projectEntries.local,
           ...explicit,
           ...content,
+          ...organization,
         ])
           ? yield* loadCompat(sources)
           : { user: [], project: [], local: [] }
 
-        // Scopes rank remote < user < project < local < flag; the managed scope is reserved to load after all of
-        // them. Within a scope, outer sources come first, base documents before their local counterparts, and
-        // ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file. The documents of other products' files open their scope,
-        // so a native document of the same scope outranks them.
-        return yield* Effect.forEach(
+        // Scopes rank remote < user < project < local < flag < managed. Within a scope, outer sources come first, base
+        // documents before their local counterparts, and ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file. The
+        // documents of other products' files open their scope, so a native document of the same scope outranks them.
+        // The managed document is the merge of the managed settings files, and comes last.
+        const seen: Observed[] = []
+        const differences = new Map<string, string[]>()
+        const stamped = yield* Effect.forEach(
           [
             ...remote,
             ...compat.user,
@@ -410,13 +526,19 @@ export const layer = (options?: Options) =>
             ...projectEntries.local,
             ...explicit,
             ...content,
+            ...organization,
           ],
-          stampEntry,
+          (entry) => stampEntry(entry, seen, differences),
         )
+        observed = seen
+        applied.clear()
+        for (const [root, found] of differences) applied.set(root, found.toSorted().join("|"))
+        return stamped
       })
 
       const initial = yield* ConfigDiscovery.discover(options)
       let sources = initial
+      let restrictions = managedSettings.current().restrictions
       let configs = yield* load(initial)
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const reloads = yield* PubSub.sliding<void>(1)
@@ -449,15 +571,19 @@ export const layer = (options?: Options) =>
       const reload = Effect.fn("Config.reload")(
         function* () {
           const discovered = yield* ConfigDiscovery.discover(options)
+          const nextRestrictions = managedSettings.current().restrictions
           const next = yield* load(discovered)
           yield* reconcile(discovered, next)
           const compatibilityChanged = !isDeepStrictEqual(
             applicable(sources, configs).compat,
             applicable(discovered, next).compat,
           )
-          if (isDeepStrictEqual(configs, next) && !compatibilityChanged) return
+          // Restrictions never enter a document, so an edit that changes only them still has to be announced.
+          const restrictionsChanged = !isDeepStrictEqual(restrictions, nextRestrictions)
+          if (isDeepStrictEqual(configs, next) && !compatibilityChanged && !restrictionsChanged) return
           sources = discovered
           configs = next
+          restrictions = nextRestrictions
           yield* bus.publish(Event.Updated, {})
         },
         (effect) => reloadLock.withPermit(effect),
@@ -484,6 +610,10 @@ export const layer = (options?: Options) =>
         ),
         Effect.forkScoped({ startImmediately: true }),
       )
+      yield* managedSettings.changes().pipe(
+        Stream.runForEach(() => requestReload),
+        Effect.forkScoped({ startImmediately: true }),
+      )
       yield* bus.subscribe(WellKnown.Event.Updated).pipe(
         Stream.runForEach(() =>
           reload().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload wellknown sources", { cause }))),
@@ -493,10 +623,18 @@ export const layer = (options?: Options) =>
       // Trust changes arrive for every folder the server knows. Asking the store again about the folders this config was
       // decided for, rather than comparing paths, settles whether one of them moved however it was spelled, and costs
       // a read for each.
+      // A grant for a folder that is trusted already moves nothing but what differs from it, which is asked as well.
       yield* bus.subscribe(Trust.Event.Updated).pipe(
         Stream.filterEffect(() =>
           Effect.forEach([...decisions], ([root, decided]) =>
-            trust.status(root).pipe(Effect.map((status) => status.trusted !== decided)),
+            Effect.gen(function* () {
+              if ((yield* trust.status(root)).trusted !== decided) return true
+              const found = yield* trust.compare(
+                root,
+                observed.filter((item) => item.root === root),
+              )
+              return found.map(signature).toSorted().join("|") !== (applied.get(root) ?? "")
+            }),
           ).pipe(Effect.map((moved) => moved.includes(true))),
         ),
         Stream.runForEach(() => requestReload),
@@ -564,6 +702,21 @@ export const layer = (options?: Options) =>
         }),
         changes: () => Stream.fromPubSub(updates),
         update,
+        fingerprints: () => Effect.sync(() => observed),
+        pluginsChanged: Effect.fn("Config.pluginsChanged")(function* (directory) {
+          const entry = configs.find(
+            (item) =>
+              item.type === "directory" && item.path === directory && (item.scope === "project" || item.scope === "local"),
+          )
+          if (entry === undefined) return false
+          const place = yield* standing(directory, decideNow)
+          const state = yield* trust.status(place.root)
+          if (!state.trusted || state.source === "implicit") return false
+          const plugins = yield* Fingerprint.pluginsOf(fs, directory, place.roots)
+          if (plugins === undefined) return false
+          const identity = yield* fs.resolve(directory)
+          return (yield* trust.compare(place.root, [{ path: directory, identity, digests: { plugins } }])).length > 0
+        }),
       })
     }),
   )
@@ -579,6 +732,7 @@ export function configured(options?: Options) {
       Global.node,
       Location.node,
       Credential.node,
+      ManagedSettings.node,
       WellKnown.node,
       WorkspaceTrust.node,
     ],

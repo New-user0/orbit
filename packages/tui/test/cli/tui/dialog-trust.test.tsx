@@ -23,6 +23,7 @@ const project: TrustStatus = {
   directory: "/tmp/orbit",
   trusted: false,
   persistent: true,
+  changed: [],
   withheld: [
     { path: "/tmp/orbit/.orbit", kinds: ["plugins", "commands"] },
     { path: "/tmp/orbit/orbit.json", kinds: ["hooks", "mcp"] },
@@ -46,6 +47,7 @@ const away: TrustStatus = {
   directory: "/elsewhere/other-clone",
   trusted: false,
   persistent: true,
+  changed: [],
   withheld: [{ path: "/elsewhere/other-clone/orbit.json", kinds: ["providers"] }],
 }
 
@@ -83,6 +85,115 @@ test("a folder that can be remembered offers trust and not now, and trusting it 
   }
 })
 
+// A folder that was trusted, and whose hooks and plugins changed since: a pull, a branch switch or an edit.
+const changedSince: TrustStatus = {
+  directory: "/tmp/orbit",
+  trusted: true,
+  persistent: true,
+  source: "saved",
+  withheld: [
+    { path: "/tmp/orbit/orbit.json", kinds: ["hooks"] },
+    { path: "/tmp/orbit/.orbit", kinds: ["plugins", "hooks"] },
+  ],
+  changed: [
+    { path: "/tmp/orbit/orbit.json", kinds: ["hooks"] },
+    { path: "/tmp/orbit/.orbit", kinds: ["plugins", "hooks"] },
+  ],
+}
+
+test("a trusted folder whose config changed asks to trust the changes, lists what changed, and a grant renews it", async () => {
+  const fixture = await renderTrust(changedSince)
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust the changes?"))
+    const frame = fixture.app.captureCharFrame()
+    expect(frame).toContain("⊙ Changed  /tmp/orbit")
+    expect(frame).toContain("changed since you trusted it")
+    expect(frame).toContain("orbit.json")
+    expect(frame).toContain("hooks")
+    expect(frame).toContain(".orbit")
+    expect(frame).toContain("plugins, hooks")
+    expect(frame).toContain("Trust changes")
+    expect(frame).toContain("Not now")
+    // Not the question for an untrusted folder.
+    expect(frame).not.toContain("Trust this folder")
+    expect(frame).not.toContain("Untrusted")
+
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => !frame.includes("Trust the changes?"))
+
+    // A grant that is stored stays stored.
+    expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
+    await until(() => fixture.toast().currentToast !== null)
+    expect(fixture.toast().currentToast).toMatchObject({ variant: "success", message: "Trusted the changes in /tmp/orbit" })
+    expect(fixture.status().changed).toEqual([])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("a grant that lasts until Orbit restarts is renewed the same way", async () => {
+  const fixture = await renderTrust({ ...changedSince, source: "session" })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust the changes?"))
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => !frame.includes("Trust the changes?"))
+    expect(fixture.updates).toEqual([{ directory, trust: true, persist: false }])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("writes out the control characters in the name of a source", async () => {
+  const fixture = await renderTrust({
+    ...changedSince,
+    withheld: [{ path: "/tmp/orbit/evil\u001b[2Jname.json", kinds: ["hooks"] }],
+    changed: [{ path: "/tmp/orbit/evil\u001b[2Jname.json", kinds: ["hooks"] }],
+  })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust the changes?"))
+    const frame = fixture.app.captureCharFrame()
+    expect(frame).not.toContain("\u001b")
+    expect(frame).toContain("evil\\x1b[2Jname.json")
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("Not now leaves the changed config off and does not ask again in this run", async () => {
+  const fixture = await renderTrust(changedSince)
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust the changes?"))
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => !frame.includes("Trust the changes?"))
+    expect(fixture.updates).toEqual([])
+    expect(fixture.status().changed).not.toEqual([])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("a file that sets environment variables is listed with their label", async () => {
+  const fixture = await renderTrust({
+    ...project,
+    withheld: [{ path: "/tmp/orbit/orbit.json", kinds: ["env"] }],
+  })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    const frame = fixture.app.captureCharFrame()
+    expect(frame).toContain("orbit.json")
+    expect(frame).toContain("environment variables")
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
 test("config above the folder is listed after the folder's own, with the command that trusts the folder that holds it", async () => {
   const fixture = await renderTrust(layered)
 
@@ -95,12 +206,41 @@ test("config above the folder is listed after the folder's own, with the command
     expect(frame.indexOf("MCP servers")).toBeLessThan(frame.indexOf("hooks"))
     // Trusting this folder does not turn the rest on, and what does is named, as the commands name it.
     expect(frame).toMatch(/Config\s+above\s+this\s+folder\s+stays\s+off\s+until\s+its\s+own\s+folder\s+is\s+trusted/)
-    expect(frame).toMatch(/orb\s+trust\s+\/tmp\/orbit`/)
+    expect(frame).toMatch(/orb\s+trust\s+\/tmp\/orbit\s+--for\s+\/tmp\/\s*orbit\/packages\/tui`/)
     expect(frame).toMatch(choice)
   } finally {
     fixture.app.renderer.destroy()
   }
 })
+
+test.each(["$(touch PWNED)", "`touch PWNED`", 'say "hi"', "it's", "a\u001b[2Jb"])(
+  "the command for a folder named %j is quoted for a shell, or left out, and never carries the raw name",
+  async (name) => {
+    const folder = `/tmp/orbit/${name}`
+    const fixture = await renderTrust({
+      ...layered,
+      withheld: [{ path: `${folder}/orbit.json`, kinds: ["hooks"], directory: folder }, ...layered.withheld.slice(1)],
+    })
+
+    try {
+      await fixture.app.waitForFrame((frame) => frame.includes(title))
+      const frame = fixture.app.captureCharFrame()
+      expect(frame).not.toContain("\u001b")
+      expect(frame).toMatch(/Config\s+above\s+this\s+folder/)
+      // The frame wraps lines wherever it likes, so the text is compared with its white space taken out.
+      const squeezed = frame.replace(/\s+/g, "")
+      expect(frame).not.toMatch(/orb\s+trust\s+\/tmp\/orbit\/(\$|`|say|it|a)/)
+      if (name.includes("\u001b")) expect(frame).toContain("\\x1b")
+      // On a POSIX shell the name is the one argument inside single quotes, which expand nothing. On Windows neither
+      // PowerShell nor cmd has quotes that expand nothing, so no command is printed for any of these names.
+      if (process.platform === "win32" || name.includes("\u001b"))
+        expect(squeezed).toContain("itsnameisnotprintedasacommand")
+      else expect(squeezed).toContain(`orbtrust'/tmp/orbit/${name.replaceAll("'", "'\\''").replace(/\s+/g, "")}'`)
+    } finally {
+      fixture.app.renderer.destroy()
+    }
+  },
+)
 
 test("a folder with no config above it does not mention one", async () => {
   const fixture = await renderTrust(project)
@@ -125,7 +265,7 @@ test("trusting the folder says what stays off above it, and that its own folder 
     expect(fixture.toast().currentToast).toMatchObject({
       variant: "success",
       message:
-        "Trusted /tmp/orbit/app. Config above it stays off until its own folder is trusted: `orb trust /tmp/orbit`",
+        "Trusted /tmp/orbit/app. Config above it stays off until its own folder is trusted: `orb trust /tmp/orbit --for /tmp/orbit/packages/tui`",
     })
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
   } finally {
@@ -466,6 +606,7 @@ async function renderTrust(
       trusted: true,
       source: body.persist === false ? "session" : "saved",
       withheld: options?.leaves ?? [],
+      changed: [],
     }
     statuses.set(folder, granted)
     return json(granted)

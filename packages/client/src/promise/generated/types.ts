@@ -18,9 +18,11 @@ export type TrustKind =
   | "permissions"
   | "providers"
   | "shell"
+  | "env"
   | "formatter"
   | "lsp"
   | "sandbox"
+  | "skills"
   | "network"
   | "settings"
 
@@ -96,6 +98,8 @@ export type PromptBase64 = string
 export type PromptFileSource = { type: "inline" } | { type: "uri"; uri: string }
 
 export type PromptMention = { start: number; end: number; text: string }
+
+export type SessionTurnOutput = { schema: { [x: string]: JsonValue }; attempts?: number }
 
 export type SessionInboxDelivery = "steer" | "queue"
 
@@ -224,7 +228,7 @@ export type FormWhen = {
   value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
 }
 
-export type FormOption = { value: string; label: string; description?: string }
+export type FormOption = { value: string; label: string; description?: string; preview?: string }
 
 export type FormExternalField = { key: string; type: "external"; url: string; title?: string; description?: string }
 
@@ -495,11 +499,19 @@ export type ConfigWorktree = { directory: string }
 
 export type ConfigModelCapabilities = { tools?: boolean; input?: Array<string>; output?: Array<string> }
 
-export type ConfigEffective = { compatibility: boolean }
+export type ConfigEffective = {
+  compatibility: boolean
+  permissions?: { bypass: boolean; always: boolean }
+  plugins?: { allow?: Array<string>; block?: Array<string>; organization?: string }
+  hooks?: { disabled: boolean; managed_only: boolean }
+  mcp?: { managed_only: boolean }
+}
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
-export type TrustWithheld = { path: string; kinds: Array<TrustKind>; directory?: string }
+export type TrustWithheld = { path: string; kinds: Array<TrustKind>; directory?: string; persistent?: boolean }
+
+export type TrustChanged = { path: string; kinds: Array<TrustKind> }
 
 export type SessionMessageLocationSwitched = {
   id: string
@@ -530,8 +542,6 @@ export type V2EventServerConnected = {
   type: "server.connected"
   data: {}
 }
-
-export type SessionTurnOptions = { maxSteps?: number; maxCost?: number; maxTokens?: number; fallbackModel?: ModelRef }
 
 export type ModelSettings = { compaction?: ProviderCompaction } & { [x: string]: any }
 
@@ -587,6 +597,14 @@ export type PromptFileAttachment = {
 export type PromptAgentAttachment = { name: string; mention?: PromptMention }
 
 export type PromptSkillAttachment = { id: string; name: string; text?: string; mention?: PromptMention }
+
+export type SessionTurnOptions = {
+  maxSteps?: number
+  maxCost?: number
+  maxTokens?: number
+  fallbackModel?: ModelRef
+  output?: SessionTurnOutput
+}
 
 export type SessionMessageSynthetic = {
   id: string
@@ -1786,6 +1804,7 @@ export type TrustStatus = {
   persistent: boolean
   source?: TrustSource
   withheld: Array<TrustWithheld>
+  changed?: Array<TrustChanged>
 }
 
 export type SessionInboxMove = {
@@ -2203,6 +2222,7 @@ export type ConfigEntry =
       info: {
         $schema?: string
         shell?: string
+        env?: { [x: string]: string }
         model?: string | { providerID: string; model: string; variant?: string }
         fallback_model?: string | { providerID: string; model: string; variant?: string }
         output_token_cap?: number
@@ -2288,6 +2308,7 @@ export type ConfigEntry =
           image?: { auto_resize?: boolean; max_width?: number; max_height?: number; max_base64_bytes?: number }
         }
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
+        shell_tool?: { timeout?: number; max_timeout?: number }
         tool_output?: { max_lines?: number; max_bytes?: number }
         tool_execution?: { max_concurrency?: number }
         mcp?: {
@@ -2347,6 +2368,7 @@ export type ConfigEntry =
             | { path: string; description?: string; hidden?: boolean }
         }
         websearch?: false | { provider: "random" | (string & {}) }
+        webfetch?: { verbatim_hosts?: Array<string> }
         plugins?: Array<string | { package: string; options?: { [x: string]: JsonValue } }>
         worktree?: ConfigWorktree
         warming?: boolean | { prompt?: string; interval?: string; duration?: string }
@@ -2403,7 +2425,7 @@ export type ConfigEntry =
         }
       }
     }
-  | { type: "directory"; path: string; scope?: ConfigScope; trusted?: boolean }
+  | { type: "directory"; path: string; scope?: ConfigScope; trusted?: boolean; withheld?: Array<TrustKind> }
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
 
@@ -2696,6 +2718,10 @@ export type AgentNotFoundError = {
 export const isAgentNotFoundError = (value: unknown): value is AgentNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "AgentNotFoundError"
 
+export type ForbiddenError = { readonly _tag: "ForbiddenError"; readonly message: string }
+export const isForbiddenError = (value: unknown): value is ForbiddenError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ForbiddenError"
+
 export type InvalidCursorError = { readonly _tag: "InvalidCursorError"; readonly message: string }
 export const isInvalidCursorError = (value: unknown): value is InvalidCursorError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "InvalidCursorError"
@@ -2881,10 +2907,6 @@ export type PtyNotFoundError = { readonly _tag: "PtyNotFoundError"; readonly pty
 export const isPtyNotFoundError = (value: unknown): value is PtyNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "PtyNotFoundError"
 
-export type ForbiddenError = { readonly _tag: "ForbiddenError"; readonly message: string }
-export const isForbiddenError = (value: unknown): value is ForbiddenError =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ForbiddenError"
-
 export type ShellNotFoundError = { readonly _tag: "ShellNotFoundError"; readonly id: string; readonly message: string }
 export const isShellNotFoundError = (value: unknown): value is ShellNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ShellNotFoundError"
@@ -2920,13 +2942,30 @@ export type LocationTrustGetOutput = TrustStatus
 
 export type LocationTrustUpdateInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
-  readonly trust: { readonly trust: boolean; readonly persist?: boolean | undefined }["trust"]
-  readonly persist?: { readonly trust: boolean; readonly persist?: boolean | undefined }["persist"]
+  readonly trust: {
+    readonly trust: boolean
+    readonly persist?: boolean | undefined
+    readonly holder?: string | undefined
+  }["trust"]
+  readonly persist?: {
+    readonly trust: boolean
+    readonly persist?: boolean | undefined
+    readonly holder?: string | undefined
+  }["persist"]
+  readonly holder?: {
+    readonly trust: boolean
+    readonly persist?: boolean | undefined
+    readonly holder?: string | undefined
+  }["holder"]
 }
 
 export type LocationTrustUpdateOutput = TrustStatus
 
 export type LocationTrustListOutput = Array<TrustGrant>
+
+export type LocationTrustRevokeInput = { readonly directory: { readonly directory: string }["directory"] }
+
+export type LocationTrustRevokeOutput = Array<string>
 
 export type AgentListInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
@@ -3313,6 +3352,7 @@ export type SessionImportInput = {
             readonly maxCost?: number
             readonly maxTokens?: number
             readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
           }
           readonly delivery?: "steer" | "queue"
           readonly type: "user"
@@ -3659,6 +3699,7 @@ export type SessionImportInput = {
             readonly maxCost?: number
             readonly maxTokens?: number
             readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
           }
           readonly delivery?: "steer" | "queue"
           readonly type: "user"
@@ -4005,6 +4046,7 @@ export type SessionImportInput = {
             readonly maxCost?: number
             readonly maxTokens?: number
             readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
           }
           readonly delivery?: "steer" | "queue"
           readonly type: "user"
@@ -4346,6 +4388,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4373,6 +4416,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4400,6 +4444,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4427,6 +4472,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4454,6 +4500,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4481,6 +4528,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4508,6 +4556,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4535,6 +4584,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4562,6 +4612,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4921,6 +4972,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -4986,6 +5038,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5023,6 +5076,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5088,6 +5142,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5132,6 +5187,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5197,6 +5253,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5234,6 +5291,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5299,6 +5357,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5343,6 +5402,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5408,6 +5468,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5445,6 +5506,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5510,6 +5572,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5554,6 +5617,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5619,6 +5683,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5656,6 +5721,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5721,6 +5787,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number

@@ -7,6 +7,7 @@ import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigCommand } from "@orbit/schema/config/command"
 import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import type { ConfigWarming } from "@orbit/schema/config/warming"
+import type { ConfigWebFetch } from "@orbit/schema/config/webfetch"
 import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
 import type { Permission } from "@orbit/schema/permission"
 import { Trust } from "@orbit/schema/trust"
@@ -35,6 +36,17 @@ import { FSUtil } from "@orbit/util/fs-util"
 //   output styles of `OutputStylePlugin`;
 // - `escapes`: the path that a file tool is given (`FileAccess`), which asks about the folder a link leads to, as for any
 //   path outside the project.
+//
+// A folder that was trusted is held to its config as the grant saw it. `Config` digests the executable parts of every
+// project and local source (`Fingerprint`), `WorkspaceTrust.compare` says which kinds differ from the grant's record, and
+// `partial` cuts those kinds from that source alone: a document loses the fields, a directory lists `withheld`, which the
+// readers below ask. `Fingerprint` reads only inside the folders that `supplies` holds the config to (the project's
+// folders, or what `reach` gives above it), before trust as after: what leads out is named with its links, never read, and a
+// network path is not touched.
+// The readers of a directory that carries code ask `ProjectTrust.allows(file, kind)`:
+//
+// - `plugins`: `ConfigPluginSource`, which also compares again when it scans;
+// - `hooks` and `mcp` of skill and agent front matter: whoever runs them (hooks-21, agents-extensibility-9).
 
 /** What is left of a value once what an untrusted folder may not supply is taken out, and the kinds of what went. */
 interface Outcome<V> {
@@ -121,6 +133,13 @@ function webSearch(selection: ConfigWebSearch.Selection): Outcome<ConfigWebSearc
   return selection === false ? { value: selection, withheld: [] } : { value: undefined, withheld: ["network"] }
 }
 
+// A listed host's Markdown pages reach the model unanswered, so a repository cannot add one. An empty list only
+// tightens, and is kept.
+function webFetch(value: ConfigWebFetch.Info): Outcome<ConfigWebFetch.Info> {
+  if (!value.verbatim_hosts || value.verbatim_hosts.length === 0) return { value, withheld: [] }
+  return { value: undefined, withheld: ["settings"] }
+}
+
 // Keep-alive requests are generations that are paid for, and nothing bounds how often a repository could ask for one.
 // Only turning them off is kept, for the reason that applies to web search.
 function warming(selection: boolean | ConfigWarming.Info): Outcome<boolean | ConfigWarming.Info> {
@@ -189,6 +208,8 @@ export const classification = {
   info: {
     $schema: inert,
     shell: withhold("shell"),
+    // It can put PATH, NODE_OPTIONS, LD_PRELOAD, proxies, CA bundles or provider keys into every program Orbit starts.
+    env: withhold("env"),
     // A model, a provider or a budget is paid for by the user, and the owner decided that an untrusted folder cannot pick one.
     model: withhold("providers"),
     fallback_model: withhold("providers"),
@@ -209,17 +230,21 @@ export const classification = {
     lsp: withhold("lsp"),
     media: inert,
     sandbox: withhold("sandbox"),
+    // A budget: a tiny timeout turns every command into a background job whose completion wakes the session for a paid
+    // request, and the atomic value would replace the user's own.
+    shell_tool: withhold("providers"),
     tool_output: inert,
     tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
     compaction: inert,
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.
     compatibility: inert,
-    skills: withhold("settings"),
+    skills: withhold("skills"),
     commands: filter(sanitizeCommands),
     instructions: filter(instructionPaths),
     references: withhold("settings"),
     websearch: filter(webSearch),
+    webfetch: filter(webFetch),
     plugins: withhold("plugins"),
     worktree: withhold("settings"),
     warming: filter(warming),
@@ -267,9 +292,13 @@ export interface Result {
   readonly withheld: readonly Trust.Kind[]
 }
 
-/** What an untrusted folder's document may contribute, and the kinds of what it may not. */
-export function sanitize(info: Info, place: Place): Result {
-  const result = walk(info, classification.info, place, (fields) => new Info(fields))
+/**
+ * What an untrusted folder's document may contribute, and the kinds of what it may not. With `only`, the folder is
+ * trusted and only those kinds are taken out, which are the ones whose executable parts changed since it was: a field
+ * of another kind is kept as written, and so is a filtered one.
+ */
+export function sanitize(info: Info, place: Place, only?: readonly Trust.Kind[]): Result {
+  const result = walk(info, classification.info, place, (fields) => new Info(fields), only)
   return { info: result.value, withheld: result.withheld }
 }
 
@@ -286,12 +315,18 @@ function walk<T extends object>(
   table: Table<T>,
   place: Place,
   make: (fields: Draft<T>) => T,
+  only?: readonly Trust.Kind[],
 ): { readonly value: T; readonly withheld: readonly Trust.Kind[] } {
   const treat = <K extends keyof T>(name: K): readonly Step[] => {
     const field = value[name]
     if (field === undefined || field === null) return []
     // A field the table does not know came from a newer schema, so it is held back like any other unknown setting.
     const treatment: Treatment<NonNullable<T[K]>> | undefined = table[name]
+    if (only !== undefined) {
+      if (treatment?.type !== "withhold" || !only.includes(treatment.kind))
+        return [{ name, kept: field, withheld: [], changed: false }]
+      return [{ name, kept: undefined, withheld: [treatment.kind], changed: true }]
+    }
     if (treatment === undefined) return [{ name, kept: undefined, withheld: ["settings" as const], changed: true }]
     if (treatment.type === "withhold") return [{ name, kept: undefined, withheld: [treatment.kind], changed: true }]
     if (treatment.type === "filter") {
@@ -326,6 +361,18 @@ export function stamp(entry: Entry, place: Place): Entry {
   return new Document({ ...entry, info: sanitized.info, trusted: false, withheld: sanitized.withheld })
 }
 
+/**
+ * The entry of a trusted folder when some of what it holds changed since the folder was trusted: a document loses
+ * those kinds, and a directory lists them for the readers of its files (`allows`, the plugin source). Both list what is
+ * off in `withheld`; `trusted` stays unset, because everything else the entry holds is as trusted.
+ */
+export function partial(entry: Entry, place: Place, kinds: readonly Trust.Kind[]): Entry {
+  const changed = Trust.Kinds.filter((kind) => kinds.includes(kind))
+  if (changed.length === 0 || (entry.scope !== "project" && entry.scope !== "local")) return entry
+  if (entry.type === "directory") return new Directory({ ...entry, withheld: changed })
+  return new Document({ ...entry, info: sanitize(entry.info, place, changed).info, withheld: changed })
+}
+
 // The folders that a product keeps its config in. They sit inside the folder the config belongs to.
 const containers = [".orbit", CompatNames.vendor.directory, CompatNames.agents]
 
@@ -338,6 +385,18 @@ export function holder(location: string) {
   return containers.includes(path.basename(location)) ? path.dirname(location) : location
 }
 
+/**
+ * The folders that a file reference in config found above the project, or a file that such a config directory
+ * supplies, may reach: the holder, which is the folder trust is decided for. A holder that cannot be trusted for good
+ * (the home directory, a filesystem root) contains everything below it, so a decision for it says nothing about the
+ * rest of the drive: only the config container may be reached, and nothing for config that sits directly in the holder.
+ * `persistent` is `WorkspaceTrust`'s answer for the holder, so that the two never disagree about what a root is.
+ */
+export function reach(input: { readonly holder: string; readonly container: string; readonly persistent: boolean }) {
+  if (input.persistent) return [input.holder]
+  return input.container === input.holder ? [] : [input.container]
+}
+
 /** What decides a file that no config entry speaks for. */
 export interface Context {
   /** The folders the project's decision covers, and what is decided. */
@@ -345,6 +404,11 @@ export interface Context {
   readonly trusted: boolean
   /** The roots of other products, as `Config.compat` lists them with the verdict it stamped on the ones above. */
   readonly compat: readonly { readonly path: string; readonly scope: "user" | "project"; readonly trusted?: boolean }[]
+  /**
+   * What is decided for an entry now, where that differs from the stamp it was loaded with. The stamp trails a grant or
+   * a revoke by the time the config takes to reload, and a caller that is about to run code must not act on it.
+   */
+  readonly verdicts?: ReadonlyMap<Entry, { readonly trusted: boolean; readonly withheld: readonly Trust.Kind[] }>
 }
 
 /**
@@ -353,13 +417,19 @@ export interface Context {
  * which are untrusted unless the decision says otherwise. So a file in an untrusted project is refused whether or not the
  * project has any config of its own, and one in the user's own config or in a root of the user's, which are never
  * subject to trust, is allowed even when the project's folder contains it. A file that nothing covers is allowed.
- * Ask `ProjectTrust.allows` rather than assembling the context.
+ * Ask `ProjectTrust.allows` rather than assembling the context. With a `kind`, a config directory that holds back that
+ * kind because its files changed since the folder was trusted refuses its own files, whatever the folder's decision.
  */
-export function allows(entries: readonly Entry[], file: string, context: Context) {
+export function allows(entries: readonly Entry[], file: string, context: Context, kind?: Trust.Kind) {
   const covers = [
     ...entries.flatMap((entry) => {
       const root = covered(entry)
-      return root === undefined ? [] : [{ root, trusted: entry.trusted !== false }]
+      if (root === undefined) return []
+      // An entry's stamp is the decision of the last load; a caller that has the decision now passes it.
+      const verdict = context.verdicts?.get(entry) ?? { trusted: entry.trusted !== false, withheld: entry.withheld ?? [] }
+      // What a trusted directory holds back of one kind is off for its own files only, not for the folder around it.
+      const off = kind !== undefined && entry.type === "directory" && verdict.trusted && verdict.withheld.includes(kind)
+      return [{ root, trusted: verdict.trusted }, ...(off ? [{ root: entry.path, trusted: false }] : [])]
     }),
     ...context.roots.map((root) => ({ root, trusted: context.trusted })),
     // A root with no verdict leaves the decision to the sources around it: only what is known is added.

@@ -18,7 +18,8 @@
   "scripts": {
     "build": "bun run script/build.ts",
     "dev": "bun run src/index.ts",
-    "test": "bun test --timeout 30000 --only-failures",
+    "test": "bun ../../tools/test/run.ts --timeout 30000 --max-concurrency=8 --only-failures",
+    "test:timings": "bun ../../tools/test/run.ts --timeout 30000 --max-concurrency=8 --only-failures --update-timings",
     "typecheck": "tsgo -b"
   },
   "dependencies": {

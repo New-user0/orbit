@@ -4,6 +4,7 @@ import { readFile, stat, writeFile } from "node:fs/promises"
 import { Effect, Option } from "effect"
 import { applyEdits, modify } from "jsonc-parser"
 import { Global } from "@orbit/util/global"
+import { ManagedPath } from "@orbit/util/managed-path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 
@@ -29,6 +30,15 @@ export default Runtime.handler(
     const server = url
       ? { type: "remote" as const, url, ...(headers ? { headers } : {}) }
       : { type: "local" as const, command, ...(environment ? { environment } : {}) }
+
+    // The organization's lists apply before anything is written: reconcile would drop the server and say nothing.
+    const { ServerManaged } = yield* Effect.promise(() => import("@orbit/server/managed"))
+    const refusal = yield* ServerManaged.mcpRefusal(
+      ManagedPath.directory(process.platform, process.env),
+      input.name,
+      server,
+    )
+    if (refusal) return yield* Effect.fail(new Error(refusal))
 
     const global = yield* Global.Service
     const configPath = yield* Effect.promise(() => resolveConfigPath(input.global ? global.config : process.cwd()))

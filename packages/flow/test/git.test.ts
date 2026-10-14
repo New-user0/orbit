@@ -72,6 +72,40 @@ test("a node named like a path stays inside the folder of its run, and a run is 
   expect(await fs.readdir(path.join(directory, ".orbit"))).not.toContain("worktrees")
 })
 
+// Git can fail one of several concurrent `worktree add` calls in a repository ("failed to read commondir"), a race that
+// shows about once in a few hundred adds. The post-checkout hook runs inside each add, so a hook that is slow and logs
+// when it starts and ends shows whether two adds overlapped.
+test("worktrees of parallel nodes are added one at a time", async () => {
+  const directory = await repository("parallel")
+  const base = await Git.head(directory)
+  const log = path.join(directory, ".git", "adds.log")
+  const hook = path.join(directory, ".git", "hooks", "post-checkout")
+  await Bun.write(hook, `#!/bin/sh\necho start >> "${log.replaceAll("\\", "/")}"\nsleep 0.3\necho end >> "${log.replaceAll("\\", "/")}"\n`)
+  await fs.chmod(hook, 0o755)
+  const run = "run_20260101000006_0a1b2c"
+
+  const places = await Promise.all(["a", "b", "c", "d"].map((node) => Git.worktree(directory, run, node, base)))
+
+  expect((await Bun.file(log).text()).split(/\r?\n/).filter(Boolean)).toEqual(Array(4).fill(["start", "end"]).flat())
+  expect(places.map((place) => place.branch).sort()).toEqual(["a", "b", "c", "d"].map((node) => `orbit/${run}/${node}`))
+  for (const place of places) expect(await fs.stat(place.directory)).toBeTruthy()
+})
+
+// Git lists a worktree under the spelling of the folder as it is on disk, and the caller may spell the drive or a folder
+// name with other case. A string prefix test then leaves the run's worktrees behind.
+test.skipIf(process.platform !== "win32")(
+  "a run is cleaned up whatever case the repository path is spelled with",
+  async () => {
+    const directory = await repository("spelling")
+    const base = await Git.head(directory)
+    const run = "run_20260101000005_0a1b2c"
+    await Git.worktree(directory, run, "build", base)
+
+    const respelled = directory.slice(0, 1).toLowerCase() + directory.slice(1).replace(/spelling$/, "SPELLING")
+    expect(await Git.clean(respelled, run)).toEqual({ worktrees: 1, branches: 1 })
+  },
+)
+
 test("a merge that would overwrite untracked files reports them and changes nothing", async () => {
   const directory = await repository("blocked")
   await Git.git(directory, ["checkout", "-q", "-b", "agent"])

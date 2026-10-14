@@ -7,9 +7,11 @@ import { Event } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
+import { LinkShare } from "@orbit/util/link-share"
 import { ConfigAgentPlugin } from "@orbit/core/config/plugin/agent"
 import { ConfigSkillPlugin } from "@orbit/core/config/plugin/skill"
 import { Credential } from "@orbit/core/credential"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
@@ -23,6 +25,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
+import { grantWithRecords } from "./fixture/grant"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -42,11 +45,11 @@ interface Folders {
 // The real configuration loader and ProjectTrust over a project in a home of its own, in a folder that nothing trusts
 // on its own. The watcher is the test one, so that a test can say that a file changed.
 // With `canonical`, the project is a linked worktree of a main checkout kept there.
-function loader(folders: Folders, canonical?: string) {
+function loader(folders: Folders, canonical?: string, directory?: string) {
   return Layer.mergeAll(
     AppNodeBuilder.build(
       LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]),
-      replacements(folders, canonical),
+      replacements(folders, canonical, directory),
     ),
     Watcher.testLayer,
   )
@@ -66,6 +69,7 @@ function pluginLoader(folders: Folders) {
         FSUtil.node,
         Global.node,
         Location.node,
+        ManagedPolicy.node,
       ]),
       replacements(folders),
     ),
@@ -73,8 +77,11 @@ function pluginLoader(folders: Folders) {
   )
 }
 
-function replacements(folders: Folders, canonical?: string) {
-  const here = location({ directory: AbsolutePath.make(folders.repo) })
+function replacements(folders: Folders, canonical?: string, directory?: string) {
+  const here = location(
+    { directory: AbsolutePath.make(directory ?? folders.repo) },
+    directory === undefined ? {} : { projectDirectory: AbsolutePath.make(folders.repo) },
+  )
   const placed =
     canonical === undefined ? here : { ...here, project: { ...here.project, canonical: AbsolutePath.make(canonical) } }
   return [
@@ -299,9 +306,27 @@ describe("ProjectTrust.status", () => {
 
         const trust = yield* WorkspaceTrust.Service
         const grantedAbove = yield* nextUpdate
-        yield* trust.grant(folders.work, { persist: false, via: "test" })
+        yield* grantWithRecords(folders.work, { persist: false, via: "test" })
         yield* Fiber.join(grantedAbove)
         expect((yield* project.status()).withheld).toEqual([])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("lists nothing for a folder above the project the moment its own grant is made, before the config reloads", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      yield* Effect.promise(() => write(path.join(folders.work, ".orbit", "plugins", "shared.ts"), plugin))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const trust = yield* WorkspaceTrust.Service
+        expect(yield* project.status().pipe(Effect.map((status) => status.withheld.length))).toBe(1)
+        // No wait for the reload: the entry's stamp still says untrusted, and the store says otherwise.
+        yield* project.grant({ persist: false, via: "test", holder: AbsolutePath.make(folders.work) })
+        expect((yield* project.status()).withheld).toEqual([])
+        // And the other way: a revoke lists it again at once, though the stamp still says trusted.
+        yield* trust.revoke(folders.work)
+        expect(held(folders.root, yield* project.status())).toEqual([[path.join("work", ".orbit"), ["plugins"]]])
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -408,19 +433,117 @@ describe("ProjectTrust.allows", () => {
           command: path.join(folders.globalConfig, "commands", "mine.md"),
           plugin: path.join(folders.globalConfig, "plugins", "mine.ts"),
         }
-        expect(yield* Effect.forEach(Object.values(own), project.allows)).toEqual(Object.values(own).map(() => false))
-        expect(yield* Effect.forEach(Object.values(mine), project.allows)).toEqual(Object.values(mine).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => false))
+        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(Object.values(mine).map(() => true))
 
         // Trusting the project allows its files once the config has reloaded, which stamps its entries trusted. A file
         // is not allowed on a stamp that is out of date, so a revoke refuses at once.
         const granted = yield* nextUpdate
         yield* project.grant({ persist: false, via: "test" })
         yield* Fiber.join(granted)
-        expect(yield* Effect.forEach(Object.values(own), project.allows)).toEqual(Object.values(own).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => true))
         yield* project.revoke()
-        expect(yield* Effect.forEach(Object.values(own), project.allows)).toEqual(Object.values(own).map(() => false))
-        expect(yield* Effect.forEach(Object.values(mine), project.allows)).toEqual(Object.values(mine).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => false))
+        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(Object.values(mine).map(() => true))
       }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+describe("ProjectTrust.status, plugins planted after the grant", () => {
+  it.live("lists a plugin that shows up in a trusted folder at once, before the config has reloaded", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const config = path.join(folders.repo, ".orbit")
+      yield* Effect.promise(() => write(path.join(config, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nText."))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const next = yield* nextUpdate
+        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
+        yield* Fiber.join(next)
+        expect((yield* project.status()).changed).toEqual([])
+
+        // A client that imports plugins on a file event asks before the debounced reload has run.
+        yield* Effect.promise(() => write(path.join(config, "plugins", "late.ts"), plugin))
+        const status = yield* project.status()
+        expect<unknown>(status.changed?.map((item) => [item.path, item.kinds])).toEqual([[config, ["plugins"]]])
+        expect(held(folders.root, status)).toEqual([[path.join("work", "repo", ".orbit"), ["plugins"]]])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+describe("ProjectTrust.allows, nested config", () => {
+  // A config directory in a folder of the project that is neither the location nor the project's root: the nearest
+  // cover of its files is the directory's own entry, whose stamp is the verdict of the last load.
+  const nested = Effect.gen(function* () {
+    const folders = yield* bare
+    const sub = path.join(folders.repo, "pkg", "sub")
+    const skill = path.join(folders.repo, "pkg", ".orbit", "skills", "x", "SKILL.md")
+    yield* Effect.promise(() =>
+      Promise.all([write(skill, "---\nname: x\ndescription: d\n---\nText."), write(path.join(sub, ".keep"), "")]),
+    )
+    return { folders, sub, skill }
+  })
+
+  it.live("answers a revoke at once and a grant at once, before the config has reloaded", () =>
+    Effect.gen(function* () {
+      const { folders, sub, skill } = yield* nested
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        expect(yield* project.allows(skill)).toBe(false)
+
+        // A grant is in force the moment it is made, not when the stamp catches up with it.
+        const granted = yield* nextUpdate
+        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
+        expect(yield* project.allows(skill)).toBe(true)
+        yield* Fiber.join(granted)
+        expect(yield* project.allows(skill)).toBe(true)
+
+        // A revoke must not leave the file allowed on a stamp that still says trusted.
+        yield* project.revoke()
+        expect(yield* project.allows(skill)).toBe(false)
+      }).pipe(Effect.provide(loader(folders, undefined, sub)))
+    }),
+  )
+
+  it.live("refuses the files of a config directory above the project by the decision for its own folder, now", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const above = path.join(folders.work, ".orbit", "skills", "x", "SKILL.md")
+      yield* Effect.promise(() => write(above, "---\nname: x\ndescription: d\n---\nText."))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const trust = yield* WorkspaceTrust.Service
+        // Trusting the project does not trust the folder around it.
+        yield* project.grant({ persist: false, via: "test" })
+        expect(yield* project.allows(above)).toBe(false)
+        yield* grantWithRecords(folders.work, { persist: false, via: "test" })
+        expect(yield* project.allows(above)).toBe(true)
+        yield* trust.revoke(folders.work)
+        expect(yield* project.allows(above)).toBe(false)
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("refuses the hooks of a skill file in a directory whose hooks changed, until the grant is renewed", () =>
+    Effect.gen(function* () {
+      const { folders, skill } = yield* nested
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const next = yield* nextUpdate
+        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
+        yield* Fiber.join(next)
+        expect(yield* project.allows(skill, "hooks")).toBe(true)
+
+        yield* Effect.promise(() =>
+          write(skill, "---\nname: x\ndescription: d\nhooks:\n  Stop:\n    - command: echo hi\n---\nText."),
+        )
+        // Read now, from the disk: no reload has run.
+        expect(yield* project.allows(skill, "hooks")).toBe(false)
+        expect(yield* project.allows(skill)).toBe(true)
+        expect(yield* project.allows(path.join(folders.repo, "pkg", "readme.md"), "hooks")).toBe(true)
+      }).pipe(Effect.provide(loader(folders, undefined, path.join(folders.repo, "pkg", "sub"))))
     }),
   )
 })
@@ -563,7 +686,7 @@ describe("ProjectTrust.escapes", () => {
     }),
   )
 
-  it.live("ends in a loop of links that points nowhere, and counts it as where it is", () =>
+  it.live("ends in a loop of links that points nowhere, and answers it as unresolved, not as the name it reached", () =>
     Effect.gen(function* () {
       const folders = yield* bare
       const first = path.join(folders.repo, "first")
@@ -575,8 +698,10 @@ describe("ProjectTrust.escapes", () => {
       })
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
-        // Nothing can be opened through such a loop, so there is nothing to ask about.
-        expect(yield* project.escapes(path.join(first, "later.txt"))).toBeUndefined()
+        // Nothing can be opened through such a loop, but the walk gave up on it and did not find where it leads, so it is
+        // not counted as a file of the project: callers refuse it as they refuse a share.
+        const escaped = yield* project.escapes(path.join(first, "later.txt"))
+        expect(escaped !== undefined && LinkShare.isUnresolved(escaped)).toBe(true)
       }).pipe(Effect.provide(loader(folders)))
     }),
   )

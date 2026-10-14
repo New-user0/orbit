@@ -5,7 +5,7 @@ import { DialogTrust } from "../component/dialog-trust"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 import { abbreviateHome } from "../util/path-format"
-import { groupWithheld, holdsBack, trustCommands } from "../util/trust"
+import { groupWithheld, holdsBack, pluginTrust, trustCommands } from "../util/trust"
 import { useClient } from "./client"
 import { useData } from "./data"
 import { createSimpleContext } from "./helper"
@@ -21,7 +21,7 @@ const DialogTrustKey = Symbol("DialogTrust")
  * turns true: a server that cannot answer, such as one older than workspace trust, or that does not answer in time, must
  * not hold anything up.
  */
-function createTrustStatus(input: {
+export function createTrustStatus(input: {
   client: ReturnType<typeof useClient>
   log: ReturnType<typeof useLog>
   directory: () => string
@@ -33,23 +33,28 @@ function createTrustStatus(input: {
   let generation = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
-  const refresh = async () => {
+  // The answer is the read's own, even when a newer read has started since and this one no longer shows in `status`; it
+  // is unset when the read failed or timed out. Whoever acts on the answer right now, such as the plugin loader,
+  // decides from this value and not from `status`, which may still hold an older one.
+  const refresh = async (): Promise<TrustStatus | undefined> => {
     const attempt = ++generation
-    await input.client.api.location.trust
+    return await input.client.api.location.trust
       // A server that takes the request and never answers would otherwise leave the terminal UI on its loading screen,
       // as nothing starts before the first answer. Two seconds, as `orb mini` allows; timing out is a failed read.
       .get({ location: { directory: directory() } }, { signal: AbortSignal.timeout(2_000) })
       .then(
         (next) => {
-          if (attempt !== generation) return
-          batch(() => {
-            setStatus(next)
-            setSettled(true)
-          })
+          if (attempt === generation)
+            batch(() => {
+              setStatus(next)
+              setSettled(true)
+            })
+          return next
         },
         (error) => {
           input.log.warn("failed to read workspace trust", { error })
           if (attempt === generation) setSettled(true)
+          return undefined
         },
       )
   }
@@ -101,6 +106,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
 
     // A choice is for `target`, the folder the dialog was opened for.
     const grant = async (target: string, persist: boolean) => {
+      // Asked before the grant, which clears it: whether this is a folder that was trusted and whose config changed.
+      const changed = current.status()?.trusted === true
       await client.api.location.trust
         .update({ location: { directory: target }, trust: true, persist })
         .then(async (status) => {
@@ -114,10 +121,14 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
           toast.show({
             variant: "success",
             message: [
-              status.persistent ? `Trusted ${folder}` : `Trusted ${folder} until Orbit restarts`,
+              changed
+                ? `Trusted the changes in ${folder}`
+                : status.persistent
+                  ? `Trusted ${folder}`
+                  : `Trusted ${folder} until Orbit restarts`,
               ...(above.length === 0
                 ? []
-                : [`Config above it stays off until its own folder is trusted: ${trustCommands(above)}`]),
+                : [`Config above it stays off until its own folder is trusted: ${trustCommands(above, target)}`]),
             ].join(". "),
           })
         }, toast.error)
@@ -133,6 +144,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         () => (
           <DialogTrust
             status={current.status() ?? status}
+            location={folder}
             onTrust={(persist) => grant(folder, persist)}
             onNotNow={() => dialog.clear()}
           />
@@ -140,7 +152,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         // However the dialog closes, unless the folder is trusted by then the answer is not now. The exception is a
         // dialog that closes because another folder came into view: nobody answered it.
         () => {
-          if (directory() === folder && !current.status()?.trusted)
+          if (directory() === folder && holdsBack(current.status()))
             setDismissed((previous) => new Set(previous).add(status.directory))
         },
         { key: DialogTrustKey },
@@ -148,7 +160,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     }
     // Whoever trusts the folder first, here or with `orb trust`, settles the question.
     createEffect(() => {
-      if (current.status()?.trusted && dialog.key === DialogTrustKey) dialog.clear()
+      const status = current.status()
+      if (status !== undefined && !holdsBack(status) && dialog.key === DialogTrustKey) dialog.clear()
     })
     // Another folder coming into view ends the dialog, and `useTrustPrompt` asks about that folder once its status is
     // read.
@@ -164,6 +177,15 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
       held: createMemo(() => holdsBack(current.status())),
       pending,
       open,
+      /**
+       * Whether the folder at `directory()` is trusted, read again as that folder changes. For whatever hands a program a
+       * folder other than the one in view or the one the terminal UI started in, such as the status line: the answer for
+       * one folder says nothing about another, and it is false until the server has said otherwise.
+       */
+      folder: (directory: () => string) => {
+        const read = createTrustStatus({ client, log, directory })
+        return createMemo(() => read.status()?.trusted === true)
+      },
       startup: {
         /** Whether the plugins in the project the terminal UI started in may load. */
         trusted: createMemo(() => startup.status()?.trusted === true),
@@ -173,12 +195,23 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
          * the same answer, so that a read that finds nothing new does not rebuild the plugins.
          */
         above: createMemo(
-          () => groupWithheld(startup.status()?.withheld ?? []).above.flatMap((item) => item.directory ?? []),
+          () => pluginTrust(startup.status()).above,
+          [],
+          { equals: isDeepEqual },
+        ),
+        /**
+         * The config directories whose plugins changed since their folder was trusted, which the server holds back until
+         * the changes are trusted. The terminal UI imports a project's plugins itself, so it leaves these out too.
+         */
+        changedPlugins: createMemo(
+          () => pluginTrust(startup.status()).changed,
           [],
           { equals: isDeepEqual },
         ),
         /** Whether the first answer has come, whatever it was. */
         settled: startup.settled,
+        /** Reads the status again now, for whoever is about to import a plugin and must not act on an older answer. */
+        refresh: startup.refresh,
       },
     }
   },

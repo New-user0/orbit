@@ -21,6 +21,7 @@ const STATES: readonly { label: string; status: TrustStatus }[] = [
       directory,
       trusted: false,
       persistent: true,
+      changed: [],
       withheld: [
         { path: `${directory}/.orbit`, kinds: ["plugins", "commands"] },
         { path: `${directory}/orbit.json`, kinds: ["hooks", "mcp"] },
@@ -33,6 +34,7 @@ const STATES: readonly { label: string; status: TrustStatus }[] = [
       directory,
       trusted: false,
       persistent: true,
+      changed: [],
       withheld: [
         { path: "/Users/kit/code/orbit.json", kinds: ["hooks"], directory: "/Users/kit/code" },
         { path: `${directory}/orbit.json`, kinds: ["hooks", "mcp"] },
@@ -45,16 +47,28 @@ const STATES: readonly { label: string; status: TrustStatus }[] = [
       directory,
       trusted: false,
       persistent: true,
+      changed: [],
       withheld: [{ path: "/Users/kit/code/orbit.json", kinds: ["hooks"], directory: "/Users/kit/code" }],
     },
   },
   {
     label: "untrusted, holds nothing back",
-    status: { directory, trusted: false, persistent: true, withheld: [] },
+    status: { directory, trusted: false, persistent: true, withheld: [], changed: [] },
+  },
+  {
+    label: "trusted, config changed since",
+    status: {
+      directory,
+      trusted: true,
+      persistent: true,
+      source: "saved",
+      withheld: [{ path: `${directory}/orbit.json`, kinds: ["hooks"] }],
+      changed: [{ path: `${directory}/orbit.json`, kinds: ["hooks"] }],
+    },
   },
   {
     label: "trusted",
-    status: { directory, trusted: true, persistent: true, source: "saved", withheld: [] },
+    status: { directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] },
   },
 ]
 

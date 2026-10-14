@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Exit, Fiber } from "effect"
+import { Deferred, Effect, Exit, Fiber, Schema } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Bus } from "@orbit/core/bus"
@@ -76,6 +76,38 @@ describe("Form", () => {
       })
       yield* service.reply({ id: externalOnly.id, answer: { setup: true } })
       expect(yield* service.state(externalOnly.id)).toEqual({ status: "answered", answer: { setup: true } })
+    }),
+  )
+
+  it.effect("carries an option preview through create and get without affecting answer validation", () =>
+    Effect.gen(function* () {
+      const service = yield* Form.Service
+      const options = [
+        { value: "wide", label: "Wide", preview: "+--+\n|  |\n+--+" },
+        { value: "narrow", label: "Narrow" },
+      ]
+      const created = yield* service.create({
+        sessionID: "global",
+        title: "Preview form",
+        fields: [{ key: "layout", type: "string", options }],
+      })
+      expect(created.fields[0]).toMatchObject({ options })
+      expect((yield* service.get(created.id)).fields[0]).toMatchObject({ options })
+
+      const byPreview = yield* service
+        .reply({ id: created.id, answer: { layout: "+--+\n|  |\n+--+" } })
+        .pipe(Effect.flip)
+      expect(byPreview._tag).toBe("Form.InvalidAnswerError")
+      yield* service.reply({ id: created.id, answer: { layout: "wide" } })
+      expect(yield* service.state(created.id)).toEqual({ status: "answered", answer: { layout: "wide" } })
+    }),
+  )
+
+  it.effect("keeps an option preview through Form.Field encode and decode", () =>
+    Effect.sync(() => {
+      const field = { key: "layout", type: "string", options: [{ value: "wide", label: "Wide", preview: "+--+" }] }
+      const encoded = Schema.encodeUnknownSync(Form.Field)(Schema.decodeUnknownSync(Form.Field)(field))
+      expect(encoded).toMatchObject({ options: [{ preview: "+--+" }] })
     }),
   )
 

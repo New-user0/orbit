@@ -1,8 +1,13 @@
 // Messages between the extension host and the chat webview. Kept free of `vscode` and DOM types so both sides and the
 // tests share them.
 
+import type { PermissionView } from "@orbit/schema/permission-view"
+
 export interface FileChange {
   readonly file: string
+  /** The absolute place the server resolved the file to, and where a moved file came from. */
+  readonly place?: string
+  readonly from?: string
   readonly patch: string
   readonly status?: string
   readonly additions?: number
@@ -44,6 +49,10 @@ export type Item =
       readonly sessionID: string
       readonly action: string
       readonly resources: ReadonlyArray<string>
+      /** Whether an "always" reply would save a grant; managed_permissions_only withholds it. */
+      readonly canSave: boolean
+      /** What the card shows: the request's own values, never the calling tool's input. */
+      readonly view: PermissionView.View
       readonly files: ReadonlyArray<FileChange>
       readonly status: "pending" | "once" | "always" | "reject"
     }
@@ -86,6 +95,8 @@ export interface TrustView {
   readonly opened?: string
   /** Whether a grant can be kept on disk. A home directory or a filesystem root can only be trusted until Orbit restarts. */
   readonly persistent: boolean
+  /** The folder is trusted, and what is listed changed since it was: the question is whether to trust the changes. */
+  readonly changed?: boolean
   /** What is left out, as a list of kinds: "hooks, MCP servers". */
   readonly summary: string
   /** The files and directories of the project that hold something back, by path from its folder. */

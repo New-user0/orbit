@@ -158,6 +158,11 @@ export function findSession(client: OrbitClient, sessionID: string, signal?: Abo
   })
 }
 
+/** The session that `--continue` picks for a folder, resolved the way the run resolves it: through the server's own `location.get`. */
+export async function latestSessionOf(client: OrbitClient, directory: string, signal?: AbortSignal) {
+  return latestSession(client, await resolveLocation(client, { directory }, signal), undefined, signal)
+}
+
 async function latestSession(
   client: OrbitClient,
   location: LocationGetOutput,

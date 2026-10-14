@@ -8,6 +8,7 @@ import type { DurableObjectStorage } from "@orbit/core/database/sqlite.workerd"
 import { EnvironmentUnavailable } from "@orbit/core/environment/unavailable"
 import { FileSystem } from "@orbit/core/filesystem"
 import { FileSystemSearch } from "@orbit/core/filesystem/search"
+import { ManagedSettings } from "@orbit/core/managed-settings"
 import { Pty } from "@orbit/core/pty"
 import { Snapshot } from "@orbit/core/snapshot"
 import { Vcs } from "@orbit/core/vcs"
@@ -77,6 +78,8 @@ export function replacements(options: Options): LayerNode.Replacements {
   return [
     Database.node.replace(Database.configuredClient(sqliteLayer({ storage: options.storage }))),
     CrossSpawnSpawner.node.replace(EnvironmentUnavailable.layer),
+    // No filesystem to read managed settings from.
+    ManagedSettings.node.replace(ManagedSettings.emptyLayer),
     Snapshot.node.replace(Snapshot.noopLayer),
     Vcs.node.replace(vcsLayer),
     FileSystem.node.replace(fileSystemLayer),

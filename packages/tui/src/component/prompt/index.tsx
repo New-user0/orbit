@@ -14,7 +14,7 @@ import { useTheme, useThemes } from "../../context/theme"
 import { tint } from "../../theme/color"
 import { createAnimatable, tween } from "../../ui/animation"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+import { useTuiApp, useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useClient } from "../../context/client"
@@ -30,7 +30,13 @@ import { expandPromptInputPastedText, realignPromptInputMentions } from "../../p
 import { parseSlashHead } from "../../prompt/parse"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
-import { emptyPrompt, PASTE_NOT_SAVED, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
+import {
+  emptyPrompt,
+  PASTE_NOT_SAVED,
+  usePromptHistory,
+  type PromptInfo,
+  type PromptPartRef,
+} from "../../prompt/history"
 import { saveDraft, takeDraft } from "./draft-stash"
 import { Skill } from "@orbit/schema/skill"
 import { computePromptTraits } from "../../prompt/traits"
@@ -50,8 +56,11 @@ import { useToast } from "../../ui/toast"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
+import { useTrust } from "../../context/trust"
 import { Vim } from "./vim-state"
-import { createStatusLine } from "../../util/status-line"
+import { StatusLine } from "./status-line"
+import { configuredOutputStyle } from "../dialog-output-style"
+import { statusLinePayload } from "../../util/status-line-payload"
 import { contextUsage } from "../../util/session"
 import { usePromptMove } from "./move"
 import { resolvePastedAttachments } from "./local-attachment"
@@ -208,11 +217,13 @@ export function Prompt(props: PromptProps) {
   const promptRef = usePromptRef()
   const sessionTabs = useSessionTabs()
   const data = useData()
+  const app = useTuiApp()
   const directoryRecents = useDirectoryRecents()
   const keymapCommands = Keymap.useCommands()
   const currentLocation = useLocation()
   const args = useArgs()
   const config = useConfig().data
+  const trust = useTrust()
   // With prompt.vim on, Escape leaves insert mode and normal-mode keys move and edit instead of typing.
   const [vim, setVim] = createSignal<Vim.State>({ mode: "insert" })
   const vimNormal = () => config.prompt?.vim === true && vim().mode === "normal"
@@ -1679,28 +1690,93 @@ export function Prompt(props: PromptProps) {
     if (agentLabel()) revealedPromptMetadata.add(local)
   })
   const borderHighlight = createMemo(() => tint(theme.border.base, highlight(), agentMetaAlpha()))
+  const statusLineLocation = () =>
+    (props.sessionID ? data.session.get(props.sessionID)?.location : undefined) ??
+    currentLocation.ref ??
+    data.location.default()
+  // The model the next prompt uses: the selection, which the session's own model only follows once a prompt is sent.
+  const statusLineModel = () => {
+    const selection = local.model.selection()
+    if (selection) return { providerID: selection.providerID, id: selection.modelID, variant: selection.variant }
+    return props.sessionID ? data.session.get(props.sessionID)?.model : undefined
+  }
+  // The command is handed this folder as `cwd` and `project_dir`, and programs it starts there (git, bun) read what the
+  // folder chose, so it is a folder the person has to trust as well. It is not always the one the terminal UI started in.
+  const statusLineTrusted = trust.folder(() => statusLineLocation().directory)
   // A user-configured status line command, shown under the prompt footer.
-  const statusLine = createStatusLine({
-    command: () => config.status_line?.command,
-    interval: () => config.status_line?.interval,
-    payload: () => {
-      const session = props.sessionID ? data.session.get(props.sessionID) : undefined
-      return {
-        session_id: props.sessionID,
-        cwd: session?.location.directory ?? data.location.info()?.directory,
-        model: session?.model,
-        agent: session?.agent,
-        context: session
-          ? contextUsage(
-              data.session.message.list(session.id),
-              data.location.model.list(session.location),
-              session.revert?.messageID,
-            )
-          : undefined,
-        cost: props.sessionID ? data.session.cost(props.sessionID) : 0,
+  const statusLine = (
+    <StatusLine
+      sessionID={props.sessionID}
+      // The command runs in the folder the terminal UI was started in, which a clone chooses the contents of, and is told
+      // about the folder in view, so no line runs or shows until both are trusted.
+      command={() =>
+        trust.startup.trusted() && statusLineTrusted() && local.permission.hooks === "open"
+          ? config.status_line?.command
+          : undefined
       }
-    },
-  })
+      // The command is the person's own and stands in for a hook, so managed settings that turn hooks off, or allow only
+      // managed ones (Orbit has no managed status line), stop it. A server that has not said does not run it either.
+      notice={() => {
+        if (!config.status_line?.command) return undefined
+        if (local.permission.hooks === "disabled") return "Status line off: managed settings turn hooks off"
+        if (local.permission.hooks === "managed_only") return "Status line off: managed settings allow only managed hooks"
+        return undefined
+      }}
+      interval={() => config.status_line?.interval}
+      colors={() => config.status_line?.colors}
+      fg={theme.text.muted}
+      on={(type, handler) => data.on(type, handler)}
+      watch={() => [
+        trust.startup.trusted(),
+        statusLineTrusted(),
+        local.permission.hooks,
+        local.agent.current()?.id,
+        statusLineModel()?.providerID,
+        statusLineModel()?.id,
+        statusLineModel()?.variant,
+        data.location.info(statusLineLocation())?.project.directory,
+      ]}
+      payload={() => {
+        const session = props.sessionID ? data.session.get(props.sessionID) : undefined
+        const models = data.location.model.list(statusLineLocation())
+        const usage = session
+          ? contextUsage(data.session.message.list(session.id), models, session.revert?.messageID)
+          : undefined
+        const selected = statusLineModel()
+        const model = selected
+          ? models?.find((item) => item.providerID === selected.providerID && item.id === selected.id)
+          : undefined
+        const limit = model?.limit.context
+        // used, limit and percent all describe the selected model; the usage's own percent is of the last answer's model.
+        const context = usage
+          ? { tokens: usage.tokens, percent: limit ? Math.round((usage.tokens / limit) * 100) : undefined }
+          : undefined
+        return statusLinePayload({
+          version: app.version,
+          session: session
+            ? {
+                id: session.id,
+                title: session.title,
+                cost: data.session.cost(session.id),
+                created: session.time.created,
+                agent: session.agent,
+              }
+            : undefined,
+          cwd: data.location.info(statusLineLocation())?.directory,
+          projectDir: data.location.info(statusLineLocation())?.project.directory,
+          model: selected,
+          modelName: model?.name,
+          agent: local.agent.current()?.id,
+          outputStyle: configuredOutputStyle(data, statusLineLocation()),
+          context,
+          contextLimit: limit,
+          running: status() !== "idle",
+          vimMode: config.prompt?.vim === true ? vim().mode : undefined,
+          now: Date.now(),
+        })
+      }}
+    />
+  )
 
   const footerInput = () => ({
     sessionID: props.sessionID,
@@ -2053,15 +2129,7 @@ export function Prompt(props: PromptProps) {
             </Slot>
           </Slot>
         </box>
-        <Show when={statusLine()}>
-          {(line) => (
-            <box paddingLeft={1} flexShrink={0}>
-              <text fg={theme.text.muted} wrapMode="none" truncate>
-                {line()}
-              </text>
-            </box>
-          )}
-        </Show>
+        {statusLine}
       </box>
       <Autocomplete
         sessionID={props.sessionID}

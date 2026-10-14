@@ -12,6 +12,17 @@ const BUILT_IN = [
   { value: "learning", title: "Learning", description: "Leaves small TODO(human) pieces for you to write" },
 ]
 
+/** The output style that a location's config sets, or undefined when it sets none. */
+export function configuredOutputStyle(
+  data: ReturnType<typeof useData>,
+  ref: Parameters<ReturnType<typeof useData>["location"]["config"]["list"]>[0],
+) {
+  const entry = data.location.config
+    .list(ref)
+    ?.findLast((item) => item.type === "document" && item.info.output_style !== undefined)
+  return entry?.type === "document" ? (entry.info.output_style ?? undefined) : undefined
+}
+
 /** /output-style: choose how the agent communicates. Saved to the global Orbit config as output_style. */
 export function DialogOutputStyle() {
   const client = useClient()
@@ -19,12 +30,7 @@ export function DialogOutputStyle() {
   const location = useLocation()
   const dialog = useDialog()
   const toast = useToast()
-  const current = createMemo(() => {
-    const entry = data.location.config
-      .list(location.ref)
-      ?.findLast((item) => item.type === "document" && item.info.output_style !== undefined)
-    return entry?.type === "document" ? (entry.info.output_style ?? "default") : "default"
-  })
+  const current = createMemo(() => configuredOutputStyle(data, location.ref) ?? "default")
   // A custom style set in config stays selectable even though only the built-ins are listed by default.
   const options = createMemo(() =>
     BUILT_IN.some((style) => style.value === current())

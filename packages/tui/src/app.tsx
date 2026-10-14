@@ -394,7 +394,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                             }
                                           >
                                             <ClientProvider api={api} url={input.server.endpoint.url} service={service}>
-                                              <PermissionProvider>
+                                              <PermissionProvider directory={directory}>
                                                 <DataProvider directory={directory}>
                                                   <LocationProvider>
                                                     <SessionTabsProvider>
@@ -634,18 +634,21 @@ function App() {
     }
 
     if (route.data.type === "session") {
+      const sessionID = route.data.sessionID
+      // The same requests the session view draws: the session and its descendants, plus global forms for its location.
+      const family = [sessionID, ...data.session.family(sessionID).filter((id) => id !== sessionID)]
+      const waiting =
+        family.some(
+          (id) => (data.session.permission.list(id)?.length ?? 0) + (data.session.form.list(id)?.length ?? 0) > 0,
+        ) || (data.session.form.list("global", session?.location)?.length ?? 0) > 0
+      const activity = waiting ? "needs input" : data.session.status(sessionID) === "running" ? "working" : undefined
       const title = session?.title
-      if (!title || isFallbackTitle(title)) {
-        renderer.setTerminalTitle("Orbit")
-        return
-      }
-
-      renderer.setTerminalTitle(terminalTitle(title))
+      renderer.setTerminalTitle(terminalTitle(!title || isFallbackTitle(title) ? undefined : title, activity))
       return
     }
 
     if (route.data.type === "plugin") {
-      renderer.setTerminalTitle(`OC | ${route.data.name}`)
+      renderer.setTerminalTitle(terminalTitle(route.data.name))
     }
   })
 

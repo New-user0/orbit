@@ -1,3 +1,4 @@
+import path from "node:path"
 import { Effect } from "effect"
 import { HttpServer } from "effect/unstable/http"
 import type { ServerOptions } from "../../src/options"
@@ -9,7 +10,7 @@ import { ServerProcess } from "../../src/process"
  */
 export const startServer = Effect.fnUntraced(function* (
   directory: string,
-  options: { readonly trust?: ServerOptions["trust"] } = {},
+  options: { readonly trust?: ServerOptions["trust"]; readonly managed?: string } = {},
 ) {
   const server = yield* ServerProcess.start<never, never>({
     hostname: "127.0.0.1",
@@ -18,6 +19,7 @@ export const startServer = Effect.fnUntraced(function* (
     app: { version: "test-version" },
     database: { path: ":memory:" },
     config: { directory },
+    managed: { directory: options.managed ?? path.join(directory, "managed-missing") },
     fs: { filewatcher: false },
     models: { fetch: false },
     trust: options.trust ?? { implicit: true },

@@ -9,19 +9,34 @@ import { Question } from "@orbit/schema/question"
 
 export const name = "AskUserQuestion"
 
-export const description = `Use this tool when you need to ask the user questions during execution. This allows you to:
-1. Gather user preferences or requirements
-2. Clarify ambiguous instructions
-3. Get decisions on implementation choices as you work
-4. Offer choices to the user about what direction to take.
+export const description = `Ask the user one to four questions while you work, then continue with their answers.
 
-Usage notes:
-- A "Type your own answer" option is added automatically; don't include a separate option for free form answers
-- Set \`multiple: true\` to allow selecting more than one option
-- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label`
+Reach for it to learn preferences or requirements, to resolve an ambiguous instruction, to settle an implementation decision, or to let the user pick a direction.
+
+How questions are shaped:
+- Send 1 to 4 questions per call. Question texts must differ from each other.
+- Give every question 2 to 4 options with labels that differ within that question. Keep each label short and use the description for what the option means or costs.
+- Do not add an option for a free-form reply. A "Type your own answer" row is always added for you.
+- Set \`multiple: true\` when the choices are not mutually exclusive.
+- To recommend an option, list it first and end its label with "(Recommended)".
+
+Planning:
+- While planning, use this tool to pin down requirements or to choose between approaches before you finish the plan.
+- Never use it to ask whether the plan is ready or whether to go ahead. Present the plan with ExitPlanMode instead.
+- The user cannot see your plan until ExitPlanMode shows it, so do not word a question as if they had read it.`
 
 export const Input = Schema.Struct({
-  questions: Schema.Array(Question.Prompt).check(Schema.isNonEmpty()).annotate({ description: "Questions to ask" }),
+  questions: Schema.Array(Question.Prompt)
+    .annotate({ description: "Questions to ask (1-4)" })
+    .check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(4),
+      Schema.makeFilter((questions) =>
+        new Set(questions.map((question) => question.question)).size === questions.length
+          ? undefined
+          : "Question texts must be different within a call",
+      ),
+    ),
 })
 
 export const Output = Schema.Struct({
@@ -37,10 +52,15 @@ export class CancelledError extends Schema.TaggedError<CancelledError>()("Questi
 
 export const toModelContent = (questions: ReadonlyArray<Question.Prompt>, answers: ReadonlyArray<Question.Answer>) => {
   const formatted = questions
-    .map(
-      (question, index) =>
-        `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
-    )
+    .map((question, index) => {
+      const answer = answers[index]
+      const entry = `"${question.question}"="${answer?.length ? answer.join(", ") : "Unanswered"}"`
+      const preview =
+        question.multiple === true || answer?.length !== 1
+          ? undefined
+          : question.options.find((option) => option.label === answer[0])?.preview
+      return preview ? `${entry} (preview of the chosen option:\n${preview}\n)` : entry
+    })
     .join(", ")
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
 }
@@ -56,7 +76,7 @@ export const Plugin = {
         editor.add({
           name,
           options: { authorizes: true, codemode: false },
-          traits: { requiresUserInteraction: true, interruptBehavior: "cancel" },
+          traits: { requiresUserInteraction: true, interruptBehavior: "cancel", maxResultChars: 100_000 },
           description,
           input: Input,
           output: Output,
@@ -127,6 +147,8 @@ function toField(question: Question.Prompt, index: number): Form.Field {
       value: option.label,
       label: option.label,
       description: option.description,
+      // Previews are single-select only; dropping them here keeps every client from special-casing multiselect.
+      ...(question.multiple !== true && option.preview ? { preview: option.preview } : {}),
     })),
     custom: true,
   }

@@ -17,13 +17,16 @@ import { Job } from "@orbit/core/job"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
 import { Permission } from "@orbit/core/permission"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { ShellSandbox } from "@orbit/core/shell/sandbox"
 import { ShellSelect } from "@orbit/core/shell/select"
-import { which } from "@orbit/core/util/which"
+import { FileAccess } from "@orbit/core/file-access"
+import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
+import { which } from "@orbit/util/which"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
@@ -42,6 +45,7 @@ const decode = Schema.decodeUnknownSync(Info)
 
 // Spawns and permission requests are recorded instead of performed, so every test can prove what did not happen.
 const spawned: { command: string; args: readonly string[]; cwd?: string }[] = []
+const spawnedEnv: (Record<string, string | undefined> | undefined)[] = []
 const asserted: Permission.AssertInput[] = []
 const denied = new Set<string>()
 const failing = new Set<string>()
@@ -52,6 +56,7 @@ const processes = Layer.mock(AppProcess.Service, {
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("expected a standard command")
       spawned.push({ command: command.command, args: command.args, cwd: command.options.cwd })
+      spawnedEnv.push(command.options.env)
       const source = command.args.at(-1) ?? ""
       if (failing.has(source))
         return yield* new AppProcess.AppProcessError({
@@ -96,6 +101,8 @@ const shell = Layer.succeed(
 const nodes = LayerNode.group([
   Command.node,
   Bus.node,
+  FileAccess.node,
+  PowerShellParse.node,
   FSUtil.node,
   AppProcess.node,
   Location.node,
@@ -105,6 +112,7 @@ const nodes = LayerNode.group([
   Job.node,
   Agent.node,
   ProjectTrust.node,
+  ManagedPolicy.node,
 ])
 const replacements = [
   Mcp.node.replace(emptyMcpLayer),
@@ -133,6 +141,7 @@ const routed = testEffect(
 
 beforeEach(() => {
   spawned.length = 0
+  spawnedEnv.length = 0
   asserted.length = 0
   denied.clear()
   failing.clear()
@@ -195,7 +204,7 @@ describe("command template shell spans", () => {
     Effect.gen(function* () {
       const probe = yield* install("Status: !`git status`\nLog: !`git log -n 3 && cat notes.txt`")
       yield* probe.execute("")
-      expect(asserted).toStrictEqual([
+      expect(asserted).toMatchObject([
         {
           action: "Bash",
           resources: ["git status"],
@@ -211,6 +220,8 @@ describe("command template shell spans", () => {
           sessionID,
         },
       ])
+      // No tool call stands behind a span.
+      expect(asserted.map((input) => input.source)).toEqual([undefined, undefined])
       expect(spawned).toEqual([
         { command: "sh", args: ["-c", "git status"], cwd: process.cwd() },
         { command: "sh", args: ["-c", "git log -n 3 && cat notes.txt"], cwd: process.cwd() },
@@ -223,9 +234,11 @@ describe("command template shell spans", () => {
     Effect.gen(function* () {
       const probe = yield* install("!`> out.txt`")
       yield* probe.execute("")
-      expect(asserted).toStrictEqual([
-        { action: "Bash", resources: ["> out.txt"], save: [], metadata: { command: "> out.txt" }, sessionID },
+      // The statement itself is the resource, and nothing is offered to save.
+      expect(asserted).toMatchObject([
+        { action: "Bash", resources: ["> out.txt"], metadata: { command: "> out.txt" }, sessionID },
       ])
+      expect(asserted[0]?.save).toBeUndefined()
     }),
   )
 
@@ -233,12 +246,12 @@ describe("command template shell spans", () => {
     Effect.gen(function* () {
       const probe = yield* install("Keys: !`cd keys && cat id_rsa`")
       yield* probe.execute("")
-      // The commands alone would show `cat id_rsa` and hide that it reads somewhere else; a saved `cat *` never covers
-      // the whole span, so a later `cd` elsewhere still asks.
-      expect(asserted).toStrictEqual([
+      // The guard, not the span text, now says where the read lands: `keys` is a folder of the project, so nothing
+      // outside is asked, and the folder change is on the request for a client to show.
+      expect(asserted).toMatchObject([
         {
           action: "Bash",
-          resources: ["cat id_rsa", "cd keys && cat id_rsa"],
+          resources: ["cat id_rsa"],
           save: ["cat *"],
           metadata: { command: "cd keys && cat id_rsa" },
           sessionID,
@@ -255,6 +268,22 @@ describe("command template shell spans", () => {
     }),
   )
 
+  // A span starts like the shell tool does: the settings' `env` is over the process environment, and a name taken out
+  // of the settings stops applying to the next span.
+  it.live("starts a span with the settings' env, managed last, and without a name the settings dropped", () =>
+    Effect.gen(function* () {
+      const document = (env: Record<string, string>, scope: Document["scope"]) =>
+        new Document({ type: "document", scope, info: decode({ commands: { probe: { template: "!`env`" } }, env }) })
+      yield* (yield* installEntries([
+        document({ ZZ_SNIPPET_A: "user", ZZ_SNIPPET_B: "user" }, "user"),
+        document({ ZZ_SNIPPET_B: "managed" }, "managed"),
+      ])).execute("")
+      yield* (yield* installEntries([document({ ZZ_SNIPPET_A: "user" }, "user")])).execute("")
+
+      expect(spawnedEnv).toEqual([{ ZZ_SNIPPET_A: "user", ZZ_SNIPPET_B: "managed" }, { ZZ_SNIPPET_A: "user" }])
+    }),
+  )
+
   it.live("fails the command, without a prompt, when a span's process cannot run", () =>
     Effect.gen(function* () {
       failing.add("git status")
@@ -268,17 +297,17 @@ describe("command template shell spans", () => {
     }),
   )
 
-  it.live("reads the portable scanner setting and fails closed on a span it cannot analyze", () =>
+  it.live("asks about a span it cannot analyze as a whole, with nothing to save, in either scanner mode", () =>
     Effect.gen(function* () {
-      const probe = yield* install('Status: !`git status`\nBroken: !`echo "oops`', {
-        experimental: { portable_shell_scanner: true },
-      })
-      const error = yield* probe.execute("").pipe(Effect.flip)
-      expect(error.message).toBe(
-        'Shell interpolation failed for "echo \\"oops": Portable shell scanner cannot analyze command: unterminated-quote',
-      )
-      expect(spawned).toEqual([])
-      expect(probe.prompts).toEqual([])
+      for (const portable of [false, true]) {
+        asserted.length = 0
+        const probe = yield* install('Status: !`git status`\nBroken: !`echo "oops`', {
+          experimental: { portable_shell_scanner: portable },
+        })
+        yield* probe.execute("")
+        expect(asserted.map((input) => input.resources[0])).toEqual(["git status", 'echo "oops'])
+        expect(asserted[1]?.save).toBeUndefined()
+      }
     }),
   )
 
@@ -339,6 +368,61 @@ describe("command template shell spans", () => {
         expect(probe.prompts).toEqual([])
       }),
     ),
+  )
+
+  // The wrapper's arguments tell whether the span may reach the network: bubblewrap gets --unshare-net only without it.
+  const offline = (args: readonly string[]) => args.includes("--unshare-net") || args.some((arg) => arg.includes("(deny network*)"))
+  const networkCases = [
+    ["domain lists", { denied_domains: ["x.example"] }, true],
+    ["an allow list, even an empty one", { allowed_domains: [] }, true],
+    ["allow_managed_domains_only", { allow_managed_domains_only: true }, true],
+    ["no domain settings at all (control)", undefined, false],
+    ["an empty deny list alone (control)", { denied_domains: [] }, false],
+  ] as const
+  for (const [name, network, forced] of networkCases)
+    it.live(`runs a span with the network ${forced ? "off" : "on"} under ${name}`, () =>
+      withSandboxTool(
+        tool,
+        Effect.gen(function* () {
+          const policy = yield* ManagedPolicy.Service
+          yield* policy.set("file", { statements: [], restrictions: network ? { network } : {} })
+          const probe = yield* install("Status: !`git status`", { sandbox: { enabled: true, network: true } })
+          yield* probe.execute("")
+          expect(spawned).toHaveLength(1)
+          expect(offline(spawned[0].args)).toBe(forced)
+        }).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              const policy = yield* ManagedPolicy.Service
+              yield* policy.set("file", { statements: [] })
+            }),
+          ),
+        ),
+      ),
+    )
+
+  it.live("leaves a span that asked for no network offline whatever the domain settings", () =>
+    withSandboxTool(
+      tool,
+      Effect.gen(function* () {
+        const probe = yield* install("Status: !`git status`", { sandbox: { enabled: true, network: false } })
+        yield* probe.execute("")
+        expect(offline(spawned[0].args)).toBe(true)
+      }),
+    ),
+  )
+
+  it.live("fails closed instead of running a span unsandboxed on WSL1", () =>
+    Effect.gen(function* () {
+      const previous = { ...ShellSandbox.host }
+      Object.assign(ShellSandbox.host, { platform: "linux", release: "4.4.0-19041-Microsoft", env: {} })
+      yield* Effect.addFinalizer(() => Effect.sync(() => Object.assign(ShellSandbox.host, previous)))
+      const probe = yield* install("Status: !`git status`", { sandbox: { enabled: true } })
+      const error = yield* probe.execute("").pipe(Effect.flip)
+      expect(error.message).toContain("WSL1")
+      expect(spawned).toEqual([])
+      expect(probe.prompts).toEqual([])
+    }).pipe(Effect.scoped),
   )
 
   it.live("expands $1 and $ARGUMENTS in the prose around a span, but not in the span or its output", () =>
@@ -544,7 +628,7 @@ describe("command template shell spans with the permission service", () => {
       const running = yield* probe.execute("").pipe(Effect.flip, Effect.forkScoped)
 
       const request = yield* Queue.take(asked)
-      expect(request.metadata).toEqual({ command: "git status" })
+      expect(request.metadata).toMatchObject({ command: "git status" })
       yield* permission.reply({ requestID: request.id, reply: "reject", message: "Read the log instead" })
       const error = yield* Fiber.join(running)
       expect(error).toBeInstanceOf(Command.ExecutionError)
@@ -567,6 +651,24 @@ describe("command template shell spans with the permission service", () => {
       expect(yield* Queue.size(asked)).toBe(0)
       expect(spawned).toEqual([])
       expect(probe.prompts).toEqual([])
+    }),
+  )
+})
+
+describe("command template shell spans: a deny on a later span", () => {
+  real.live("blocks the template before the first span asks its question", () =>
+    Effect.gen(function* () {
+      const session = yield* createSession([
+        { action: "Bash", resource: "git *", effect: "ask" },
+        { action: "Bash", resource: "rm *", effect: "deny" },
+      ])
+      const asked = yield* requests
+      const probe = yield* install("Status: !`git status`\nClean: !`rm -rf build`", {}, session.id)
+      const error = yield* probe.execute("").pipe(Effect.flip)
+      expect(error.message).toBe('Shell interpolation failed for "rm -rf build": Permission denied: Bash')
+      // The span before the deny would have asked about `git status`.
+      expect(yield* Queue.size(asked)).toBe(0)
+      expect(spawned).toEqual([])
     }),
   )
 })

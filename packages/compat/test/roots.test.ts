@@ -245,4 +245,40 @@ describe.skipIf(process.platform !== "win32")("CompatRoots.discover with differe
       ])
     }),
   )
+
+  // A run with an isolated home (ORBIT_TEST_HOME) sits in a temporary folder on a machine whose real user keeps
+  // settings files of their own above it. The walk stops one folder above the isolated home, so fixtures never see them.
+  live("an isolated home keeps the walk from reading foreign settings above the test folders", () =>
+    Effect.gen(function* () {
+      const fixture = yield* tmpdirScoped()
+      const outer = path.join(fixture, "outer")
+      const inner = path.join(outer, "inner")
+      const home = path.join(inner, "home")
+      const repo = path.join(inner, "repo")
+      yield* write([
+        home,
+        repo,
+        [path.join(outer, ".claude", "settings.json"), JSON.stringify({ env: { PLANTED: "above" } })],
+      ])
+      const directories = [repo, inner, outer]
+      // The control: without an isolated home the same walk lists the folder above the ceiling.
+      const open = yield* discover(fixture, home, directories)
+      const before = process.env.ORBIT_TEST_HOME
+      process.env.ORBIT_TEST_HOME = home
+      const isolated = yield* discover(fixture, home, directories).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (before === undefined) delete process.env.ORBIT_TEST_HOME
+            else process.env.ORBIT_TEST_HOME = before
+          }),
+        ),
+      )
+
+      expect(labels(fixture, open)).toContain("project:vendor:outer/.claude")
+      expect(labels(fixture, isolated).filter((label) => label.startsWith("project:vendor"))).toEqual([
+        "project:vendor:outer/inner/.claude",
+        "project:vendor:outer/inner/repo/.claude",
+      ])
+    }),
+  )
 })

@@ -6,18 +6,33 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, Effect, Layer, Schema } from "effect"
 import { lookup } from "mime-types"
 import { Environment } from "../environment/index.js"
+import { FileLedger } from "../file-ledger.js"
 import type { Files } from "../environment/index.js"
 import { FileSystem } from "../filesystem.js"
 import { Mime } from "../mime.js"
 import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath } from "../schema.js"
+import { Token } from "../util/token.js"
+import { Pdf } from "./pdf.js"
 
 export const MAX_READ_LINES = 2_000
-export const MAX_READ_BYTES = 50 * 1024
+/** What one read may render for the model, estimated as `Token.estimate` does, line numbers included. */
+export const MAX_READ_TOKENS = 25_000
 export const MAX_MEDIA_INGEST_BYTES = 20 * 1024 * 1024
+/** A PDF is read whole to count and cut its pages, so its source stays below the process driver's 64 MiB read cap. */
+export const MAX_PDF_SOURCE_BYTES = 32 * 1024 * 1024
 const FIRST_CHUNK = 256 * 1024
 const MAX_LINE_LENGTH = 2_000
+/**
+ * A line is cut at MAX_LINE_LENGTH characters, which is at most 6,000 bytes. Once the line being read has this many bytes
+ * in memory, the rest of it is not kept: a file of one huge line then costs a bounded amount of memory and time.
+ */
+const LINE_KEEP_BYTES = 64 * 1024
 const TREE_BASE = 6
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
+
+/** The characters a line takes in the model text: its `N: ` prefix, the line and the newline after it. */
+export const renderedLength = (line: number, text: string) => String(line).length + 3 + text.length
+export const withinBudget = (characters: number) => Token.estimateLength(characters) <= MAX_READ_TOKENS
 export const MEDIA_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"])
 
 export class BinaryFileError extends Schema.TaggedError<BinaryFileError>()("ReadTool.BinaryFileError", {
@@ -33,10 +48,38 @@ export class MediaIngestLimitError extends Schema.TaggedError<MediaIngestLimitEr
   {
     resource: Schema.String,
     maximumBytes: Schema.Number,
+    advice: Schema.optionalKey(Schema.String),
   },
 ) {
   override get message() {
-    return `Media exceeds ${this.maximumBytes} byte ingestion limit: ${this.resource}`
+    return `Media exceeds ${this.maximumBytes} byte ingestion limit: ${this.resource}${this.advice === undefined ? "" : `. ${this.advice}`}`
+  }
+}
+
+export class PdfPagesRequiredError extends Schema.TaggedError<PdfPagesRequiredError>()(
+  "ReadTool.PdfPagesRequiredError",
+  { resource: Schema.String, pages: Schema.Number },
+) {
+  override get message() {
+    return `${this.resource} runs to ${this.pages} pages, and Read opens a PDF whole only up to ${Pdf.MAX_WHOLE_PAGES}. Call Read again with a pages range (for instance "1-8"); a single call covers at most ${Pdf.MAX_PAGES_PER_CALL} pages.`
+  }
+}
+
+export class PdfPageRangeError extends Schema.TaggedError<PdfPageRangeError>()("ReadTool.PdfPageRangeError", {
+  resource: Schema.String,
+  first: Schema.Number,
+  total: Schema.Number,
+}) {
+  override get message() {
+    return `Page ${this.first} is past the end of this PDF, which has ${this.total} ${this.total === 1 ? "page" : "pages"}: ${this.resource}`
+  }
+}
+
+export class PdfSourceError extends Schema.TaggedError<PdfSourceError>()("ReadTool.PdfSourceError", {
+  resource: Schema.String,
+}) {
+  override get message() {
+    return `The PDF could not be read in full: ${this.resource}`
   }
 }
 
@@ -63,18 +106,28 @@ export type ReadError =
   | Environment.Failed
   | BinaryFileError
   | MediaIngestLimitError
+  | PdfPagesRequiredError
+  | PdfPageRangeError
+  | PdfSourceError
+  | Pdf.Error
   | OffsetOutOfRangeError
   | PathKindError
 
 export const PageInput = Schema.Struct({
   offset: Schema.optionalKey(NonNegativeInt),
   limit: Schema.optionalKey(NonNegativeInt),
+  // Applies to PDFs only and is parsed by the caller; other files ignore it.
+  pages: Schema.optionalKey(Schema.Struct({ first: PositiveInt, last: PositiveInt })),
 })
 export type PageInput = typeof PageInput.Type
 
 export const FileContent = Schema.Struct({
   type: Schema.Literal("file"),
   ...FileSystem.Content.fields,
+  /** For a PDF read by range: the pages returned and how many the source has. */
+  pages: Schema.optionalKey(Schema.Struct({ first: PositiveInt, last: PositiveInt, total: PositiveInt })),
+  /** For an image: the pixel size its header declares. Absent when the header gives none. */
+  dimensions: Schema.optionalKey(Schema.Struct({ width: PositiveInt, height: PositiveInt })),
 }).annotate({ identifier: "ReadTool.FileContent" })
 export type FileContent = typeof FileContent.Type
 
@@ -100,13 +153,15 @@ export class ListPage extends Schema.Class<ListPage>("ReadTool.ListPage")({
   next: Schema.optionalKey(PositiveInt),
 }) {}
 
+/** What a read returned, and what it saw of the file (nothing for a directory) for the FileLedger. */
+export interface ReadResult {
+  readonly content: FileContent | TextPage | ListPage
+  readonly seen?: FileLedger.Seen
+}
+
 export interface Interface {
   readonly list: (path: AbsolutePath) => ReturnType<Files["list"]>
-  readonly read: (
-    path: AbsolutePath,
-    resource: string,
-    page?: PageInput,
-  ) => Effect.Effect<FileContent | TextPage | ListPage, ReadError>
+  readonly read: (path: AbsolutePath, resource: string, page?: PageInput) => Effect.Effect<ReadResult, ReadError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ReadToolFileSystem") {}
@@ -124,38 +179,119 @@ export const read = Effect.fn("ReadTool.read")(function* (
       if (error.actual !== "directory")
         return Effect.fail(new PathKindError({ resource, expected: "a file or directory" }))
       return files.list(input).pipe(
-        Effect.map((entries) => list(entries, page)),
+        Effect.map((entries) => list(entries, page, resource)),
         Effect.catchTag("Environment.WrongKind", () =>
           Effect.fail(new PathKindError({ resource, expected: "a file or directory" })),
         ),
       )
     }),
   )
-  if (first instanceof ListPage) return first
+  if (first instanceof ListPage) return { content: first } satisfies ReadResult
 
   const media = Mime.detect(first.bytes)
+  if (media === "application/pdf") return yield* readPdf(files, first.info.size, input, resource, page)
   if (MEDIA_MIMES.has(media)) {
     if (first.info.size > MAX_MEDIA_INGEST_BYTES)
       return yield* new MediaIngestLimitError({ resource, maximumBytes: MAX_MEDIA_INGEST_BYTES })
     const whole = yield* readFile(files, input, resource)
+    const dimensions = Mime.dimensions(whole.bytes, media)
     return {
-      type: "file" as const,
-      uri: pathToFileURL(input).href,
-      name: path.basename(input),
-      content: Buffer.from(whole.bytes).toString("base64"),
-      encoding: "base64" as const,
-      mime: media,
-    }
+      content: {
+        type: "file" as const,
+        uri: pathToFileURL(input).href,
+        name: path.basename(input),
+        content: Buffer.from(whole.bytes).toString("base64"),
+        encoding: "base64" as const,
+        mime: media,
+        ...(dimensions ? { dimensions } : {}),
+      },
+      seen: { mtimeMs: whole.info.mtimeMs, digest: FileLedger.digest(whole.bytes) },
+    } satisfies ReadResult
   }
 
-  const paged = first.info.size > MAX_READ_BYTES || page.offset !== undefined || page.limit !== undefined
-  if (!paged) {
+  const content = yield* readText(files, first, input, resource, page)
+  // The digest covers the raw bytes and exists only when the first chunk held the whole file: hashing more would mean
+  // reading the rest of a large file on every paged read.
+  return {
+    content,
+    seen: {
+      mtimeMs: first.info.mtimeMs,
+      ...(first.bytes.length >= first.info.size ? { digest: FileLedger.digest(first.bytes) } : {}),
+    },
+  } satisfies ReadResult
+})
+
+// A PDF is read whole to count its pages (the count decides whether a whole read is allowed) and to cut a range from it.
+const readPdf = Effect.fn("ReadTool.readPdf")(function* (
+  files: Files,
+  size: number,
+  input: AbsolutePath,
+  resource: string,
+  page: PageInput,
+) {
+  if (size > MAX_PDF_SOURCE_BYTES)
+    return yield* new MediaIngestLimitError({ resource, maximumBytes: MAX_PDF_SOURCE_BYTES })
+  const whole = yield* readFile(files, input, resource).pipe(
+    Effect.catchTag("Environment.Failed", () => Effect.fail(new PdfSourceError({ resource }))),
+  )
+  const total = yield* Pdf.pageCount(whole.bytes, resource)
+  const seen = { mtimeMs: whole.info.mtimeMs, digest: FileLedger.digest(whole.bytes) }
+  const result = (bytes: Uint8Array, pages?: { first: number; last: number }) =>
+    ({
+      content: {
+        type: "file" as const,
+        uri: pathToFileURL(input).href,
+        name: path.basename(input),
+        content: Buffer.from(bytes).toString("base64"),
+        encoding: "base64" as const,
+        mime: "application/pdf",
+        ...(pages ? { pages: { first: pages.first, last: pages.last, total } } : {}),
+      },
+      seen,
+    }) satisfies ReadResult
+
+  if (page.pages === undefined) {
+    if (total > Pdf.MAX_WHOLE_PAGES) return yield* new PdfPagesRequiredError({ resource, pages: total })
+    if (whole.bytes.length > MAX_MEDIA_INGEST_BYTES)
+      return yield* new MediaIngestLimitError({
+        resource,
+        maximumBytes: MAX_MEDIA_INGEST_BYTES,
+        advice: "Read part of it with the pages argument",
+      })
+    return result(whole.bytes)
+  }
+  if (page.pages.first > total) return yield* new PdfPageRangeError({ resource, first: page.pages.first, total })
+  const last = Math.min(page.pages.last, total)
+  const bytes = yield* Pdf.extract(whole.bytes, resource, page.pages.first, last)
+  if (bytes.length > MAX_MEDIA_INGEST_BYTES)
+    return yield* new MediaIngestLimitError({
+      resource,
+      maximumBytes: MAX_MEDIA_INGEST_BYTES,
+      advice: "Ask for fewer pages",
+    })
+  return result(bytes, { first: page.pages.first, last })
+})
+
+const readText = Effect.fn("ReadTool.readText")(function* (
+  files: Files,
+  first: Effect.Success<ReturnType<Files["read"]>>,
+  input: AbsolutePath,
+  resource: string,
+  page: PageInput,
+) {
+  // The whole file comes back only when the first chunk holds it, it is no longer than a page, and its rendered text
+  // fits the budget; anything else pages from the first line, with the next offset to continue from.
+  const whole =
+    page.offset === undefined && page.limit === undefined && first.bytes.length >= first.info.size
+      ? wholeFile(first.bytes)
+      : undefined
+  if (whole !== undefined) {
     if (first.bytes.includes(0)) return yield* new BinaryFileError({ resource })
     return {
       type: "file" as const,
       uri: pathToFileURL(input).href,
       name: path.basename(input),
-      content: new TextDecoder().decode(first.bytes).split("\n").map(clampLine).join("\n"),
+      content: whole,
       encoding: "utf8" as const,
       mime: mimeType(input),
     }
@@ -178,10 +314,16 @@ export const read = Effect.fn("ReadTool.read")(function* (
   const leaves = [textLeaf(first.bytes)]
   let bytes = first.bytes.length
   let lines = leaves[0].summary.lines
+  // Bytes after the last line break that is held, so a line that has outgrown LINE_KEEP_BYTES is noticed.
+  let tail = bytes - (first.bytes.lastIndexOf(10) + 1)
+  // The file's real last byte so far; a dropped chunk leaves an empty leaf, which would hide an unterminated last line.
+  let last = first.bytes.at(-1)
   let ended = false
+  // A page can only change when a line break arrives or the file ends, so a chunk without one is not tried again.
+  let due = true
   while (true) {
     const eof = ended || bytes >= first.info.size
-    if (lines >= offset - 1 || eof) {
+    if ((due || eof) && (lines >= offset - 1 || eof)) {
       const tree = textTree(leaves)
       const start = textOffset(tree, offset - 1)
       let position = 0
@@ -193,7 +335,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           return [leaf.bytes.subarray(Math.max(0, start - leafStart))]
         }),
       )
-      const result = textPage(selected, eof, { limit })
+      const result = textPage(selected, eof, { limit }, offset)
       if (result !== undefined) {
         const translated = {
           ...result,
@@ -207,7 +349,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           checked += leaf.summary.bytes
           return length > 0 && leaf.bytes.subarray(0, length).includes(0)
         })
-        return yield* makeTextPage(input, resource, translated, binary, lineCount(lines, leaves.at(-1)?.bytes.at(-1)))
+        return yield* makeTextPage(input, resource, translated, binary, lineCount(lines, last))
       }
     }
 
@@ -216,12 +358,31 @@ export const read = Effect.fn("ReadTool.read")(function* (
       ended = true
       continue
     }
-    const leaf = textLeaf(next.bytes)
+    bytes += next.bytes.length
+    last = next.bytes.at(-1)
+    const newline = next.bytes.lastIndexOf(10)
+    // The middle of an over-long line is dropped. A chunk that held a NUL leaves one behind, so that a page which
+    // reaches the line is still refused as binary.
+    const leaf =
+      newline === -1 && tail >= LINE_KEEP_BYTES
+        ? textLeaf(next.bytes.includes(0) ? Uint8Array.of(0) : new Uint8Array())
+        : textLeaf(next.bytes)
+    tail = newline === -1 ? tail + next.bytes.length : next.bytes.length - newline - 1
     leaves.push(leaf)
-    bytes += leaf.summary.bytes
     lines += leaf.summary.lines
+    due = leaf.summary.lines > 0
   }
 })
+
+// The clamped text of a file that fits one read, or undefined when it needs paging.
+const wholeFile = (bytes: Uint8Array) => {
+  const lines = new TextDecoder().decode(bytes).split("\n")
+  const count = lines.at(-1) === "" ? lines.length - 1 : lines.length
+  if (count > MAX_READ_LINES) return
+  const clamped = lines.map(clampLine)
+  const characters = clamped.slice(0, count).reduce((total, line, index) => total + renderedLength(index + 1, line), 0)
+  return withinBudget(characters) ? clamped.join("\n") : undefined
+}
 
 const readFile = (
   files: Files,
@@ -255,7 +416,7 @@ const makeTextPage = Effect.fnUntraced(function* (
   })
 })
 
-const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
+const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput, resource: string) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
   const visible = items
@@ -278,7 +439,15 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
           ? 1
           : a.path.localeCompare(b.path),
     )
-  const selected = visible.slice(offset - 1, offset - 1 + limit)
+  // The model text is the header (it names the path), one line per entry and a note that says where to continue. A page
+  // stops before the entry that would pass the budget and always holds one.
+  let size = resource.length + 160
+  const window = visible.slice(offset - 1, offset - 1 + limit)
+  const fits = window.findIndex((entry, index) => {
+    size += entry.path.length + 1
+    return index > 0 && !withinBudget(size)
+  })
+  const selected = fits === -1 ? window : window.slice(0, fits)
   const truncated = offset - 1 + selected.length < visible.length
   return new ListPage({
     type: "list-page",
@@ -288,7 +457,8 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
   })
 }
 
-const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
+// `origin` is the file's number for the line that `offset` selects, when `bytes` start later than the file does.
+const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput, origin = page.offset || 1) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
   const decoded = new TextDecoder().decode(bytes)
@@ -301,13 +471,14 @@ const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
   let next: number | undefined
   for (const [index, value] of available.slice(offset - 1).entries()) {
     const line = offset + index
-    if (entries.length >= limit || size >= MAX_READ_BYTES) {
+    if (entries.length >= limit) {
       next = line
       break
     }
     const text = clampLine(value)
-    const lineSize = Buffer.byteLength(text, "utf-8") + (entries.length > 0 ? 1 : 0)
-    if (size + lineSize > MAX_READ_BYTES) {
+    const lineSize = renderedLength(origin + index, text)
+    // A page always holds a line, so one long line never stops a read from moving on.
+    if (entries.length > 0 && !withinBudget(size + lineSize)) {
       next = line
       break
     }
@@ -323,7 +494,7 @@ const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
   return { entries, offset, next, consumed }
 }
 
-const clampLine = (line: string) =>
+export const clampLine = (line: string) =>
   line.length > MAX_LINE_LENGTH ? line.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : line
 
 // A trailing newline ends the last line instead of starting an empty one.

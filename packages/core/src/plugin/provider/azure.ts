@@ -12,7 +12,7 @@ import { IntegrationConnection } from "../../integration/connection.js"
 import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
 import { iife } from "../../util/iife.js"
-import { which } from "../../util/which.js"
+import { which } from "@orbit/util/which"
 import type { PluginInternal } from "../internal.js"
 import { configuredSettings } from "./configured.js"
 

@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect } from "bun:test"
+import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { Effect, Exit, Layer, Result } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
+import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
+import { LayerNodePlatform } from "@orbit/util/effect/app-node-platform"
 import { Config } from "@orbit/core/config"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -13,10 +18,12 @@ import { Permission } from "@orbit/core/permission"
 import { Session } from "@orbit/core/session"
 import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Global } from "@orbit/util/global"
+import { Token } from "@orbit/core/util/token"
 import { FileAccess } from "@orbit/core/file-access"
 import { location } from "./fixture/location"
 import { Tool } from "@orbit/core/tool"
 import { ReadTool } from "@orbit/core/tool/plugin/read"
+import { Pdf } from "@orbit/core/tool/pdf"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { SessionInstructions } from "@orbit/core/session/instructions"
@@ -76,7 +83,7 @@ const reader = Layer.succeed(
       if (readDefect !== undefined) return Effect.die(readDefect)
       if (readOverride) return readOverride(input, resource, page)
       if (readFailure !== undefined) return Effect.fail(readFailure)
-      return Effect.succeed(readResult)
+      return Effect.succeed({ content: readResult })
     },
   }),
 )
@@ -237,6 +244,169 @@ describe("ReadTool", () => {
       ])
     }),
   )
+  it.effect("refuses a device with its own message, asks nothing and opens nothing", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const device = process.platform === "win32" ? "NUL" : "/dev/stdin"
+
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-read-device", name: "Read", input: { file_path: device } },
+      })
+
+      expect(result).toMatchObject({
+        status: "error",
+        error: { type: "file.device", message: expect.stringContaining("is a device or stream, not a file") },
+      })
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("reads a notebook from its first line when offset and limit are 0", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const execution = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-read-notebook-zero",
+          name: "Read",
+          input: { file_path: "test/fixtures/notebook/sample.ipynb", offset: 0, limit: 0 },
+        },
+      })
+      expect(execution.status).toBe("completed")
+      if (execution.status !== "completed") return
+      expect(execution.output).toMatchObject({ type: "text-page", offset: 1 })
+    }),
+  )
+
+  it.effect("pages a notebook with huge outputs within the budget", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const directory = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "orbit-notebook-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })))
+      const file = path.join(directory, "big.ipynb")
+      const outputLines = Array.from({ length: 1_500 }, (_, index) => `${index} ${"o".repeat(80)}`)
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          file,
+          JSON.stringify({
+            cells: [
+              {
+                cell_type: "code",
+                id: "big",
+                metadata: {},
+                source: ["print('x')"],
+                outputs: [
+                  { output_type: "stream", name: "stdout", text: outputLines.map((line) => `${line}\n`) },
+                  { output_type: "stream", name: "stdout", text: ["z".repeat(500_000)] },
+                ],
+              },
+            ],
+            metadata: {},
+            nbformat: 4,
+            nbformat_minor: 5,
+          }),
+        ),
+      )
+      // The real reader, so that the paging of the raw JSON (a few lines) and of the rendering (thousands) are both real.
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const environment = Environment.makeFiles(Environment.makeLocalDriver(spawner))
+      readOverride = (input, resource, page) => ReadToolFileSystem.read(environment, input, resource, page)
+
+      // Page to the end: each page stays within the budget and starts where the one before said to continue.
+      const starts: number[] = []
+      let offset: number | undefined
+      let finished = false
+      for (let index = 0; index < 20 && !finished; index++) {
+        const page = yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: {
+            type: "tool-call",
+            id: `call-big-notebook-${index}`,
+            name: "Read",
+            input: offset === undefined ? { file_path: file } : { file_path: file, offset },
+          },
+        })
+        if (page.status !== "completed" || page.output.type !== "text-page") throw new Error("expected a page")
+        const text = page.content?.[0]?.type === "text" ? page.content?.[0].text : ""
+        expect(Token.estimate(text)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS + 100)
+        starts.push(page.output.offset)
+        if (page.output.next === undefined) finished = true
+        else {
+          expect(page.output.next).toBeGreaterThan(page.output.offset)
+          expect(text).toContain(`Continue reading with offset: ${page.output.next}`)
+          offset = page.output.next
+        }
+      }
+      // More than one page, chained to the last: the offsets are lines of the rendering, not of the JSON.
+      expect(starts.length).toBeGreaterThan(1)
+      expect(starts[0]).toBe(1)
+      expect(finished).toBe(true)
+    }).pipe(
+      Effect.provide(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem]))),
+      Effect.scoped,
+    ),
+  )
+
+  it.effect("fails a notebook read past the end like a text file, and pages a folder named like a notebook", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const directory = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "orbit-notebook-edge-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })))
+      const notebook = path.join(directory, "small.ipynb")
+      const folder = path.join(directory, "nb.ipynb")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(
+          notebook,
+          JSON.stringify({
+            cells: [{ cell_type: "code", id: "a", metadata: {}, source: ["print(1)"], outputs: [] }],
+            metadata: {},
+            nbformat: 4,
+            nbformat_minor: 5,
+          }),
+        )
+        await fs.mkdir(folder)
+        await Promise.all(
+          Array.from({ length: 5 }, (_, index) => fs.writeFile(path.join(folder, `f${index}.txt`), "x")),
+        )
+      })
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const environment = Environment.makeFiles(Environment.makeLocalDriver(spawner))
+      readOverride = (input, resource, page) => ReadToolFileSystem.read(environment, input, resource, page)
+
+      const past = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-nb-past", name: "Read", input: { file_path: notebook, offset: 500 } },
+      })
+      expect(past).toMatchObject({
+        status: "error",
+        error: { message: expect.stringContaining("out of range") },
+      })
+
+      const listed = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-nb-folder",
+          name: "Read",
+          input: { file_path: folder, offset: 3, limit: 2 },
+        },
+      })
+      if (listed.status !== "completed" || listed.output.type !== "list-page") throw new Error("expected a list page")
+      expect(listed.output.entries).toHaveLength(2)
+    }).pipe(
+      Effect.provide(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem]))),
+      Effect.scoped,
+    ),
+  )
+
   it.effect("asks for external_directory approval before reading an external absolute path", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
@@ -271,6 +441,7 @@ describe("ReadTool", () => {
         content: png,
         encoding: "base64",
         mime: "image/png",
+        dimensions: { width: 1, height: 1 },
       }
       const registry = yield* Tool.Service
 
@@ -282,7 +453,7 @@ describe("ReadTool", () => {
       expect(execution.status).toBe("completed")
       if (execution.status !== "completed") return
       expect(execution.content).toEqual([
-        { type: "text", text: "Image read successfully" },
+        { type: "text", text: "Image read successfully (1×1 px, image/png)" },
         { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png", name: "pixel.png" },
       ])
       expect(readCalls).toEqual([
@@ -299,9 +470,9 @@ describe("ReadTool", () => {
       })
       expect(settled.status).toBe("completed")
       if (settled.status !== "completed") return
-      expect(settled.metadata).toEqual({ truncated: false })
+      expect(settled.metadata).toEqual({ truncated: false, image: { width: 1, height: 1 } })
       expect(settled.content).toMatchObject([
-        { type: "text", text: "Image read successfully" },
+        { type: "text", text: "Image read successfully (1×1 px, image/png)" },
         { type: "file", mime: "image/png", uri: `data:image/png;base64,${png}` },
       ])
     }),
@@ -340,9 +511,26 @@ describe("ReadTool", () => {
         encoding: "base64",
       })
       expect(settled.content).toEqual([
-        { type: "text", text: "Image read successfully" },
+        { type: "text", text: "Image read successfully (image/png)" },
         { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png", name: "large.png" },
       ])
+    }),
+  )
+
+  it.effect("names the type alone when the header gives no size", () =>
+    Effect.gen(function* () {
+      const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      readResult = { type: "file", uri: "file:///pixel.png", name: "pixel.png", content: png, encoding: "base64", mime: "image/png" }
+      const registry = yield* Tool.Service
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-no-size", name: "Read", input: { file_path: "pixel.png" } },
+      })
+      expect(result.status).toBe("completed")
+      if (result.status !== "completed") return
+      expect(result.metadata).toEqual({ truncated: false })
+      expect(result.content?.[0]).toEqual({ type: "text", text: "Image read successfully (image/png)" })
     }),
   )
 
@@ -356,9 +544,11 @@ describe("ReadTool", () => {
         content: png,
         encoding: "base64",
         mime: "image/png",
+        dimensions: { width: 1, height: 1 },
       }
       const registry = yield* Tool.Service
 
+      // The header still names the size from the file, and no resize note follows an image passed through unchanged.
       expect(
         yield* executeTool(registry, {
           sessionID,
@@ -367,7 +557,10 @@ describe("ReadTool", () => {
         }),
       ).toMatchObject({
         status: "completed",
-        content: [{ type: "text" }, { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png" }],
+        content: [
+          { type: "text", text: "Image read successfully (1×1 px, image/png)" },
+          { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png" },
+        ],
       })
     }),
   )
@@ -393,7 +586,7 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "Image read successfully" },
+          { type: "text", text: "Image read successfully (image/png)" },
           { type: "text", text: "[1 image omitted: could not be decoded.]" },
         ],
       })
@@ -427,7 +620,7 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "Image read successfully" },
+          { type: "text", text: "Image read successfully (image/png)" },
           { type: "text", text: "[1 image omitted: could not be resized below the image size limit.]" },
         ],
       })
@@ -469,6 +662,87 @@ describe("ReadTool", () => {
     }),
   )
 
+  it.effect("names the original and shown sizes and the width factor after a resized image", () =>
+    Effect.gen(function* () {
+      const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const source = new photon.PhotonImage(new Uint8Array(Array.from({ length: 1_000 * 7 * 4 }, () => 255)), 1_000, 7)
+      const base64 = Buffer.from(source.get_bytes()).toString("base64")
+      source.free()
+      readResult = {
+        type: "file",
+        uri: "file:///wide.png",
+        name: "wide.png",
+        content: base64,
+        encoding: "base64",
+        mime: "image/png",
+        dimensions: { width: 1_000, height: 7 },
+      }
+      const image = yield* Image.Service
+      yield* image.transform((editor) => editor.configure({ maxWidth: 300 }))
+      const registry = yield* Tool.Service
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-resize-note", name: "Read", input: { file_path: "wide.png" } },
+      })
+
+      expect(result.status).toBe("completed")
+      if (result.status !== "completed") return
+      const media = result.content?.[1]
+      if (media?.type !== "file") throw new Error("expected the image")
+      const shown = photon.PhotonImage.new_from_byteslice(Buffer.from(media.uri.split(",")[1] ?? "", "base64"))
+      const size = { width: shown.get_width(), height: shown.get_height() }
+      shown.free()
+      expect(size).toEqual({ width: 300, height: 2 })
+      expect(result.metadata).toEqual({ truncated: false, image: { width: 1_000, height: 7 } })
+      // The factor is the width ratio (1000 / 300), not the height ratio (7 / 2), printed to two places.
+      expect(result.content).toEqual([
+        { type: "text", text: "Image read successfully (1000×7 px, image/png)" },
+        { type: "file", uri: media.uri, mime: media.mime, name: "wide.png" },
+        {
+          type: "text",
+          text: "[Shown at 300×2 px; the file itself is 1000×7 px. Scale positions on the shown image by 3.33 to map them onto the file.]",
+        },
+      ])
+    }),
+  )
+
+  it.effect("gives no resize note when the image is only re-encoded at its own pixel size", () =>
+    Effect.gen(function* () {
+      const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const pixels = Uint8Array.from({ length: 256 * 256 * 4 }, (_, index) => (index * 73 + (index >> 3)) % 256)
+      const source = new photon.PhotonImage(pixels, 256, 256)
+      const png = Buffer.from(source.get_bytes()).toString("base64")
+      source.free()
+      readResult = {
+        type: "file",
+        uri: "file:///large.png",
+        name: "large.png",
+        content: png,
+        encoding: "base64",
+        mime: "image/png",
+        dimensions: { width: 256, height: 256 },
+      }
+      const image = yield* Image.Service
+      yield* image.transform((editor) => editor.configure({ maxBase64Bytes: png.length - 1 }))
+      const registry = yield* Tool.Service
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-reencode", name: "Read", input: { file_path: "large.png" } },
+      })
+
+      expect(result.status).toBe("completed")
+      if (result.status !== "completed") return
+      expect(result.content?.map((item) => item.type)).toEqual(["text", "file"])
+      const media = result.content?.[1]
+      if (media?.type !== "file") throw new Error("expected the image")
+      const shown = photon.PhotonImage.new_from_byteslice(Buffer.from(media.uri.split(",")[1] ?? "", "base64"))
+      expect([shown.get_width(), shown.get_height()]).toEqual([256, 256])
+      shown.free()
+    }),
+  )
+
   it.effect("accepts PNG candidates at the exact base64 limit and skips them one byte below", () =>
     Effect.gen(function* () {
       const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
@@ -492,18 +766,44 @@ describe("ReadTool", () => {
         [6, ""],
       ] as const) {
         yield* image.transform((editor) => editor.configure({ maxWidth, maxBase64Bytes: 1_024 }))
-        const candidate = yield* image.normalize("wide.png", content)
+        const candidate = (yield* image.normalize("wide.png", content)).content
         expect(candidate.mime).toBe("image/png")
         expect(candidate.content.match(/=*$/)?.[0]).toBe(padding)
 
         yield* image.transform((editor) => editor.configure({ maxBase64Bytes: candidate.content.length }))
-        expect(yield* image.normalize("wide.png", content)).toEqual(candidate)
+        expect((yield* image.normalize("wide.png", content)).content).toEqual(candidate)
 
         yield* image.transform((editor) => editor.configure({ maxBase64Bytes: candidate.content.length - 1 }))
-        const smaller = yield* image.normalize("wide.png", content)
+        const smaller = (yield* image.normalize("wide.png", content)).content
         expect(smaller.mime).toBe("image/png")
         expect(smaller.content.length).toBeLessThan(candidate.content.length)
       }
+    }),
+  )
+
+  it.effect("gives no resize note to a GIF whose logical screen is 0x0", () =>
+    Effect.gen(function* () {
+      // A 1x1 frame on a 0x0 screen, padded with a comment extension so it is over the byte cap.
+      const gif = Uint8Array.from([
+        ...Array.from("GIF89a").map((c) => c.charCodeAt(0)),
+        0, 0, 0, 0, 0x80, 0, 0,
+        0, 0, 0, 0xff, 0xff, 0xff,
+        0x21, 0xfe, 200, ...Array.from({ length: 200 }, () => 0x61), 0,
+        0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0,
+        2, 2, 0x44, 0x01, 0,
+        0x3b,
+      ])
+      const image = yield* Image.Service
+      yield* image.transform((editor) => editor.configure({ maxBase64Bytes: 200 }))
+      const content = { uri: "file:///empty.gif", content: Buffer.from(gif).toString("base64"), encoding: "base64" as const, mime: "image/gif" }
+      const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const decoded = photon.PhotonImage.new_from_byteslice(gif)
+      // Control: the fixture really is a 0x0 image to the resizer, so the test is not vacuous.
+      expect([decoded.get_width(), decoded.get_height()]).toEqual([0, 0])
+      decoded.free()
+      const result = yield* image.normalize("empty.gif", content)
+      expect(result.content.content.length).toBeLessThanOrEqual(200)
+      expect(result).not.toHaveProperty("resized")
     }),
   )
 
@@ -531,7 +831,7 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "Image read successfully" },
+          { type: "text", text: "Image read successfully (image/png)" },
           { type: "text", text: "[1 image omitted: could not be resized below the image size limit.]" },
         ],
       })
@@ -586,10 +886,173 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "PDF read successfully" },
+          { type: "text", text: "Read PDF document.pdf" },
           { type: "file", uri: `data:application/pdf;base64,${pdf}`, mime: "application/pdf", name: "document.pdf" },
         ],
       })
+    }),
+  )
+
+  const pdfPart = {
+    type: "file",
+    uri: "file:///document.pdf",
+    name: "document.pdf",
+    content: "JVBERi0xLjcK",
+    encoding: "base64",
+    mime: "application/pdf",
+  } as const
+  const pdfCall = (id: string, input: Record<string, unknown>) => ({
+    sessionID,
+    ...toolIdentity,
+    call: { type: "tool-call" as const, id, name: "Read", input: { file_path: "document.pdf", ...input } },
+  })
+
+  it.effect("names the pages of a PDF range and the total, and passes the parsed range to the reader", () =>
+    Effect.gen(function* () {
+      readResult = { ...pdfPart, pages: { first: 3, last: 7, total: 15 } as never }
+      const registry = yield* Tool.Service
+
+      for (const pages of ["3-7", " 3-7 "]) {
+        readCalls.length = 0
+        expect(yield* executeTool(registry, pdfCall(`call-${pages}`, { pages }))).toMatchObject({
+          status: "completed",
+          content: [
+            { type: "text", text: "Read document.pdf, PDF pages 3-7 of 15" },
+            { type: "file", mime: "application/pdf" },
+          ],
+        })
+        expect(readCalls).toEqual([
+          {
+            input: AbsolutePath.make(path.join(process.cwd(), "document.pdf")),
+            page: { offset: undefined, limit: undefined, pages: { first: 3, last: 7 } },
+          },
+        ])
+      }
+    }),
+  )
+
+  it.effect("accepts the widest range of 20 pages, and passes pages when the PDF carries a notebook name", () =>
+    Effect.gen(function* () {
+      readResult = { ...pdfPart, pages: { first: 1, last: 20, total: 30 } as never }
+      const registry = yield* Tool.Service
+
+      for (const file_path of ["document.pdf", "disguised.ipynb"]) {
+        readCalls.length = 0
+        yield* executeTool(registry, pdfCall("wide", { file_path, pages: "1-20" }))
+        // The first read is the one that tells a PDF by its content; it must carry the range whatever the name.
+        expect(readCalls[0]?.page.pages).toEqual({ first: 1, last: 20 })
+      }
+    }),
+  )
+
+  it.effect("refuses a bad pages value before any permission request or read, whatever the file", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const cases = [
+        { pages: "0", message: '"0" is not a usable pages value' },
+        { pages: "5-3", message: '"5-3" is not a usable pages value' },
+        { pages: "-5", message: '"-5" is not a usable pages value' },
+        { pages: "", message: '"" is not a usable pages value' },
+        { pages: "1-25", message: 'The pages value "1-25" asks for more than 20 pages' },
+        { pages: "3-", message: 'The pages value "3-" asks for more than 20 pages' },
+        { pages: "1-21", message: 'The pages value "1-21" asks for more than 20 pages' },
+        { pages: "9007199254740991-9007199254740993", message: 'is not a usable pages value' },
+      ]
+      for (const item of cases) {
+        for (const file_path of ["document.pdf", "README.md", "missing-file.xyz"]) {
+          const result = yield* executeTool(registry, {
+            ...pdfCall(`call-${item.pages}`, { pages: item.pages }),
+            call: { type: "tool-call", id: "c", name: "Read", input: { file_path, pages: item.pages } },
+          })
+          expect(result).toMatchObject({ status: "error", error: { message: expect.stringContaining(item.message) } })
+        }
+      }
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("rejects a pages value that is not a number or a range at the schema", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+
+      for (const pages of ["abc", "3abc", "1.5", "1-5x"]) {
+        expect(yield* executeTool(registry, pdfCall(`call-${pages}`, { pages }))).toMatchObject({
+          status: "error",
+          error: { type: "tool.input-invalid" },
+        })
+      }
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("accepts a pages value for a text file and reads it as usual", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+
+      expect(
+        yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "c", name: "Read", input: { file_path: "README.md", pages: "2" } },
+        }),
+      ).toMatchObject({
+        status: "completed",
+        content: [{ type: "text", text: "Read file README.md, lines 1-1\n1: hello" }],
+      })
+    }),
+  )
+
+  it.effect("answers a repeated identical PDF read with the PDF again, never the unchanged stub", () =>
+    Effect.gen(function* () {
+      readResult = { ...pdfPart, pages: { first: 1, last: 2, total: 4 } as never }
+      const registry = yield* Tool.Service
+
+      for (const id of ["first", "second"]) {
+        expect(yield* executeTool(registry, pdfCall(id, { pages: "1-2" }))).toMatchObject({
+          status: "completed",
+          content: [{ type: "text", text: "Read document.pdf, PDF pages 1-2 of 4" }, { type: "file" }],
+        })
+      }
+    }),
+  )
+
+  it.effect("ignores offset and limit for the reader result of a PDF", () =>
+    Effect.gen(function* () {
+      readResult = pdfPart
+      const registry = yield* Tool.Service
+
+      expect(yield* executeTool(registry, pdfCall("c", { offset: 3, limit: 2 }))).toMatchObject({
+        content: [{ type: "text", text: "Read PDF document.pdf" }, { type: "file" }],
+      })
+    }),
+  )
+
+  it.effect("returns each PDF failure to the model as its own message", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const cases = [
+        [new ReadToolFileSystem.PdfPagesRequiredError({ resource: "document.pdf", pages: 15 }), "runs to 15 pages"],
+        [new ReadToolFileSystem.PdfPageRangeError({ resource: "document.pdf", first: 40, total: 15 }), "Page 40"],
+        [new ReadToolFileSystem.PdfSourceError({ resource: "document.pdf" }), "could not be read in full"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "corrupt" }), "not a well-formed PDF"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "encrypted" }), "is encrypted"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "unavailable" }), "missing from this build"],
+        [
+          new ReadToolFileSystem.MediaIngestLimitError({
+            resource: "document.pdf",
+            maximumBytes: ReadToolFileSystem.MAX_PDF_SOURCE_BYTES,
+          }),
+          `${ReadToolFileSystem.MAX_PDF_SOURCE_BYTES} byte`,
+        ],
+      ] as const
+      for (const [error, text] of cases) {
+        readFailure = error
+        const result = yield* executeTool(registry, pdfCall(`call-${error._tag}`, {}))
+        expect(result).toMatchObject({ status: "error", error: { message: expect.stringContaining(text) } })
+        expect(JSON.stringify(result)).not.toContain("Unable to read")
+      }
     }),
   )
 
@@ -722,7 +1185,7 @@ describe("ReadTool", () => {
       readOverride = (input) =>
         input === requestedAbsolute
           ? Effect.fail(new Environment.NotFound({ path: requestedAbsolute }))
-          : Effect.succeed(readResult)
+          : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       const result = yield* executeTool(registry, {
@@ -754,7 +1217,9 @@ describe("ReadTool", () => {
       const recovered = path.join(directory, "report\u202ffinal.txt")
       directoryEntryDetails = [{ name: path.basename(recovered), type: "file" }]
       readOverride = (input) =>
-        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed(readResult)
+        input === requested
+          ? Effect.fail(new Environment.NotFound({ path: requested }))
+          : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       expect(
@@ -780,7 +1245,9 @@ describe("ReadTool", () => {
       deniedResource = path.basename(recovered)
       directoryEntryDetails = [{ name: path.basename(recovered), type: "file" }]
       readOverride = (input) =>
-        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed(readResult)
+        input === requested
+          ? Effect.fail(new Environment.NotFound({ path: requested }))
+          : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       expect(
@@ -830,7 +1297,9 @@ describe("ReadTool", () => {
       readOverride = (input) =>
         input === requestedAbsolute
           ? Effect.fail(new Environment.NotFound({ path: requestedAbsolute }))
-          : Effect.succeed(new ReadToolFileSystem.ListPage({ type: "list-page", entries: [], truncated: false }))
+          : Effect.succeed({
+              content: new ReadToolFileSystem.ListPage({ type: "list-page", entries: [], truncated: false }),
+            })
       const registry = yield* Tool.Service
 
       expect(
@@ -968,7 +1437,7 @@ describe("ReadTool", () => {
       expect(result.content).toEqual([
         {
           type: "text",
-          text: "Read file large.txt, lines 2-2\n2: hello\n[Output truncated. Continue reading with offset: 3]",
+          text: "Read file large.txt, lines 2-2\n2: hello\n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 3, or use Grep to find specific content.]",
         },
       ])
       expect(readCalls).toEqual([

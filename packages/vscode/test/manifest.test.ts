@@ -19,13 +19,14 @@ test("every setting the extension contributes has a decision on who may set it",
   const decisions: Record<string, string> = {
     "orbit.executable": "machine: the program the extension runs and the terminal starts",
     "orbit.placement": "window: where the chat opens, which runs and chooses nothing",
+    "orbit.notifications": "window: whether the extension shows its own in-editor notices, which runs and chooses nothing",
   }
   const properties = manifest.contributes.configuration.properties
 
   expect(Object.keys(properties).sort()).toEqual(Object.keys(decisions).sort())
   // Only a setting that chooses nothing to run keeps the scope that a workspace may set.
   for (const [key, setting] of Object.entries<{ scope?: string; default: string }>(properties))
-    if (key !== "orbit.placement") expect({ key, scope: setting.scope }).toEqual({ key, scope: "machine" })
+    if (key !== "orbit.placement" && key !== "orbit.notifications") expect({ key, scope: setting.scope }).toEqual({ key, scope: "machine" })
 })
 
 test("the extension stays off in a workspace that VS Code does not trust", () => {

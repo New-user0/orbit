@@ -1,3 +1,5 @@
+import { Environment } from "./environment.js"
+
 // How Windows finds a program that Orbit starts by a bare name such as `hg`, `git`, `node` or `cmd`.
 //
 // Such a name is looked for in the working folder of the new process before PATH, by Bun's spawn, by Node's (under Bun
@@ -15,10 +17,13 @@ export function install() {
   process.env.NoDefaultCurrentDirectoryInExePath = "1"
 }
 
-/** The environment to hand to a child: `env`, or the one of this process when there is none, plus the variable. */
+/**
+ * The environment to hand to a child: `env`, or the one of this process when there is none, plus the variable. The
+ * variable replaces any other spelling of its name in `env`, so no setting can shadow it.
+ */
 export function environment(env: Readonly<Record<string, string | undefined>> | undefined) {
   if (process.platform !== "win32") return env
-  return { ...(env ?? process.env), NoDefaultCurrentDirectoryInExePath: "1" }
+  return Environment.assign({ ...(env ?? process.env) }, { NoDefaultCurrentDirectoryInExePath: "1" })
 }
 
 export * as ProgramLookup from "./program-lookup.js"

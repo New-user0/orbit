@@ -15,9 +15,11 @@ const labels: Record<TrustKind, string> = {
   permissions: "permission rules",
   providers: "providers",
   shell: "shell",
+  env: "environment variables",
   formatter: "formatters",
   lsp: "language servers",
   sandbox: "sandbox",
+  skills: "skills",
   network: "network access",
   settings: "other settings",
 }
@@ -66,13 +68,20 @@ export function groupWithheld(items: ReadonlyArray<TrustWithheld>) {
   }
 }
 
+/** The files of the folder itself whose executable config changed since the folder was trusted. */
+function changedOwn(status: TrustStatus) {
+  const changed = new Set((status.changed ?? []).map((item) => item.path))
+  return groupWithheld(status.withheld).own.filter((item) => changed.has(item.path))
+}
+
 /**
- * Whether the folder is untrusted and so holds something of its own back, which is what the question and the
- * indicators are for. Config in a folder above it follows that folder's own decision, so a folder whose only held-back
- * config sits above it has nothing that trusting it would turn on.
+ * Whether the folder holds something of its own back, which is what the question and the indicators are for: it is
+ * untrusted, or it is trusted and some of its config changed since. Config in a folder above it follows that folder's
+ * own decision, so a folder whose only held-back config sits above it has nothing that trusting it would turn on.
  */
 export function holdsBack(status: TrustStatus | undefined) {
-  return status !== undefined && !status.trusted && groupWithheld(status.withheld).own.length > 0
+  if (status === undefined) return false
+  return status.trusted ? changedOwn(status).length > 0 : groupWithheld(status.withheld).own.length > 0
 }
 
 /**
@@ -81,12 +90,14 @@ export function holdsBack(status: TrustStatus | undefined) {
  */
 export function view(status: TrustStatus, opened: string): TrustView {
   const held = groupWithheld(status.withheld)
+  const own = status.trusted ? changedOwn(status) : held.own
   return {
     directory: plain(status.directory),
     ...(path.relative(opened, status.directory) === "" ? {} : { opened: plain(opened) }),
     persistent: status.persistent,
-    summary: [...new Set(held.own.flatMap((item) => item.kinds.map(label)))].join(", "),
-    held: held.own.map((item) => ({
+    ...(status.trusted ? { changed: true } : {}),
+    summary: [...new Set(own.flatMap((item) => item.kinds.map(label)))].join(", "),
+    held: own.map((item) => ({
       name: plain(fromFolder(status.directory, item.path)),
       kinds: item.kinds.map(label).join(", "),
     })),
@@ -103,9 +114,11 @@ export function aboveFolders(status: TrustStatus) {
 export function prompt(trust: TrustView) {
   const shown = trust.held.slice(0, listed)
   return {
-    message: `Trust ${trust.directory}?`,
+    message: trust.changed === true ? `Trust the changes in ${trust.directory}?` : `Trust ${trust.directory}?`,
     detail: [
-      "Orbit is leaving out what could run code or reach the network:",
+      trust.changed === true
+        ? "This folder's config changed since you trusted it, and Orbit is leaving out what changed:"
+        : "Orbit is leaving out what could run code or reach the network:",
       [
         ...shown.map((item) => `${item.name}: ${item.kinds}`),
         ...(trust.held.length > shown.length ? [`and ${trust.held.length - shown.length} more`] : []),
@@ -115,12 +128,14 @@ export function prompt(trust: TrustView) {
         : [
             `VS Code opened ${trust.opened}. Trust belongs to the project's folder, which covers everything under it and its linked worktrees.`,
           ]),
-      trust.persistent
+      trust.changed === true
+        ? "Trust the changes only if you know who made them. The folder stays trusted either way, and the rest of its config keeps running."
+        : trust.persistent
         ? "Trust it only if you trust whoever wrote it. It stays trusted until `orb trust --revoke`."
         : "Trust it only if you trust whoever wrote it. Trusting a home directory or filesystem root lasts only until Orbit restarts, or on the background service until the service restarts. End it sooner with `orb trust --revoke`.",
       ...(trust.above.length === 0 ? [] : [aboveNote(trust.above)]),
     ].join("\n\n"),
-    accept: trust.persistent ? "Trust this folder" : "Trust until Orbit restarts",
+    accept: trust.changed === true ? "Trust changes" : trust.persistent ? "Trust this folder" : "Trust until Orbit restarts",
   }
 }
 

@@ -1,4 +1,5 @@
 import type { OrbitClient } from "@orbit/client"
+import { waitForBackground } from "./background.js"
 import type { ErrorClass, Usage } from "./workflow.js"
 
 // One attempt of one agent node: a fresh Orbit session in the node's directory, one prompt, then the final reply,
@@ -59,9 +60,23 @@ export async function attempt(
   // that were not there before this prompt count toward its reply and usage.
   const recent = () => client.message.list({ sessionID: session.id, limit: 200, order: "desc" })
   const before = new Set(input.session ? (await recent()).data.map((message) => message.id) : [])
-  await client.session.prompt({ sessionID: session.id, text: input.prompt, delivery: "steer" })
-  const finished = await waitFor(client.session.wait({ sessionID: session.id }), input.timeout)
+  const admitted = await client.session.prompt({ sessionID: session.id, text: input.prompt, delivery: "steer" })
+  // A command the model moved to the background outlives its step, and its notice starts another one, so the reply
+  // is read only once those have ended too. The timeout covers both waits.
+  let abandoned = false
+  const finished = await waitFor(
+    delivered(client, session.id, admitted?.id).then(() =>
+      waitForBackground({
+        client,
+        sessionID: session.id,
+        location: { directory: input.directory },
+        abandoned: () => abandoned,
+      }),
+    ),
+    input.timeout,
+  )
   if (!finished) {
+    abandoned = true
     await client.session.interrupt({ sessionID: session.id }).catch(() => undefined)
     return {
       session: session.id,
@@ -98,6 +113,24 @@ export async function attempt(
                 : 'The agent produced no reply. No model was set for it; set `model` on the agent, or "model" in orbit.json.',
             },
           }),
+  }
+}
+
+// `session.wait` resolves once no execution is active, and it says nothing about a prompt that no execution has taken
+// yet (an execution that ended just before the prompt was admitted, a wake that coalesced into it). Such a prompt
+// is still in the inbox, so the reply is awaited until it has been delivered. A prompt that stays queued for this
+// long is not going to run, and is read as it is.
+const DELIVERY_GRACE_MS = 10_000
+
+async function delivered(client: OrbitClient, sessionID: string, inboxID: string | undefined) {
+  const started = Date.now()
+  while (true) {
+    await client.session.wait({ sessionID })
+    // Without an id (a server that does not report one) there is nothing to look for.
+    if (!inboxID) return
+    const queued = await client.session.inbox.list({ sessionID }).catch(() => [])
+    if (!queued.some((item) => item.id === inboxID) || Date.now() - started > DELIVERY_GRACE_MS) return
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
 }
 

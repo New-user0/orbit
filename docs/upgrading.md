@@ -151,7 +151,8 @@ The file tools hold a link to the folder in the same way. Until the project is t
 the project leads out of the project as outside it, and ask about the folder it leads to (`external_directory`) as for
 any other path outside the project, which a run with nobody to ask rejects. A file that does not exist yet counts by
 where the nearest folder of its path that does exist leads, so a `write` through a link is asked about too. A trusted
-project follows links as before.
+project follows its links, and asks about the folder they lead to in the same way (see "A link inside a trusted project
+that leads out is asked about like the folder it leads to").
 
 Orbit starts no language server and runs no formatter in a folder that is not trusted, the built-in ones and the ones
 in your own config alike, because they read the folder's own code and config and several of them run it. Both start
@@ -261,9 +262,236 @@ trust prompt, which lists the `providers` kind.
 **What to do:** Nothing for your own config. To use a repository's model settings, run `orb trust` in it, or set them in
 your user config.
 
+### Managed settings files
+
+An organization can now put settings in a folder that only an administrator can write. Orbit reads
+`managed-settings.json`, then the `managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux,
+`/Library/Application Support/Orbit` on macOS and `%ProgramFiles%\Orbit` on Windows (`C:\Program Files\Orbit` when that
+variable is unset). Windows does not use `%ProgramData%`, because a standard user can create and write under it.
+`ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it), and
+`orb debug paths managed` prints the one in use. Objects merge by key, lists of independent entries (permissions,
+policies, instructions, plugins, restriction lists) concatenate and lose their repeats, and any other value takes the
+later file's: a `command` argument list, a tiered `cost`, a model, and a whole entry of `mcp.servers`, `lsp`,
+`formatter`, `references` and `commands` (each entry is one definition, so a later `url` never keeps an earlier
+`headers` or `oauth`, an LSP `env` never reaches another server, and a `disabled` entry is replaced, not kept). `providers`
+and `agents` merge by key, as across documents, except that a later agent entry that leaves out `disabled` is enabled again. A relative `plugins` path in a drop-in
+resolves against the managed folder, not `managed-settings.d`; a `{file:}` variable resolves against the file that
+holds it. The merged settings load as a `managed` scope document that outranks every other scope, and the file watcher reloads them
+while the server runs. A `managed` block in these files holds restrictions (`organization`, `mcp`, `plugins`,
+`network` and the hook and permission switches); the key is ignored with a diagnostic in any other config file. Orbit
+never creates the folder, and a folder created after the server starts is read on the next start.
+
+A file or an entry that does not decode is skipped on its own and never drops what its siblings say, and a key that
+Orbit does not know, at any depth of the native settings (`sandbox.enabeld`, a server's `disable`, an agent's `permisions`), is
+reported instead of ignored. The legacy top-level spellings (`agent`, `provider`, `permission` and the rest) are not
+checked, and neither is a key that another variant of the same value knows (`headers` on a local server). `orb doctor` lists
+the managed files by name and each problem it found. The permission rules and restrictions go to the policy service,
+which enforces them (see "Managed permission rules, hook limits and the bypass switch are enforced").
+
+**Affects:** machines that already have a file at one of those paths, and people who run a server with
+`ORBIT_MANAGED_DIR` set.
+
+**What to do:** Nothing unless your organization manages Orbit.
+
+### Managed permission rules, hook limits and the bypass switch are enforced
+
+Managed settings now take effect. Permission checks end in a managed layer that runs in core after the plugin hooks, so
+no plugin can override it. In order of precedence: a configured deny (agent rules, session rules and every non-managed
+config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
+then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
+`managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
+upgrades only the default asks: the one no rule spoke to and every agent's built-in `external_directory` ask for a place outside the project, also when it reaches a link's folder through the real place the link leads to and your own allow or an "Always" covers that folder (`external-leads.test.ts`). It never lifts an ask that your own rule (an `external_directory` one included), an agent's built-in `.env` ask, Plan's `Bash` ask or a plugin hook gave, and never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a `Read` or `Edit` rule, managed or your own (agent, user, project or session), also decides a file inside the session's folder by its absolute place, so a deny or an ask on `~/.ssh/*` holds when Orbit runs in the home folder (the rows "under the person's ... rule" in `permission.test.ts`). The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
+managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
+
+- `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
+  approvals, drops allow rules from a session's own permissions, offers no "always" on a request, and treats an
+  "always" reply as "once". The built-in rules of the agents stay.
+- `disable_hooks` runs no declarative hook, and `managed_hooks_only` runs only the hooks of managed settings. The managed file's own `hooks.disabled` and `hooks.managed_only` mean the same.
+- `disable_bypass_permissions` makes `orb`, `orb run`, `orb -p`, `orb loop`, `orb flow run`, `orb flow resume` and
+  `orb eval` refuse `--auto`, `--yolo` and `--dangerously-skip-permissions`. A workflow or suite node whose
+  `permissions` is `auto` (including a team member's) has its requests rejected, with the managed message as feedback.
+  The terminal interface keeps asking for permission and shows a notice when auto-accept was requested. A server that
+  cannot say whether bypass is allowed counts as refusing it.
+- `GET /api/config/effective` also reports `permissions: { bypass, always }`, so clients can read these switches.
+- `orb flow clean` now compares a worktree's folder with the run's folder the way the platform compares paths, so a
+  run is cleaned up when the repository path is spelled with other case on Windows.
+
+Bypass is refused by the clients until a durable permission mode in the server reads the managed settings itself.
+
+**Affects:** organizations that ship managed settings, and people on their machines who use `--auto` or workflows with
+`permissions: auto`.
+
+**What to do:** nothing unless your organization manages Orbit.
+
+### A foreground shell command that outlives its timeout moves to the background
+
+A foreground shell command that is still running at its timeout is no longer killed. It keeps running as a background
+shell job, the call returns its shell ID and output file, and one notification follows when it finishes. A command made
+only of sleeps (`sleep 60`, `Start-Sleep 60`) is still stopped at its timeout. Anything else is moved, including a
+command Orbit cannot read, and a sleep followed by other work.
+A command that exits before the call has seen it move is returned inline, as if nothing had happened, with no
+notification.
+
+Agent, verify, team and eval nodes of `orb flow run` and `orb eval` wait for such a command too: a node reports its
+reply only after the session's background commands have ended and their notices have been answered, within the node's
+own timeout.
+
+A foreground `timeout` of `0` no longer means "never time out": it means the default, like leaving it out. A timeout
+above the maximum is lowered to the maximum in every shell, and for a background command too, whose kill deadline is
+still only set when a timeout is given.
+
+Two new settings in `orbit.json` choose the numbers: `shell_tool.timeout` (milliseconds, default 120000) and
+`shell_tool.max_timeout` (default 600000). The maximum is never below the default, so setting only a longer `timeout`
+raises the maximum to match. The tool description shows the model both numbers. A project's `shell_tool` waits for the
+folder to be trusted, like the other budget settings; yours applies everywhere.
+
+**Affects:** scripts and agents that relied on a long command being killed at its timeout, or on `timeout: 0` to wait
+without limit, and SDK callers that read `shell_tool` from the config schema.
+
+**What to do:** Stop a command you no longer want with `TaskStop`.
+Raise `shell_tool.timeout` and `shell_tool.max_timeout` if a command should be waited
+for longer before it moves.
+
+### Managed MCP, plugin and network-domain restrictions are enforced
+
+The `mcp`, `plugins` and `network` lists of a managed `managed` block now take effect. Only managed settings can set them; a repository, user or flag file cannot.
+
+- **MCP.** `mcp.deny` and `mcp.allow` hold selectors: a server name, `command:<pattern>` (a local server's command joined with single spaces) and `url:<pattern>` (a remote server's URL, tried both as written and as the URL parser serializes it). In a pattern `*` matches any run of characters and everything else is literal, case counts and nothing depends on the operating system. Joining a command with spaces cannot tell `["node", "a b"]` from `["node", "a", "b"]`; write commands without spaces inside an argument when that matters. Deny wins. No `allow` allows everything and `allow: []` allows nothing. With an `allow`, a local server must match a `command:` selector when the list has any (a name alone no longer admits it) and a name otherwise; a remote server likewise with `url:`. The lists apply to servers from every document, **the managed document's own servers included**, and to plugins, Code Mode defaults and `Mcp.add`. A blocked server does not exist: it is not listed, never starts, and the server logs one line (name and reason, never the command or URL) when its state changes. `PUT /api/experimental/mcp/:server` answers a blocked server with 403 `ForbiddenError` and stores nothing; an ACP session skips only that server, and `orb mcp add` refuses a blocked server with the denied or not-on-the-allow-list wording and writes nothing. A new or lifted restriction takes effect on the running server.
+- **Plugins.** `plugins.block` and `plugins.allow` hold `*`, `prefix.*`, `@scope/*` or exact selectors; any other `*` is reported as an invalid entry and dropped, because it would match nothing. An absolute path selector matches the whole path and holds no `*` (`/opt/plugins/*` and `C:/plugins/*` are reported as invalid and dropped); it is made real once per activation, so one written through a link meets the real path of a target. `block` wins. `allow: []` allows no external plugin, and a plugin that the managed document names is held to `allow` too. A registry package is matched by its name without the version (`@corp/x@^1` is `@corp/x`), a local plugin by its real absolute path (exact; separators are normalized and case folds on Windows only; Windows 8.3 short names are expanded, but a UNC admin-share spelling such as `//localhost/C$/...` or a copy of the folder is a different path, so a path block matches the real path only and only an allow list holds against another spelling), and a spec whose package cannot be named (git, alias, tarball) is not allowed while `allow` is set. Built-in, SDK and instance plugins are never held back. A blocked or unlisted target is never installed or imported (the server's source scan still lists its folder before the check); `orb plugin add` refuses it before the registry is contacted, `POST /api/plugin/update` answers 403 for it without a registry request, a path that cannot be resolved (a target under a file, a link loop, an unreachable network share) is one unverified entry that is refused under an allow list and never stops the other plugins, and a plugin that was running when its ID was blocked is not kept running by a failed reload. It shows as failed with "Blocked by managed settings". A plugin ID is known only after import, so `block` by ID stops the plugin's setup but **its top-level module code has already run**; to stop code from running at all, block the target. The terminal UI applies the same lists in its own process to the plugins only it loads, and loads no external plugin when the server does not report them (`GET /api/config/effective` has a new `plugins` field). `plugins.marketplaces` is read and kept for a later release.
+- **Network.** `network.denied_domains` denies every URL-bearing tool (WebFetch and Code Mode `fetch`, for the first URL and for every redirect hop) whose host matches: an exact host, or `*.domain` for subdomains at any depth but never the domain itself or an IP address. Hosts are compared in canonical form, so `127.1` and `2130706433` are `127.0.0.1`. A URL action whose resource cannot be read as an http(s) URL is denied while the list is not empty. Each entry is checked when the file is read: a scheme, path, port, `*`, `*.com`, a stray `*` or whitespace is reported and dropped, and a one-label name such as `intranet` is accepted. `network.allowed_domains` and the new `network.allow_managed_domains_only` do not limit WebFetch or Code Mode `fetch`; use managed permission rules for that. They bind shell commands in the sandbox, which can only allow all of the network or none of it, so until a per-host proxy exists **any of `denied_domains`, `allowed_domains` or `allow_managed_domains_only` launches a sandboxed command with the network off**. Commands outside the sandbox (including every command on native Windows, which has no sandbox), remote MCP servers and language servers are not bound; set `sandbox.enabled` in the managed settings, and the server logs once when domain lists exist but a command ran unsandboxed.
+
+**Affects:** organizations that ship managed settings, and people on their machines who run MCP servers, plugins or sandboxed shell commands.
+
+**What to do:** nothing unless your organization manages Orbit.
+
+### Managed settings can run only the MCP servers they define
+
+Set `managed.mcp.managed_only` to `true` in the managed settings (only managed files can set it) and Orbit runs only the servers in the managed document's own `mcp.servers`. Servers from every other source are ignored: user, project, local, flag (`--mcp-config`, `--settings`, `ORBIT_CONFIG_CONTENT`) and well-known config, plugins and their transforms, and `.mcp.json`. A server that the flag drops is not listed and never starts, and the server logs one line (name and reason, never the command or URL) when that state changes. The organization's `mcp.allow` and `mcp.deny` still apply to the managed servers, and a later drop-in's value wins over an earlier file's, as for the other managed flags. A value that is not a boolean is ignored with a diagnostic and costs only itself.
+
+- A managed server runs as the managed files write it. Its `timeout` defaults come from the managed `mcp.timeout` alone, so a person's `mcp.timeout` and Orbit's Code Mode defaults do not shape it; write `codemode` in the managed definition if you want it.
+- `PUT /api/experimental/mcp/:server` (`Mcp.add`) answers 403 `ForbiddenError` for every server, including a replacement of a managed server's name, and stores nothing. The refusal is given before the deny and allow lists, so it names the real cause. `orb mcp add` refuses and writes no file, and an ACP session attaches without each server it names and adds it on a later attach once the flag is off.
+- `orb`, `orb -p` and `orb run` with `--mcp-config`, or `--settings` (inline or a file) with `mcp.servers`, that names at least one server stop with exit code 1 before the first request. An empty `{"servers":{}}` runs. A server that does not report `config.effective.mcp` (an older one) stops the run too.
+- `Mcp.remove` works on a managed server, and a removed one stays out until restart.
+- The change takes effect live: turning the flag on stops the other servers on the running server, a managed server whose definition did not change keeps its process, and turning it off starts the others again.
+- `GET /api/config/effective` reports `mcp.managed_only`; it is absent from a server that predates it, which clients read as unknown.
+
+**Affects:** organizations that ship managed settings, and people on their machines who add MCP servers by any route, plus SDK callers of `Config.Effective`, which gains an optional `mcp` field.
+
+**What to do:** nothing unless your organization manages Orbit. To use it, define the servers in the managed `mcp.servers` and set `managed.mcp.managed_only` to `true`.
+
+### A background shell command that stops at a prompt is reported once
+
+Orbit now watches every shell command that runs in the background (asked for, moved at its deadline, or moved by a
+client). It looks at the size of the command's output every 5 seconds. After 45 to 50 seconds without new output, it reads
+the last 1024 bytes. If the last line looks like a question the model could answer (`(y/n)`, `[Y/n]`, `(yes/no)`, "Do you
+...?", "Are you sure ...?", "Press any key", "Press Enter", "Continue?", "Overwrite?"), the session gets one notice with
+state `waiting`, the end of its output, and advice to stop the command with `TaskStop` and run it again with the answer supplied.
+Password, passphrase and token prompts are not matched. A command that is only slow or quiet gets no notice. There is at
+most one notice per command, it does not end the job, and the completion notice still follows. Commands still run with no
+input, and a foreground command is not watched until its deadline moves it to the background.
+
+**Affects:** clients and scripts that read the synthetic shell notices of a session: `metadata.state` can now be
+`waiting`, which is not an end of the job.
+
+**What to do:** Treat `waiting` as progress. Take the end of a job from the job and shell events.
+
+### An `env` setting for the programs Orbit starts
+
+`orbit.json` and the managed settings now take a top-level `env`: variable names and values that are added to the
+environment of the shell, terminals, hooks, the shell snippets of slash commands, MCP servers, language servers and
+formatters that Orbit starts for a location. It works in every scope and folds name by name, with the organization's managed value last, so it wins. A
+program's own variables (an MCP server's `environment`, a formatter's `environment`, an LSP server's `env`, a terminal's
+caller) and Orbit's (`ORBIT_PROJECT_DIR`, `TERM`, `ORBIT_TERMINAL`) win over it. A number or boolean is kept as its text.
+An entry with an empty name, a name holding `=` or a NUL, or a value that is not text is skipped on its own, and
+`NoDefaultCurrentDirectoryInExePath` cannot be set from `env`. On Windows names are one variable whatever their case,
+so a later `PATH` replaces an earlier `Path`.
+
+`env` is read each time a program starts, so a name removed from a file stops applying to the next program, which is
+stricter than adding variables until a restart. A project's or local file's `env` waits until the folder is trusted,
+with the other settings that reach programs; `orb trust` lists it as `env`, and the terminal interface and VS Code
+name it "environment variables". Workspace-bound locations and the persistent terminal
+panes of the interface get no overlay. The managed `env` is also put into the environment of a server that `orb`
+starts, once at boot, so a change to it needs a restart there; the server's own network requests take proxy and CA
+settings from that environment or from the one the server was started with, not from user or project `env`.
+
+With compatibility on (the default), an `env` in another product's settings files now reaches those programs the same
+way, which can carry provider keys into every child; turn it off with `compatibility.enabled = false`. The managed
+settings' `managed.env` is ignored and reported: use the top-level `env`.
+
+`which` now skips every `PATH` entry that is not absolute (`.`, `bin`, `node_modules/.bin`, and on Windows a
+drive-relative or root-relative one), as it already skipped empty ones, so Orbit's own lookups never find a `git` or `rg`
+in the working folder through such an entry.
+
+**Affects:** people who set `env` in any settings file, organizations that manage settings, and people whose `PATH`
+holds a relative entry that Orbit's own lookups used to honor.
+
+**What to do:** Move variables you want in Orbit's child processes into `env`. Replace a relative `PATH` entry with an
+absolute one.
+
+### Changed project config asks to be trusted again
+
+A trusted folder used to keep every part of its project config on for good, whatever a `git pull`, a branch switch or an
+edit did to it afterwards. Now Orbit records, when you trust a folder, a digest of the parts of each project and local
+config source that start programs: the `hooks`, `mcp`, `plugins`, `providers`, `shell`, `formatter`, `lsp`, `env`,
+`sandbox` and `skills` fields of the settings files (the other products' hook settings and `.mcp.json` included), the
+plugin files and `package.json` of a `.orbit` directory, the `hooks` in the front matter of its skills and agents, and
+the `mcp_servers` in the front matter of its agents. Permissions, commands and grants are not digested. When one of them
+differs from the record, only that kind of that file or directory is left out, as in an untrusted folder, and the rest of
+the folder keeps running: a new hook does not stop its MCP servers. Reformatting a file, reordering keys, comments and
+line endings are not changes, and neither is removing a file or a field. Trust the changes and the kind comes back.
+A digest that cannot be computed, such as a locked file, counts as changed until it can be.
+
+The `skills` setting now has a kind of its own (`skills`) where an untrusted folder used to report it as `settings`.
+
+Links are followed when they stay inside the project. A `.orbit/plugins` folder, a plugin file or folder, or an `agents` or
+`skills` folder that is a link to another folder of the same project counts for its real contents, so editing the target or
+adding a plugin there asks again. A link that leads out of the project is not read at all: the digest holds its name and
+where the link points, so pointing it somewhere else asks, editing what it points at does not, and a project plugin behind
+such a link is not loaded, in the server or in the terminal UI, whether the folder is trusted or not.
+
+You are asked once after each change to executable config, however it got there: a `git pull`, a branch switch or an
+edit. Orbit does not tell its own writes from anyone else's, so a command that edits project config, such as `orb mcp
+add` at project scope, asks as well. A folder you trusted before this version has no record, so each of its sources
+asks once, and so does a nested folder's config that no grant has recorded yet. The headless commands (`orb run` and the
+others) stop with the kinds and the files that changed, `orb trust` renews the grant ("Trusted … again"), `--trust`
+accepts the changes for one run, and the terminal UI, Mini and VS Code ask "Trust the changes?". `Trust.Status` has a new
+`changed` list, and the kinds in it are in `withheld` too. A server older than this version sends no `changed`, which
+the clients read as none.
+
+**Affects:** anyone who trusted a project folder, SDK callers and clients that read `Trust.Status`, and plugins or
+scripts that edit executable project config while Orbit runs.
+
+**What to do:** Look at what changed, then trust it with `orb trust` or the dialog. Nothing for config that only you edit
+in a folder you have not trusted.
+
+### Config `env` cannot set Orbit's own control variables
+
+`env` in any settings document now skips `ORBIT_MANAGED_DIR`, `ORBIT_TRUST_PROJECT`, `ORBIT_CONFIG`, `ORBIT_CONFIG_DIR`, `ORBIT_CONFIG_CONTENT`, `ORBIT_CONFIG_CONTENT_FILE` and `ORBIT_PASSWORD`, in any spelling, with one "unsupported" diagnostic at the entry's own path. Before, a trusted project's or your own `env` could hand them to every program Orbit starts, so an `orb` started from a hook or an approved command could read another managed folder or trust its folder implicitly. A nested `orb` now inherits these names exactly as the parent process has them.
+
+**Affects:** setups that set one of these names from `env` on purpose.
+
+**What to do:** Export the variable in the environment you start Orbit from instead.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
+
+### `orb doctor` prints a `sandbox` line, and the TUI says a stalled command waits for input
+
+`orb doctor` now has a `sandbox` line. It asks the same code the shell runner uses, so it names the program a sandboxed
+command would run through (`bwrap` on Linux and WSL2, `sandbox-exec` on macOS) and says when it is missing, when WSL1
+cannot sandbox (convert the distribution to WSL2), or when the platform (Windows and others) has no OS sandbox. The line
+turns red, with exit code 1, only when managed settings turn the sandbox on and it cannot work. The offline doctor reads
+managed settings only, so with no managed `sandbox` setting the line is informational and says what would happen if the
+sandbox were turned on. Every label and detail it prints is now written out through the same escaping as other untrusted
+text, so a `PATH` folder, a model ID or a provider error cannot send control characters to the terminal.
+
+In the TUI, the row for a background command that stopped at a prompt now reads `! Shell waiting for input · <command>`
+in the informational colour, never as finished or failed. It still shows only the command, not the end of its output.
+
+**Affects:** anyone who parses `orb doctor` output, and the TUI session view.
+
+**What to do:** Nothing; a blank `sandbox` line is informational, and a new `!!` line appears only where managed settings enable the sandbox.
 
 ### The TUI no longer finds another product's IDE extension, and reads Zed only with compatibility on
 
@@ -1007,6 +1235,147 @@ approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini
 
 **What to do:** Nothing.
 
+### `--mcp-config` and `--agents` add MCP servers and agents for one run
+
+`orb`, `orb run` and `orb -p` take `--mcp-config` (repeatable) and `--agents`. Each value is a JSON file or the JSON
+itself (comments and trailing commas are allowed). `--mcp-config` takes `{"servers": {"<name>": {"type": "local",
+"command": ["<program>"]}}}`, the shape of the `mcp` key, and `--agents` takes a map from agent name to the same fields as
+the `agents` key. A relative program or `cwd` in a file means the folder of that file. Another product's `mcpServers` map
+is refused with a hint. The values are checked before anything starts, an error names the flag and the path inside the
+value, and the merged document may not pass 4 MiB. They layer over `ORBIT_CONFIG_CONTENT`, then `--mcp-config` in order,
+then `--agents`. A later value that names a server another value already named replaces it whole (so a new `url` keeps no earlier `headers`, and a new `command` no earlier `environment`), as it does for `lsp`, `formatter`, `references` and `commands` entries; agents still merge by key. An empty or blank `--mcp-config` or `--agents` value is skipped, so a script that passes an unset variable runs.
+
+A run with either flag uses a private server, as `--bare` does, so it starts a little slower and does not run anything on the
+background service. The config reaches that server in a file in Orbit's state folder that only your user can open,
+which the server deletes when it has read it, and `orb` removes the variable and the folder as soon as the server is up. The environment that `orb` hands to a session no longer carries
+`ORBIT_CONFIG_CONTENT` or `ORBIT_CONFIG_CONTENT_FILE`. The flags cannot be combined with `--server`. With `--continue`, `--session` or `--resume`,
+the run stops, before the interface starts, when the background service reports that session as running, or when a service is registered and alive
+but cannot be asked, because two servers would run it at once; `--fork` is not checked, since a fork never runs the
+session it copies, and an `orb` that opens the session list cannot tell, and does not check. A value that starts, after whitespace, with `{`, a `/*` comment, or a `//` comment followed by another line is read as inline JSONC and anything else is a file name (so a one-line `//server/share/mcp.json` is a path); the disk never decides, so a folder that ships a file named after the text you typed cannot replace it (a file whose name starts with `{` is reached as `./{...}`). This replaces the earlier rule that a value was a file whenever a file of that name existed. A relative file name is
+taken from the folder you typed it in, also with `orb <directory>`; a relative `{file:...}` inside the value is taken from the folder of the file that holds it, or the folder you typed an inline value in, also when it holds an `{env:NAME}` (a reference that starts with `{env:NAME}` is anchored when NAME holds a relative path, and left to Orbit when it holds an absolute one). Only the session named at start is checked: the session list, restored tabs and `/resume` can still open one the service runs, as with `--standalone`. Rules that `--agents` gives an agent add to the rules
+the same agent already has from `ORBIT_CONFIG_CONTENT`. A `ORBIT_CONFIG_CONTENT_FILE` that you set yourself is ignored (a server logs one line)
+and never deleted.
+
+**Affects:** scripts and people who want a different set of MCP servers or agents for a single run.
+
+**What to do:** Nothing.
+
+### `--settings` loads a config file or inline JSON for one run
+
+`orb`, `orb -p`, `orb run`, `orb mini`, `orb loop` and `orb debug config` take `--settings <file-or-json>`: a config in
+the `orbit.json` shape (comments and trailing commas allowed) that applies to this run only. It ranks in the flag scope,
+above project and local config and below managed settings. Within that scope an `ORBIT_CONFIG` file or a `--settings`
+file comes first (a `--settings` file takes the place of `ORBIT_CONFIG` for the run), then `ORBIT_CONFIG_CONTENT`, then an
+inline `--settings`, then `--mcp-config` and `--agents`. The value is inline JSON when it starts, after whitespace, with
+`{` or a comment, and a file name otherwise; the disk never decides. A relative file name is taken from the folder you
+typed the command in, and a relative `{file:...}` inside a file is taken from beside that file. The value is checked before
+anything starts: a missing file, a folder, a device, a file over 4 MiB, JSON that does not parse, an empty value and a
+repeated flag are each refused before anything starts; `-p` and `run` print one line, and the interface, `loop`, `mini`
+and `debug config` print the error with a stack trace. A file saved as UTF-16 (Windows PowerShell 5.1 does this for `>`) is refused
+with a request to save it as UTF-8; an empty file is accepted, and an inherited `ORBIT_CONFIG` then still applies. Fields that do not fit the config schema are judged by the
+server, which logs them and leaves them out (the whole document is dropped only when final validation fails); `orb debug config --settings ...` shows whether it arrived.
+
+A run with `--settings` uses a private server, like `--mcp-config`, so it starts a little slower, runs nothing on the
+background service, and cannot be combined with `--server`. With `--continue`, `--session` or `--resume` it stops when the
+background service is running that session (pinned for `orb`, `-p` and `loop`). The settings never trust the folder: `--trust` is still what grants that.
+
+A config file that discovery already loaded (the project's own `orbit.json`, a local file or your user config) now loads
+once, at its own scope and under its own trust, by real path (a link, a different case and, on Windows, an 8.3 short name count as the same
+file), including through `ORBIT_CONFIG` or a `--settings`
+that names it. Before, `ORBIT_CONFIG` pointing at a project's file loaded it a second time in the flag scope without the
+trust restrictions of an untrusted folder.
+
+**Affects:** people who want settings for a single run, and anyone who set `ORBIT_CONFIG` to a file inside a project.
+
+**What to do:** Nothing. Pass a file or JSON to `--settings`; to give an untrusted project's file full effect, trust the
+folder rather than naming its file.
+
+### Terminal bell, idle reminder and a status in the window title
+
+`attention.bell` in the terminal UI's `cli.json` (default off) rings the terminal bell for an attention event while the
+terminal is blurred or its focus is unknown, between frames (right after the next frame while an animation keeps the
+renderer running). A subagent's permission or form rings it too, since a person must answer; a subagent finishing does
+not. `attention.idle_reminder` is a number of seconds (default 60, larger values are capped at 86400, 0 turns it off): once a top-level
+session has finished, the reminder "Orbit is waiting for your input" comes after that many seconds with no key
+pressed, no new run started and no permission or form pending. It is sent only while the terminal reports that it is
+blurred (never for a terminal whose focus is unknown), only when notifications, sound or the bell are on, and once per
+idle period. The window title was
+`OC | <title>`; it is now `Orbit · <title>`, with ` · working` while a session runs and ` · needs input` while a
+permission or form waits, including those of its subagents (in Mini, on Linux, as before).
+
+**Affects:** people who match the window title in a terminal multiplexer, window manager rule or script, and people who
+have notifications, sound or the bell on, who get the reminder.
+
+**What to do:** Match `Orbit · ` instead of `OC | `. Set `attention.idle_reminder` to 0 to turn the reminder off.
+
+### System notifications for the TUI and Mini, and notices in VS Code
+
+`attention.backend` in `cli.json` chooses where a notification appears. `"terminal"`, the default, asks the terminal
+to show it, as before. `"system"` uses the operating system's own notifications (`notify-send` on Linux, Notification
+Center on macOS, a toast from Windows PowerShell on Windows) and falls back to the terminal when the program is missing,
+exits with an error or runs longer than 10 seconds. `attention.notifications` is still the master switch and still off by
+default, and a notification still shows only while the terminal is blurred. The title and the message reach the program
+as data, never as part of a script. Mini now honours `attention.notifications`, `attention.backend`, `attention.bell` and
+`attention.idle_reminder` exactly as the TUI does, including the reminder after a finished session.
+
+A subagent's permission request or form now notifies like a root session's does. It used to send a sound and a bell
+only. A subagent finishing stays silent.
+
+The VS Code extension has a new setting, `orbit.notifications` (on by default). While the Orbit chat is hidden or the
+window is in the background, it shows a notice when a permission needs review ("Orbit needs your review") and when a
+working period ends ("Orbit finished"), each with an Open button. These are notices inside VS Code, not operating
+system notifications.
+
+**Affects:** TUI and Mini users who turn notifications on, people who use subagents with notifications on, and VS Code
+users, who get the new notices unless they turn `orbit.notifications` off.
+
+**What to do:** Nothing. Set `"attention": { "backend": "system" }` to use the operating system's notifications, and
+`orbit.notifications` to `false` to silence the VS Code notices.
+
+### `orb trust` can trust the folder above a project, and revoke a folder that was deleted
+
+When a file in a folder above the project holds config back, the advice used to be `orb trust <folder>`. That command
+opens a location of its own for the folder, and the grant goes to that location's project, which can be another one
+(an outer repository, a plain folder in it, and an inner repository: trusting the middle folder trusted the outer
+repository and left the middle folder's config off). The refusal, the terminal UI, Mini and `orb trust` now print
+`orb trust <folder> --for <location>`, which names both and works from any folder. `--for` trusts the folder only
+when the location holds config back for it; for any other folder nothing is trusted. A home directory or a filesystem
+root is never offered a command, because it is trusted only for one run (`--trust`) or until Orbit restarts.
+
+`orb trust --revoke <folder>` now ends the stored grant, and what it recorded, of a folder that no longer exists. It
+matches the name given or listed by `orb trust --list`, ignoring case on Windows, and says "is not trusted" when none
+matches; before, it asked you to create the folder again. The server has a new `POST /api/trust/revoke` route for this.
+
+**Affects:** scripts that parse the advice of `orb trust` or the refusal text, and anyone who revokes a folder they
+deleted.
+
+**What to do:** Copy the printed command as it is. Nothing otherwise.
+
+The printed command quotes the folder names: a name with a space, a quote, `$(` or a backtick is wrapped so that no
+shell runs it, and a name that no quoting makes safe (a control character, a line break, or on Windows anything PowerShell
+or cmd would expand) gets no command, only its escaped name and the way to type it yourself. `orb trust --revoke <folder>`
+now ends a folder that is a stored grant by its own name, wherever it is a location: after `orb trust M --for I`, the
+revoke it prints removes M and leaves the grant of the repository around it.
+
+### The status line stays blank until the folder is trusted
+
+The status line command used to run as soon as the terminal UI opened, in the folder it was started in, which for a clone can make the command's own programs (`bun`, `git`, `npx`) run code the clone chose. It now runs no command and draws no line while that folder is untrusted, and starts as soon as it is trusted (`/trust` in the terminal UI, or `orb trust`). The command is also given the folder of the session in view as `cwd` and `project_dir`, and runs only while that folder is trusted as well, because a status line that runs `git` there would run the folder's own `core.fsmonitor`.
+
+**Affects:** people with a `status_line` command who open `orb` in a folder they have not trusted.
+
+**What to do:** Trust the folder; nothing changes in folders that are already trusted.
+
+### The status line follows managed hook settings, shows every line, runs quoted commands on Windows and stops with the terminal UI
+
+- Managed `disable_hooks` or `managed_hooks_only` (or the managed file's `hooks.disabled` or `hooks.managed_only`) now stop the status line command, because it stands in for a hook and Orbit has no managed status line. One muted line says why. `GET /api/config/effective` reports `hooks.disabled` and `hooks.managed_only`; a server that does not report them counts as unknown, and the terminal UI does not run the command until it knows.
+- The status line draws every non-empty line the command prints, up to ten, one row each. It used to draw the first line only, and nothing when the output began with a blank line.
+- On Windows a command that contains a double quote, such as a quoted script path or `echo "a b"`, now runs as typed. It used to fail without a message.
+- On Linux and macOS a command still running when the terminal UI exits is stopped with what it started; it used to be left running in its own session.
+
+**Affects:** people with a `status_line` command, in particular under organization-managed hook restrictions and on Windows.
+
+**What to do:** Nothing, unless your script printed several lines and relied on only the first showing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -1182,6 +1551,35 @@ drive such as `HKLM:`, which now fail. Code that matches on a failed tool call's
 **What to do:** use the plain path of a file or folder. A shell command can still name a registry key as an argument;
 only a change of location to it is refused.
 
+### Another spelling of the project's folder is decided where it really is, and share paths are refused
+
+A path that named the project through another spelling of its own folder was counted as outside the project by that
+spelling: on Windows `C:\Documents and Settings\…` and `C:\Users\<you>\Local Settings\…` (system junctions), and anywhere
+a link that leads to the project. In a folder that is not trusted, a link the repository ships below such a path was not
+followed, so the folder question named the link's path while the tool acted where the link leads, and your deny rules
+for the project's own names turned into questions.
+
+Now the file tools (Read, Write, Edit, NotebookEdit, Patch, LSP, and the paths of Grep, Glob and a shell `workdir`) find
+which part of the path is really inside the project, and decide the rest under the project's own folder: the rules see
+the project-relative name, a repository link below it is followed and asked about as for the plain spelling, and an
+approval names the place the tool acts on. An 8.3 short name of the project's folder, or of a folder above it, is decided as the project, too. A share or device path (`\\server\share\…`, `\\localhost\C$\…`,
+`\\?\Volume{…}\…`, `\\.\…`) is refused with the error type `file.spelling` before any disk is read, unless the path
+is in the project's folder. A repository link whose target is a share, in any of these spellings (a local
+`\\localhost\C$\…` included), is refused the same way, with no question, for a tool's path and for the plain words of a
+shell command, and is never opened; a part with `~` (an 8.3 short name) below such a link is refused too, as its long
+name could only be found by opening the share. `file-access-spelling.test.ts` pins that only `readLink` touches such a link or a path below it. The words a shell command names are followed through a repository link in these
+spellings as well, and a drive made from the project's folder (`subst`) is the project. The lock that serializes edits of one file now takes the long name without the periods and spaces
+Windows drops, so `new.txt.` and `new.txt` wait for each other.
+
+Your own rule with exactly the value of one of Orbit's folder allows (such as `external_directory` for the global config
+folder) now decides a place a link leads to; before, it was taken for Orbit's own allow and the question was asked.
+
+**Affects:** Windows users who name a project through `Documents and Settings`, `Local Settings` or a share path, and
+anyone whose path goes through a link to the project; code that matches on a failed tool call's `error.type` can see
+`file.spelling`.
+
+**What to do:** use the plain path of a file or folder on a local drive. Nothing else.
+
 ### Grep and Glob ask your Read rules about the path they search
 
 Grep and Glob asked their own rules about the pattern only, so a Read deny of `*.env` did not cover a Grep of `.env`,
@@ -1195,6 +1593,217 @@ about the path as well as about the pattern, and an agent whose rules allow Grep
 search.
 
 **What to do:** answer the question, or allow the path for Read in your own rules or the agent's.
+
+### Every approval is drawn from the request, and names the folder, the method and the arguments
+
+The terminal interface, Mini, ACP and the VS Code card used to work out parts of an approval from the model's own tool
+input. They now draw only what the server put on the permission request. The request carries the absolute place of every
+file a Read, Edit, Write, NotebookEdit, LSP or Patch asks about (a moved file's source too), the folder a shell command
+runs in and a Grep or Glob searches, the method and URL of a fetch, the diff of each file with the place it is written to,
+and the arguments of an MCP tool. So the terminal interface, Mini and VS Code now say which folder a shell, Grep or Glob
+approval is for; an MCP call made through Code Mode shows its arguments, where it used to be approved by name alone; VS
+Code and ACP take a NotebookEdit's file from the request; and an ACP approval and the updates of the call after it show the
+place the tool acts on, where an ordinary tool call showed the path as the model spelled it, a link's own path included. A
+key the model adds to its input, such as a `cwd`, a `files` array or an old field name, changes nothing that is shown.
+An approval over ACP shows the server's diffs only. The finished call's own update of an Edit still builds its diff from the `old_string`
+and `new_string` of the input, now at the place the tool reported. A file tool, a shell command, a Glob or a Grep reports the place
+it resolved before it asks or acts (a `places` entry in its progress), so over ACP the updates of a call name the real place
+even when no rule asks about it. An ACP tool call's `rawInput` is still the call's input, as before. The argument text of an MCP
+call is shown whole, where it was cut at 2000 characters: in the terminal interface the prompt scrolls as a whole and the fullscreen view shows more, and the VS Code card writes out control characters, in the changed lines of a diff too, and keeps the command of a shell approval beside its folder. A fetch approval shows the URL the rules matched and the fetch connects to, without credentials and with an ASCII host, where it showed the spelling the model chose. The terminal interface and Mini list the resource of an MCP resource call and the id of a skill. The live pending call over ACP is sent with an empty input and names no place; when a session is loaded, each replayed call carries its recorded input (so its title and `rawInput` are as before) and names the places its record holds (a completed or failed call records them) and none for a call recorded without them. A shell call's `rawInput` keeps its declared `workdir` and gets a `cwd` only when it declared none.
+
+**Affects:** people who approve calls in the terminal interface, Mini, VS Code or an ACP client, ACP clients that read the
+locations, title or content of a tool call or an approval, and plugins or SDK callers that read the metadata of a
+permission request. The request gains `metadata.paths` (and, per file, `place` and `from`) on file requests,
+`metadata.method` on a WebFetch request and `metadata.arguments` on an MCP request, and `metadata.url` of a WebFetch request is
+now the normalized URL; the metadata of a completed or failed tool call gains `places`. Nothing is removed.
+
+**What to do:** nothing.
+
+### Shell strings written as $'...' are read the way bash reads them
+
+The command scanner decoded some `$'...'` escapes differently from bash, so a command could hide behind one. It now
+ends `$'\c'` at its quote, keeps the character after `\c\` (`$'\c\/'` is 0x1c then `/`), keeps one byte of an octal
+escape (`\456` is `.`), and refuses a heredoc delimiter written with an escape it cannot decode (`\x{..}`, a NUL, a
+byte or code point of 0x80 or more written with `\x`, `\u`, `\U` or octal, a `\c` before a non-ASCII character, a
+code point above U+10FFFF). Bash writes a raw byte for the `\x`, octal and `\c` forms, and bytes that depend on the locale for `\u` and `\U`, so
+the scanner treats the word as dynamic. Such a command is now seen as two commands, or is refused.
+
+**Affects:** people whose shell commands use these escapes; an approval may ask where it did not before.
+
+**What to do:** Nothing; write the character itself instead of the escape if a command is refused.
+
+### A file that changes while its edit waits for approval is not overwritten
+
+`edit`, `write`, `patch` and `notebook_edit` used to write the bytes they had prepared even when the file changed while
+the person was deciding. They now read every file they will write once more after approval, and write nothing if any of
+them differs from what was shown: the call fails with the error type `edit.stale`. The file keeps the other writer's
+content, and a file that appeared or vanished in the meantime counts as changed. For `patch` this covers every path, the
+destination of a move included, and no path is written when one is stale. Only content counts: a file that was touched
+or rewritten with the same bytes is not stale, but a change of line endings alone or of a leading byte-order mark is.
+
+`write` now also waits for another `write` to the same file. A file that cannot be read
+after approval counts as changed. `edit.stale` differs from `file.stale`: the first means the file changed during the
+approval, the second that it changed since the session last read it. After either, read the file again and retry.
+
+`patch` now shows what it replaces. An `Add File` hunk on a file that already exists is listed as `modified` with the
+old lines as removed, not as `added`, and a move onto an existing file lists the destination as a second entry in
+`metadata.files` (and in the result) with its current text as removed. A move destination that already exists must now
+have been read by the session and unchanged since, as an `Add File` target must: otherwise the call fails with
+`file.unread` or `file.stale` and nothing is written.
+
+`patch` now also refuses, before anything is asked, a patch that reaches one file under two names: a `Move to` that
+names its own source (the same path, another letter case on any case-insensitive file system, or a link or hard link to it), or two
+hunks that name one existing file by different spellings (for a new file, letter case is compared on Windows and macOS). Such a patch used to delete the file. Rename a file's letter case with
+the shell instead. An `Add File` over an existing file now keeps that file's byte-order mark, as `write` does.
+
+**Affects:** code that reads a failed tool call's `error.type`, and anyone whose editor, formatter or script writes a file
+while a change to it is waiting for approval: the change now fails instead of overwriting.
+
+**What to do:** Read the file again and repeat the change. Nothing for code that does not read the type.
+
+### Shell commands are judged by what they do: files outside the project, commands with no resource, and input Orbit cannot read
+
+The shell tool and the `!` spans of slash commands now go through one gate. It analyses the command once, resolves every file
+the command names to where it really is, and builds the requests from that. Before, the request held the commands the
+scanner found, and the folder question held the folders the scanner found.
+
+- For input Orbit can analyse, a file the command reads, writes, copies from or removes outside the project (a redirect
+  target, a `cp` source, a `cat`) asks `external_directory` for its folder, judged where links really lead, in a trusted
+  project too. Input that Orbit cannot analyse (see below), or that is over 10,000 characters, is read less closely: it asks for
+  the folders that a `cd`, `pushd`, `Set-Location` or `Push-Location` fragment names (every word that is not a parameter and comes before a comment; for bash only the first operand,
+  the value of `-Path`, `-LiteralPath` and `-PSPath`, and `$HOME`, `$env:NAME`, `${env:NAME}`, `$PWD` and `$PSHOME`
+  expanded), and, in a project that is not trusted, for the folder that a link leads to when a plain word of a fragment
+  names it. A target built as the command runs asks for the nearest folder before the built part. A file that such input
+  names in other ways is not asked about. A new file under a link,
+  a dangling link and a numeric link are judged where the write would land. A write under `os.tmpdir()` is outside like any
+  other, unless the call runs in the sandbox, where the sandbox's writable folders count as inside for writes.
+- A statement with no command, such as `> file`, and a PowerShell statement that is not a pipeline of commands (an
+  assignment, an expression such as `[IO.File]::WriteAllText(...)`, an `if`, a loop, a function) is asked about by its own
+  text. Before, its resources were empty and it ran under any `shell *` ask rule. A saved grant for the commands inside it does not cover it.
+- For input Orbit can analyse, a person's `Read` and `Edit` deny rules now stop a shell command that names the file, and
+  a deny anywhere in a call (the shell request, the folder question, a path rule) blocks it before any question is shown. A
+  `!` span of a slash command counts with the others: a deny on any span of the template blocks it before a question about
+  the first. Plan mode's own deny of every edit is not such a rule: a command in Plan mode is still asked about, as it always
+  was, and only an `Edit` deny of your own stops it. `New-PSDrive` is an ordinary PowerShell command that is asked about
+  by its text (it can map a network share), not a change of location.
+- Input Orbit cannot analyse, a syntax error or an unterminated quote included, is asked about as the whole text plus its
+  fragments, with no "always allow", in both scanner modes. Before, the portable scanner refused it with an error and the
+  default scanner asked about the commands it could find. A deny rule still blocks it, on the whole text or on a fragment, and a fragment answers to the cmdlet's aliases and its module-qualified spelling as parsed input does (`rm *` and `Remove-Item *` meet each other, however long the input is). Bash
+  that uses an unknown variable, an unquoted heredoc, a function body or an array subscript is in this group, so it asks each time.
+- PowerShell approvals come from PowerShell's own parser: the "always allow" pattern is the cmdlet's name (a program's name
+  plus its subcommand words, and nothing for a shell, an interpreter, `Invoke-Expression` or a name that is a path), and a
+  rule written with an alias meets the cmdlet and the reverse (`rm *` meets `Remove-Item x`) on Windows, where rules ignore case.
+
+**Affects:** anyone who relied on a broad allow rule to run commands that read or write outside the project, a `> file`
+statement or a PowerShell expression without a question, and plugin authors who read the shell request's `metadata`, which
+now also carries `findings`.
+
+**What to do:** Approve the folder once, or add an `external_directory` allow for it. Write an allow rule for the commands you
+mean, such as `Bash printf *`. Until the follow-up that makes these asks unliftable (shell-safety-12), a broad allow rule
+(the default `* *` allow included) still lifts a statement with no command and input Orbit cannot read, because it matches
+every resource of the request.
+
+### A PowerShell command spelled as a path to a location cmdlet is asked about
+
+`scripts\Set-Location .`, `& 'scripts\Push-Location'` and `Some.Module\Pop-Location` name a program or script of the
+folder, not the cmdlet, yet the shell guard used to treat them as the location cmdlet and made no request, so a
+`Bash * deny` rule (yours, a managed one or the Plan agent's ask) never saw them. The same happened to a location
+cmdlet whose argument runs code, such as `Set-Location ([IO.File]::WriteAllText(...))` or `Set-Location -Path { ... }`
+next to another command. Now only a plain `Set-Location`, `Push-Location` or `Pop-Location` (or an alias) with
+constant, variable or parameter arguments is left out of the request; every other spelling is asked about as written
+and is covered by deny rules, and a saved grant for another command does not lift it.
+
+**Affects:** people on Windows PowerShell or PowerShell 7 whose rules deny or ask for `Bash`, and repositories that ship
+scripts named like a location cmdlet.
+
+**What to do:** Nothing. Ordinary `cd`, `Set-Location` and `Push-Location` calls still run without a question.
+
+### Hooks and stdio MCP servers wait for the project folder to be trusted
+
+A hook, and a stdio (`local`) MCP server, starts with the project's folder as its working folder, so `bun`, `npx`,
+`uvx` and `git` read that folder's own files (a `bunfig.toml` preload, an `.npmrc`, a repository config) before your
+script runs. Until the folder is trusted no hook runs, yours and your organization's included (one warning is logged),
+and no stdio MCP server starts: it shows as failed with the reason, whatever its `cwd`. Granting the folder starts the
+waiting servers at once, and hooks run from the next event. Remote MCP servers are not held. Before, only the project's
+own hooks waited.
+
+A `PreToolUse` hook is a guard, so it does not just stand aside: while the folder is not trusted, a tool call that one of
+your or your organization's `PreToolUse` hooks applies to is refused, with a reason that names `/trust`, `orb trust` and
+`--trust`, instead of going through as if no hook existed. Calls that no hook applies to run as before, and the other
+events (which cannot stop a call) wait without refusing anything.
+
+**Affects:** people who run `orb run` without `--trust`, the TUI, ACP editors and SDK hosts in a folder they have not
+trusted, with hooks or stdio MCP servers in their user or managed config. A folder that holds nothing back shows no
+trust dialog, so the hooks and servers wait without a prompt.
+
+**What to do:** Trust the folder (`/trust` in the TUI, `orb trust`, or `--trust` on `orb run`) when you want your hooks
+and servers there, and so that calls your guard hooks cover are judged by them again.
+
+### An `external_directory` deny or ask also meets the folder a link or junction leads to
+
+A file tool that reached a folder outside the project through a link, a Windows system junction (`Local Settings`,
+`Documents and Settings`) or `/proc/self/root` was judged by the spelled folder only, so a deny or ask you or your
+organization wrote for the real folder (for example `external_directory ~/.ssh/*`) did not apply. Read, Grep, Glob, the
+language-server tool, Edit, Write, Patch and NotebookEdit now also check the folder behind the spelling, as they already
+did for `Read` and `Edit` rules. An allow written for the real folder still does not lift a spelled path.
+
+**Affects:** people with `external_directory` deny or ask rules, and managed settings that carry them.
+
+**What to do:** Nothing. A path that is blocked by its plain spelling is now blocked by every spelling.
+
+### A link inside a trusted project that leads out is asked about like the folder it leads to
+
+Read, Grep, Glob, the language-server tool, Edit, Write, Patch, NotebookEdit and the shell's working folder used to follow
+a link of a trusted project without a question, so `external_directory` rules (the built-in ask, and any deny or ask you
+or your organization wrote) did not apply to a link such as `keys` pointing at `~/.ssh`, while the same folder named
+directly, or by the shell, was asked about. They now ask `external_directory` for the folder the link leads to, and show
+that folder as the place. Orbit's own allows still apply to it, because a trusted project's link is not an escape; the
+extra mark that stops them is only for a project that is not trusted. A link to a network share is left as it was. A read
+through such a link is outside the project, so it no longer picks up instruction files from the folder it leads to, as a
+read of that folder by its own name never did.
+
+**Affects:** people who work in a trusted project that has links to files or folders outside it, and anyone with
+`external_directory` rules.
+
+**What to do:** Answer the new question once, or allow the folder with `external_directory <folder>/* allow`.
+
+### A chain of 41 or more links is judged like a short one
+
+Windows follows a chain of up to 63 links, but Orbit stopped looking after 40 and then treated the path as having no
+share and as lying inside the project. A repository with such a chain could make Orbit connect to a host it chose before
+anyone was asked (when the chain ends at a share, even while its config loads or `orb trust` runs), and a write through a
+chain that ends at a file outside the project was judged to be inside it, so no question was asked and deny rules for the
+real folder did not apply. Orbit now follows up to 80 links, and a chain it gives up on is refused as a share is, or
+reported as a place it could not resolve. A folder named `plugin` or `plugins` in a config directory that is itself a link
+to a share is no longer listed when the trust status is read.
+
+**Affects:** people who open repositories that contain links, on Windows.
+
+**What to do:** Nothing. A chain that long is refused with the same message as a share.
+
+### Managed `denied_domains` match an IPv4 address in its IPv6 spellings
+
+An IPv4 address in the managed `denied_domains` list now also denies its mapped (`[::ffff:203.0.113.5]`), compatible, translated and well-known NAT64 (`[64:ff9b::203.0.113.5]`) IPv6 spellings, and an entry written in one of those spellings denies the dotted address. Before, such a URL missed the deny and fell through to the ordinary question or to your own allow rule.
+
+**Affects:** organizations whose managed settings list an IP address in `denied_domains`.
+
+**What to do:** Nothing.
+
+### One bad field no longer drops its agent entry or its settings object
+
+In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry (`color`, `model`, `steps`, `mode`, or one rule in its `permissions`) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
+
+**Affects:** anyone with a typo in one of these entries, administrators most of all; `orb doctor` lists each skipped field.
+
+**What to do:** Nothing; fix the field that `orb doctor` names.
+
+### A deny for the linked spelling of Orbit's own folders covers its real path
+
+When the global config, data or temporary folder is reached through a link, Orbit allows it by both spellings. A deny or ask you wrote for the linked spelling (`external_directory ~/orbit-link/* deny`) now also decides a place named by the real path, and a deny written for the real path decides the linked spelling, as it did. Before, naming the real path directly fell through to Orbit's own allow. If a folder cannot be resolved at startup (a link loop), Orbit now keeps the spelled path and starts, instead of failing to build its agent and permission layers.
+
+**Affects:** people whose config, data or temporary folder is a link and who wrote rules about it.
+
+**What to do:** Nothing.
 
 ## Plugins and SDK
 
@@ -1783,3 +2392,553 @@ edits in the terminal interface or Mini, and plugins or SDK callers that read `m
 permission request.
 
 **What to do:** nothing. A plugin that wanted the path as the model wrote it reads it from the tool call's input.
+
+### Structured output is a validated tool hand-in
+
+A prompt can ask that the turn end with an answer that follows a JSON Schema: `turn.output` on the prompt request holds
+the `schema` and, optionally, `attempts` (1 to 20, default 5), and `orb run`, `orb -p` and the SDK send it from
+`--json-schema`. The schema is checked and compiled when the prompt is admitted. The runner then offers the model one
+extra tool, `StructuredOutput`, whose parameters are the schema as you wrote it, always as a direct tool: no permission
+rule, agent tool list or context hook removes it, and it never asks. Each hand-in is validated; a bad one is
+sent back to the model with every failure (a JSON Pointer and a reason), and a turn that stops without an accepted
+hand-in is asked to hand one in. The turn ends with the latest accepted value, or fails: `limit.structured-output` after
+`attempts` responses that handed in a wrong answer (a valid last attempt still succeeds), or `output.missing` when the model
+never hands one in (after the eight turn-end continuations, or when the agent's step allowance ends first). A model that cannot call
+tools fails with `output.unsupported-model`, and a stored schema that no longer compiles with `output.schema-invalid`. `structured_output` on the result comes from the accepted
+hand-in in the history, and is present only on success.
+
+This replaces the earlier text path: the schema is no longer appended to the prompt, and the answer is no longer parsed
+from the reply (a fenced or bare JSON answer in prose is not an answer). Other changes:
+
+- A schema is refused at admission (HTTP 400, field `turn.output.schema`) unless it is an object whose root declares
+  `"type": "object"`, passes the meta-schema (draft-07, 2019-09 or 2020-12; no `$schema` means draft-07), uses only
+  keywords the validator enforces (a `$id` is allowed only at the root), has only local `$ref`s that resolve (nothing is fetched), and stays under 256 KiB and 64
+  levels of nesting. Unknown keywords, such as a misspelt `requred`, are refused instead of ignored. `format` and the
+  other annotations (`title`, `description`, `default`, `examples`, `$comment`, `deprecated`, `readOnly`, `writeOnly`,
+  `contentMediaType`, `contentEncoding`) are accepted and not enforced. The validator interprets the schema and never
+  builds code from it.
+- `--json-schema` takes inline JSON when its value starts with `{`, and otherwise the path of a file (a UTF-8 byte order
+  mark is dropped and UTF-16 files are decoded). A missing file, invalid JSON or a root that is not an object schema is a
+  usage error in the requested format, before any session exists. Windows PowerShell 5.1 strips the quotes from inline
+  JSON, so pass a file there.
+- `ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES` (1 to 20) sets `attempts` for the prompts of a run; any other value is a usage error.
+- A failed run reports the new subtype `error_max_structured_output_retries` for the attempt limit, and `reason:
+  "invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
+  attempts and its own result line.
+- An older server refuses a request that carries `turn.output`, and a server that drops it fails the run; neither falls
+  back to parsing text.
+- On an agent's last allowed step the hand-in tool is offered alone (and asked for by name) until an answer is accepted.
+
+**Affects:** scripts and SDK callers that use `--json-schema` or build prompts with a schema in the text, anything that
+matched the old `The answer was not valid JSON.` error, and schemas that were not object roots or used unknown keywords.
+
+**What to do:** Pass the schema as `--json-schema` (or `turn.output`) and read `structured_output` from the result or
+from the accepted `StructuredOutput` call; make the schema an object schema; update an older server.
+
+## Shell sandbox
+
+### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
+
+With `sandbox.enabled` set, Orbit now recognises Windows Subsystem for Linux from the kernel release. WSL2 uses the same
+bubblewrap sandbox as Linux, and Orbit hides the WSL interop sockets (`/run/WSL`) from the sandboxed command, so a
+sandboxed command on WSL2 cannot start Windows programs such as `cmd.exe` or `powershell.exe`. WSL1 has no support for
+the namespaces bubblewrap needs, so a shell command there fails with a message saying so, instead of failing with
+bubblewrap's own namespace error.
+
+**Affects:** people who enable the shell sandbox inside a WSL1 or WSL2 distribution. On WSL2, commands that start a
+Windows program now fail.
+
+**What to do:** convert the distribution with `wsl --set-version <name> 2`, or turn the sandbox off.
+
+### The status line refreshes on events, gets more fields and can keep colors
+
+The status line command (`status_line.command`) used to run only on its interval and received a short JSON object. It
+now also runs when a step ends or an execution starts or ends in the session, and when the selected agent, model or
+model variant changes. Runs start at least 300 ms apart (the interval aside), and a trigger that arrives while a run is
+in flight causes exactly one more run, 300 ms after the first started or when it ends, whichever is later. A command
+that has not closed its output and exited within 2 s of starting is stopped together with the programs it
+started, and the last good line stays. On macOS and Linux the command runs in its own session, so it has
+no controlling terminal: a script that reads the terminal size from `/dev/tty` (`stty size`) fails, and the command is
+given no terminal size. On Windows
+that covers what the shell is still running when it is stopped; a program that the shell started detached
+(`start /b`) and then left is not stopped. Its stdin JSON gains `version`, `session` (`id`, `title`), `cwd`,
+`project_dir`, `model` (`provider`, `id`, `name`, `variant`, the model selected for the next prompt), `agent`,
+`output_style`, `context` (`used`, `limit`, `percent`, all three for the selected model), `cost` (`usd`, `duration_ms`,
+`lines_added`, `lines_removed`), `status` (`idle` or `running`) and `vim_mode`; `session_id` stays. The `model` object
+now names its provider `provider` (it was `providerID`), `cost` is an object, where it was a number, and `context`
+holds `used`, `limit` and `percent`, where it held `tokens` and `percent`. `session_id` and `model` are `null` on the
+home screen, where they used to be absent. `lines_added` and `lines_removed` are `null` until Orbit tracks them. The new
+`status_line.colors` key (default `false`) renders the command's colors, bold, dim, italic and underline instead of
+removing them. Every other escape sequence, such as a
+title change or a clipboard write, is dropped in both modes, control characters are shown as their control pictures,
+and format characters such as a right-to-left override or a zero-width space are written out (`\u{202e}`). Private Use
+Area glyphs (Powerline, Nerd Font) and the zero-width joiner of an emoji sequence are drawn as they are. On Windows the
+command runs through `cmd.exe` by its full path and no longer finds a program of the same name in the working folder
+first.
+
+Known gap: the prompt, and with it the status line, is replaced by the permission prompt while a permission is
+pending, so the line is not drawn then, and `status` has no `waiting` value.
+
+**Affects:** people with a `status_line` command, in particular scripts that read `model` or `cost` from stdin.
+
+**What to do:** Update a script that read `cost` as a number to read `cost.usd`, one that read `model.providerID` to
+read `model.provider`, and one that read `context.tokens` to read `context.used`.
+Set `status_line.colors` to `true` to see your script's colors.
+
+### The shell tool no longer runs commands in csh or tcsh
+
+When the tool shell is picked for compatibility, Orbit used to accept a `csh` or `tcsh` login shell and run commands in
+it. Those shells cannot run the POSIX syntax that models write, and Orbit cannot analyse their syntax to decide which
+commands need a question. They are now skipped like `fish` and `nu`: the tool falls back to the shell Orbit picks
+otherwise (`zsh` on macOS, `bash` or `sh` on Linux, PowerShell or Git Bash on Windows). Your own terminal and your login
+shell are unchanged.
+
+**Affects:** people whose login shell, `SHELL` or `shell` setting is `csh` or `tcsh`.
+
+**What to do:** nothing. Commands that relied on csh syntax (`setenv`, `set x = y`) must be written for the shell Orbit
+picks.
+
+## Tools
+
+### Web search results start with a Sources reminder
+
+Before, the `WebSearch` tool returned only the results and its description did not mention how to cite them. Its
+description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown
+links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page
+also begin with a one-line reminder of that rule, ahead of the first result so that a result the session bounds (it
+keeps the head) still carries it; an empty result does not. Domain filtering and the query sent to providers are
+unchanged.
+
+**Affects:** people who read `WebSearch` tool output in logs, ACP editor users and VS Code users who expand a WebSearch card, who see the reminder,
+and plugin or SDK code that compares the result text exactly.
+
+**What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.
+
+### Read-only shell calls run at the same time
+
+Before, every `Bash` call in a step ran alone, in the order the model wrote them. Now a call whose command the shell
+analysis judges read-only (`ls`, `git status`, `cat a | grep b`, `sleep 1`) runs beside other safe calls, up to
+`tool_execution.max_concurrency`. Any other call, such as `touch x` or `echo hi > f`, still runs alone and waits for
+the calls before it. The decision uses the command text the model sent, before any hook rewrites it, and ignores
+`run_in_background`, the timeout and the paths the command reads. A command that cannot be analysed, an empty command,
+and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has an empty or relative
+entry (a trailing `;` in the Windows `Path` is enough) no command counts as read-only, so shell calls stay serial.
+
+**Affects:** people whose model issues several read-only shell commands in one step, and plugins that observe the
+`execute.before` and `execute.after` hooks of `Bash` and assume they never overlap.
+
+**What to do:** Nothing. To keep shell calls serial, set `tool_execution.max_concurrency` to 1.
+
+### A failing shell command cancels the shell calls beside it
+
+Before, a foreground `Bash` call that exited with a non-zero code left the other calls of its step alone. Now, under
+`bash`, `sh` and the other POSIX shells (Git Bash included), it cancels the calls of that step that are still running
+and the ones not started yet, because commands in a step often depend on each other. The exit code is read by the
+program that ends the command line, as written: `grep`, `rg`, `find`, `diff`, `test` and `[` only fail at exit code 2 or
+more, since 1 means no match, differences, unreadable folders or a false condition. `grep x f && echo found` is judged
+by `echo`, and a line the analysis cannot model (a `$(...)`, an unknown variable, a syntax error) fails on any non-zero
+code. Under PowerShell an exit code never cancels anything, and under `cmd.exe` any non-zero code does. The text the
+model sees is unchanged. Timeouts, signals and commands that cannot start already cancelled their siblings. Background
+commands are not affected.
+
+The shell tool also reports `readOnly` and `destructive` for each call (advisory; nothing
+is allowed or asked differently because of them). `rm -rf x`, `git reset --hard`, `git push --force`, `DROP TABLE` and
+similar are destructive; every command under `cmd.exe` or an unrecognised shell is. `destructive` is read from the command
+text alone; `readOnly` also depends on where each program would be found, so a program on a relative `PATH` entry or in
+the working folder is not read-only.
+
+**Affects:** people whose model issues several shell commands in one step, and plugins or SDK code that read the
+`error` field of a shell result's metadata.
+
+**What to do:** Nothing. Put commands that must not cancel each other in separate steps, or end them with `|| true`.
+
+## Files and web tools
+
+Changes to the file tools and the web tools.
+
+### Read refuses devices and budgets its output by tokens
+
+The Read, Grep and Glob tools now refuse a device or stream path with a message that says it is a device or stream (the failure reaches a client as an ordinary tool error, with no dedicated error type), before anything is asked or opened: `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/ptmx`, `/dev/tty*`, `/dev/cu.*`, `/dev/pts/*`, `/dev/fd/*` and `/proc/<self, thread-self or pid>/[task/<tid>/]fd/*` on Linux and macOS, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9` (also `COM¹`, `COM²`, `COM³` and the `LPT` forms), `CONIN$`, `CONOUT$` (with or without an extension) and the `\\.\` forms and the `\\?\` forms of these names on Windows (a `\\?\` drive path such as `\\?\C:\Windows\win.ini` is read as the plain drive path and goes through the usual approval). On Linux and macOS a path whose target, followed through links, exists and is neither a file nor a folder (a pipe, a socket, a device the list lacks, or a link of the repository to one) is refused the same way. The Windows names are refused on every Windows version, though Windows 11 itself opens `nul.txt` or `aux.c` as an ordinary file; rename such a file to read it. Files such as `console.log` still read. A read also returns at most about 25,000 tokens of rendered text (line numbers included) instead of 50 KB: a file of ordinary lines up to that size comes back whole where it was paged before, a file of more than 2,000 lines pages whatever its size, and a truncated read ends with the offset to continue from and a hint to use Grep. Notebooks page by the same budget.
+
+**Affects:** people and scripts that read very large files or device paths through the Read tool.
+
+**What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.
+
+### A touched file no longer blocks an edit, and a repeat read is short
+
+The file tools remember what a Session read of a file and what its own edits left behind. When a file's modification time is newer than the one remembered but its bytes are the same (a touch, a checkout that rewrote the same content, a formatter that changed nothing), Edit, Write, NotebookEdit and Patch now go ahead instead of reporting that the file changed. This applies to files of up to 256 KiB that the Session read, whatever range it asked for, and files it last edited or wrote; a larger file still compares modification times only. A file whose content changed is refused as before, and a change of line endings alone (CRLF to LF) counts as no change while adding or removing a byte order mark does not. A file that was never read is refused before any of it is loaded. A file reached through a symbolic link is compared by the link target's modification time, as its read recorded it. Separately, reading the same range of an unchanged text file or notebook again in the same Session answers with a short "unchanged since your last read" note instead of the text; the tool's structured output is unchanged and its metadata says `unchanged: true`. Only the last range read of a file is remembered, so reading range A, then range B, then A again returns A in full. The note is never used for a directory listing, an image or a PDF, and never skips the permission check. The note is not used after the Session is compacted or a revert is committed, nor after any Edit, Write, Patch or NotebookEdit of that file. A completed compaction also forgets that the Session read any file: a file has to be read again after a compaction before Edit, Write, Patch or NotebookEdit may change it (a failed compaction changes nothing).
+
+**Affects:** people who run formatters, version control or build tools while a Session is open, and clients that show Read results.
+
+**What to do:** Nothing.
+
+### Grep returns up to 250 matches in a token-bounded page, and clips long lines
+
+Grep used to return 100 matches per call and cut a line at 2,000 characters. Its default page is now 250 matches, but
+a page in `content` mode also stops before its text passes about 25,000 tokens, so a call with a lot of `context` holds
+fewer. A truncated result says which matches it shows and the exact `offset` that continues it; paging from that
+offset skips nothing and repeats nothing, because matches come in path order. A line longer than 500 characters is cut
+to a window that starts about 100 characters before its first match, with ellipsis markers and a
+`[line truncated: N chars]` note, and the submatch offsets in the result index into the clipped text; a match that runs
+past the window is kept and cut at its end. A multiline match is measured one line at a time, so only a line longer
+than 500 characters is cut, and a match of more than 20,000 characters ends with a
+`[match continues for N more lines]` marker. A line that is not valid UTF-8 is shown with replacement characters
+instead of failing the search. Submatch
+`start` and `end` are now offsets in UTF-16 characters of the row's `text`, not UTF-8 bytes, on every line including
+unclipped ones (a plugin reading `Ripgrep.Service` sees this too); `Match.offset` stays a byte offset. Grep and Glob
+also skip `.svn`, `.hg`, `.bzr`, `.jj` and `.sl` folders and files of those names, as they already skipped `.git`.
+Glob still returns at most 100 files.
+
+**Affects:** people who read Grep results in scripts or plugins, and anyone who relied on a search entering one of
+those version-control folders.
+
+**What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
+truncation note for more results.
+
+### Language servers hear about every write, and about each save
+
+A file created or overwritten with Write now goes to its language server, so the tool result carries the same inline
+errors that Edit already reported; before, a Write got none. After every edit (Write, Edit, Patch and NotebookEdit),
+the server is also sent `textDocument/didSave` once the new text is synced, with the text only when the server asked
+for it. Servers that run extra checks on save, such as rust-analyzer with `cargo check`, may now do so after each edit.
+The `LSP` tool never saves.
+
+Language servers and formatters now also decide per file. A file outside the project is served only when the folder that
+owns it (the nearest folder above it with a `.git` or `.hg`, else its own folder) is trusted too; trusting the project
+is no longer enough for an edit that reaches into another folder. A link is decided twice, by the spelling it was
+given and by where it really leads, and the stricter answer wins: a link in an untrusted folder, even one with no
+`.git`, that leads into a trusted one is refused. A skipped file leaves the tool result as it was. A server is started through Orbit's process spawner: a bare program name is found on `PATH`
+only.
+
+**Affects:** people with a language server configured or on `PATH`, mostly Rust users.
+
+**What to do:** Nothing. Set `lsp` to `false` to turn language servers off.
+
+### A web search that nobody agreed to fails as "websearch.not-enabled"
+
+When the web search consent form is cancelled, is not answered within a minute, or cannot be shown, the `WebSearch` tool now
+fails with the type `websearch.not-enabled` and a fixed message that names the `websearch` setting, tells the model that
+only the user can turn search on (it must not edit Orbit's config or settings files or send the query to a search
+service some other way) and not to
+call the tool again in this run, and says how the user can turn search on. Before, the failure had the type `tool.execution`
+and the message "Unable to search the web for ...". Nothing is searched or stored: a cancelled or timed-out form does not
+save a choice, so the next call asks again. Headless runs (`orb run` with no flag, `--auto` or
+`--dangerously-skip-permissions`) still never answer the form, so they search only when the user has already chosen: by
+answering the prompt in an interactive client, or by setting `websearch` in their own config or a trusted project's
+config; the exit code of such a run does not change.
+
+**Affects:** clients and hooks that match on the error type of a failed `WebSearch` call, and people who read logs.
+
+**What to do:** Nothing. To allow search in a headless run, set `websearch` (for example `{ "provider": "random" }`) in your
+own Orbit config.
+
+### WebFetch follows same-site redirects only, checks every hop and caches pages for 15 minutes
+
+`WebFetch` used to let the HTTP client follow every redirect to any host, with one approval for the URL the model named.
+It now sends each request itself:
+
+- A redirect within the same site is followed: the same protocol (or `http:` to `https:`), the same port, no credentials
+  in the target, and the same host once one leading `www.` is dropped from each. A redirect to anything else is not
+  followed. The call succeeds with a note that names the URL that redirected, the target and the status, and says to call
+  `WebFetch` again with the target. Nothing is sent to the target, and the note is not cached. A 303 is a status error.
+  At most 10 redirects are followed; an 11th fails with "Too many redirects". (Tests: `WebFetchTool redirects` in
+  `packages/core/test/tool-webfetch.test.ts`.)
+- Every request is asked about, not only the first, so a rule written for a URL applies to a redirect target on the same
+  site. A hop from `example.com` to `www.example.com` is a different host, so it can prompt once. The approval of a hop
+  shows the hop's own method and URL, with the hop it came from in `redirect`. (Tests: "follows a same-host redirect" and
+  "follows a hop that only adds or drops a leading www.")
+- An `http:` URL is fetched over `https:`, and the approval shows the `https:` URL. A single-label host such as
+  `localhost` or an address keeps its scheme. A URL with a username or password, or one longer than 2000 characters, is
+  refused before anything is asked or sent. (Tests: `WebFetchTool URL checks`.)
+- After the permission for a request, the host is checked: a name that resolves to a loopback or private-network address
+  is refused unless `experimental.allow_local_fetch` is on, a link-local or cloud metadata address is always refused, and
+  so is a name that resolves to nothing. The request then connects to the address that was checked, with the name in
+  `Host` and in the TLS handshake. Fetching a local development server therefore needs `experimental.allow_local_fetch`,
+  which a repository cannot turn on. (Tests: `WebFetchTool address guard and pinning`.)
+- A response body may be up to 10 MiB, up from 5 MiB; an HTML page is still converted to Markdown within a 5 MiB budget.
+  (Tests: `WebFetchTool size cap`.)
+- A fetched page is cached for 15 minutes from the moment it is stored, up to 50 MiB in all, and shared by the sessions of
+  one project. A repeat call within that time sends no request, but still asks permission for the URL and for each
+  redirect it was reached through, in order, so a rule or a decline written for a hop applies to a cached page as it does
+  to a live one. A failure, a redirect note or a timeout is never cached. (Tests: `WebFetchTool cache` and
+  `tool-webfetch-cache.test.ts`.)
+- The timeout (30 seconds by default, at most 120) applies to each request and to the read of the body, not to the whole
+  call and never to a question put to you, which can wait as long as you take. A chain of redirects can therefore take
+  longer than the timeout in all, and the limit of 10 redirects bounds it. (Tests: `WebFetchTool timeout`.)
+- The name of a site is now resolved on this machine, and a name that does not resolve there is refused. Through a proxy
+  the name used to be resolved by the proxy. A configured proxy now sees the address that was checked, not the name, so a
+  `NO_PROXY` entry written by name no longer matches. Whether a proxy should be given the name instead is an open question
+  for the owner, kept under Known gaps in `docs/untrusted-repositories.md`.
+
+**Affects:** people and scripts that fetch a local server or a private address with `WebFetch`, pages that redirect to
+another host, and anyone with `WebFetch` rules written for `http:` URLs, which now match the `https:` URL.
+
+**What to do:** To fetch local servers, set `experimental.allow_local_fetch` to `true` in your own configuration. Write
+rules for the `https:` form of a URL. Behind a proxy that resolves names this machine cannot, or one that is picked by
+`NO_PROXY` entries written by name, `WebFetch` does not work yet. When a note reports a redirect, call `WebFetch` again with the target it names.
+
+### Edit keeps a file's curly quotes and removes the line break of a deleted line
+
+When Edit finds `old_string` only after matching typography (curly quotes, dashes, spaces) or ignoring trailing whitespace, and the quote characters of the text it found differ from those of `old_string`, it writes the straight `"` and `'` of `new_string` in the quote style of the text it replaced: curly doubles are used only if the replaced text has curly doubles, curly singles only if it has curly singles, and a quote opens at the start of `new_string`, after a space, tab or line break, after `(`, `[` or `{`, or after an en or em dash, and closes anywhere else (a no-break space and a hyphen-minus close). A match whose quotes equal `old_string`'s (an exact match, or one that differs only in whitespace, dashes or spaces) is never restyled. When `new_string` is empty and the matched text is the only thing on its line (apart from whitespace), Edit also removes the line break, so no blank line is left; a deletion in the middle of a line, or one whose `old_string` starts or ends with a line break, removes only the matched text.
+
+**Affects:** people and scripts that rely on the exact bytes Edit writes.
+
+**What to do:** Nothing.
+
+### WebFetch answers a question about the page
+
+WebFetch used to return the page as text, Markdown or HTML, and answered a question only when you passed an optional `prompt`. Now `prompt` is required and `format` is gone (a stale `format` is ignored). A small model reads the page, with nothing else from the conversation and no tools, and WebFetch returns only its answer. HTML is converted to Markdown first, and a page longer than 100,000 characters is cut, with a note that it was. If no answer can be produced, WebFetch returns a short note that says so, and never the page. The page stays cached for 15 minutes, so trying again costs only the answer.
+
+A new key, `webfetch.verbatim_hosts`, lists hosts (`docs.example.com`, `*.example.com`, or `example.com/guides` for a path prefix) whose Markdown pages under 100,000 characters are returned whole instead of answered. Write a non-ASCII host in its ASCII form and an IPv6 address in brackets. The default is none. Listing a host grants no permission to fetch it, and a project that is not yet trusted cannot set a non-empty list.
+
+**Affects:** prompts, scripts and plugins that called WebFetch without a `prompt`, or relied on it returning the raw page or HTML.
+
+**What to do:** Ask for what you need in `prompt`. To read a documentation site whole, list its host in `webfetch.verbatim_hosts` in your own configuration.
+
+### The LSP tool finds implementations, searches workspace symbols and walks call hierarchies
+
+The `LSP` tool has five new actions: `implementation`, `workspace_symbols` (with a new `query` input, sent as an empty
+string when left out; `path` only chooses the language server), `prepare_call_hierarchy`, `incoming_calls` and
+`outgoing_calls`. The call actions take the position of a function's name and use the first item the server finds there.
+The language server client also declares link, implementation, call hierarchy and workspace symbol support when it
+starts, retries a request up to three times (after 0.5 s, 1 s and 2 s) when a server answers that its content changed
+while it was indexing, and refuses a file larger than 10 MB with a message instead of sending it.
+
+The existing actions print differently: `definition` and `references` give a headline with a count, references are grouped
+by file, a link falls back to its whole target when it has no selection range, hover shows a list as separate paragraphs
+and starts with the range's position when the server sends one, and `symbols` shows each symbol's kind, detail and the line
+where its range starts. Paths are relative to the session's folder only when that is shorter and does not climb two folders, use
+forward slashes, and a result that is not a file path (for example a `jdt:` address) is printed as given. Results in
+git-ignored files are left out of `definition`, `implementation`, `references` and `workspace_symbols`; a file git tracks is
+always shown, and a folder that is not a repository hides nothing.
+
+**Affects:** models and scripts that parse the text of an `LSP` result, and anyone who relied on seeing results inside
+git-ignored folders such as `node_modules`.
+
+**What to do:** Nothing for most setups. Read results by their content, not by the old `path:line:column` lines.
+
+### Read returns a PDF by page range
+
+Read takes a new optional `pages` argument for PDFs: a page such as `3` or a range such as `1-5`, counted from 1, at most 20 pages per call. It copies those pages into a new PDF, so the text stays selectable. A PDF of more than 10 pages can no longer be read whole: Read fails and tells the model to pass `pages`, where it used to send the file whole up to 20 MiB. A last page past the end is clamped to the last page; a first page past the end fails. A PDF that cannot be parsed, or is password-protected, is refused with a message instead of being sent; so is one whose page tree lists a page node twice, and one that holds any invalid object, even an unreferenced one, which a more lenient reader would still open. A PDF above 32 MiB is refused, and one between 20 and 32 MiB can still be read through `pages`. `pages` on any other file is ignored; a malformed value, or one wider than 20 pages, fails before anything is read. No program is installed or run: the pages are cut in process.
+
+**Affects:** models, scripts and plugins that read PDFs of more than 10 pages, or PDFs that are not valid, with Read.
+
+**What to do:** Pass `pages`, for example `"1-5"`, for a long PDF. A model that cannot take PDF input still receives the usual unsupported-media text.
+
+### `--input-format stream-json` lets a program drive a headless run
+
+`orb -p --input-format stream-json --output-format stream-json` (and `orb run --input-format stream-json --format stream-json`)
+reads one JSON input per line from standard input while the run goes on, instead of sending one message and exiting. The
+inputs are `user` (`text`, optional `files`, `delivery` `steer` or `queue`, `id`), `interrupt`, `permission_reply`,
+`form_reply`, `form_cancel`, `set_model` and `end`. Output is the envelope of `--output-format stream-json`, with an init
+line first and one `result` line for each busy period, plus `permission_request` and `form_request` lines for the asks and
+questions the program should answer, `request_cancelled` when one of them is settled by someone else, and `error` lines with
+type `invalid_input`, `unknown_request` or `input_failed` for a line or operation that failed (the run goes on). A message
+sent with `delivery: "steer"` joins the work that is running and shares its result; `"queue"` waits and gets its own. When
+standard input closes, every ask that is still open is rejected (a question is cancelled) with feedback so the model carries on,
+the queued work finishes, and the exit status is 1 if the last result was an error and 0 otherwise. A first message may also be
+given on the command line. Like `orb -p`, it refuses an untrusted folder. Without `--yolo`, `--auto` or `--dangerously-skip-permissions` every ask goes to the program;
+with one of them, asks are approved without being shown.
+
+**Affects:** nothing that exists: the flag is new. `--input-format` is a new `-p` flag, so a script that passes it to a
+root command without `-p` now gets the usual usage error.
+
+**What to do:** Nothing, unless you want to drive Orbit from a program. See `orb -p --help` for the line shapes.
+
+### The question tool has limits and option previews
+
+The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that a client may show while the option is focused. SDK clients receive it on `Form.Option`; Orbit's own clients do not draw previews yet, so the tool description does not mention them to the model. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
+
+**Affects:** SDK callers that build question forms and read `Form.Option`, which gains an optional `preview`, and anyone whose agents or plugins send questions with no options or one option, more than four options, or more than four questions.
+
+**What to do:** Nothing for most setups. Clients that do not draw previews keep working because the field is optional.
+
+### Read reports image sizes, and a resized image comes with a note
+
+Read now opens an image with a header line that names its pixel size and type, for example "Image read successfully (1920×1080 px, image/png)", and puts the same size in the result metadata under `image`. When the size cannot be read from the header, the line names the type alone. Whenever an image that a tool returns directly is scaled down to fit the size limits, a short bracketed note follows it with the original size, the size it is shown at and a factor (original width divided by shown width, two decimals) for turning positions read from the shown image into positions in the original. An image that is only re-encoded at the same pixel size gets no note, and neither does one passed through because the resizer is unavailable. An image returned to a Code Mode program (the Execute tool) is resized as before and gets no note yet, and images in your own prompts are resized as before and get no note yet.
+
+**Affects:** anyone who matches Read's exact "Image read successfully" text, SDK callers that read the Read tool output schema (images gain an optional `dimensions`), and sessions that read large images.
+
+**What to do:** Nothing for most setups. Match the line by its prefix if you parse it.
+
+### Editing any file of a plugin folder asks about the folder again
+
+A project plugin folder is now fingerprinted by every regular file in it, not only its entry files and `package.json`, so a change to a helper module counts like a change to the entry. A folder named `node_modules` directly in `plugin/` or `plugins/` is never a plugin: it is not read and not loaded. Inside a plugin folder, `node_modules` is named but not read, so a change inside an existing `node_modules` does not ask again, while creating it (a first install) or changing a lockfile or `package.json` does. Before a folder is trusted, Orbit lists a plugin folder without following links that lead out of the project or onto a network share.
+
+**Affects:** projects with plugin folders that hold more than the entry files, under a trust grant made before this change.
+
+**What to do:** Nothing; grant the folder again if it asks.
+
+### `orb run` and `-p` wait for commands that moved to the background
+
+A shell command that outlives its timeout now keeps running in the background, and the model is told when it ends. A headless run (`orb run`, `orb -p`) used to stop at the first idle moment, which killed such a command with the standalone server, or left it running unwatched in a service, while the run reported success. It now keeps waiting while the session owns a running command, then waits for the step that the completion notice starts, so the final answer reflects the command's result. A notice that does not arrive within ten seconds after the last command ended stops the wait.
+
+**Affects:** scripts and CI jobs that run `orb run` or `orb -p` with commands longer than the shell timeout, or that start a long-lived command in the background (a dev server) and expect the run to end without it.
+
+**What to do:** Nothing for commands that end. Stop a long-lived command before the model's last step, or interrupt the run.
+
+### Deny and ask rules also see where a link in a trusted project leads
+
+A link in a trusted project (a symlink or a junction) was followed, but the rules were checked against the link's own name only, so `keys/id_rsa` passed a Read or Edit deny written for `~/.ssh/*` when `keys` led to that folder, and a managed deny did not hold. The file tools (Read, Grep, Glob, LSP, Edit, Write, Patch, NotebookEdit) now also check the deny and ask rules, the person's and the managed ones, against the place the path really leads to, a link that points nowhere included. An allow written for the real place alone never lifts the link: only a deny or an ask on that place applies.
+
+**Affects:** projects that hold links to folders outside them, under deny or ask rules written for those folders.
+
+**What to do:** Nothing. Write the rule for the real folder as before; it now covers the links to it.
+
+### A deny on the place a link leads to now holds for links outside the project, and for rules written relative to it
+
+The check above also applies to a path outside the project that goes through a link (`~/elsewhere/k` leading to `~/.ssh`): a deny or an ask written for the real folder holds even when an allow for `~/elsewhere/*` comes after it, in the person's rules and in the managed ones (the rows "a deny or ask for the real place beats a later allow for the link's folder" in `packages/core/test/permission-leads.test.ts`). The Plan agent keeps its plan file when the home folder or `~/.orbit` is a link, because its allow for the plan folder is also written for the folder's real path (`packages/core/test/plugin/plan.test.ts` and the Plan rows of `permission-leads.test.ts`); a link inside the plan folder that leads elsewhere stays denied.
+
+A place a link leads to is matched in its real path, in the same place under the project's folders as they are spelled, and relative to the session folder (`secrets/*`, `.env`), whether Orbit was started in the project's folder or through a link to it, for relative and absolute rules, managed and configured ("the session folder spelled directly or through a link" rows). For a place inside the project the last rule that matches any of those spellings decides, so an allow written as `src/*` or as the absolute path still covers a link to `src/real-gen`. A link that leads out of the project is decided by the folder it leads to: under a broad `Edit * ask`, an allow written for the link's own name (`vendor/*`) does not lift the ask. Read refuses a `\\?\Volume{...}` or `\\.\Volume{...}` path as a share or device spelling (`file.spelling`), and a device such as `NUL` with `file.device` instead of `unknown` (`file-access-spelling.test.ts`, `tool-read.test.ts`).
+
+**Affects:** projects with links to folders, and `\\?\` or `\\.\` paths on Windows.
+
+**What to do:** Nothing for most setups. To allow a link that leads out of the project under a broad ask, write the allow for the folder it leads to.
+
+### The Ollama model list is read before the first session starts
+
+Starting a location now waits for the first read of the Ollama server's model list (each request is limited to 1 second),
+so a run that relies on the default model finds the Ollama models instead of failing with "No model was set" when the
+list arrives a moment late. With an Ollama address that does not answer, the start takes up to 1 second longer.
+
+A read that a location rebuild interrupts (as `--trust` does right after it grants) no longer leaves a "checked" mark
+without models behind, so the next start reads the list again instead of finding it empty until the refresh interval
+passes. The LM Studio and vLLM model lists follow the same rule.
+
+### The shell guard asks about more places for PowerShell, and reports a refused place as unresolved
+
+PowerShell 7 goes to the home folder when a location change names nothing, so a bare `Set-Location` or `cd`, `Set-Location $null`, and a variable that is unset or empty (`${env:NAME}`) are now asked about as the home folder on every host; Windows PowerShell 5.1 fails there, and the home folder is the stricter reading. On Linux and macOS a backslash in a PowerShell word is read as a separator, as `pwsh` reads it there, so `Set-Location ..\outside` is asked about as `../outside`. A place that the file layer refuses (a link of the project that leads to a share, or a share spelling) is now reported as unresolved even when it lies in the sandbox's writable roots, where it used to count as inside them, and so is any `\`-led place when the project itself is on a network share. The effect is one more question for these unusual spellings, never fewer.
+
+A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Path ''`, `-Path:''`) or with only parameters that take no path (`cd -PassThru`, `cd -ErrorAction Stop`) is asked about as the home folder as well, since PowerShell 7 goes home for each of them. The end-of-parameters marker `--` names no place, so `cd --` and `cd -PassThru --` are asked about as home too, and a block comment or a quoted `<#` in the input no longer changes that.
+
+**Affects:** `pwsh` users who run `cd` or `Set-Location` with no folder or with an unset variable, `pwsh` on Linux or macOS with backslash paths, and projects that hold links to shares or sit on a network share.
+
+**What to do:** Nothing; answer the extra question, or write the folder out.
+
+### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
+
+In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone,
+before anything is asked, by the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts`
+pin: the commands, agents, skill folders and plugin source folders of a config folder, the compatibility roots, the
+settings file, the MCP file, `{file:}` references, instruction markers found by walking up, the custom themes of the
+terminal UI and Mini (`.orbit/themes`), the run store (`.orbit/runs.db` and its `-wal`, `-shm` and `-journal` files)
+that `orb flow` opens, and the workflow and suite files that `orb flow` reads before it asks about trust, which
+includes the file name that `orb flow resume` takes from the run store. Folders are listed without following links,
+and a link inside them is entered only after its target is known not to be a share (in a trusted project too). Before,
+one such link made the start, the trust status or a reload wait for the share to answer. A theme behind such a link is
+skipped, with one line in the log, and `orb flow` stops with a message that names the store or the file. Not covered:
+config discovery's own `.orbit` folder, the loading of config files by `Config`, the compatibility plugin's real-path
+lookup, the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
+
+A trusted project's file tools now ask before they open a place that a link of the project leads to a share, as they do
+for any folder outside the project; the place is not read to draw the question. A chain of more than 80 links is
+refused with a message about links, not about shares. On Linux and macOS the "too many links" answer is a rooted path,
+so it can no longer be taken for a path inside the working folder.
+
+**Affects:** projects that link to network shares, on Windows.
+
+**What to do:** Nothing; use the share's drive path, or copy the files into the project, if a loader should read them.
+
+### Mercurial is not run in a folder that is not trusted
+
+When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and then `hg branch`,
+`hg status` and `hg diff` for the branch and the changes, and Mercurial loads the `[extensions]` and `[hooks]` of that
+folder's own `.hg/hgrc` into each command. None of them is run now until you trust the folder: the branch is unknown
+and there are no changes or diffs, and they appear once you trust it. An untrusted Mercurial folder is its own project
+(identified by its path), not the shared `global` project, so its saved "always allow" answers are not shared with other
+folders; a trusted folder with no `hg` or no changeset is `global`, as before.
+
+**Affects:** Mercurial users who open a clone before trusting it.
+
+**What to do:** Nothing; trust the folder.
+
+### Declarations that print the environment ask like any command
+
+`export -p`, a bare `export`, `declare` or `typeset` (with or without `-p`, `-f`, `-F`), a bare `local` or `readonly`, and any of them with a print or function flag list every variable with its value, which would send credentials in the environment to the model. They are now shell requests that a `Bash` rule (yours or your organization's) can allow, ask about or deny. Declarations that only set named variables (`export A=1`, `declare -x B=2`, `export A`) and `unset`, `cd`, `pushd` and `popd` still run without a question.
+
+A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network share are no longer opened by the shell guard's repository check, and the same holds for the `.git`, `.hg` and `.orbit` names the terminal UI looks for at startup. A link of this kind counts as a repository marker that is there but not followed, so the shell command asks and Orbit starts at once instead of waiting about 40 seconds for the share.
+
+**Affects:** anyone who runs `export -p`, `declare -p` or similar from the shell tool under a rule that allowed them silently, and Windows users who open a folder that holds such links.
+
+**What to do:** Nothing; answer the question, or write a `Bash` rule for the form you want.
+
+### Shell rules meet printing declarations
+
+A leading assignment or a wrapper in front of a program (`FOO=1 rm x`, `timeout 5 rm x`, `nice`, `nohup`, `time`, `stdbuf`, `env`, `sudo`, `doas`, `exec`) is still not looked through: a `Bash` deny or ask rule written for the program (`rm *`) does not meet it, and an "always" reply to such a command saves what the scanner saves for it and nothing more. That is a known gap, carried as a follow-up by `shell-safety-12`, so a leading assignment or a wrapper can still step around a `Bash` deny rule.
+
+A declaration that prints the environment (`export -p`, `declare -p`) next to other commands (`export -p; ls`, `declare -p && git status`, `export -p | cat`) is a request of its own, so a `Bash` ask or deny for it applies and an allow for the other command does not lift it.
+
+Opaque PowerShell input that starts with a path to a program in the repository (`.\rm x`, `scripts\rm x`) is no longer lifted by an allow written for the cmdlet of the same name; a deny for the cmdlet still blocks it.
+
+"Always allow" no longer offers `Where-Object *`, `Select-Object *`, `Sort-Object *`, `Group-Object *`, `Measure-Object *`, the `Format-*` cmdlets, `Out-String`, `Out-Host`, `Write-Output`, `Write-Host`, `Start-Sleep`, `Invoke-WmiMethod` or `Invoke-CimMethod`, or their aliases, because a saved grant would lift script blocks and .NET calls in their arguments.
+
+**Affects:** anyone who runs `export -p`, `declare -p` or similar next to other commands under a rule that allowed them silently, and anyone who saved "always" for one of the cmdlets above.
+
+**What to do:** Nothing; answer the questions. For a program that you do not want run behind a wrapper, deny the wrapper too.
+
+### Shell commands that write through an output option meet your Edit rules
+
+The shell guard now records the file that an output option names as a write: `sort -o`, `-oFILE`, `--output` (and any prefix of it that `sort` accepts), the second operand of `uniq IN OUT`, `find -fprint`, `-fprint0`, `-fprintf` and `-fls`, `tree -o` and `--output`, and the file of a `w`, `W` or `s///w` command (and the file of an `r`) in a sed script given on the command line. An `Edit` rule on that file applies, a file outside the project asks the folder question, and the sandbox treats it as a write. Before, these files were recorded as reads or not at all. `rg --pre` and `--hostname-bin` name a program, so such a command is asked about as a whole. Sed reads `[/]` as a bracket that holds the delimiter, so `sed -n '/[/]/w out'` records `out`. A git output file (`git diff --output`, `git format-patch -o`, `git archive -o`) is not checked as a write, and an assignment-shaped argument such as `cat x=~/s` has its `~` read literally, although bash expands it (`paths.test.ts`); both are follow-ups carried by `shell-safety-12`. `dd` is the exception: `dd if=~/x of=~/y` expands both, as bash does (`paths.test.ts`), and `sed` refuses a word such as `f=~/x` rather than guess (`sed.test.ts`). Writers that the guard does not model (`curl -o`, `wget -O`, `awk` redirects, `tar -x`, interpreter one-liners) are unchanged.
+
+A read through a wildcard (`cat secr*.txt`, `head *`) is still checked against your `Read` rules for the folder it starts in, not for each file the wildcard matches. A glob spelling of a file can therefore still read past a `Read` deny on that file. That is a known gap, carried as a follow-up by `shell-safety-12`.
+
+**Affects:** anyone with `Edit` deny rules who also lets the model run shell commands.
+
+**What to do:** Nothing; a command that your rules now stop is refused with the rule that matched.
+
+### Web tools refuse bad searches with a type, send no trace headers, and Read keeps folders and long lines in bounds
+
+- `WebSearch` refuses a query shorter than 2 characters (type `tool.input-invalid`) and a call that gives both
+  `allowedDomains` and `blockedDomains` (type `websearch.invalid`). Both are refused before the permission request, the
+  consent form or any provider call, so nothing is asked or sent. Before, a one-character query was sent to the provider
+  and the blocked list silently won over the allowed one.
+- `WebFetch` refusals now carry a type: `webfetch.refused` for a URL that cannot be fetched (not http or https,
+  credentials, longer than 2,000 characters, a host with `*`) and for an address the address guard blocks, and
+  `webfetch.redirect-limit` for more than 10 same-site redirects. Code Mode `fetch` uses `webfetch.refused` for the same
+  refusals. Before, they arrived as `unknown` or `tool.execution`. Failures that are not refusals (a status error, a
+  timeout, an unsupported content type) keep their old type.
+- `WebFetch` and the web search providers no longer send `traceparent`, `tracestate` or `b3` headers to the sites and
+  providers they contact, on the first request or on a redirect hop. Requests to model providers are not affected.
+- `Read` of a folder now stays within about 25,000 tokens, like a file: a long listing is cut before the entry that
+  would pass the budget, with the usual `Continue reading with offset:` note.
+- `Read` of a file with very long lines, or none, no longer slows down with the file's size or holds the whole file in
+  memory. The part of a line past what a page can show is skipped as it is read; a null byte in it still makes the file
+  binary.
+- The note for a repeat read of an unchanged range and the note after a resized image are worded differently
+  ("this range has not changed since you last read it ..." and "[Shown at W x H px; the file itself is ...]"), and the
+  extraction instruction for a host in `webfetch.verbatim_hosts` is reworded. The meaning is the same.
+
+**Affects:** clients and hooks that match on the error type of a failed `WebSearch` or `WebFetch` call or on the exact
+wording of those notes, and models that sent a one-character query or both domain lists.
+
+**What to do:** Nothing. Send one domain list per search.
+
+## No saved grant for `ipconfig`, `hostname` and `route`
+
+- PowerShell and shell no longer offer a saved grant for `ipconfig`, `hostname` and `route`, whose arguments change what they do.
+
+**Affects:** people who saved grants for those programs.
+
+**What to do:** Nothing.
+
+## A saved grant lifts a command that steers its program only by exact text
+
+- A saved grant lifts a command that sets `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `BASH_ENV`, `ENV` or `IFS` as a plain `NAME=` word, or gives `env` an option, only when it is that command's exact text. An `env *` or `ls *` grant does not lift `env PATH=. ls`.
+- That exact-text rule covers only those plain spellings. An "always" on a command led by `env`, `sudo`, `timeout`, `nice` and the like saves the scanner's prefix (`env *`, `sudo *`, `timeout *`), which lifts every later command behind that word, `env ./prog` included, so a program in the repository can run unasked. A quoted or escaped assignment such as `env "PATH"=. ls` is also lifted by `env *` (follow-up).
+
+**Affects:** people who answer "always" on `env`, `sudo`, `timeout` or similar commands, or on `PATH=` commands.
+
+**What to do:** Answer "always" on such a command only for a program you trust everywhere; otherwise answer once. For a command that steers its program as in the first point, "always" saves the pattern of the first word after any leading assignments (`env *`, `sudo *`, `timeout *`, `nice *`, `printf *`), or nothing for a plain `IFS=` command, and that does not lift the command again (`tool-shell.test.ts`). For `env`, `sudo` or `timeout`, that pattern covers every program behind the word (the bullet above), so answer "always" only when you would let every command starting with that word run unasked. To stop the question for the command itself, write a Bash allow rule with its exact text.
+
+## A project ID file shipped in a folder is ignored unless the folder is trusted
+
+- Orbit reads `.git/orbit` and `.hg/orbit` only in a trusted folder, and only when the file holds a hash of the shape Orbit
+  makes (40 or 64 hexadecimal characters). Anything else (`global`, a short value, a path) is dropped with one log line.
+  Orbit never writes these files, so a folder that ships one could pick its own project ID, and with it the saved "always
+  allow" answers and the data folders of another project. An untrusted Mercurial folder is its own project, as before.
+- A link that the file system cannot resolve (a loop, a path through a file, no access) in a commands, agents or skills
+  folder is now skipped with one log line on Linux and macOS. It used to stop the loaders.
+
+**Affects:** people who edited `.git/orbit` or `.hg/orbit` by hand, and repositories that ship such a file or link.
+
+**What to do:** Nothing; trust the folder, or use a 40-character hash, to keep a hand-written ID.

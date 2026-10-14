@@ -71,7 +71,7 @@ async function edit(editor: string, input: { file: string; renderer: CliRenderer
   const [command, ...args] = [...editor.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
     (match) => match[1] ?? match[2] ?? match[3] ?? "",
   )
-  const { which } = await import("@orbit/core/util/which")
+  const { which } = await import("@orbit/util/which")
   const program = command ? which(command) : null
   if (!program) throw new Error(`Cannot find the editor ${command ?? editor} on PATH`)
   // cross-spawn runs a .cmd or .bat editor, such as code.cmd, the way Windows needs it to be run, and is given the path

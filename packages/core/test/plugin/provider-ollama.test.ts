@@ -119,6 +119,32 @@ describe("OllamaPlugin", () => {
     ),
   )
 
+  // Table: how long /api/show takes to answer. A default model is resolved right after the location starts, so the
+  // catalog has to be filled by the time the plugin has started, however long discovery takes within its limits.
+  for (const delay of [0, 50, 250, 700]) {
+    it.live(`has the catalog filled once the plugin has started when /api/show takes ${delay} ms`, () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            port: 0,
+            fetch: async (request) => {
+              if (request.method === "GET") return Response.json({ models: [summary("slow:1b", "slow-digest")] })
+              await Bun.sleep(delay)
+              return Response.json(show({ capabilities: ["completion", "tools"], context: 8192 }))
+            },
+          }),
+        ),
+        (server) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin)
+            expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("slow:1b"))).toBeDefined()
+          }),
+        (server) => Effect.promise(() => server.stop(true)),
+      ),
+    )
+  }
+
   it.live("budgets context to the window Ollama serves", () =>
     Effect.acquireUseRelease(
       Effect.sync(() =>

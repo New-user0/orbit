@@ -142,6 +142,8 @@ export type SubagentTracker = {
     reconnect?: boolean
   }): Promise<void>
   ready(): Promise<void>
+  /** True once the session is known to be a descendant of the one on screen. */
+  knows(sessionID: string): boolean
   select(sdk: OrbitClient, sessionID: string | undefined): void
   snapshot(): FooterSubagentState
   settleForm(sessionID: string, formID: string): void
@@ -1001,6 +1003,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       if (!child.blockersHydrated) void hydrateBlockers(sdk, child, blockerEpoch, signal)
       if (!child.hydrated) void hydrateChild(sdk, child, signal)
     },
+    knows: (sessionID) => children.has(sessionID),
     foreign(sdk, sessionID, event, signal = input.signal) {
       if (!active(signal)) return
       const child = children.get(sessionID)

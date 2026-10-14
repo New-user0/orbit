@@ -63,10 +63,23 @@ export async function worktree(repository: string, run: string, node: string, ba
   const directory = path.join(runFolder(repository, run), segment)
   const name = branch(run, node)
   if (existsSync(directory)) return { directory, branch: name }
-  const exists = (await git(repository, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).code === 0
-  await ok(repository, ["worktree", "add", ...(exists ? [directory, name] : ["-b", name, directory, base])])
+  // Parallel nodes of one run add worktrees to the same repository, and git can fail one of several concurrent adds
+  // with "failed to read .git/worktrees/<sibling>/commondir". The adds of a repository therefore run one at a time.
+  const previous = adding.get(repository) ?? Promise.resolve()
+  const add = previous.then(async () => {
+    const exists = (await git(repository, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).code === 0
+    await ok(repository, ["worktree", "add", ...(exists ? [directory, name] : ["-b", name, directory, base])])
+  })
+  // The chain goes on after a failed add; each caller still sees its own result.
+  adding.set(
+    repository,
+    add.catch(() => undefined),
+  )
+  await add
   return { directory, branch: name }
 }
+
+const adding = new Map<string, Promise<void>>()
 
 /** Commit whatever the agent changed in its worktree; returns false when nothing changed. */
 // Caches that tools such as pytest create as a side effect. An agent committing them would put them on its branch,
@@ -144,13 +157,20 @@ export async function diff(directory: string, base: string, limit = 40_000) {
   return text.length > limit ? `${text.slice(0, limit)}\n… diff cut at ${limit} characters` : text
 }
 
+// Whether `candidate` is a folder under `folder`, judged the way the platform compares paths: a drive letter or a folder
+// name that differs only in case is the same place on Windows, which a string prefix test misses.
+function inside(folder: string, candidate: string) {
+  const relative = path.relative(folder, candidate)
+  return relative !== "" && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative)
+}
+
 /** Remove a run's worktrees and branches; returns how many of each went. */
 export async function clean(repository: string, run: string) {
   const prefix = runFolder(repository, run)
   const listed = (await ok(repository, ["worktree", "list", "--porcelain"]))
     .split("\n")
     .flatMap((line) => (line.startsWith("worktree ") ? [path.resolve(line.slice("worktree ".length))] : []))
-    .filter((directory) => directory.startsWith(prefix + path.sep))
+    .filter((directory) => inside(prefix, directory))
   for (const directory of listed) await ok(repository, ["worktree", "remove", "--force", directory])
   await ok(repository, ["worktree", "prune"])
   await rm(prefix, { recursive: true, force: true })

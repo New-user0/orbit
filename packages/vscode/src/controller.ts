@@ -6,6 +6,7 @@ import {
   type TrustStatus,
 } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
+import { PermissionView } from "@orbit/schema/permission-view"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
 import { aboveFolders, holdsBack, readStatus, trusted, view, type TrustGrant } from "./trust.js"
 import { legacyToolName } from "./tool-name.js"
@@ -295,7 +296,8 @@ export class Controller {
   // Then the folder this chat works in is asked about again: both answers must say trusted, and the stricter one stands.
   private async grant(shown: TrustStatus): Promise<TrustGrant> {
     const granted = await this.client.location.trust.update(
-      { location: { directory: shown.directory }, trust: true, persist: shown.persistent },
+      // A grant that is stored stays stored when it is renewed after a change; one that lasts until Orbit restarts, too.
+      { location: { directory: shown.directory }, trust: true, persist: shown.trusted ? shown.source === "saved" : shown.persistent },
       { signal: AbortSignal.timeout(this.wait.grant) },
     )
     // Folder names are the repository's to choose, so they are written out wherever a person reads them.
@@ -508,15 +510,7 @@ export class Controller {
         return
       }
       case "permission.asked":
-        this.update({
-          type: "permission",
-          id: event.data.id,
-          sessionID: event.data.sessionID,
-          action: event.data.action,
-          resources: event.data.resources,
-          files: changes(event.data.metadata),
-          status: "pending",
-        })
+        this.update(permissionItem(event.data))
         return
       case "form.created":
         this.emit({
@@ -592,6 +586,28 @@ export class Controller {
 function loopNotice(metadata: Readonly<Record<string, unknown>> | undefined, description: string | undefined) {
   if (typeof metadata?.notice !== "string" || description === undefined) return undefined
   return plain(description) || undefined
+}
+
+/** The chat item for a permission request: every place, file, method, URL and diff it shows is the request's own. */
+export function permissionItem(request: {
+  readonly id: string
+  readonly sessionID: string
+  readonly action: string
+  readonly resources: ReadonlyArray<string>
+  readonly save?: ReadonlyArray<string>
+  readonly metadata?: Readonly<Record<string, unknown>>
+}): Extract<Item, { type: "permission" }> {
+  return {
+    type: "permission",
+    id: request.id,
+    sessionID: request.sessionID,
+    action: request.action,
+    resources: request.resources,
+    view: PermissionView.of(request),
+    canSave: (request.save?.length ?? 0) > 0,
+    files: changes(request.metadata),
+    status: "pending",
+  }
 }
 
 function changes(metadata: Readonly<Record<string, unknown>> | undefined): ReadonlyArray<FileChange> {

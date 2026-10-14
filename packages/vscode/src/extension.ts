@@ -5,6 +5,7 @@ import { ask, explain, fix, review, type Diagnostic, type Selection } from "./co
 import { Controller, type TrustAnswer, type Update } from "./controller.js"
 import { askForm } from "./forms.js"
 import { headers, start, version } from "./endpoint.js"
+import { createNoticeTracker, notice } from "./notify.js"
 import { proposed } from "./patch.js"
 import { configured, find, missing } from "./program.js"
 import type { Check, FromView, Item, Mode, Model, ToView, TrustView, Workspace } from "./protocol.js"
@@ -86,8 +87,12 @@ export function activate(context: vscode.ExtensionContext) {
   chat.onDiff = async (item) => {
     const root = directory(editor)
     for (const change of item.files) {
-      const file = path.isAbsolute(change.file) ? change.file : path.join(root, change.file)
-      const original = vscode.Uri.file(file)
+      // The place is the one the server resolved, else the name it gave the file. A moved file is read from where it came
+      // from, as its destination does not exist yet, and proposed at the destination.
+      const named = change.place ?? change.file
+      const file = path.isAbsolute(named) ? named : path.join(root, named)
+      const source = change.from ?? named
+      const original = vscode.Uri.file(path.isAbsolute(source) ? source : path.join(root, source))
       const before = await vscode.workspace.fs.readFile(original).then(
         (bytes) => new TextDecoder().decode(bytes),
         () => "",
@@ -201,6 +206,7 @@ class Chat implements vscode.WebviewViewProvider {
   private controller: Promise<Controller> | undefined
   private readonly items: Item[] = []
   private busy = false
+  private readonly notices = createNoticeTracker()
   private models: ReadonlyArray<Model> = []
   private selected: string | undefined
   private mode: Mode = "build"
@@ -471,6 +477,8 @@ class Chat implements vscode.WebviewViewProvider {
         if (update.type === "log") return this.log.appendLine(update.text)
         if (update.type === "trust") return this.trusting(update)
         if (update.type === "busy") {
+          const done = this.notices.busy(update.busy)
+          if (done) this.notice(done)
           this.busy = update.busy
           this.paint()
           return this.post(update)
@@ -491,6 +499,10 @@ class Chat implements vscode.WebviewViewProvider {
           )
           return
         }
+        if (update.item.type === "permission") {
+          const asked = this.notices.permission(update.item)
+          if (asked) this.notice(asked)
+        }
         const index = this.items.findIndex((item) => item.id === update.item.id)
         if (index === -1) this.items.push(update.item)
         else this.items[index] = update.item
@@ -507,6 +519,18 @@ class Chat implements vscode.WebviewViewProvider {
       this.post({ type: "status", text: `Could not start orb: ${text}. Check the orbit.executable setting.` })
       return undefined
     })
+  }
+
+  private notice(event: "permission" | "done") {
+    const next = notice({
+      event,
+      enabled: vscode.workspace.getConfiguration("orbit").get<boolean>("notifications") ?? true,
+      panelVisible: (placement() === "sidebar" ? this.view?.visible : this.panel?.visible) ?? false,
+      windowFocused: vscode.window.state.focused,
+    })
+    if (!next) return
+    const show = next.level === "warning" ? vscode.window.showWarningMessage : vscode.window.showInformationMessage
+    void show(next.text, "Open").then((choice) => (choice === "Open" ? this.reveal() : undefined))
   }
 
   private check(next: Check) {

@@ -24,9 +24,12 @@ import { AppProcess } from "@orbit/util/process"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
 import { Permission } from "@orbit/core/permission"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
+import { FileAccess } from "@orbit/core/file-access"
+import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
 import { emptyConfigLayer, emptyMcpLayer, testLocationLayer } from "../fixture/mcp"
@@ -52,6 +55,8 @@ const it = testEffect(
     LayerNode.group([
       Command.node,
       Bus.node,
+      FileAccess.node,
+      PowerShellParse.node,
       FSUtil.node,
       AppProcess.node,
       Location.node,
@@ -61,6 +66,7 @@ const it = testEffect(
       Job.node,
       Agent.node,
       ProjectTrust.node,
+      ManagedPolicy.node,
     ]),
     [
       Mcp.node.replace(emptyMcpLayer),

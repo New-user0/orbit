@@ -10,7 +10,11 @@ import { AppProcess } from "@orbit/util/process"
 import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../../config.js"
+import { ConfigEnv } from "../env.js"
+import { HookSources } from "../hook-sources.js"
 import { Location } from "../../location.js"
+import { ManagedPolicy } from "../../managed-policy.js"
+import { ProjectTrust } from "../../project-trust.js"
 import { isRecord } from "@orbit/ai/utils/record"
 import { Mcp } from "../../mcp/index.js"
 import { ToolNames } from "../../tool/names.js"
@@ -24,6 +28,11 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * `{"decision":"block","reason":...}` on stdout blocks a tool call, and other stdout becomes context for the model.
  * When several hooks block, the reason of the one in the highest-ranked document is reported. A hook that fails to
  * run is logged and skipped, so a broken script never stops the session.
+ *
+ * No hook runs while the project's folder is not trusted, the user's and the organization's included, because a hook
+ * starts in that folder and the programs it runs read the clone's own files there. A PreToolUse hook is a guard, so a
+ * tool call that one applies to is refused meanwhile, with a reason that names the trust commands, instead of going
+ * through as if no hook existed. The other events cannot stop a call and simply wait.
  *
  * A matcher accepts every spelling of a built-in tool's name (`ToolNames`), so a hook written for `shell` still fires
  * for `Bash`. A native hook is told the old name as `tool_name` whenever its matcher accepts it (an absent, `*` or
@@ -40,7 +49,9 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * This is the interim runner, and it honors less than the hooks schema describes. It warns once for each of these:
  * - Hooks of the other types (prompt, agent, http) are skipped.
  * - The `shell`, `async`, `async_rewake`, `once`, `if` and `status_message` settings of a command are ignored.
- * - The `disabled`, `managed_only` and `http` policies are not enforced.
+ * - The `http` policy of a hooks block, and `disabled` and `managed_only` outside the managed file, are not enforced.
+ *   The organization's `managed_hooks_only` and `disable_hooks` restrictions, and `hooks.disabled` and
+ *   `hooks.managed_only` of the managed file, are, through `HookSources.collect`.
  *
  * No warning covers these differences from the schema's descriptions:
  * - Only PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop and PreCompact fire; hooks under the other
@@ -74,6 +85,9 @@ interface Outcome {
 
 const NOTHING: Outcome = { context: "" }
 
+const UNTRUSTED_GUARD =
+  "a hook is configured for this call, and hooks wait for the project folder to be trusted; trust the folder (`/trust`, `orb trust` or `--trust`) to run it"
+
 export const Plugin = define({
   id: "orbit.config.lifecycle-hooks",
   effect: Effect.fn("LifecycleHooksPlugin")(function* (ctx) {
@@ -82,6 +96,8 @@ export const Plugin = define({
     const processes = yield* AppProcess.Service
     const shells = yield* ShellSelect.Service
     const location = yield* Location.Service
+    const managed = yield* ManagedPolicy.Service
+    const trust = yield* ProjectTrust.Service
 
     // Each warning is logged once, not on every event: hooks are matched every time an event fires.
     const warned = new Set<string>()
@@ -106,11 +122,12 @@ export const Plugin = define({
       aliases: readonly string[],
     ) {
       // A later document outranks an earlier one, and the position is its rank.
-      const documents = (yield* config.entries()).flatMap((entry) =>
-        entry.type === "document" && entry.info.hooks
+      const documents = HookSources.collect(yield* config.entries(), managed.current().restrictions).flatMap((entry) =>
+        entry.info.hooks
           ? [
               {
                 hooks: entry.info.hooks,
+                managed: entry.scope === "managed",
                 foreign: CompatSettings.isForeign(entry.path),
                 directory: CompatSettings.projectDirectory(entry, location.directory),
               },
@@ -118,7 +135,13 @@ export const Plugin = define({
           : [],
       )
       yield* Effect.forEach(
-        documents.flatMap((document) => UNENFORCED_POLICIES.filter((policy) => document.hooks[policy])),
+        // The managed file's `disabled` and `managed_only` are enforced by `HookSources.collect`.
+        documents.flatMap((document) =>
+          UNENFORCED_POLICIES.filter(
+            (policy) =>
+              document.hooks[policy] && !(document.managed && (policy === "disabled" || policy === "managed_only")),
+          ),
+        ),
         (policy) =>
           warnOnce(`policy:${policy}`, "hook policy is not enforced yet and is ignored", {
             setting: `hooks.${policy}`,
@@ -179,11 +202,22 @@ export const Plugin = define({
       payload: Record<string, unknown>,
       target?: string,
     ) {
+      // A hook starts with the project's folder as its working folder, where bun, npx, git and the like read the
+      // repository's own files (a bunfig preload, a package registry, a repository config) before the hook's script
+      // runs. Until the person trusts the folder, no hook runs, the user's own and the organization's included.
+      const trusted = yield* trust.trusted()
+      if (!trusted)
+        yield* warnOnce("untrusted", "hooks wait for the project folder to be trusted and did not run", { event })
+      if (!trusted && event !== "PreToolUse") return NOTHING
       const aliases = yield* foreignNames(target)
       const configured = yield* commands(event, target, aliases)
       if (configured.length === 0) return NOTHING
+      // A guard that cannot run is not the same as no guard. PreToolUse is the one event whose hook can stop a call,
+      // so a call that a hook would have judged is refused until the folder is trusted, never let through unjudged.
+      if (!trusted) return { block: UNTRUSTED_GUARD, context: "" }
       const shell = yield* shells.resolve({ priority: "compat" })
       const compat = yield* config.compatEnabled()
+      const settingsEnv = location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {}
       const stdin = (tool: string | undefined, foreign: boolean) =>
         JSON.stringify({
           hook_event_name: event,
@@ -206,10 +240,11 @@ export const Plugin = define({
               ChildProcess.make(shell, ShellSelect.args(shell, item.hook.command), {
                 cwd: location.directory,
                 extendEnv: true,
-                env: {
+                // The settings' `env` sits under Orbit's own variables.
+                env: ConfigEnv.applyTo(ConfigEnv.applyTo({}, settingsEnv), {
                   ORBIT_PROJECT_DIR: location.directory,
                   ...(compat ? CompatAliases.hookEnv(item.directory) : {}),
-                },
+                }),
               }),
               {
                 stdin: stdin(item.tool, item.foreign),

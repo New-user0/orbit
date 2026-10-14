@@ -4,6 +4,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { FileLedger } from "@orbit/core/file-ledger"
+import { readNow } from "./fixture/ledger"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Environment } from "@orbit/core/environment/index"
 import { FileMutation } from "@orbit/core/file-mutation"
@@ -64,6 +65,9 @@ const notebook = {
   nbformat_minor: 5,
 }
 
+// Runs inside the permission assert, so it stands for a write that lands while the person is deciding.
+let afterApproval = (): Effect.Effect<void> => Effect.void
+
 const withTool = <A, E, R>(
   directory: string,
   body: (registry: Tool.Interface) => Effect.Effect<A, E, R | FileLedger.Service>,
@@ -81,7 +85,7 @@ const withTool = <A, E, R>(
           Location.node.replace(
             Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
           ),
-          Permission.node.replace(permissionLayer({ assert: () => Effect.void })),
+          Permission.node.replace(permissionLayer({ assert: () => Effect.suspend(() => afterApproval()) })),
         ],
       ),
     ),
@@ -181,6 +185,51 @@ describe("NotebookEditTool", () => {
     }),
   )
 
+  it.live("fails edit.stale and keeps the external bytes when the notebook changes during approval", () =>
+    withTempDir((tmp) => {
+      const target = path.join(tmp.path, "analysis.ipynb")
+      const external = `${JSON.stringify({ ...notebook, metadata: { kernelspec: { name: "other" } } }, null, 1)}\n`
+      afterApproval = () => Effect.promise(() => fs.writeFile(target, external))
+      return Effect.promise(() => fs.writeFile(target, `${JSON.stringify(notebook, null, 1)}\n`)).pipe(
+        Effect.andThen(
+          withTool(tmp.path, (registry) =>
+            executeTool(
+              registry,
+              call({ notebook_path: "analysis.ipynb", mode: "replace", cellId: "calc", source: "print(2)" }),
+            ),
+          ),
+        ),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe(external)
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => void (afterApproval = () => Effect.void))),
+      )
+    }),
+  )
+
+  it.live("completes when the notebook is touched during approval", () =>
+    withTempDir((tmp) => {
+      const target = path.join(tmp.path, "analysis.ipynb")
+      afterApproval = () =>
+        Effect.promise(() => fs.utimes(target, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000)))
+      return Effect.promise(() => fs.writeFile(target, `${JSON.stringify(notebook, null, 1)}\n`)).pipe(
+        Effect.andThen(
+          withTool(tmp.path, (registry) =>
+            executeTool(
+              registry,
+              call({ notebook_path: "analysis.ipynb", mode: "replace", cellId: "calc", source: "print(2)" }),
+            ),
+          ),
+        ),
+        Effect.andThen((result) => Effect.sync(() => expect(result.status).toBe("completed"))),
+        Effect.ensuring(Effect.sync(() => void (afterApproval = () => Effect.void))),
+      )
+    }),
+  )
+
   it.live("names a notebook the session has not read, and one that changed since, with the ledger's codes", () =>
     withTempDir((tmp) => {
       const target = path.join(tmp.path, "analysis.ipynb")
@@ -199,9 +248,12 @@ describe("NotebookEditTool", () => {
                   },
                 })
 
-                yield* (yield* FileLedger.Service).record(sessionID, target)
+                yield* readNow(sessionID, target)
                 const later = new Date(Date.now() + 60_000)
-                yield* Effect.promise(() => fs.utimes(target, later, later))
+                yield* Effect.promise(async () => {
+                  await fs.appendFile(target, "\n")
+                  await fs.utimes(target, later, later)
+                })
                 expect(yield* executeTool(registry, call(input))).toEqual({
                   status: "error",
                   error: {

@@ -512,6 +512,8 @@ describe("ConfigInstructionPlugin.Plugin", () => {
           Config.Service.of({
             entries: () => Effect.succeed([]),
             changes: () => Stream.never,
+            fingerprints: () => Effect.succeed([]),
+            pluginsChanged: () => Effect.succeed(false),
             compatEnabled: () => Effect.sync(() => state.enabled),
             compat: () => Effect.sync(() => ({ enabled: state.enabled, roots: [] })),
           }),

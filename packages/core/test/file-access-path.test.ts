@@ -112,7 +112,7 @@ describe("FileAccess.resolve", () => {
     ),
   )
 
-  it.live("resolves a prospective target below an external symlink lexically", () =>
+  it.live("names a prospective target below an external symlink lexically and asks about the folder it leads to", () =>
     withTempDir(({ path: directory }) =>
       Effect.gen(function* () {
         if (process.platform === "win32") return
@@ -124,7 +124,10 @@ describe("FileAccess.resolve", () => {
           absolute: path.join(directory, "escape", "new.txt"),
           resource: "escape/new.txt",
         })
-        expect(target.externalDirectory).toBeUndefined()
+        expect(target.externalDirectory?.directory).toBe(
+          AbsolutePath.make(yield* Effect.promise(() => fs.realpath(outside.path))),
+        )
+        expect(target.externalDirectory?.escaped).toBeUndefined()
       }).pipe(provide(directory)),
     ),
   )

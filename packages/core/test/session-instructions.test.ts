@@ -417,7 +417,7 @@ describe("SessionInstructions in a project that is not trusted", () => {
     return { skipped, logger: Logger.layer([logger]) }
   }
 
-  untrusted.live("does not inject an instruction file that a link in the project leads to, until it is trusted", () => {
+  untrusted.live("does not inject an instruction file that a link in the project leads to, before or after it is trusted", () => {
     const { skipped, logger } = skippedNotices()
     return Effect.gen(function* () {
       const location = yield* Location.Service
@@ -459,14 +459,15 @@ describe("SessionInstructions in a project that is not trusted", () => {
       expect(yield* synthetics(sessionID)).toHaveLength(0)
       expect(skipped).toMatchObject([{ path: outsideFile, reason: expect.stringContaining("not trusted") }])
 
-      // Nothing was recorded for it, so the next read after the grant injects it.
+      // The grant changes what is asked, not what is injected.
       yield* trust.grant({ persist: false, via: "test" })
       asserted.length = 0
       yield* executeTool(registry, readCall(sessionID, "call-trusted", "linked/file.txt"))
-      expect(asserted.map((input) => input.action)).toEqual(["Read"])
-      const injected = yield* synthetics(sessionID)
-      expect(injected).toHaveLength(1)
-      expect(injected[0]!.text).toBe(`Instructions from: ${outsideFile}\noutside-instructions`)
+      // The link is the project's own now, but the folder it leads to is still asked about, as the shell asks.
+      expect(asserted.map((input) => input.action)).toEqual(["external_directory", "Read"])
+      // Like a read of that folder by its own name, it is outside the project, so the walk for instruction files does not
+      // start from it: nothing is injected, and the file stays out in a trusted project as in one that is not trusted.
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
     }).pipe(Effect.provide(logger))
   })
 

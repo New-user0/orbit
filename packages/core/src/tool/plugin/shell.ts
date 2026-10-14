@@ -6,11 +6,15 @@ import type { SessionHooks } from "@orbit/plugin/effect/session"
 import type { ShellCreateBefore } from "@orbit/plugin/effect/shell"
 import type { Tool } from "@orbit/schema/tool"
 import { AppProcess } from "@orbit/util/process"
-import { Deferred, Effect, Schema, Scope } from "effect"
+import { ConfigShellTool } from "@orbit/schema/config/shell-tool"
+import { Deferred, Duration, Effect, Fiber, Ref, Schema, Scope } from "effect"
+import os from "node:os"
+import path from "node:path"
 import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
 import { Job } from "../../job.js"
 import { FileAccess } from "../../file-access.js"
+import { Location } from "../../location.js"
 import { Permission } from "../../permission.js"
 import { NonNegativeInt } from "../../schema.js"
 import { Session } from "../../session.js"
@@ -18,12 +22,40 @@ import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
 import { STYLE_HEADING } from "../../plugin/output-style.js"
+import { ShellAnalysis } from "../../shell/analysis.js"
+import { FSUtil } from "@orbit/util/fs-util"
+import { ProjectTrust } from "../../project-trust.js"
+import { ManagedNetwork } from "../../managed-network.js"
+import { ManagedPolicy } from "../../managed-policy.js"
+import { ShellDestructive } from "../../shell/destructive.js"
+import { ShellGuard } from "../../shell/guard.js"
+import { ShellSandbox } from "../../shell/sandbox.js"
+import { ShellExit } from "../../shell/exit.js"
 import { ShellParse } from "../../shell/parse.js"
+import { PowerShellParse } from "../../shell/powershell-parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
+import { ShellStall } from "../../shell/stall.js"
 
 export const name = "Bash"
-export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
+
+/** The default and the largest timeout of a call. The largest is never below the default. */
+export function limits(configured?: ConfigShellTool.Info) {
+  const timeout = configured?.timeout ?? ConfigShellTool.DEFAULT_TIMEOUT
+  return { timeout, max: Math.max(configured?.max_timeout ?? ConfigShellTool.DEFAULT_MAX_TIMEOUT, timeout) }
+}
+
+/**
+ * How long a call waits. A foreground call that gives no timeout, or 0, waits the default. A background call with
+ * no timeout, or 0, has no deadline. Anything given is capped at the maximum.
+ */
+export function budget(
+  input: Pick<typeof Input.Type, "timeout" | "run_in_background">,
+  limit: ReturnType<typeof limits>,
+) {
+  if (input.run_in_background === true) return input.timeout ? Math.min(input.timeout, limit.max) : 0
+  return Math.min(input.timeout || limit.timeout, limit.max)
+}
 
 const BACKGROUND_INSTRUCTION =
   "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
@@ -35,7 +67,11 @@ const OS =
       : process.platform === "linux"
         ? "Linux"
         : process.platform
-const description = (shell?: string) =>
+const duration = (ms: number) => {
+  const minutes = Number((ms / 60_000).toFixed(2))
+  return minutes < 1 ? `${ms} ms` : `${ms} ms (${minutes} ${minutes === 1 ? "minute" : "minutes"})`
+}
+const description = (shell: string | undefined, limit: ReturnType<typeof limits>) =>
   [
     "Execute a shell command and return its output.",
     ...(shell ? [`Commands run on ${OS} using ${shell}.`] : []),
@@ -43,7 +79,9 @@ const description = (shell?: string) =>
     "Prefer dedicated tools over shell commands when possible.",
     "When output is large, the full result is saved to a file and a truncated preview is returned.",
     "Rely on automatic truncation unless filtering the output is more useful.",
-    "Commands accept an optional timeout, background commands have no timeout by default.",
+    `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a foreground command waits ${duration(limit.timeout)}.`,
+    "A foreground command still running at its timeout is not stopped: it moves to the background and you are notified when it finishes. A command made only of sleeps is stopped instead.",
+    "Background commands have no timeout unless one is given.",
     "Background commands return immediately, and you will be notified when they complete.",
   ].join(" ")
 
@@ -58,7 +96,8 @@ export const Input = Schema.Struct({
       "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.",
   }),
   timeout: Schema.optionalKey(NonNegativeInt).annotate({
-    description: `Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to ${DEFAULT_TIMEOUT_MS} for foreground commands. Background commands have no timeout by default.`,
+    description:
+      "Timeout in milliseconds for a foreground command. The tool description gives the default and the maximum. Background commands have no timeout unless one is given.",
   }),
   run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
@@ -87,26 +126,60 @@ const resultMessages = (output: Output) => {
   return [...(output.output ? [output.output] : []), ...(notice ? [notice] : [])]
 }
 
-const toolResult = (output: Output) => {
+/**
+ * Whether a finished foreground run is a failure by its exit code. A run that timed out or was killed by a signal is a
+ * failure elsewhere. Under PowerShell an exit code never is one: a PowerShell call cancels no sibling, and `-Command`
+ * reports every native code other than 0 as 1, so the code carries no meaning to judge. Every other shell is judged by
+ * `ShellExit` on the analysis of the command that ran.
+ */
+const exitFailed = (output: Output, analysis: ShellAnalysis.Analysis | undefined, powershell: boolean) =>
+  !powershell &&
+  output.status === "completed" &&
+  output.exit !== undefined &&
+  output.timeout !== true &&
+  output.signal === undefined &&
+  ShellExit.failed(analysis, output.exit)
+
+const toolResult = (output: Output, failed = false) => {
   return {
     output,
     content: resultMessages(output).map((text) => ({ type: "text" as const, text })),
     metadata: {
       status: output.status,
       ...ShellResult.metadata(output),
-      // A timeout or a kill by signal counts as a failure that cancels sibling calls. Exit codes do not yet.
-      ...(output.timeout === true || output.signal !== undefined ? { error: true } : {}),
+      // A timeout, a kill by signal and an exit code that reads as a failure (see `exitFailed`) cancel sibling calls.
+      ...(output.timeout === true || output.signal !== undefined || failed ? { error: true } : {}),
       ...(output.shellID !== undefined ? { shellID: output.shellID } : {}),
     },
   }
 }
 
-const backgroundResult = (shellID: string, file: string) => ({
-  output: `Command moved to the background (shell ID: ${shellID}).\nOutput is streaming to: ${file}`,
+const backgroundResult = (shellID: string, file: string, deadline?: number) => ({
+  output: `${deadline === undefined ? "" : ShellResult.deadlineNotice(deadline) + "\n"}Command moved to the background (shell ID: ${shellID}).\nOutput is streaming to: ${file}`,
   shellID,
   truncated: false,
   status: "running" as const,
 })
+
+/**
+ * Whether a call may run beside others: exactly when the command is read-only to the synchronous analysis. Only a
+ * bash-dialect shell is analysed here; PowerShell, cmd and any unrecognised shell answer false without parsing,
+ * because PowerShell is judged read-only only in the permission path, where its parse is available.
+ */
+export const concurrent = Effect.fn("ShellTool.concurrent")(function* (command: string, ctx: ShellAnalysis.Context) {
+  if (ShellAnalysis.dialect(ctx.shell, ctx) !== "bash") return false
+  // The working folder is the model's own text and nobody has been asked about it yet: a share is not opened to judge.
+  if (ShellAnalysis.opensShare(ctx)) return false
+  return (yield* ShellAnalysis.inspect(command, ctx)).readOnly
+})
+
+/**
+ * Whether the command text is in the destructive catalogue of the shell's dialect. Pure text, no parse. A shell with no
+ * catalogue (cmd.exe, any unrecognised shell) answers true.
+ */
+export function destructive(command: string, ctx: Pick<ShellAnalysis.Context, "shell" | "platform" | "path">) {
+  return ShellDestructive.matches(command, ShellAnalysis.dialect(ctx.shell, ctx))
+}
 
 export const Plugin = {
   id: "orbit.tool.shell",
@@ -121,8 +194,19 @@ export const Plugin = {
     const compatibleShell = shellSelect.resolve({ priority: "compat" })
     const permission = yield* Permission.Service
     const config = yield* Config.Service
+    const powershellParse = yield* PowerShellParse.Service
+    const location = yield* Location.Service
+    const managed = yield* ManagedPolicy.Service
+    // What the guard reads from the disk, captured here so a call needs none of it from its caller.
+    const guarded = yield* Effect.context<
+      FSUtil.Service | ProjectTrust.Service | FileAccess.Service | Location.Service | Permission.Service | PowerShellParse.Service
+    >()
 
-    const prepare = Effect.fn("ShellTool.prepare")(function* (invocation: ShellCreateBefore, context: Tool.Context) {
+    const prepare = Effect.fn("ShellTool.prepare")(function* (
+      invocation: ShellCreateBefore,
+      context: Tool.Context,
+      foreground: boolean,
+    ) {
       const source = {
         type: "tool" as const,
         messageID: context.messageID,
@@ -130,35 +214,38 @@ export const Plugin = {
       }
       const target = yield* access.resolve({ path: invocation.cwd, kind: "directory" })
       invocation.cwd = target.absolute
-      const timeout = invocation.timeout
-      const portable = Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
-      const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, { portable })
-      const directories = yield* Effect.forEach(parsed.directories, (directory) =>
-        access.resolve({
-          path: FileAccess.resolvePath(target.absolute, directory),
-          kind: "directory",
-        }),
+      // The folder as resolved, before anything is asked, so a client names where the command runs even when no rule asks.
+      yield* context.progress({ places: [target.place] })
+      const entries = yield* config.entries()
+      // The folders the command may write when it runs inside the sandbox; unset when it runs without one.
+      const sandbox = yield* ManagedNetwork.sandboxSettings(
+        Config.latest(entries, "sandbox"),
+        managed.current().restrictions.network,
       )
-      // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
-      // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
-      const operands = yield* access.escaped(
-        (yield* ShellParse.operands(invocation.command, invocation.shell)).map((operand) =>
-          FileAccess.resolvePath(target.absolute, operand),
-        ),
-      )
-      yield* access.authorizeExternal([target, ...directories, ...operands], context)
-      if (parsed.commands.length > 0)
-        yield* permission.assert({
-          action: name,
-          resources: parsed.commands.map((command) => command.resource),
-          save: parsed.commands.map((command) => command.save),
-          // The folder the command runs in, as resolved here, so a client shows it rather than the input's spelling, and
-          // the real folder when a link in an untrusted project leads there.
-          metadata: { workdir: target.place },
-          sessionID: context.sessionID,
-          agent: context.agent,
-          source,
-        })
+      const writable =
+        ShellSandbox.launch({
+          settings: sandbox,
+          shell: invocation.shell,
+          args: ShellSelect.args(invocation.shell, invocation.command),
+          cwd: target.absolute,
+          writable: [],
+        }).type === "wrapped"
+          ? [location.project.directory, target.absolute, os.tmpdir(), ...(sandbox.write ?? [])]
+          : undefined
+      // The one parse of the call, and every question the command needs, asked after every request is checked for a deny.
+      const analysis = yield* ShellGuard.authorize({
+        command: invocation.command,
+        shell: invocation.shell,
+        cwd: target,
+        env: invocation.env,
+        portable: Config.latest(entries, "experimental")?.portable_shell_scanner === true,
+        writable,
+        base: { sessionID: context.sessionID, agent: context.agent, source },
+      }).pipe(Effect.provideContext(guarded))
+      // The deadline as the hooks left it. A foreground command is moved to the background at its deadline, so the Shell
+      // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
+      // be analysed counts as not sleep-led, so it is moved and never killed.
+      const deadline = invocation.timeout
       // Approval can outlive the directory, so validate immediately before spawning.
       const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
         Effect.catchTag("Environment.NotFound", () =>
@@ -167,7 +254,11 @@ export const Plugin = {
       )
       if (workdir !== "directory")
         return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.absolute}`))
-      return timeout
+      // The analysis also reads the exit code of a foreground call.
+      if (!foreground) return { budget: deadline, autoBackground: false, analysis: undefined }
+      if (deadline <= 0 || analysis.sleepLed) return { budget: deadline, autoBackground: false, analysis }
+      invocation.timeout = 0
+      return { budget: deadline, autoBackground: true, analysis }
     })
 
     const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(
@@ -178,7 +269,37 @@ export const Plugin = {
         command: string,
         settled: Deferred.Deferred<Output>,
       ) {
-        const info = (yield* jobs.wait({ id })).info
+        // Watched until the command ends.
+        const watcher = yield* ShellStall.watch({
+          size: shell.output(Shell.ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER }).pipe(
+            Effect.map((out) => out.size),
+          ),
+          tail: Effect.gen(function* () {
+            const size = (yield* shell.output(Shell.ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER })).size
+            return (yield* shell.output(Shell.ID.make(shellID), {
+              cursor: Math.max(0, size - ShellStall.TAIL_BYTES),
+              limit: ShellStall.TAIL_BYTES,
+            })).output
+          }),
+          onStall: (tail) =>
+            Effect.gen(function* () {
+              if ((yield* jobs.get(id))?.status !== "running") return
+              // A new message: the completion notice keeps the job's own ID, and the background marker stays until the
+              // command really ends.
+              yield* sessions.synthetic({
+                sessionID,
+                description: command,
+                ...ShellResult.notification({
+                  jobID: id,
+                  shellID,
+                  command,
+                  state: "waiting",
+                  text: ShellResult.stallNotice({ shellID, tail }),
+                }),
+              })
+            }).pipe(Effect.ignore),
+        }).pipe(Effect.forkChild({ startImmediately: true }))
+        const info = (yield* jobs.wait({ id }).pipe(Effect.ensuring(Fiber.interrupt(watcher)))).info
         if (!info || info.status === "running") return
         const output = info.status === "completed" ? yield* Deferred.await(settled) : undefined
         const text = output
@@ -204,26 +325,60 @@ export const Plugin = {
       Effect.forkIn(scope, { startImmediately: true }),
     )
 
+    const commandReadOnly = (input: { command: string; workdir?: string }) =>
+      Effect.gen(function* () {
+        return yield* concurrent(input.command, {
+          shell: yield* compatibleShell,
+          platform: process.platform,
+          path: process.platform === "win32" ? path.win32 : path.posix,
+          home: os.homedir(),
+          cwd: input.workdir ? FileAccess.resolvePath(location.directory, input.workdir) : location.directory,
+          env: process.env,
+        }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
+      })
+
     yield* ctx.tool
       .transform((editor) =>
         editor.add({
           name,
           options: { authorizes: true, codemode: false },
-          traits: { cancelSiblingsOnFailure: true },
-          description: description(),
+          traits: {
+            cancelSiblingsOnFailure: true,
+            // Decided on the input the model sent, before any hook, from the command text alone: not the background
+            // flag, the timeout or the paths it reads. The scheduler runs a call that answers false by itself.
+            concurrencySafe: (input) => commandReadOnly(input),
+            // The same verdict as `concurrencySafe`, and like it a verdict on the command text alone: it ignores the
+            // paths the command reads, the background flag and permission rules. Nothing relaxes a permission on it, and
+            // a consumer that wants to must first add the read-path conditions that shell-safety owns.
+            readOnly: (input) => commandReadOnly(input),
+            destructive: (input) =>
+              Effect.gen(function* () {
+                return destructive(input.command, {
+                  shell: yield* compatibleShell,
+                  platform: process.platform,
+                  path: process.platform === "win32" ? path.win32 : path.posix,
+                })
+              }),
+            // interruptBehavior stays "block": a new user message does not cancel a running shell call.
+          },
+          description: description(undefined, limits()),
           input: Input,
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              const timeout =
-                input.run_in_background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
+              // Read at call time, so a config change applies to the next call.
+              const timeout = budget(input, limits(Config.latest(yield* config.entries(), "shell_tool")))
               let finalTimeout = timeout
+              let autoBackground = false
+              let analysis: ShellAnalysis.Analysis | undefined
+              const selected = yield* compatibleShell
+              const powershell = ["powershell", "pwsh"].includes(ShellSelect.name(selected))
               const info = yield* shell.create(
                 {
                   command: input.command,
                   cwd: input.workdir,
                   timeout,
-                  shell: yield* compatibleShell,
+                  shell: selected,
                   metadata: { sessionID: context.sessionID },
                 },
                 (invocation) =>
@@ -232,7 +387,10 @@ export const Plugin = {
                     invocation.env.ORBIT = "1"
                     invocation.env.AI_AGENT ||= "orbit"
                     invocation.env.ORBIT_SESSION_ID = context.sessionID
-                    finalTimeout = yield* prepare(invocation, context)
+                    const prepared = yield* prepare(invocation, context, input.run_in_background !== true)
+                    finalTimeout = prepared.budget
+                    autoBackground = prepared.autoBackground
+                    analysis = prepared.analysis
                   }),
               )
               yield* context.progress({ shellID: info.id })
@@ -272,17 +430,47 @@ export const Plugin = {
               if (input.run_in_background === true) {
                 yield* jobs.background(job.id)
                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
-                return backgroundResult(info.id, info.file)
+                return toolResult(backgroundResult(info.id, info.file))
               }
 
-              const result = yield* jobs
-                .block({ id: job.id, sessionID: context.sessionID })
-                .pipe(Effect.onInterrupt(() => jobs.cancel(job.id).pipe(Effect.ignore)))
-              if (result?.type === "backgrounded") {
-                yield* shell.timeout(info.id, 0)
+              // The deadline of a command that is not killed on a timer. Measured from just after the spawn. It moves the
+              // job uninterruptibly, so once it is interrupted and joined, `moved` says for certain whether it did.
+              const moved = yield* Ref.make<Job.Info | undefined>(undefined)
+              const timer = autoBackground
+                ? yield* Effect.sleep(Duration.millis(finalTimeout)).pipe(
+                    Effect.andThen(
+                      Effect.uninterruptible(
+                        jobs.background(job.id).pipe(Effect.flatMap((backgrounded) => Ref.set(moved, backgrounded))),
+                      ),
+                    ),
+                    Effect.forkChild({ startImmediately: true }),
+                  )
+                : undefined
+              const stopTimer = Effect.gen(function* () {
+                if (timer) yield* Fiber.interrupt(timer)
+                return yield* Ref.get(moved)
+              })
+              const result = yield* jobs.block({ id: job.id, sessionID: context.sessionID }).pipe(
+                Effect.onInterrupt(() =>
+                  Effect.gen(function* () {
+                    // Stop the timer before cancelling, or it could move a job that was just cancelled and leave a marker
+                    // that only a restart would deliver.
+                    if (yield* stopTimer)
+                      return yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                    yield* jobs.cancel(job.id)
+                  }).pipe(Effect.ignore),
+                ),
+              )
+              const timerMoved = yield* stopTimer
+              // A command that exits before the call has seen it move is reported as finished, once: its marker is cleared
+              // and no notification follows.
+              const notificationID = result?.info.notificationID ?? timerMoved?.notificationID
+              if (result?.type === "backgrounded" && !(yield* Deferred.isDone(settled))) {
+                if (!timerMoved) yield* shell.timeout(info.id, 0)
                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
-                return backgroundResult(info.id, info.file)
+                return toolResult(backgroundResult(info.id, info.file, timerMoved ? finalTimeout : undefined))
               }
+              if (notificationID) yield* jobs.completeBackground(notificationID)
               if (result?.info.status === "error")
                 return yield* new ToolFailure({
                   message: result.info.error ?? "Command failed",
@@ -290,9 +478,9 @@ export const Plugin = {
                 })
               if (result?.info.status === "cancelled") return yield* Effect.fail(new Error("Command cancelled"))
 
-              return yield* Deferred.await(settled)
+              const output = yield* Deferred.await(settled)
+              return toolResult(output, exitFailed(output, analysis, powershell))
             }).pipe(
-              Effect.map(toolResult),
               Effect.mapError(
                 (error) =>
                   new ToolFailure({
@@ -316,7 +504,23 @@ export const Plugin = {
       Effect.gen(function* () {
         const tool = event.tools[name]
         if (!tool) return
-        tool.description = description(ShellSelect.name(yield* compatibleShell))
+        const limit = limits(Config.latest(yield* config.entries(), "shell_tool"))
+        tool.description = description(ShellSelect.name(yield* compatibleShell), limit)
+        // The inputs are shared shallow copies, so this assigns a new object rather than changing the shared one.
+        const properties = tool.input.properties
+        tool.input = {
+          ...tool.input,
+          properties: {
+            ...(typeof properties === "object" && properties !== null ? properties : {}),
+            timeout: {
+              ...(typeof properties === "object" && properties !== null && "timeout" in properties
+                ? (properties.timeout as object)
+                : {}),
+              maximum: limit.max,
+              description: `Timeout in milliseconds for a foreground command, at most ${limit.max}. A foreground command that is still running then moves to the background. Background commands have no timeout unless one is given.`,
+            },
+          },
+        }
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

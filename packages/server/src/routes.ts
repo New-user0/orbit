@@ -32,6 +32,8 @@ import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { WellKnown } from "@orbit/core/wellknown"
 import { Workspace } from "@orbit/core/workspace"
 import { Watcher } from "@orbit/core/filesystem/watcher"
+import { ManagedSettings } from "@orbit/core/managed-settings"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -52,6 +54,8 @@ import type { ServerOptions } from "./options"
 
 const applicationServiceNodes = [
   Global.node,
+  // The effective-settings handler reports what the managed policy leaves open.
+  ManagedPolicy.node,
   Database.node,
   Bus.node,
   EventLogger.node,
@@ -131,6 +135,7 @@ function makeRoutes<AuthError, AuthServices>(
         content: options.config?.content,
       }),
     ),
+    ManagedSettings.node.replace(ManagedSettings.configured({ directory: options.managed?.directory })),
     // A host that does not ask for implicit trust trusts nothing on its own, whatever its environment holds.
     WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: options.trust?.implicit ?? false })),
     InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: options.config?.project })),
@@ -170,6 +175,7 @@ function makeRoutes<AuthError, AuthServices>(
           Context.pick(
             Database.Service,
             Credential.Service,
+            ManagedPolicy.Service,
             PermissionSaved.Service,
             PluginUpdate.Service,
             Project.Service,

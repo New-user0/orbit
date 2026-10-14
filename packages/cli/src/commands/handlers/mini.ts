@@ -1,6 +1,9 @@
 import { Context, Effect, FileSystem, Option } from "effect"
 import { EOL } from "node:os"
+import { Orbit } from "@orbit/client"
+import { Service } from "@orbit/client/effect/service"
 import { Commands } from "../commands"
+import { ConfigOverlay } from "../../config-overlay"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { Config } from "../../config"
@@ -14,11 +17,27 @@ export default Runtime.handler(Commands.commands.mini, (input) =>
     const { runMini, validateMiniTerminal } = yield* Effect.promise(() => import("../../mini"))
     yield* Effect.promise(async () => validateMiniTerminal())
     const serverURL = Option.getOrUndefined(input.server)
+    // A --settings file or JSON reaches a private server, so it is read here, before anything starts.
+    const overlay = yield* ConfigOverlay.apply({ settings: input.settings, server: serverURL })
     const server = yield* ServerConnection.resolve({
       server: serverURL,
-      standalone: input.standalone,
+      standalone: input.standalone || overlay,
       mismatch: "replace",
     })
+    yield* Effect.promise(() => ConfigOverlay.release())
+    // A private server shares the database with the background service, so a session the service is running is not
+    // driven a second time. The session that is checked is the session that opens.
+    const named = Option.getOrUndefined(input.session)
+    const checked = overlay
+      ? yield* ConfigOverlay.refuseActive({
+          client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+          session: named,
+          continue: input.continue,
+          fork: input.fork,
+          directory: process.cwd(),
+        })
+      : named
+    const session = checked ?? named
     const config = yield* Config.Service
     const global = yield* Global.Service
     const file = KeybindingsFile.locate(config.path)
@@ -40,8 +59,8 @@ export default Runtime.handler(Commands.commands.mini, (input) =>
           endpoint: server.endpoint,
           reconnect: service ? (signal) => runServicePromise(service.reconnect(), { signal }) : undefined,
         },
-        continue: input.continue,
-        session: Option.getOrUndefined(input.session),
+        continue: input.continue && !(overlay && session !== undefined),
+        session,
         fork: input.fork,
         model: Option.getOrUndefined(input.model),
         agent: Option.getOrUndefined(input.agent),

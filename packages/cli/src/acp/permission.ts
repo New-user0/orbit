@@ -1,20 +1,12 @@
 import type { PermissionOption, ToolCallContent, ToolCallLocation } from "@agentclientprotocol/sdk"
 import type { EventSubscribeOutput, OrbitClient, PermissionReplyInput } from "@orbit/client/promise"
+import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
-import { Patch } from "@orbit/util/patch"
 import { Cause, Effect } from "effect"
+import { resolve } from "node:path"
 import type { ACPConnection } from "./connection"
 import { ACPPromise } from "./promise"
-import {
-  absolutePath,
-  filePath,
-  patchHunks,
-  pendingToolCall,
-  resourcePath,
-  stringValue,
-  toLocations,
-  type ToolInput,
-} from "./tool"
+import { declaredFields, pendingToolCall, resourcePath, stringValue, type ToolInput } from "./tool"
 
 type PermissionEvent = Extract<EventSubscribeOutput, { type: "permission.asked" }>
 type Tool = { readonly name: string; readonly input: ToolInput }
@@ -55,23 +47,19 @@ export const reply = Effect.fn("cli.acp.permission.reply")(function* (input: Inp
 
 const ask = Effect.fnUntraced(function* (input: Input) {
   const request = input.event.data
+  // The place, file, method, URL and diff of the approval are the request's own values, which the server resolved and the
+  // tool acts on. A model can add any key to its own input and spell a path any way the tool accepts, so the calling
+  // tool's input is never read for them; it is passed on only as the call's raw input.
+  const view = PermissionView.of(request)
   // The call found by the request's source ID is its caller, not always the tool the request is about: a link out of the
   // project asks `external_directory` under a Read, and Code Mode, MCP and Workflow asks come from an Execute or a
-  // Workflow. The caller's name and input are shown only when the caller owns the action, and never over the request's
-  // own metadata; otherwise the prompt is built from the request alone.
+  // Workflow. The caller's name and raw input are shown only when the caller owns the action.
   const caller = input.tool && ToolNames.owns(request.action, input.tool.name) ? input.tool : undefined
   const toolName = caller?.name ?? request.action
-  const toolInput: ToolInput = caller
-    ? { ...declaredFields(caller.name, caller.input), ...request.metadata }
+  const rawInput: ToolInput = caller
+    ? declaredFields(caller.name, caller.input)
     : { ...request.metadata, resources: request.resources }
-  const previews = yield* permissionPreviews(
-    toolName,
-    toolInput,
-    request.metadata ?? {},
-    request.resources,
-    input.cwd,
-    caller !== undefined,
-  )
+  const previews = [...servedPreviews(view, input.cwd), ...argumentsContent(view)]
   const toolCallID = input.event.data.source?.id ?? input.event.data.id
   const result = yield* input.connection.requestPermission({
     sessionId: input.clientSessionID,
@@ -80,18 +68,19 @@ const ask = Effect.fnUntraced(function* (input: Input) {
         toolCallId: input.toolCallPrefix ? `${input.toolCallPrefix}:${toolCallID}` : toolCallID,
         toolName,
         state: {
-          input: toolInput,
+          input: rawInput,
           title: prefixedTitle(
             input.titlePrefix,
-            permissionTitle(toolName, toolInput, previews, request.resources, caller !== undefined),
+            permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
           ),
         },
         cwd: input.cwd,
       }),
-      locations: permissionLocations(toolName, toolInput, request.resources, input.cwd),
+      locations: permissionLocations(toolName, view, request, input.cwd),
       ...(previews.length > 0 ? { content: previews } : {}),
     },
-    options,
+    // A request with nothing to save offers no "always": the server would treat it as once.
+    options: request.save?.length ? options : options.filter((option) => option.optionId !== "always"),
   })
   const selected = result.outcome.outcome === "selected" ? result.outcome.optionId : undefined
   return selected === "once" || selected === "always" ? selected : "reject"
@@ -109,114 +98,21 @@ function prefixedTitle(prefix: string | undefined, title: string | undefined) {
   return `${prefix}: ${title}`
 }
 
-// The input fields each built-in tool declares, by its current name, with the old names a recorded call may carry. A
-// recorded call keeps the extra keys its schema drops at decode, so a model can add any key to its own input; only a
-// declared one describes what the person is asked to approve. A tool with no row, such as an MCP tool, keeps its
-// arguments: the prompt shows them only as the raw input.
-const shell = ["command", "description", "workdir", "timeout", "run_in_background", "background"]
-const declared: Record<string, readonly string[]> = {
-  Read: ["file_path", "offset", "limit", "path", "filePath"],
-  Edit: [
-    "file_path",
-    "old_string",
-    "new_string",
-    "replace_all",
-    "path",
-    "filePath",
-    "oldString",
-    "newString",
-    "replaceAll",
-  ],
-  Write: ["file_path", "content", "path", "filePath"],
-  NotebookEdit: ["notebook_path", "mode", "cellId", "index", "source", "cellType", "path"],
-  LSP: ["action", "path", "line", "character"],
-  Glob: ["pattern", "path", "hidden", "limit"],
-  Grep: [
-    "pattern",
-    "path",
-    "include",
-    "literal",
-    "caseSensitive",
-    "limit",
-    "offset",
-    "outputMode",
-    "type",
-    "multiline",
-    "context",
-    "before",
-    "after",
-  ],
-  Bash: shell,
-  PowerShell: shell,
-  WebFetch: ["url", "format", "timeout", "prompt"],
-  WebSearch: ["query", "allowedDomains", "blockedDomains"],
-  Agent: ["agent", "description", "prompt", "model", "sessionID", "background"],
-  Patch: ["patchText"],
-  Skill: ["id"],
-}
-
-function declaredFields(tool: string, input: ToolInput): ToolInput {
-  const fields = declared[ToolNames.canonical(tool)]
-  if (!fields) return input
-  return Object.fromEntries(fields.flatMap((key) => (key in input ? [[key, input[key]]] : [])))
-}
-
 // Only the edit family has files to show a diff of; the check is by canonical name and alias.
-const editFamily = new Set(["edit", "write", "notebook_edit", "multiedit", "patch", "apply_patch"])
 const isEditFamily = (name: string) =>
-  [name, ToolNames.canonical(name), ToolNames.legacy(name)].some((item) => editFamily.has(item.toLowerCase()))
+  PermissionView.action(name) === "edit" || ["patch", "notebook_edit"].includes(PermissionView.action(name))
 
-const permissionPreviews = Effect.fnUntraced(function* (
-  toolName: string,
-  input: ToolInput,
-  metadata: ToolInput,
-  resources: ReadonlyArray<string>,
-  cwd: string,
-  owned: boolean,
-) {
-  const tool = toolName.toLocaleLowerCase()
-  // The server's own diffs come first: they are what it will write (an Edit converts line endings to the file's, which
-  // a replace on the client's copy of old_string does not), and a request whose caller is not the editor has no other.
-  // They come only from the request's metadata, and only for the edit family.
-  const served = isEditFamily(toolName) ? servedPreviews(metadata, cwd) : []
-  if (served.length > 0) return served
-  if (!owned) return []
-  if (tool === "patch" || tool === "apply_patch") return yield* patchPreviews(input, cwd)
-  // The file the request names is the one the tool writes, as for the locations.
-  const files = resources.filter(isPath)
-  const file = filePath(input)
-  const path = files.length === 1 ? resourcePath(files[0]!, cwd) : file && absolutePath(file, cwd)
-  if (!path) return []
-  if (tool === "write") {
-    const content = stringValue(input.content)
-    if (content === undefined) return []
-    const oldText = yield* readText(path)
-    return [diff(path, oldText, content)]
-  }
-  if (tool !== "edit") return []
-  const oldString = stringValue(input.old_string) ?? stringValue(input.oldString)
-  const newString = stringValue(input.new_string) ?? stringValue(input.newString)
-  if (oldString === undefined || newString === undefined) return []
-  const oldText = yield* readText(path)
-  const newText =
-    input.replace_all === true || input.replaceAll === true
-      ? oldText.replaceAll(oldString, newString)
-      : oldText.replace(oldString, newString)
-  return [diff(path, oldText, newText)]
-})
-
-/** The files of `metadata.files`, drawn from their unified patches: the removed and context lines against the added ones. */
-function servedPreviews(input: ToolInput, cwd: string): ToolCallContent[] {
-  if (!Array.isArray(input.files)) return []
-  return input.files.flatMap((item: unknown) => {
-    const file = item as { file?: unknown; patch?: unknown } | null
-    const name = stringValue(file?.file)
-    const patch = stringValue(file?.patch)
-    if (name === undefined || patch === undefined) return []
+/**
+ * The files of the request, drawn from their unified patches: the removed and context lines against the added ones. They
+ * are the server's own diffs, what it will write (an Edit converts line endings to the file's, which a replace on the
+ * client's copy of old_string does not), and a model-added key in the calling input adds none.
+ */
+function servedPreviews(view: PermissionView.View, cwd: string): ToolCallContent[] {
+  return view.files.map((file) => {
     const before: string[] = []
     const after: string[] = []
     let hunks = 0
-    patch.split("\n").forEach((line) => {
+    file.patch.split("\n").forEach((line) => {
       if (line.startsWith("@@")) {
         if (hunks++ === 0) return
         before.push("...")
@@ -232,28 +128,15 @@ function servedPreviews(input: ToolInput, cwd: string): ToolCallContent[] {
         after.push(text)
       }
     })
-    return [diff(resourcePath(name, cwd), before.join("\n"), after.join("\n"))]
+    return diff(resourcePath(file.place ?? file.file, cwd), before.join("\n"), after.join("\n"))
   })
 }
 
-// Patch.derive throws when a hunk does not match the current file; the patch then gets no previews.
-function patchPreviews(input: ToolInput, cwd: string) {
-  return Effect.forEach(
-    patchHunks(input),
-    (hunk) =>
-      Effect.gen(function* () {
-        const path = absolutePath(hunk.path, cwd)
-        if (hunk.type === "add") {
-          const newText = hunk.contents.endsWith("\n") || hunk.contents === "" ? hunk.contents : `${hunk.contents}\n`
-          return diff(path, "", newText)
-        }
-        const oldText = yield* readText(path)
-        if (hunk.type === "delete") return diff(path, oldText, "")
-        const derived = yield* Effect.try(() => Patch.derive(hunk.path, hunk.chunks, oldText))
-        return diff(hunk.movePath ? absolutePath(hunk.movePath, cwd) : path, oldText, derived.content)
-      }),
-    { concurrency: "unbounded" },
-  ).pipe(Effect.orElseSucceed((): ToolCallContent[] => []))
+/** The arguments of an MCP call as the server sends them, which its caller (Code Mode's Execute) does not show. */
+function argumentsContent(view: PermissionView.View): ToolCallContent[] {
+  return view.arguments === undefined
+    ? []
+    : [{ type: "content", content: { type: "text", text: `Arguments: ${view.arguments}` } }]
 }
 
 function diff(path: string, oldText: string, newText: string): ToolCallContent {
@@ -262,78 +145,86 @@ function diff(path: string, oldText: string, newText: string): ToolCallContent {
 
 function permissionTitle(
   toolName: string,
-  input: ToolInput,
+  view: PermissionView.View,
+  callerInput: ToolInput | undefined,
   previews: ReadonlyArray<ToolCallContent>,
-  resources: ReadonlyArray<string>,
+  request: PermissionEvent["data"],
   owned: boolean,
+  cwd: string,
 ) {
-  if (previews.length > 1 && isEditFamily(toolName)) return `${previews.length} files`
-  switch (toolName.toLocaleLowerCase()) {
+  const metadata: ToolInput = request.metadata ?? {}
+  const diffs = previews.filter((item) => item.type === "diff")
+  const files = request.resources.filter(isPath)
+  if (diffs.length > 1 && isEditFamily(toolName)) return `${diffs.length} files`
+  switch (PermissionView.action(request.action)) {
     case "external_directory": {
-      const directory = resources.find(isPath)
+      const directory = request.resources.find(isPath)
       return (
-        stringValue(input.description) ??
-        stringValue(input.command) ??
-        stringValue(input.parentDir) ??
+        stringValue(metadata.description) ??
+        stringValue(metadata.command) ??
+        stringValue(metadata.parentDir) ??
         (directory && `Access external directory ${wildcardDirectory(directory)}`)
       )
     }
     case "webfetch": {
       // The method is part of what is approved: a Code Mode POST must not read like the GET that was allowed.
-      const method = stringValue(input.method)?.toUpperCase()
-      const url = stringValue(input.url) ?? resources.find(isUrl)
-      return method && method !== "GET" && method !== "HEAD" ? `${method} ${url ?? ""}`.trim() : url
+      const method = view.method
+      return method && method !== "GET" && method !== "HEAD" ? `${method} ${view.url ?? ""}`.trim() : view.url
     }
     case "websearch":
-      return stringValue(input.query)
+      return stringValue(callerInput?.query)
     case "grep":
     case "glob":
-      return stringValue(input.pattern)
+      return view.pattern
     case "read":
     case "edit":
     case "write":
     case "patch":
-    case "apply_patch": {
-      // The file the server resolved names a request about one file, whatever the calling tool's input spelled.
-      const files = resources.filter(isPath)
-      return (
-        (files.length === 1 ? files[0] : undefined) ??
-        filePath(input) ??
-        (previews[0]?.type === "diff" ? previews[0].path : undefined)
-      )
-    }
+    case "notebook_edit":
+    case "list":
+    case "lsp":
+      // The file the server named for its rules: relative to the project inside it, absolute outside it. Whatever the
+      // calling tool's input spelled changes nothing. A trusted link that leads out keeps its link spelling as the
+      // resource, so when that resource is not the place the tool acts on, the real place is the title.
+      if (files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))) return files[0]
+      return view.places[0] ?? files[0] ?? view.files[0]?.file
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.
-      return owned ? undefined : [toolName, ...resources.filter((resource) => resource !== "*")].join(" ")
+      return owned ? undefined : [toolName, ...request.resources.filter((resource) => resource !== "*")].join(" ")
   }
 }
 
 function permissionLocations(
   toolName: string,
-  input: ToolInput,
-  resources: ReadonlyArray<string>,
+  view: PermissionView.View,
+  request: PermissionEvent["data"],
   cwd: string,
 ): ToolCallLocation[] {
-  const paths = resources.filter(isPath)
+  const action = PermissionView.action(request.action)
+  const paths = request.resources.filter(isPath)
+  const metadata: ToolInput = request.metadata ?? {}
   // Outside the project the request's own folder is the whole point of the prompt, so it is always listed.
-  if (toolName.toLocaleLowerCase() === "external_directory")
+  if (action === "external_directory")
     return Array.from(
       new Set([
-        ...toLocations(toolName, input, cwd).map((item) => item.path),
+        ...[stringValue(metadata.filepath)].flatMap((item) => (item ? [resourcePath(item, cwd)] : [])),
         ...paths.map((item) => resourcePath(wildcardDirectory(item), cwd)),
       ]),
       (path) => ({ path }),
     )
-  // A request about files names them in its resources as the server resolved them: what its rules were checked against
-  // and what the tool acts on, so they come before the calling tool's input, whose spelling a hook, filename recovery or
-  // an old field name can turn into another file. Only such a request has files for resources: an MCP tool's, an
-  // agent's and a fetch's are not places on disk.
-  if (fileActions.has(ToolNames.legacy(toolName).toLowerCase()) && paths.length > 0)
-    return paths.map((path) => ({ path: resourcePath(path, cwd) }))
-  return toLocations(toolName, input, cwd)
+  // The places the server resolved, which are what its rules were checked against and what the tool acts on.
+  if (view.places.length > 0) return view.places.map((path) => ({ path: resourcePath(path, cwd) }))
+  if (view.folder) return [{ path: resourcePath(view.folder, cwd) }]
+  // A shell command with no folder named runs in the session's folder.
+  if (action === "shell") return [{ path: cwd }]
+  return []
 }
 
-const fileActions = new Set(["edit", "write", "read", "patch", "apply_patch", "notebook_edit", "list", "lsp"])
+function samePlace(resource: string, place: string, cwd: string) {
+  const a = resolve(resourcePath(resource, cwd))
+  const b = resolve(resourcePath(place, cwd))
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
+}
 
 // A URL, a `METHOD url` pair or the `*` wildcard is not a place on disk; a fetch's resources must not become file locations.
 const isUrl = (resource: string) => /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(resource)
@@ -344,11 +235,6 @@ function wildcardDirectory(resource: string) {
   if (wildcard === -1) return resource
   const prefix = resource.slice(0, wildcard)
   return /^[\\/]+$/.test(prefix) || /^[A-Za-z]:[\\/]$/.test(prefix) ? prefix : prefix.replace(/[\\/]+$/, "")
-}
-
-// A missing file previews as empty.
-function readText(path: string) {
-  return Effect.tryPromise(() => Bun.file(path).text()).pipe(Effect.orElseSucceed(() => ""))
 }
 
 export * as ACPPermission from "./permission"

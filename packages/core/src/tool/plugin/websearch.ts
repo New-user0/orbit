@@ -3,6 +3,7 @@ export * as WebSearchTool from "./websearch.js"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { ToolFailure } from "@orbit/ai"
+import { Tool } from "@orbit/schema/tool"
 import { Effect, Schema, Semaphore } from "effect"
 import { HttpClientError } from "effect/unstable/http"
 import { Form } from "../../form.js"
@@ -17,12 +18,28 @@ const httpErrors = new Map([
   [401, "Web search authentication failed (HTTP 401)"],
 ])
 
+// Fixed text: it never repeats the model's query, and it tells the model to stop rather than work around the missing consent.
+export const NOT_ENABLED =
+  'Web search is not enabled: the user has not agreed to it, so nothing was searched. The user can turn it on by answering the web search prompt in an interactive client, or by setting `websearch` in their own Orbit config (for example { "provider": "random" } or { "provider": "<provider ID>" }). Only the user can turn it on: do not change any Orbit config or settings file yourself, and do not send the query to a search service some other way. Do not call WebSearch again in this run; carry on without it, or tell the user how to turn it on.'
+
+const notEnabled = () => new ToolFailure({ message: NOT_ENABLED, code: Tool.ErrorCode.WebSearchNotEnabled })
+
+// Placed before the first result: the session runner keeps the head of an oversized result, so a trailing line is lost.
+export const SOURCES_REMINDER =
+  'Reminder: when your reply uses these results, end it with a "Sources:" section listing each page you used as a markdown link, like [Title](URL).'
+
 export const description = `Search the web using the user's selected search integration. Use this for current information beyond knowledge cutoff.
+
+When your reply draws on search results, end it with a "Sources:" section that lists the pages you used as markdown links, like [Title](URL).
+
+Use allowedDomains to restrict results to certain sites (subdomains included) and blockedDomains to exclude sites. Both are optional and are applied to the results after the search. Give one of them, not both: a call with both is refused.
 
 The current year is ${new Date().getFullYear()}. Use this year when searching for recent information or current events.`
 
 export const Input = Schema.Struct({
-  query: Schema.String.annotate({ description: "Websearch query" }),
+  query: Schema.String.check(Schema.isMinLength(2, { message: "Query must be at least 2 characters" })).annotate({
+    description: "Websearch query",
+  }),
   allowedDomains: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
     description: 'Only return results from these domains and their subdomains, such as ["docs.python.org"]',
   }),
@@ -65,6 +82,12 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              // Refused before anything is asked or sent. The two lists cannot both apply, so which one wins is not guessed.
+              if (input.allowedDomains?.length && input.blockedDomains?.length)
+                return yield* new ToolFailure({
+                  message: "Give allowedDomains or blockedDomains, not both.",
+                  code: Tool.ErrorCode.WebSearchInvalid,
+                })
               yield* permission.assert({
                 action: name,
                 resources: [input.query],
@@ -116,8 +139,7 @@ export const Plugin = {
                             },
                           ],
                         })
-                        if (response.status === "cancelled")
-                          return yield* Effect.fail(new Error("Web search cancelled"))
+                        if (response.status === "cancelled") return yield* notEnabled()
                         if (response.answer.choice === "disable") {
                           yield* websearch.select(false)
                           return yield* new WebSearch.DisabledError()
@@ -143,8 +165,7 @@ export const Plugin = {
                                 ],
                               })
                             : undefined
-                        if (selection?.status === "cancelled")
-                          return yield* Effect.fail(new Error("Web search cancelled"))
+                        if (selection?.status === "cancelled") return yield* notEnabled()
                         const providerID = selection?.answer.provider ?? "random"
                         if (providerID === "random") {
                           yield* websearch.select("random")
@@ -157,9 +178,20 @@ export const Plugin = {
                       }),
                     )
                     .pipe(
+                      // Consent is a user decision: no answer (a form that cannot be shown, or a minute without a reply)
+                      // means no search. The minute includes the wait for the permit, so a queued call can fail without
+                      // seeing a form. The timeout interrupts the pending form, which cancels it; a late reply is rejected.
+                      Effect.catchIf(
+                        (error): error is Form.AlreadyExistsError | Form.InvalidFormError =>
+                          error instanceof Form.AlreadyExistsError || error instanceof Form.InvalidFormError,
+                        (error) =>
+                          Effect.logWarning("web search consent form could not be created", error).pipe(
+                            Effect.andThen(Effect.fail(notEnabled())),
+                          ),
+                      ),
                       Effect.timeoutOrElse({
                         duration: "1 minute",
-                        orElse: () => Effect.fail(new Error("Web search cancelled")),
+                        orElse: () => Effect.fail(notEnabled()),
                       }),
                       Effect.flatMap(search),
                     )
@@ -169,20 +201,18 @@ export const Plugin = {
                 provider: result.providerID,
                 results: result.results.filter((item) => allowed(item.url, input)),
               }
-              const content = output.results.length
-                ? output.results
-                    .map((result) => {
-                      const title = result.title ?? result.url
-                      const published = result.time.published
-                        ? `\nPublished: ${new Date(result.time.published).toISOString()}`
-                        : ""
-                      return `## [${title}](${result.url})${published}${result.content ? `\n\n${result.content}` : ""}`
-                    })
-                    .join("\n\n")
-                : NO_RESULTS
+              const sections = output.results.map((result) => {
+                const title = result.title ?? result.url
+                const published = result.time.published
+                  ? `\nPublished: ${new Date(result.time.published).toISOString()}`
+                  : ""
+                return `## [${title}](${result.url})${published}${result.content ? `\n\n${result.content}` : ""}`
+              })
+              const content = sections.length ? [SOURCES_REMINDER, ...sections].join("\n\n") : NO_RESULTS
               return { output, content, metadata: { provider: output.provider } }
             }).pipe(
               Effect.mapError((error) => {
+                if (error instanceof ToolFailure && error.code !== undefined) return error
                 const fallback = `Unable to search the web for ${input.query}`
                 if (!Schema.is(WebSearch.RequestError)(error)) return new ToolFailure({ message: fallback, error })
                 const status = HttpClientError.isHttpClientError(error.cause) ? error.cause.response?.status : undefined

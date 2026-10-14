@@ -7,7 +7,7 @@ export type ScriptedRequest = {
   readonly system: string
   /** The text of the last user message. */
   readonly user: string
-  readonly body: { messages: Array<{ role: string; content?: unknown }> }
+  readonly body: { model?: string; messages: Array<{ role: string; content?: unknown }> }
 }
 
 /**
@@ -26,9 +26,18 @@ export type ScriptedReply =
       readonly tool?: { readonly name: string; readonly input: unknown }
       /** The finish reason of the step, such as "content_filter" for a step the runner counts as failed. */
       readonly finish?: string
+      /** Wait this long before answering, so a slow start such as an MCP server connecting is over by the next request. */
+      readonly delayMs?: number
     }
 
-export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
+export function scriptedModel(
+  replies: ReadonlyArray<ScriptedReply> = ["ok"],
+  contextLength = 32_768,
+  /** Called for each request before it is answered, so a test can look at the machine while the run is in progress. */
+  observe?: (request: ScriptedRequest) => void | Promise<void>,
+  /** Names of further models the server lists next to `scripted:1b`, for a test that switches models. */
+  extraModels: ReadonlyArray<string> = [],
+) {
   const requests: ScriptedRequest[] = []
   const details = {
     format: "gguf",
@@ -44,22 +53,20 @@ export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
       const pathname = new URL(request.url).pathname
       if (pathname === "/api/tags")
         return Response.json({
-          models: [
-            {
-              name: "scripted:1b",
-              model: "scripted:1b",
-              modified_at: "2026-01-01T00:00:00Z",
-              size: 1,
-              digest: "d",
-              details,
-            },
-          ],
+          models: ["scripted:1b", ...extraModels].map((name) => ({
+            name,
+            model: name,
+            modified_at: "2026-01-01T00:00:00Z",
+            size: 1,
+            digest: "d",
+            details,
+          })),
         })
       if (pathname === "/api/show")
         return Response.json({
           parameters: "",
           capabilities: ["completion", "tools"],
-          model_info: { "general.architecture": "llama", "llama.context_length": 32_768 },
+          model_info: { "general.architecture": "llama", "llama.context_length": contextLength },
           details: { parent_model: "", ...details },
         })
       if (pathname === "/api/ps") return Response.json({ models: [] })
@@ -72,10 +79,12 @@ export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
         body,
       }
       requests.push(entry)
+      await observe?.(entry)
       const reply = entry.step
         ? (replies[Math.min(requests.filter((item) => item.step).length - 1, replies.length - 1)] ?? "ok")
         : "Title"
       const scripted = typeof reply === "string" ? { chunks: [reply] } : reply
+      if ("delayMs" in scripted && scripted.delayMs) await Bun.sleep(scripted.delayMs)
       const events = [
         ...(scripted.tool
           ? [

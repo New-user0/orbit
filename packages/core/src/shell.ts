@@ -20,10 +20,12 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { SessionEnvironment } from "./session/environment.js"
 import { SessionSchema } from "./session/schema.js"
 import { Config } from "./config.js"
+import { ConfigEnv } from "./config/env.js"
+import { ManagedNetwork } from "./managed-network.js"
+import { ManagedPolicy } from "./managed-policy.js"
 import { ToolOutput } from "./tool-output.js"
 import { ShellResult } from "./shell/result.js"
 import { ShellSandbox } from "./shell/sandbox.js"
-import { which } from "./util/which.js"
 import { tmpdir } from "node:os"
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.NotFoundError", {
@@ -138,6 +140,7 @@ const layer = () =>
       const hooks = yield* PluginHooks.Service
       const environments = yield* SessionEnvironment.Service
       const config = yield* Config.Service
+      const managed = yield* ManagedPolicy.Service
       const context = yield* Effect.context()
       const runFork = Effect.runForkWith(context)
       const commands = new Map<Shell.ID, Active>()
@@ -275,11 +278,15 @@ const layer = () =>
           cwd: input.cwd ?? location.directory,
           timeout: input.timeout ?? 0,
           shell: input.shell ?? (yield* shell.resolve({ priority: "config" })),
-          env: {
-            ...(sessionEnvironment ?? process.env),
-            TERM: "xterm-256color",
-            ORBIT_TERMINAL: "1",
-          },
+          // The session's environment, then the settings' `env`, then Orbit's own variables. A workspace-bound location
+          // takes no settings overlay: its environment is not this host's.
+          env: ConfigEnv.applyTo(
+            ConfigEnv.applyTo(
+              { ...(sessionEnvironment ?? process.env) },
+              location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
+            ),
+            { TERM: "xterm-256color", ORBIT_TERMINAL: "1" },
+          ),
         }
         yield* hooks.trigger("shell", "create.before", invocation)
         if (before) yield* before(invocation)
@@ -287,15 +294,13 @@ const layer = () =>
         const id = Shell.ID.ascending()
         const args = ShellSelect.args(invocation.shell, invocation.command)
         const sandbox = Config.latest(yield* config.entries(), "sandbox")
-        const sandboxTool = ShellSandbox.TOOL[process.platform]
-        const sandboxed = ShellSandbox.wrap({
-          platform: process.platform,
-          settings: sandbox ?? {},
+        const network = managed.current().restrictions.network
+        const sandboxed = ShellSandbox.launch({
+          settings: yield* ManagedNetwork.sandboxSettings(sandbox, network),
           shell: invocation.shell,
           args,
           cwd: invocation.cwd,
           writable: [location.project.directory, invocation.cwd, tmpdir()],
-          tool: sandbox?.enabled && sandboxTool ? (which(sandboxTool) ?? undefined) : undefined,
         })
         // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
         if (sandboxed.type === "missing")
@@ -303,6 +308,12 @@ const layer = () =>
             command: invocation.command,
             cause: new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`),
           })
+        if (sandboxed.type === "unsupported")
+          return yield* new AppProcess.AppProcessError({
+            command: invocation.command,
+            cause: new Error(sandboxed.reason),
+          })
+        if (sandboxed.type === "unwrapped") yield* ManagedNetwork.unbound(network)
         const file = path.join(outputDir, `${id}.out`)
 
         const info: Info = {
@@ -500,6 +511,7 @@ export const node = makeLocationNode({
     Environment.node,
     PluginHooks.node,
     SessionEnvironment.node,
+    ManagedPolicy.node,
     Config.node,
     cleanupNode,
   ],

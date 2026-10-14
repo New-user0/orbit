@@ -3,6 +3,7 @@ export * as ConfigSkillPlugin from "./skill.js"
 import { define } from "@orbit/plugin/effect/plugin"
 import type { Directory, Entry } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import { Global } from "@orbit/util/global"
 import path from "path"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
@@ -129,9 +130,7 @@ export const Plugin = define({
       const roots = (yield* Effect.forEach(directories, watchDirectory)).flat()
       const skills: Skill.Info[] = []
       for (const directory of directories) {
-        const files = yield* fs
-          .scan("{*.md,**/SKILL.md}", { cwd: directory, absolute: true, include: "file", symlink: true, dot: true })
-          .pipe(Effect.orElseSucceed(() => [] as string[]))
+        const files = yield* LinkShare.scan(fs, directory, ["{*.md,**/SKILL.md}"])
         for (const filepath of files.toSorted()) {
           if (!(yield* supplied(directory, filepath))) continue
           const resolved = yield* fs.realPath(filepath).pipe(Effect.orElseSucceed(() => filepath))

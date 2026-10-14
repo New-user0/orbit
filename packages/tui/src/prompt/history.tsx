@@ -175,6 +175,11 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
     const limit = () => config.prompt?.history_limit ?? DEFAULT_HISTORY_LIMIT
     // The size of the history file, so that an append knows when the file has outgrown its cap.
     let fileBytes = 0
+    // Appends and rewrites run one after another: an append that lands after a rewrite started would restore a trimmed entry.
+    let writes: Promise<unknown> = Promise.resolve()
+    const enqueue = (write: () => Promise<unknown>) => {
+      writes = writes.then(write).catch(() => {})
+    }
     onMount(async () => {
       const lines = parsePromptHistory(await readText(historyPath).catch(() => ""), limit())
       setStore("history", lines)
@@ -189,7 +194,7 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
       const lines = savedLines(entries, limit())
       const content = lines.map((line) => line + "\n").join("")
       fileBytes = Buffer.byteLength(content)
-      writeText(historyPath, content).catch(() => {})
+      enqueue(() => writeText(historyPath, content))
     }
 
     return {
@@ -231,7 +236,7 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
           rewrite(store.history)
           return
         }
-        appendText(historyPath, line).catch(() => {})
+        enqueue(() => appendText(historyPath, line))
       },
     }
   },

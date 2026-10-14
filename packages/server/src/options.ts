@@ -32,6 +32,16 @@ export const ServerOptions = Schema.Struct({
       content: Schema.optional(Schema.String),
     }),
   ),
+  managed: Schema.optional(
+    Schema.Struct({
+      // Where the managed settings files are read from. Unset means the per-OS default, or ORBIT_MANAGED_DIR for a
+      // host that reads the environment. The folder is read, never created.
+      directory: Schema.optional(Schema.String),
+      // Put the managed `env` into this process's environment once at boot. Unset means false: an embedding host keeps its
+      // own environment, and the managed `env` still reaches every program a location starts.
+      applyEnv: Schema.optional(Schema.Boolean),
+    }),
+  ),
   trust: Schema.optional(
     Schema.Struct({
       // Trust every folder except the home directory and filesystem roots, without a grant. Unset means false, whatever

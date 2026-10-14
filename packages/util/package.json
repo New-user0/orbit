@@ -33,7 +33,7 @@
   },
   "scripts": {
     "build": "bun run script/build.ts",
-    "test": "bun test --only-failures",
+    "test": "bun ../../tools/test/run.ts --serial --only-failures",
     "typecheck": "tsgo --noEmit",
     "typecheck:dist": "bun run build && bun typecheck --project tsconfig.dist.json"
   },
@@ -59,7 +59,8 @@
     "minimatch": "10.2.5",
     "npm-package-arg": "13.0.2",
     "open": "11.0.4",
-    "pacote": "21.5.1"
+    "pacote": "21.5.1",
+    "which": "6.0.1"
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
@@ -68,6 +69,7 @@
     "@types/node": "catalog:",
     "@types/npm-package-arg": "6.1.4",
     "@types/npmcli__arborist": "6.3.3",
+    "@types/which": "3.0.4",
     "@types/pacote": "11.1.8",
     "@typescript/native-preview": "catalog:"
   }

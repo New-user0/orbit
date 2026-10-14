@@ -240,6 +240,28 @@ function assistant(
   }
 }
 
+// A response of the model that called the structured-output tool once, and how the server settled that call.
+function handedIn(
+  id: string,
+  value: Record<string, JsonValue>,
+  status: "completed" | "error" = "completed",
+  callID = `call_${id}`,
+): SessionMessageInfo {
+  const state: SessionMessageAssistantTool["state"] =
+    status === "completed"
+      ? { status: "completed", input: value, content: [{ type: "text", text: "accepted" }] }
+      : { status: "error", input: value, error: { type: "output.rejected", message: "rejected" } }
+  return {
+    id,
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "test", id: "test-model" },
+    content: [{ type: "tool", id: callID, name: "StructuredOutput", state, time: { created: 2, completed: 3 } }],
+    finish: "tool-calls",
+    time: { created: 2, completed: 3 },
+  }
+}
+
 function synthetic(id: string, metadata: Record<string, JsonValue>, description?: string): SessionMessageInfo {
   return { id, type: "synthetic", text: "The output limit was raised.", description, metadata, time: { created: 3 } }
 }
@@ -410,6 +432,8 @@ async function run(input: {
   // The limits and fallback model the prompt asks for, and whether the fake server admits them (an old one drops them).
   options?: SessionTurnOptions
   admit?: boolean
+  // The turn options the fake server records instead of the ones it was sent.
+  admitTurn?: SessionTurnOptions
 }) {
   const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
   const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {} }]
@@ -466,7 +490,7 @@ async function run(input: {
     queued = true
     wake?.()
     wake = undefined
-    const payload = { text: "hello", ...(input.admit === false ? {} : { turn: request.turn }) }
+    const payload = { text: "hello", ...(input.admit === false ? {} : { turn: input.admitTurn ?? request.turn }) }
     return ok({
       id: messageID,
       sessionID: "ses_1",
@@ -556,14 +580,48 @@ describe("runNonInteractivePrompt", () => {
     })
   })
 
-  test("a JSON schema asks for JSON and parses the answer, failing when it is not JSON", async () => {
+  test("a JSON schema reads the answer from the accepted hand-in, never from the text", async () => {
     const schema = { type: "object", properties: { count: { type: "number" } } }
-    const valid = await capture({ format: "result", jsonSchema: schema, turn: answered('```json\n{"count": 3}\n```') })
+    const valid = await capture({
+      format: "result",
+      jsonSchema: schema,
+      turn: answered("Done."),
+      messages: history(handedIn("msg_one", { count: 3 })),
+    })
     expect(JSON.parse(valid.stdout)).toMatchObject({ is_error: false, structured_output: { count: 3 } })
 
-    const invalid = await capture({ format: "result", jsonSchema: schema, turn: answered("three") })
-    expect(JSON.parse(invalid.stdout)).toMatchObject({ is_error: true, error: "The answer was not valid JSON." })
-    expect(invalid.exitCode).toBe(1)
+    // JSON in the prose is not the answer, fenced or not.
+    for (const text of ['{"count": 3}', '```json\n{"count": 3}\n```']) {
+      const prose = await capture({ format: "result", jsonSchema: schema, turn: answered(text) })
+      const result = JSON.parse(prose.stdout)
+      expect(result).toMatchObject({ is_error: true, error: "The run ended without an accepted structured answer." })
+      expect(result).not.toHaveProperty("structured_output")
+      expect(prose.exitCode).toBe(1)
+    }
+  })
+
+  test("the latest hand-in is the answer, and a rejected one leaves none", async () => {
+    const schema = { type: "object" }
+    const later = await capture({
+      format: "result",
+      jsonSchema: schema,
+      turn: answered("Done."),
+      messages: history(
+        handedIn("msg_one", { count: 1 }),
+        handedIn("msg_two", { count: 2 }, "error"),
+        handedIn("msg_three", { count: 3 }),
+      ),
+    })
+    expect(JSON.parse(later.stdout)).toMatchObject({ is_error: false, structured_output: { count: 3 } })
+
+    const rejected = await capture({
+      format: "result",
+      jsonSchema: schema,
+      turn: answered("Done."),
+      messages: history(handedIn("msg_one", { count: 1 }), handedIn("msg_two", { count: 2 }, "error")),
+    })
+    expect(JSON.parse(rejected.stdout)).toMatchObject({ is_error: true })
+    expect(JSON.parse(rejected.stdout)).not.toHaveProperty("structured_output")
   })
 
   test("keeps formatted tool output and compact tool metadata in JSON", async () => {
@@ -1039,23 +1097,55 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
     const rows: {
       name: string
       turn: (messageID: string) => V2Event[]
+      messages?: (messageID: string) => SessionMessageInfo[]
       expected: Record<string, unknown>
       absent: string[]
     }[] = [
       {
         name: "success",
-        turn: answer('{"a":1}', settled()),
+        turn: answer("Done.", settled()),
+        messages: history(handedIn("msg_one", { a: 1 })),
         expected: { is_error: false, outcome: "succeeded", structured_output: { a: 1 } },
         absent: ["reason", "error"],
       },
       {
-        name: "invalid JSON after a success",
+        name: "no accepted hand-in after a success",
         turn: answer("nope", settled()),
         expected: {
           is_error: true,
           outcome: "failed",
           reason: "invalid_output",
-          error: "The answer was not valid JSON.",
+          error: "The run ended without an accepted structured answer.",
+        },
+        absent: ["structured_output"],
+      },
+      {
+        name: "the turn ending without an answer",
+        turn: (messageID) => [
+          prompted(messageID),
+          executionFailed("The turn ended without handing in an answer.", "output.missing"),
+        ],
+        expected: {
+          is_error: true,
+          outcome: "failed",
+          reason: "invalid_output",
+          subtype: "error",
+          error: "The turn ended without handing in an answer.",
+        },
+        absent: ["structured_output"],
+      },
+      {
+        name: "the attempt limit",
+        turn: (messageID) => [
+          prompted(messageID),
+          executionFailed("The model did not hand in an answer within 5 attempts.", "limit.structured-output"),
+        ],
+        messages: history(handedIn("msg_one", { a: 1 }, "error")),
+        expected: {
+          is_error: true,
+          outcome: "failed",
+          reason: "error",
+          subtype: "error_max_structured_output_retries",
         },
         absent: ["structured_output"],
       },
@@ -1066,10 +1156,11 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
         absent: ["structured_output"],
       },
       {
-        name: "failure after an answer that is not JSON",
+        name: "failure after an accepted answer",
         turn: answer("nope", executionFailed("boom")),
+        messages: history(handedIn("msg_one", { a: 1 })),
         expected: { is_error: true, outcome: "failed", reason: "error", error: "boom" },
-        absent: [],
+        absent: ["structured_output"],
       },
       {
         name: "interruption",
@@ -1098,7 +1189,13 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
 
     // One after the other: each run replaces process.stdout.write.
     for (const row of rows) {
-      const output = await capture({ format: "result", envelope, jsonSchema, turn: row.turn })
+      const output = await capture({
+        format: "result",
+        envelope,
+        jsonSchema,
+        turn: row.turn,
+        ...(row.messages ? { messages: row.messages } : {}),
+      })
       const result = JSON.parse(output.stdout)
       expect({ row: row.name, ...result }).toMatchObject({ row: row.name, ...row.expected })
       row.absent.forEach((key) => expect({ row: row.name, has: key in result }).toEqual({ row: row.name, has: false }))
@@ -1124,6 +1221,152 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       steps: 2,
       cost: 0.75,
       tokens: { input: 3, output: 1 },
+    })
+  })
+
+  describe("structured output", () => {
+    const envelope = { cwd: "/tmp", version: "test" }
+    const jsonSchema = { type: "object" }
+
+    test("text format prints the accepted value as one line, with control characters escaped", async () => {
+      const hostile = { note: "a\u001b[31mred\u001b[0m\nsecond line\u0007", "key\u001b]0;x\u0007": 1 }
+      const output = await capture({
+        envelope,
+        jsonSchema,
+        turn: (messageID) => [prompted(messageID), settled()],
+        messages: history(handedIn("msg_one", hostile)),
+      })
+
+      expect(output.stdout.endsWith(EOL)).toBe(true)
+      expect(output.stdout.trimEnd().split("\n")).toHaveLength(1)
+      expect(output.stdout).not.toMatch(/[\u001b\u0007]/)
+      expect(JSON.parse(output.stdout)).toEqual(hostile)
+      expect(output.exitCode ?? 0).toBe(0)
+    })
+
+    test.each(["result", "stream-json", "json"] as const)("%s format escapes control characters in the value", async (format) => {
+      const hostile = { note: "a\u001b[31mred\nline\u0007" }
+      const output = await capture({
+        format,
+        envelope,
+        jsonSchema,
+        turn: (messageID) => [prompted(messageID), settled()],
+        messages: history(handedIn("msg_one", hostile)),
+      })
+
+      expect(output.stdout).not.toMatch(/[\u001b\u0007]/)
+      if (format !== "json")
+        expect(events(output.stdout).find((event) => event.type === "result")).toMatchObject({
+          structured_output: hostile,
+        })
+    })
+
+    test("text format prints nothing on stdout and one error line when the attempts ran out", async () => {
+      const output = await capture({
+        envelope,
+        jsonSchema,
+        turn: (messageID) => [
+          prompted(messageID),
+          executionFailed("The model did not hand in an answer within 5 attempts.", "limit.structured-output"),
+        ],
+        messages: history(handedIn("msg_one", { a: 1 }, "error")),
+      })
+
+      expect(output.stdout).toBe("")
+      expect(output.stderr.match(/within 5 attempts/g)).toHaveLength(1)
+      expect(output.exitCode).toBe(1)
+    })
+
+    test("text format with no accepted answer fails instead of printing the prose", async () => {
+      const output = await capture({ envelope, jsonSchema, turn: answered('{"a": 1}') })
+
+      expect(output.stdout).toBe("")
+      expect(output.stderr).toContain("without an accepted structured answer")
+      expect(output.exitCode).toBe(1)
+    })
+
+    test("stream-json shows the hand-in like any tool call, then the result with the value", async () => {
+      const output = await capture({
+        format: "stream-json",
+        envelope,
+        jsonSchema,
+        turn: (messageID) => [
+          prompted(messageID),
+          stepStarted("msg_one"),
+          {
+            id: "evt_call",
+            created: 2,
+            type: "session.tool.called",
+            durable: { aggregateID: "ses_1", seq: 2, version: 1 },
+            data: {
+              sessionID: "ses_1",
+              assistantMessageID: "msg_one",
+              id: "call_msg_one",
+              input: { a: 1 },
+              executed: false,
+            },
+          } as V2Event,
+          stepEnded("msg_one", "tool-calls"),
+          settled(),
+        ],
+        messages: history(handedIn("msg_one", { a: 1 })),
+      })
+
+      const lines = events(output.stdout)
+      expect(lines.at(-1)).toMatchObject({ type: "result", is_error: false, subtype: "success", structured_output: { a: 1 } })
+      expect(lines.some((line) => line.type === "tool_use" && line.part.tool === "StructuredOutput")).toBe(true)
+    })
+
+    test("a server that drops the output field fails the run and never falls back to the text", async () => {
+      const options = { output: { schema: jsonSchema } }
+      // One server records the turn without `output`, the other records no turn at all.
+      for (const dropped of [{ admitTurn: {} }, { admit: false }]) {
+        const output = await capture({
+          format: "result",
+          envelope,
+          jsonSchema,
+          options,
+          ...dropped,
+          turn: answered('{"a": 1}'),
+        })
+
+        const result = JSON.parse(output.stdout)
+        expect(result).toMatchObject({ is_error: true })
+        expect(result.error).toContain("output schema")
+        expect(result).not.toHaveProperty("structured_output")
+        expect(output.exitCode).toBe(1)
+      }
+    })
+
+    test("a server that echoes a different schema or attempts fails the run", async () => {
+      const sent = { output: { schema: jsonSchema, attempts: 3 } }
+      const output = await capture({
+        format: "result",
+        envelope,
+        jsonSchema,
+        options: sent,
+        turn: answered('{"a": 1}'),
+        // Admitted with other attempts than were sent.
+        admitTurn: { output: { schema: jsonSchema, attempts: 4 } },
+      })
+
+      expect(JSON.parse(output.stdout)).toMatchObject({ is_error: true })
+      expect(output.exitCode).toBe(1)
+    })
+
+    test("a server that stores the schema with its keys in another order is accepted", async () => {
+      const sent = { output: { schema: { type: "object", properties: { a: { type: "string", minLength: 1 } } } } }
+      const output = await capture({
+        format: "result",
+        envelope,
+        jsonSchema: sent.output.schema,
+        options: sent,
+        turn: (messageID) => [prompted(messageID), settled()],
+        messages: history(handedIn("msg_one", { a: "x" })),
+        admitTurn: { output: { schema: { properties: { a: { minLength: 1, type: "string" } }, type: "object" } } },
+      })
+
+      expect(JSON.parse(output.stdout)).toMatchObject({ is_error: false, structured_output: { a: "x" } })
     })
   })
 
@@ -1257,7 +1500,7 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
         settled(),
       ]
 
-    test("is joined in the answer and in the value that a JSON Schema parses", async () => {
+    test("is joined in the answer", async () => {
       const result = await capture({ format: "result", turn: cut("The answer is forty-tw", "o.") })
       expect(JSON.parse(result.stdout)).toMatchObject({
         type: "result",
@@ -1265,20 +1508,6 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
         is_error: false,
         result: "The answer is forty-two.",
       })
-
-      const parsed = await capture({
-        format: "result",
-        jsonSchema: { type: "object" },
-        turn: cut('{"name": "Ali', 'ce"}'),
-      })
-      expect(JSON.parse(parsed.stdout)).toMatchObject({
-        type: "result",
-        sessionID: "ses_1",
-        is_error: false,
-        result: '{"name": "Alice"}',
-        structured_output: { name: "Alice" },
-      })
-      expect(parsed.exitCode).toBe(0)
     })
 
     test("gives the same answer in the result and stream-json envelopes", async () => {
@@ -1290,7 +1519,8 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
           format,
           envelope,
           jsonSchema: { type: "object" },
-          turn: cut('{"name": "Ali', 'ce"}'),
+          turn: cut("The answer is forty-tw", "o."),
+          messages: history(handedIn("msg_one", { name: "Alice" })),
         })
         results.push(JSON.parse(output.stdout.trim().split(/\r?\n/).at(-1)!))
       }
@@ -1298,7 +1528,7 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       results.forEach((result) =>
         expect(result).toMatchObject({
           is_error: false,
-          result: '{"name": "Alice"}',
+          result: "The answer is forty-two.",
           structured_output: { name: "Alice" },
         }),
       )
@@ -1563,17 +1793,13 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
     )
 
     test.each(runs('{"a":1}', '{"b":2}'))(
-      "drops the replaced attempt from the value that a JSON Schema parses when it reads %s",
+      "does not take the structured answer from the text of a replaced attempt when it reads %s",
       async (_, source) => {
         const result = await capture({ ...source, format: "result", jsonSchema: { type: "object" } })
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          type: "result",
-          sessionID: "ses_1",
-          is_error: false,
-          result: '{"b":2}',
-          structured_output: { b: 2 },
-        })
-        expect(result.exitCode).toBe(0)
+        const parsed = JSON.parse(result.stdout)
+        expect(parsed).toMatchObject({ type: "result", sessionID: "ses_1", is_error: true, result: '{"b":2}' })
+        expect(parsed).not.toHaveProperty("structured_output")
+        expect(result.exitCode).toBe(1)
       },
     )
 
@@ -2043,10 +2269,27 @@ describe("runNonInteractivePrompt limits and results", () => {
           expected: { subtype, outcome: "failed", reason: "error", error: "Reached it." },
         })),
         {
-          name: "invalid JSON under a schema",
+          name: "no accepted hand-in under a schema",
           turn: answered("nope", settled()),
           jsonSchema: { type: "object" },
           expected: { subtype: "error", outcome: "failed", reason: "invalid_output" },
+        },
+        {
+          name: "limit.structured-output",
+          turn: answered("x", executionFailed("Out of attempts.", "limit.structured-output")),
+          jsonSchema: { type: "object" },
+          expected: {
+            subtype: "error_max_structured_output_retries",
+            outcome: "failed",
+            reason: "error",
+            error: "Out of attempts.",
+          },
+        },
+        {
+          name: "output.missing",
+          turn: answered("x", executionFailed("No answer.", "output.missing")),
+          jsonSchema: { type: "object" },
+          expected: { subtype: "error", outcome: "failed", reason: "invalid_output", error: "No answer." },
         },
       ]
 
@@ -2346,6 +2589,45 @@ describe("runNonInteractivePrompt limits and results", () => {
         turn: (id) => [prompted(id), notice(name, "Something to know."), settled()],
       })
       expect(events(lines.stdout).filter((event) => event.type === "notice")).toHaveLength(1)
+    })
+
+    // The text of a waiting shell notice quotes script output. No format prints it, from the events or the history.
+    const hostile = "\u001b]0;pwned\u0007\u001b[2KProceed (y/n) \rOVERWRITTEN"
+    const waitingMetadata: Record<string, JsonValue> = { source: "shell", state: "waiting", shellID: "sh_1" }
+    const waitingEvent = (): V2Event => {
+      const base = escalation(waitingMetadata, "npm init \u001b]0;title\u0007\r")
+      if (base.type !== "session.synthetic") throw new Error("Expected a synthetic event")
+      return {
+        ...base,
+        data: {
+          sessionID: "ses_1",
+          text: `<shell id="sh_1" state="waiting" command="x">\nThe output ends with:\n${hostile}\n</shell>`,
+          description: "npm init \u001b]0;title\u0007\r",
+          metadata: waitingMetadata,
+        },
+      }
+    }
+
+    test.each([undefined, "json", "stream-json"] as const)("a waiting shell notice prints nothing (format %s)", async (format) => {
+      const out = await capture({
+        ...(format ? { format } : {}),
+        turn: (id) => [prompted(id), waitingEvent(), settled()],
+        messages: history({
+          id: "msg_wait",
+          type: "synthetic",
+          text: "waiting",
+          description: "npm init \u001b]0;title\u0007\r",
+          metadata: waitingMetadata,
+          time: { created: 3 },
+        }),
+      })
+      for (const stream of [out.stdout, out.stderr]) {
+        expect(stream).not.toContain("OVERWRITTEN")
+        expect(stream).not.toContain("pwned")
+        expect(stream).not.toContain("\u001b")
+        expect(stream).not.toContain("\r")
+      }
+      if (format) expect(events(out.stdout).filter((event) => event.type === "notice")).toEqual([])
     })
 
     test("a reminder without a description prints nothing", async () => {

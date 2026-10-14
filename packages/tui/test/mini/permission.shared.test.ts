@@ -155,8 +155,8 @@ describe("run permission shared", () => {
     })
   })
 
-  test("uses source patch text when an edit has no generated diff", () => {
-    const patch = '*** Begin Patch\n*** Update File: src/index.ts\n@@\n-old\n+const arrow = "→"\n*** End Patch'
+  test("never shows the patch text of the calling input when an edit has no generated diff", () => {
+    const patch = '*** Begin Patch\n*** Update File: decoy.ts\n@@\n-old\n+const arrow = "→"\n*** End Patch'
     const request = req({
       action: "edit",
       resources: ["src/index.ts"],
@@ -171,17 +171,10 @@ describe("run permission shared", () => {
         "call-edit",
       ),
     })
-    expect(permissionInfo(request)).toMatchObject({
-      title: "Edit src/index.ts",
-      diff: undefined,
-      patch,
-    })
-    expect(permissionInfo(request, undefined, true)).toMatchObject({
-      title: "Edit src/index.ts",
-      lines: [patch],
-      diff: undefined,
-      patch: undefined,
-    })
+    expect(permissionInfo(request)).toMatchObject({ title: "Edit src/index.ts", diff: undefined, patch: undefined })
+    expect(JSON.stringify([permissionInfo(request), permissionInfo(request, undefined, true)])).not.toContain(
+      "decoy.ts",
+    )
   })
 
   test("formats always-allow copy for wildcard and explicit patterns", () => {

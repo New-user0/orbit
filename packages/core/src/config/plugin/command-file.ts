@@ -4,6 +4,7 @@ import { ConfigCommand } from "@orbit/schema/config/command"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Effect, Option, Schema } from "effect"
 import path from "path"
+import { LinkShare } from "@orbit/util/link-share"
 import { ConfigMarkdown } from "../markdown.js"
 
 const decodeCommand = Schema.decodeUnknownOption(ConfigCommand.Info)
@@ -20,9 +21,7 @@ export function load(
   supplies: (file: string) => Effect.Effect<boolean> = () => Effect.succeed(true),
 ) {
   return Effect.gen(function* () {
-    const found = yield* fs
-      .scan("{command,commands}/**/*.md", { cwd: directory, absolute: true, dot: true, symlink: true })
-      .pipe(Effect.orElseSucceed(() => [] as string[]))
+    const found = yield* LinkShare.scan(fs, directory, ["{command,commands}/**/*.md"])
     const files = yield* Effect.filter(found.toSorted(), supplies)
     return yield* Effect.forEach(files, (filepath) =>
       fs.readFileStringSafe(filepath).pipe(

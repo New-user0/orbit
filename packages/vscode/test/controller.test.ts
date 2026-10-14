@@ -116,7 +116,7 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
 
   await controller.send("Create hello.txt containing hi")
   const permission = await until(() => [...items.values()].find((item) => item.type === "permission"))
-  expect(permission).toMatchObject({ action: "Edit", status: "pending" })
+  expect(permission).toMatchObject({ action: "Edit", status: "pending", canSave: true })
   if (permission?.type !== "permission") throw new Error("Expected a permission")
   expect(permission.files[0]?.patch).toContain("+hi")
 

@@ -8,6 +8,7 @@ import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigCommand } from "@orbit/schema/config/command"
 import { ConfigCompaction } from "@orbit/schema/config/compaction"
 import { ConfigFormatter } from "@orbit/schema/config/formatter"
+import { EnvConfig } from "@orbit/schema/config/env-config"
 import { HookConfig } from "@orbit/schema/config/hook-config"
 import { ConfigLSP } from "@orbit/schema/config/lsp"
 import { ConfigMedia } from "@orbit/schema/config/media"
@@ -67,6 +68,14 @@ export function normalize(input: unknown): Result {
   const diagnostics: Diagnostic[] = []
   const encoded: Record<string, unknown> = {}
   unsupportedTopLevel.forEach((key) => unsupportedIfPresent(input, key, [key], diagnostics))
+  // Restrictions are read from managed settings files, which split `managed` off before they get here. In any other
+  // document the key never takes effect.
+  if (own(input, "managed"))
+    diagnostics.push({
+      kind: "unsupported",
+      path: ["managed"],
+      message: "ignored managed restrictions outside the managed settings files",
+    })
 
   const legacySnapshots = own(input, "snapshot")
     ? decodeEncoded(Schema.Boolean, input.snapshot, ["snapshot"], diagnostics)
@@ -154,7 +163,9 @@ export function normalize(input: unknown): Result {
     canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
   )
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
-  const nativeAgents = decodeMap(input.agents, ConfigAgent.Info, ["agents"], diagnostics, decodeEncoded)
+  const nativeAgents = decodeMap(input.agents, ConfigAgent.Info, ["agents"], diagnostics, (schema, value, at, found) =>
+    decodeFields(schema, value, at, found, "permissions"),
+  )
   diagnoseAgentUnsupported(input.agent, ["agent"], diagnostics)
   diagnoseAgentUnsupported(input.mode, ["mode"], diagnostics)
   mergeMap(
@@ -198,6 +209,7 @@ export function normalize(input: unknown): Result {
   normalizeFormatter(input, encoded, diagnostics)
   normalizeLsp(input, encoded, diagnostics)
   normalizeHooks(input, encoded, diagnostics)
+  normalizeEnv(input, encoded, diagnostics)
 
   const nativeAtomic = {
     $schema: Info.fields.$schema,
@@ -214,15 +226,22 @@ export function normalize(input: unknown): Result {
     snapshots: Info.fields.snapshots,
     compatibility: Info.fields.compatibility,
     media: Info.fields.media,
+    shell_tool: Info.fields.shell_tool,
     tool_output: Info.fields.tool_output,
     tool_execution: Info.fields.tool_execution,
     websearch: Info.fields.websearch,
+    webfetch: Info.fields.webfetch,
     worktree: Info.fields.worktree,
     warming: Info.fields.warming,
   }
+  // Objects whose fields are independent settings: a bad field costs only itself, so `sandbox.enabled` survives a bad
+  // `sandbox.write` (class 7).
+  const independent = ["sandbox", "shell_tool", "tool_execution", "websearch", "webfetch", "worktree", "warming"]
   Object.entries(nativeAtomic).forEach(([key, schema]) => {
     if (!own(input, key)) return
-    const value = decodeEncoded(schema, input[key], [key], diagnostics)
+    const value = independent.includes(key)
+      ? decodeFields(schema, input[key], [key], diagnostics)
+      : decodeEncoded(schema, input[key], [key], diagnostics)
     if (value === undefined) return
     overlay(encoded, key, value, [key], diagnostics)
   })
@@ -497,6 +516,13 @@ function normalizeLsp(input: Record<string, unknown>, encoded: Record<string, un
   if (isRecord(input.lsp) && (!Object.keys(input.lsp).length || Object.keys(entries).length)) encoded.lsp = entries
 }
 
+function normalizeEnv(input: Record<string, unknown>, encoded: Record<string, unknown>, diagnostics: Diagnostic[]) {
+  if (!own(input, "env")) return
+  const result = EnvConfig.decode(input.env)
+  diagnostics.push(...result.diagnostics)
+  if (result.env !== undefined) encoded.env = result.env
+}
+
 function normalizeHooks(input: Record<string, unknown>, encoded: Record<string, unknown>, diagnostics: Diagnostic[]) {
   if (!own(input, "hooks")) return
   const result = HookConfig.decode(input.hooks)
@@ -710,15 +736,54 @@ function decodeEncoded<S extends Schema.Codec<unknown, unknown, never, never>>(
   path: string[],
   diagnostics: Diagnostic[],
 ) {
+  const decoded = decodeQuiet(schema, value)
+  if (decoded === undefined) invalid(path, diagnostics)
+  return decoded
+}
+
+function decodeQuiet<S extends Schema.Codec<unknown, unknown, never, never>>(schema: S, value: unknown) {
   const decoded = Schema.decodeUnknownOption(schema, options)(value)
-  if (Option.isNone(decoded)) {
+  if (Option.isNone(decoded)) return undefined
+  const encoded = Schema.encodeUnknownOption(schema, options)(decoded.value)
+  return Option.isSome(encoded) ? plain(encoded.value) : undefined
+}
+
+/**
+ * Decodes an object whose fields are independent, one field at a time when the whole does not decode, so a bad field
+ * costs only itself. A field is judged by decoding it alone; an object that fails because a required field is missing
+ * has no field to drop and is reported as a whole. `rules` names a list of permission rules that is kept rule by rule, since one bad rule must not take the
+ * valid denies beside it. Each loss is reported at its own path, and an object of which nothing survives is dropped.
+ */
+function decodeFields<S extends Schema.Codec<unknown, unknown, never, never>>(
+  schema: S,
+  value: unknown,
+  path: string[],
+  diagnostics: Diagnostic[],
+  rules?: string,
+) {
+  const whole = decodeQuiet(schema, value)
+  if (whole !== undefined) return whole
+  if (!isRecord(value)) {
     invalid(path, diagnostics)
     return undefined
   }
-  const encoded = Schema.encodeUnknownOption(schema, options)(decoded.value)
-  if (Option.isSome(encoded)) return plain(encoded.value)
-  invalid(path, diagnostics)
-  return undefined
+  const reported = diagnostics.length
+  const input =
+    rules !== undefined && Array.isArray(value[rules])
+      ? { ...value, [rules]: decodeList(value[rules], Permission.Rule, [...path, rules], diagnostics, decodeEncoded) }
+      : value
+  const kept = Object.fromEntries(
+    Object.entries(input).filter(([key, item]) => {
+      if (decodeQuiet(schema, { [key]: item }) !== undefined) return true
+      invalid([...path, key], diagnostics)
+      return false
+    }),
+  )
+  const result = Object.keys(kept).length === 0 ? undefined : decodeQuiet(schema, kept)
+  // An object that fails only because a required field is missing (an empty one, or one with only unknown keys) has no
+  // field to drop, so report the object itself rather than losing it silently.
+  if (result === undefined && (Object.keys(kept).length > 0 || diagnostics.length === reported)) invalid(path, diagnostics)
+  return result
 }
 
 function canonical<S extends Schema.Codec<unknown, unknown, never, never>>(schema: S, value: unknown) {

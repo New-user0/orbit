@@ -36,6 +36,7 @@ test.each([
   [["--print", "no", "x"], ["--print=true", "no", "x"]],
   [["-p", "--constructor", "x"], ["--print=true", "--constructor", "x"]],
   [["-s=abc", "-p", "run"], ["-s=abc", "--print=true", "run"]],
+  [["-p", "--settings", "s.json", "hello"], ["--print=true", "--settings", "s.json", "hello"]],
 ])("%j is a print line", (argv, expected) => {
   expect(printed(argv)).toEqual(expected)
 })

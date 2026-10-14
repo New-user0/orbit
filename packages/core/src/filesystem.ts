@@ -67,6 +67,8 @@ export type ListInput = typeof ListInput.Type
 export { FindInput, Write }
 
 export const DEFAULT_SEARCH_LIMIT = 100
+/** Grep counts matches, not files, so its default page is larger than glob's. */
+export const DEFAULT_GREP_LIMIT = 250
 export const DEFAULT_SEARCH_TIMEOUT_MS = 30_000
 
 export class GlobInput extends Schema.Class<GlobInput>("FileSystem.GlobInput")({

@@ -15,6 +15,7 @@ import { FileMutation } from "../../file-mutation.js"
 import { FileLedger } from "../../file-ledger.js"
 import { Formatter } from "../../formatter.js"
 import { FileAccess } from "../../file-access.js"
+import { Location } from "../../location.js"
 import { Permission } from "../../permission.js"
 import { fileDiff } from "./file-diff.js"
 
@@ -51,6 +52,7 @@ export const Plugin = {
     const ledger = yield* FileLedger.Service
     const environment = yield* Environment.Service
     const formatter = yield* Formatter.Service
+    const location = yield* Location.Service
     const permission = yield* Permission.Service
 
     yield* ctx.tool
@@ -71,29 +73,46 @@ export const Plugin = {
                 id: context.id,
               }
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
+              // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
+              yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
-              const current = yield* FileMutation.readText(environment.files, target.absolute).pipe(
-                Effect.catchTag("Environment.NotFound", () => Effect.undefined),
-              )
-              const next = Bom.split(input.content)
-              const preview = fileDiff(target.resource, current?.text ?? "", next.text, current ? "modified" : "added")
-              yield* permission.assert({
-                action: "Edit",
-                resources: [target.resource],
-                save: ["*"],
-                metadata: { files: [preview] },
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source,
-              })
-              const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
-              const bom = (yield* FileMutation.readText(environment.files, target.absolute)).bom
-              if (yield* formatter.file(target.absolute)) {
-                yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-              }
-              yield* ledger.record(context.sessionID, target.absolute)
-              return result
+              // Locked only now: the lock key resolves the path on disk, which FileAccess must have checked first.
+              return yield* Effect.gen(function* () {
+                yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
+                const current = yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
+                  Effect.catchTag("Environment.NotFound", () => Effect.undefined),
+                )
+                // A new file has nothing to be stale against; for an existing one the same read serves as the current state.
+                yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path, current)
+                const next = Bom.split(input.content)
+                const preview = fileDiff(
+                  FileAccess.shownName(target),
+                  current?.text ?? "",
+                  next.text,
+                  current ? "modified" : "added",
+                )
+                yield* permission.assert({
+                  action: "Edit",
+                  resources: [target.resource],
+                  save: ["*"],
+                  ...FileAccess.leadsOf([target]),
+                  // `paths` and each file's `place` are where the write lands as resolved here, absolute, for a client to show.
+                  metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source,
+                })
+                yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, current)
+                const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
+                const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+                const final = (yield* formatter.file(target.absolute))
+                  ? yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom).pipe(
+                      Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
+                    )
+                  : written
+                yield* ledger.recordWrite(context.sessionID, target.absolute, final)
+                return result
+              }).pipe(fileMutation.withLock([target.absolute]))
             }).pipe(
               Effect.map((output) => ({ output, content: toModelContent(output) })),
               Effect.mapError((error) =>

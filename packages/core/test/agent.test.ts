@@ -1,6 +1,6 @@
 import path from "path"
-import { describe, expect } from "bun:test"
-import { Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
+import { describe, expect, test } from "bun:test"
+import { Effect, Exit, Fiber, Layer, Scope, Stream, type Types } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -16,6 +16,7 @@ import { agentHost, host } from "./plugin/host"
 
 const testLocation = location({ directory: AbsolutePath.make("/project") })
 const locationLayer = Layer.succeed(Location.Service, Location.Service.of(testLocation))
+const mutable = <T>(value: T) => value as Types.DeepMutable<T>
 const global = Global.make({ data: "/data", config: "/config", tmp: "/tmp/orbit" })
 const globalLayer = Layer.succeed(Global.Service, Global.Service.of(global))
 
@@ -162,6 +163,15 @@ describe("Agent", () => {
         Permission.evaluate("external_directory", path.join(global.tmp, "*"), info?.permissions ?? []).effect,
       ).toBe("allow")
 
+      // Orbit's own folder allows keep their mark in the agent, so that `Permission` leaves them out for a place a link
+      // leads to; a rule of the person's with the same value has none (permissions-23).
+      const folders = (info?.permissions ?? []).filter(
+        (rule) => rule.action === "external_directory" && rule.effect === "allow",
+      )
+      expect(folders).toHaveLength(4)
+      expect(folders.map(Agent.isOwnFolder)).toEqual([true, true, true, true])
+      expect(folders.map((rule) => Agent.isOwnFolder({ ...rule }))).toEqual([false, false, false, false])
+
       yield* agent.transform((editor) => editor.remove(id))
       expect(yield* agent.get(id)).toBeUndefined()
     }),
@@ -214,6 +224,41 @@ describe("Agent", () => {
     }),
   )
 
+  // The plugin host hands the real editor to a plugin, as this does, so the rules a plugin takes over by reference keep
+  // their mark. Permission leaves the marked allows out for a place a link leads to; Explore takes them over, and a
+  // plugin that copied them would turn them into the person's (permissions-23).
+  it.effect("keeps the mark of Orbit's own folder allows in every built-in agent, Explore among them", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(
+        host({
+          agent: {
+            ...agentHost(agent),
+            transform: (callback) =>
+              agent.transform((editor) =>
+                callback({
+                  list: () => mutable(editor.list()),
+                  get: (id) => mutable(editor.get(Agent.ID.make(id))),
+                  default: (id) => editor.default(id === undefined ? undefined : Agent.ID.make(id)),
+                  update: (id, update) => editor.update(Agent.ID.make(id), update),
+                  remove: (id) => editor.remove(Agent.ID.make(id)),
+                }),
+              ),
+          },
+        }),
+      )
+      const valued = new Set(Agent.folders(global).map((rule) => rule.resource))
+      const agents = yield* agent.list()
+      expect(agents.map((item) => String(item.id))).toContain("explore")
+      for (const item of agents) {
+        const own = item.permissions.filter(
+          (rule) => rule.action === "external_directory" && rule.effect === "allow" && valued.has(rule.resource),
+        )
+        expect([String(item.id), own.length >= 4, own.every(Agent.isOwnFolder)]).toEqual([String(item.id), true, true])
+      }
+    }),
+  )
+
   it.effect("denies the subagent tool for built-in subagents", () =>
     Effect.gen(function* () {
       const agent = yield* Agent.Service
@@ -232,6 +277,57 @@ describe("Agent", () => {
           expect(Permission.evaluate("subagent", "*", info.permissions).effect).toBe("deny")
         }),
       )
+    }),
+  )
+})
+
+describe("Agent.folders", () => {
+  const spelled = Global.make({ data: "/data", config: "/config", tmp: "/tmp/orbit" })
+  const leads = Global.make({ data: "/real/data", config: "/real/config", tmp: "/real/tmp" })
+  const resources = (rules: ReturnType<typeof Agent.folders>) => rules.map((rule) => rule.resource)
+
+  // Each row is a root that may be reached through a link: the allow must also be written for where it leads.
+  for (const root of ["data", "config", "tmp"] as const) {
+    test(`also allows the real path of the ${root} folder`, () => {
+      const rules = Agent.folders(spelled, { ...spelled, [root]: leads[root] })
+      const wanted = resources(Agent.folders(leads)).filter((resource) => resource.startsWith(path.normalize(leads[root])))
+      expect(wanted.length).toBeGreaterThan(0)
+      expect(resources(rules)).toEqual(expect.arrayContaining(wanted))
+      expect(resources(rules)).toEqual(expect.arrayContaining(resources(Agent.folders(spelled))))
+      expect(rules.every((rule) => rule.effect === "allow" && Agent.isOwnFolder(rule))).toBe(true)
+    })
+  }
+
+  test("writes nothing twice when no folder is reached through a link", () => {
+    expect(Agent.folders(spelled, spelled)).toHaveLength(4)
+  })
+
+  it.effect("follows a config folder that is a link when the agent service starts", () =>
+    Effect.gen(function* () {
+      const fs = yield* Effect.promise(() => import("fs/promises"))
+      const os = yield* Effect.promise(() => import("os"))
+      const root = yield* Effect.promise(() => fs.realpath(os.tmpdir()))
+      const base = yield* Effect.promise(() => fs.mkdtemp(path.join(root, "orbit-own-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(base, { recursive: true, force: true })))
+      const target = path.join(base, "target")
+      const link = path.join(base, "link")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(target)
+        await fs.symlink(target, link, "junction")
+      })
+      const linked = Global.make({ data: "/data", config: link, tmp: "/tmp/orbit" })
+      const layer = AppNodeBuilder.build(LayerNode.group([Agent.node, Bus.node, Location.node]), [
+        Global.node.replace(Layer.succeed(Global.Service, Global.Service.of(linked))),
+        Location.node.replace(locationLayer),
+      ]) as unknown as Layer.Layer<Agent.Service, never>
+      const agent = yield* Effect.gen(function* () {
+        const service = yield* Agent.Service
+        yield* service.transform((editor) => editor.update(Agent.ID.make("reviewer"), () => {}))
+        return yield* service.get(Agent.ID.make("reviewer"))
+      }).pipe(Effect.provide(Layer.fresh(layer)))
+      const allowed = agent!.permissions.filter(Agent.isOwnFolder).map((rule) => rule.resource)
+      expect(allowed).toContain(path.join(link, "*"))
+      expect(allowed).toContain(path.join(target, "*"))
     }),
   )
 })

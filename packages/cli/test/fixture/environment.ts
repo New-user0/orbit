@@ -10,6 +10,8 @@ export function isolatedEnv(root: string, overrides: Record<string, string | und
     ORBIT_DB: path.join(root, "orbit.db"),
     ORBIT_DISABLE_FILEWATCHER: "true",
     ORBIT_DISABLE_MODELS_FETCH: "true",
+    // No real /etc/orbit or %ProgramFiles%\Orbit: the managed settings point at a folder that does not exist.
+    ORBIT_MANAGED_DIR: path.join(root, "managed-missing"),
     ORBIT_TEST_HOME: root,
     // Private servers trust the folders they run in, as before; trust tests override this with undefined.
     ORBIT_TRUST_PROJECT: "1",

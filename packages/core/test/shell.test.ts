@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { FSUtil } from "@orbit/util/fs-util"
-import { which } from "@orbit/core/util/which"
+import { which } from "@orbit/util/which"
 import fs from "node:fs/promises"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -46,6 +46,8 @@ describe("shell", () => {
   test("falls back for terminal-only shells when compatibility is required", () => {
     expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "fish"))).not.toBe("fish")
     expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "nu"))).not.toBe("nu")
+    expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "tcsh"))).not.toBe("tcsh")
+    expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "csh"))).not.toBe("csh")
   })
 
   test("builds command args per shell family", () => {

@@ -207,11 +207,15 @@ export const ErrorCode = {
   FileUnread: "file.unread",
   /** The file changed since the session last read it. */
   FileStale: "file.stale",
+  /** The file changed, appeared or disappeared while the change was waiting for approval, so nothing was written; read it again before retrying. */
+  EditStale: "edit.stale",
   /**
    * On Windows, the path names an NTFS data stream (`name::$DATA`, `name:stream`), or an 8.3 short name whose long name
    * cannot be found: spellings that a rule written for the file would not see.
    */
   FileSpelling: "file.spelling",
+  /** The path names a device or stream (`NUL`, `/dev/zero`) rather than a file, so nothing was asked or opened. */
+  FileDevice: "file.device",
   /** An edit that replaces a text with itself. */
   EditNoChange: "edit.no-change",
   /** An edit that looks for nothing. */
@@ -220,6 +224,17 @@ export const ErrorCode = {
   EditNoMatch: "edit.no-match",
   /** The text to replace is in the file more than once, and not every occurrence was asked for. */
   EditAmbiguous: "edit.ambiguous",
+  /**
+   * The user has not agreed to send queries to a search provider (the consent form was cancelled, timed out or could not
+   * be shown), so nothing was searched.
+   */
+  WebSearchNotEnabled: "websearch.not-enabled",
+  /** A web search call that was refused before anything was asked or sent: the query is too short, or both domain lists were given. */
+  WebSearchInvalid: "websearch.invalid",
+  /** WebFetch (or Code Mode fetch) refused the address before sending anything: an unusable URL, one with credentials or too long, or a host the address guard blocks. */
+  WebFetchRefused: "webfetch.refused",
+  /** WebFetch stopped following same-site redirects because the chain was too long. */
+  WebFetchRedirectLimit: "webfetch.redirect-limit",
 } as const
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode]
 

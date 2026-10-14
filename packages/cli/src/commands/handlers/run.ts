@@ -6,6 +6,9 @@ import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { errorMessage } from "../../util/error"
 import { findResumeSession } from "../../session-target"
+import { ConfigOverlay } from "../../config-overlay"
+import { bypassRefusal } from "../../util/managed-bypass"
+import { mcpConfigRefusal } from "../../util/managed-mcp"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -16,6 +19,9 @@ type HeadlessInput = {
   readonly standalone: boolean
   readonly trust: boolean
   readonly bare: boolean
+  readonly settings: ReadonlyArray<string>
+  readonly mcpConfig: ReadonlyArray<string>
+  readonly agents: Option.Option<string>
   readonly message: ReadonlyArray<string>
   readonly continue: boolean
   readonly session: Option.Option<string>
@@ -26,6 +32,7 @@ type HeadlessInput = {
   readonly format: Format
   readonly jsonSchema: Option.Option<string>
   readonly file: ReadonlyArray<string>
+  readonly inputFormat: Option.Option<"text" | "stream-json">
   readonly title: Option.Option<string>
   readonly thinking: boolean
   readonly envelope?: boolean
@@ -47,31 +54,62 @@ type HeadlessInput = {
  * trust for the folder before the first prompt and report a refusal in the format that was asked for.
  */
 export function headlessInput(input: HeadlessInput) {
+  // Standard input is a stream of JSON inputs, and the output is the envelope of lines, whichever door was used.
+  const stream = Option.getOrUndefined(input.inputFormat) === "stream-json"
+  if (stream && input.format !== "stream-json")
+    return Effect.fail(new Error("--input-format stream-json requires --format stream-json"))
+  if (stream && input.file.length > 0 && input.message.length === 0)
+    return Effect.fail(new Error("--file needs a message when --input-format is stream-json"))
+  const envelope = input.envelope || stream
   return Effect.gen(function* () {
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
-    const schemaFile = Option.getOrUndefined(input.jsonSchema)
-    const jsonSchema = schemaFile ? yield* Effect.promise(() => Bun.file(schemaFile).json()) : undefined
+    const schemaValue = Option.getOrUndefined(input.jsonSchema)
     // Without the envelope a schema always prints the result object; with it the format picks what is printed.
-    const format = jsonSchema === undefined || input.envelope ? input.format : "result"
+    const format = schemaValue === undefined || envelope ? input.format : "result"
+    // A schema that cannot be read, or an attempts override that is not 1 to 20, is a usage error: it is reported in the
+    // requested format before any session exists.
+    const output =
+      schemaValue === undefined
+        ? undefined
+        : yield* Effect.promise(async () => {
+            const { readAttempts, readOutputSchema } = await import("../../run/output-schema")
+            const schema = await readOutputSchema(schemaValue)
+            if ("error" in schema) return schema
+            const attempts = readAttempts(process.env)
+            return "error" in attempts ? attempts : { schema: schema.schema, attempts: attempts.attempts }
+          })
+    if (output && "error" in output) return reportRunError({ format, envelope }, output.error)
+    const jsonSchema = output?.schema
+    const attempts = output?.attempts
     // The private server inherits this process's environment, which is how --bare reaches it.
     if (input.bare) {
       process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
       process.env.ORBIT_DISABLE_INSTRUCTIONS = "1"
     }
+    // --settings, --mcp-config and --agents reach the private server through ORBIT_CONFIG_CONTENT_FILE, set here for the
+    // same reason.
+    const applied = yield* ConfigOverlay.applyNamed({
+      settings: input.settings,
+      mcpConfig: input.mcpConfig,
+      agents: Option.getOrUndefined(input.agents),
+      server: Option.getOrUndefined(input.server),
+    }).pipe(Effect.catch((error) => Effect.succeed(error)))
+    // Like every refusal before a session exists, in the format that was asked for.
+    if (applied instanceof Error) return reportRunError({ format, envelope }, applied.message)
+    const overlay = applied.overlay
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
-      standalone: input.standalone || input.bare,
+      standalone: input.standalone || input.bare || overlay,
       trust: input.trust,
     })
+    // The private server has read its file by now; nothing the run starts should inherit the variable.
+    yield* Effect.promise(() => ConfigOverlay.release())
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
     // --resume names a session that must exist. It is resolved once, before the trust check, so the folder that is
     // checked and the folder the run happens in are the folder of that one session.
     const resume = Option.getOrUndefined(input.resume)
     if (resume !== undefined && (input.continue || Option.isSome(input.session)))
-      return reportRunError(
-        { format, envelope: input.envelope },
-        "--resume cannot be combined with --continue or --session",
-      )
+      return reportRunError({ format, envelope }, "--resume cannot be combined with --continue or --session")
     const resumed =
       resume === undefined
         ? undefined
@@ -79,21 +117,59 @@ export function headlessInput(input: HeadlessInput) {
             try: () => findResumeSession(client, resume, directory()),
             catch: (cause) => new Error(errorMessage(cause)),
           }).pipe(Effect.catch((error) => Effect.succeed(error)))
-    if (resumed instanceof Error) return reportRunError({ format, envelope: input.envelope }, resumed.message)
-    const session = resumed?.id ?? Option.getOrUndefined(input.session)
+    if (resumed instanceof Error) return reportRunError({ format, envelope }, resumed.message)
+    const named = resumed?.id ?? Option.getOrUndefined(input.session)
+    // The session that --continue would pick is settled here, once, in the folder the run works in (the run moves
+    // there itself, which settles a link or a trailing separator in PWD), and the run takes that ID as its target,
+    // so the session that was checked is the session that runs.
+    const checked = overlay
+      ? yield* Effect.try({
+          try: () => {
+            process.chdir(directory())
+            return process.cwd()
+          },
+          catch: () => new Error(`Failed to change directory to ${directory()}`),
+        }).pipe(
+          Effect.flatMap((folder) =>
+            ConfigOverlay.refuseActive({
+              client,
+              session: named,
+              continue: input.continue,
+              fork: input.fork,
+              directory: folder,
+            }),
+          ),
+          Effect.catch((error) => Effect.succeed(error)),
+        )
+      : named
+    if (checked instanceof Error) return reportRunError({ format, envelope }, checked.message)
+    const session = checked ?? named
+    const continues = input.continue && session === undefined
     // Checks the folder the run happens in, which is the folder of the session when --session or --resume names one
     // that exists. A refusal, and a request that fails, go out the way any error before a session exists does, so a
     // script that asked for JSON gets JSON.
-    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session, strict: input.strict }).pipe(
-      Effect.catch((error) => Effect.succeed(errorMessage(error))),
+    const stopped = yield* trustRefusal(client, directory(), {
+      grant: input.trust,
+      session,
+      // Stream input starts work as `orb -p` does, so it is just as strict.
+      strict: input.strict || stream,
+    }).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
+    if (stopped !== undefined) return reportRunError({ format, envelope }, stopped)
+    // Before the first prompt, and in the format that was asked for, like the trust refusal above.
+    const bypass = yield* bypassRefusal(
+      client,
+      directory(),
+      input.auto || input.yolo || input.dangerouslySkipPermissions,
     )
-    if (stopped !== undefined) return reportRunError({ format, envelope: input.envelope }, stopped)
+    if (bypass !== undefined) return reportRunError({ format, envelope }, bypass)
+    const mcpOnly = yield* mcpConfigRefusal(client, directory(), applied.named)
+    if (mcpOnly !== undefined) return reportRunError({ format, envelope }, mcpOnly)
     yield* Effect.promise(() =>
       runNonInteractive({
         server,
         // The parser already appends the operands after a literal -- to the message.
         message: [...input.message],
-        continue: input.continue,
+        continue: continues,
         session,
         mustExist: resumed !== undefined,
         fork: input.fork,
@@ -101,10 +177,12 @@ export function headlessInput(input: HeadlessInput) {
         agent: Option.getOrUndefined(input.agent),
         format,
         jsonSchema,
+        attempts,
         file: [...input.file],
         title: Option.getOrUndefined(input.title),
         thinking: input.thinking,
-        envelope: input.envelope,
+        envelope,
+        stream,
         partial: input.partial,
         verbose: input.verbose,
         maxSteps: Option.getOrUndefined(input.maxSteps),

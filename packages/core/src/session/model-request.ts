@@ -37,6 +37,7 @@ import { ToolTraits } from "../tool/traits.js"
 import { Tool } from "../tool.js"
 import { SessionAffinity } from "./affinity.js"
 import { SessionModelTransport } from "./model-transport.js"
+import { SessionOutput } from "./output.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
@@ -99,6 +100,16 @@ export interface Input {
   readonly outputTokenCap?: number
   /** Ignore `outputTokenCap` and ask for the model's maximum (the cap was escalated earlier in this response). */
   readonly outputEscalated?: boolean
+  /**
+   * The turn asked for a structured answer: the request ends with the hand-in tool, whatever the registry, the agent's
+   * permissions or a context hook left. `only` offers nothing else, for a step that may do nothing but hand in.
+   */
+  readonly output?: {
+    readonly validator: SessionOutput.Validator
+    /** The turn's own schema, in the order the person wrote it; the validator may be a cached one from another key order. */
+    readonly schema: Readonly<Record<string, unknown>>
+    readonly only: boolean
+  }
 }
 
 const modelOutputMax = (limit: Model.Info["limit"]) =>
@@ -296,6 +307,25 @@ export const layer = Layer.effect(
       const entries = Object.entries(shaped.options)
       const generation = Object.fromEntries(entries.filter(([k]) => GENERATION_KEYS.has(k))) as GenerationOptionsFields
       const providerOptions = Object.fromEntries(entries.filter(([k]) => !GENERATION_KEYS.has(k)))
+      // Added after the hooks and in a fixed place, so nothing removes, renames or reorders it, and the cached prefix of
+      // the request does not change from step to step.
+      const handIn = input.output
+      const advertised = [
+        ...(handIn?.only ? [] : Array.from(hooked).filter(([name]) => name !== SessionOutput.NAME)),
+        ...(handIn
+          ? [
+              [
+                SessionOutput.NAME,
+                {
+                  type: "tool" as const,
+                  name: SessionOutput.NAME,
+                  description: SessionOutput.DESCRIPTION,
+                  inputSchema: handIn.schema,
+                },
+              ] as const,
+            ]
+          : []),
+      ]
       const affinity = SessionAffinity.get(session)
       const base = LLM.request({
         model: model.model,
@@ -309,7 +339,7 @@ export const layer = Layer.effect(
         promptCacheKey: /^ses_[0-9a-f]{64}$/.test(affinity) ? affinity.slice(4) : affinity,
         system: shaped.system,
         messages: boundImages(unsupportedParts(shaped.messages, model.capabilities)),
-        tools: Array.from(hooked, ([name, t]) => ({ ...t, name })),
+        tools: advertised.map(([name, t]) => ({ ...t, name })),
         toolChoice: input.toolChoice,
         generation: Object.keys(generation).length === 0 ? undefined : generation,
         providerOptions: Object.keys(providerOptions).length === 0 ? undefined : providerOptions,
@@ -427,24 +457,31 @@ export const layer = Layer.effect(
         // Permission.assert and the question tool throw declines as defects so tools cannot
         // catch them and turn a "no" into model-visible output. Recover them here as failures.
         executeTool: (call: Parameters<Prepared["executeTool"]>[0]) =>
-          tools.execute({ ...call, definitions: hooked }).pipe(
-            Effect.catchCauseFilter(
-              (cause) => {
-                const decline = cause.reasons.flatMap((r) =>
-                  Cause.isDieReason(r) &&
-                  (r.defect instanceof Permission.DeclinedError || r.defect instanceof QuestionTool.CancelledError)
-                    ? [r.defect]
-                    : [],
-                )[0]
-                return decline ? Result.succeed(decline) : Result.fail(cause)
-              },
-              (decline) => Effect.fail(decline),
-            ),
-          ),
+          handIn && call.call.name === SessionOutput.NAME
+            ? // The registry does not know this tool: no gate, no permission, and no hook can rewrite what is checked.
+              SessionOutput.execute(handIn.validator, call.call.input)
+            : tools.execute({ ...call, definitions: hooked }).pipe(
+                Effect.catchCauseFilter(
+                  (cause) => {
+                    const decline = cause.reasons.flatMap((r) =>
+                      Cause.isDieReason(r) &&
+                      (r.defect instanceof Permission.DeclinedError || r.defect instanceof QuestionTool.CancelledError)
+                        ? [r.defect]
+                        : [],
+                    )[0]
+                    return decline ? Result.succeed(decline) : Result.fail(cause)
+                  },
+                  (decline) => Effect.fail(decline),
+                ),
+              ),
         // Both read the same map as `executeTool`, so a tool that a context hook renamed or removed resolves the
         // way the call will execute.
-        toolTraits: (call: ToolCall) => tools.traits({ call, definitions: hooked }),
-        describeTool: (name: string) => tools.describe(name, hooked),
+        toolTraits: (call: ToolCall) =>
+          handIn && call.name === SessionOutput.NAME
+            ? Effect.succeed(SessionOutput.TRAITS)
+            : tools.traits({ call, definitions: hooked }),
+        describeTool: (name: string) =>
+          handIn && name === SessionOutput.NAME ? SessionOutput.STATIC_TRAITS : tools.describe(name, hooked),
       }
     })
 

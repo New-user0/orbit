@@ -18,9 +18,11 @@ import { location } from "./location"
  */
 export const trustedProject = Layer.mock(ProjectTrust.Service, {
   trusted: () => Effect.succeed(true),
+  trustedAt: () => Effect.succeed(true),
   allows: () => Effect.succeed(true),
   reachable: () => Effect.succeed(true),
   escapes: () => Effect.succeed(undefined),
+  leads: (file) => Effect.succeed(file),
   supplies: () => Effect.succeed(true),
 })
 

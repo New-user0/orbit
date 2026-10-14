@@ -118,7 +118,52 @@ const plan = (input: typeof Input.Type, source: string) => {
   // These one-to-one mappings preserve offsets into the original source.
   const unicode = exact.length > 0 ? [] : findOccurrences(normalizeForMatch(source), normalizeForMatch(oldText))
   const trailing = exact.length > 0 || unicode.length > 0 ? [] : findLineOccurrences(source, oldText)
-  return { matches: exact.length > 0 ? exact : unicode.length > 0 ? unicode : trailing, newText }
+  const matches = exact.length > 0 ? exact : unicode.length > 0 ? unicode : trailing
+  const selected = input.replace_all === true ? matches : matches.slice(0, 1)
+  // A deletion that leaves a whole line empty takes the line break with it. A mid-line deletion, an old_string that
+  // already ends or starts with a line break, and a match whose widened range would touch another match are left alone.
+  const wholeLines = input.new_string === "" && !input.old_string.endsWith("\n") && !/^\r?\n/.test(input.old_string)
+  const edits = selected.map((match) => {
+    // Restyle only when the file's quotes differ from the ones old_string spelled. A match that differs in whitespace,
+    // dashes or spaces alone leaves the model's own quote characters as they are.
+    const slice = source.slice(match.start, match.end)
+    const text = quotesOf(slice) === quotesOf(oldText) ? newText : restyleQuotes(slice, newText)
+    const range = wholeLines ? wholeLine(source, match) : undefined
+    const widened =
+      range && !selected.some((other) => other !== match && other.end > range.start && other.start < range.end)
+    return { ...(widened ? range : match), text }
+  })
+  return { matches, edits }
+}
+
+/** The line `match` sits on, with its line break, when nothing but whitespace is on that line outside the match. */
+const wholeLine = (source: string, match: Match) => {
+  const start = match.start === 0 ? 0 : source.lastIndexOf("\n", match.start - 1) + 1
+  if (!/^[^\S\n]*$/.test(source.slice(start, match.start))) return
+  const tail = /^[^\S\n]*(\n|$)/.exec(source.slice(match.end))
+  if (!tail) return
+  return { start, end: match.end + tail[0].length }
+}
+
+const opening = new Set([" ", "\t", "\n", "\r", "(", "[", "{", "—", "–"])
+
+/**
+ * Writes `text` in the quote style of the file text it replaces. A quote kind is restyled only when `slice` holds
+ * that kind in curly form; detection and output cover U+2018, U+2019, U+201C and U+201D only. A straight quote
+ * opens at the start of `text`, after a space, tab or line break, after `(`, `[` or `{`, or after an en or em dash, and closes anywhere else.
+ */
+const quotesOf = (value: string) => value.replace(/[^"'‘’“”„‟‚‛]/g, "")
+
+const restyleQuotes = (slice: string, text: string) => {
+  const restyle = (value: string, straight: string, left: string, right: string) =>
+    // Index the code-point array being mapped: a string index drifts after any astral character.
+    Array.from(value)
+      .map((char, index, chars) =>
+        char !== straight ? char : index === 0 || opening.has(chars[index - 1]) ? left : right,
+      )
+      .join("")
+  const doubled = /[“”]/.test(slice) ? restyle(text, '"', "“", "”") : text
+  return /[‘’]/.test(slice) ? restyle(doubled, "'", "‘", "’") : doubled
 }
 
 /** Why an edit that needs no file cannot work, if it cannot. */
@@ -150,7 +195,7 @@ const mismatch = (input: typeof Input.Type, replacements: number) => {
 }
 
 const readOriginal = (files: Environment.Files, absolute: string, display: string) =>
-  FileMutation.readText(files, absolute).pipe(
+  FileMutation.readSnapshot(files, absolute).pipe(
     Effect.catchTag("Environment.NotFound", () =>
       Effect.fail(new ToolFailure({ message: `File not found: ${display}`, code: Tool.ErrorCode.FileNotFound })),
     ),
@@ -189,7 +234,7 @@ export const Plugin = {
           options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
-            "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in old_string or new_string. The edit fails if old_string is not found. By default, old_string must identify a UNIQUE location. Multiple matches FAIL unless replace_all is true. Add more surrounding context to disambiguate, or set replace_all to true to replace every occurrence. Use replace_all when the change should apply to every occurrence, such as renaming a variable.",
+            "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in old_string or new_string. The edit fails if old_string is not found. By default, old_string must identify a UNIQUE location. Multiple matches FAIL unless replace_all is true. Add more surrounding context to disambiguate, or set replace_all to true to replace every occurrence. Use replace_all when the change should apply to every occurrence, such as renaming a variable. To delete whole lines, set new_string to an empty string; the line break after them is removed too, so no blank line is left.",
           input: Input,
           output: Output,
           // Refuses an edit that cannot work before `execute` asks anyone to approve it. A file outside the Location is
@@ -203,8 +248,13 @@ export const Plugin = {
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               if (target.externalDirectory) return
               yield* Effect.gen(function* () {
-                yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
-                const original = yield* readOriginal(environment.files, target.absolute, input.file_path)
+                // An unread file is refused before any of it is loaded; the snapshot then tells a touched file from an edited one.
+                yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
+                const original = yield* readOriginal(environment.files, target.absolute, input.file_path).pipe(
+                  Effect.tap((snapshot) =>
+                    ledger.assertFresh(context.sessionID, target.absolute, input.file_path, snapshot),
+                  ),
+                )
                 const mismatched = mismatch(input, plan(input, original.text).matches.length)
                 if (mismatched) return yield* mismatched
               }).pipe(fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]))
@@ -227,43 +277,54 @@ export const Plugin = {
               if (refused) return yield* refused
 
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
+              // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
+              yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
-
-              const original = yield* readOriginal(environment.files, target.absolute, input.file_path)
+              yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
+              const original = yield* readOriginal(environment.files, target.absolute, input.file_path).pipe(
+                Effect.tap((snapshot) =>
+                  ledger.assertFresh(context.sessionID, target.absolute, input.file_path, snapshot),
+                ),
+              )
               const source = original.text
               const edit = plan(input, source)
               const replacements = edit.matches.length
               // The person is asked to approve an edit only once it is known to work, whichever file it is for.
               const mismatched = mismatch(input, replacements)
               if (mismatched) return yield* mismatched
-              const replaced = (input.replace_all === true ? edit.matches : edit.matches.slice(0, 1))
+              const replaced = edit.edits
                 .toReversed()
                 .reduce(
-                  (content, match) => `${content.slice(0, match.start)}${edit.newText}${content.slice(match.end)}`,
+                  (content, match) => `${content.slice(0, match.start)}${match.text}${content.slice(match.end)}`,
                   source,
                 )
               yield* permission.assert({
                 action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
-                metadata: { files: [fileDiff(target.resource, source, replaced)] },
+                ...FileAccess.leadsOf([target]),
+                // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
+                metadata: {
+                  paths: [target.place],
+                  files: [{ ...fileDiff(FileAccess.shownName(target), source, replaced), place: target.place }],
+                },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source: permissionSource,
               })
               const replacementBom = replaced.startsWith("\uFEFF")
+              yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, original)
               const result = yield* fileMutation.write({
                 target,
                 content: Bom.join(replaced, original.bom || replacementBom),
               })
               const bom = original.bom || replacementBom
-              const formatted = (yield* formatter.file(target.absolute))
-                ? yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-                : (yield* FileMutation.readText(environment.files, target.absolute)).text
-              yield* ledger.record(context.sessionID, target.absolute)
+              if (yield* formatter.file(target.absolute))
+                yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
+              const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+              yield* ledger.recordWrite(context.sessionID, target.absolute, final)
               return {
-                files: [fileDiff(result.resource, source, formatted)],
+                files: [fileDiff(result.resource, source, final.text)],
                 replacements,
               } satisfies Output
             }).pipe(

@@ -64,11 +64,59 @@ describe("FileAccess.authorizeRead", () => {
           action: "Read",
           resources: ["README.md"],
           save: ["*"],
+          // The absolute place, which a client shows rather than the path as the input spelled it.
+          metadata: { paths: [absolute] },
           sessionID: invocation.sessionID,
           agent: invocation.agent,
           source: { type: "tool", messageID: invocation.messageID, id: invocation.id },
         },
       ])
+    }).pipe(provide(requests))
+  })
+
+  // A device is refused from its resolved path, before the external-directory question and the read rules.
+  const devices =
+    process.platform === "win32"
+      ? ["NUL", "nul.txt", "COM1", "src/con.txt", "AUX"]
+      : ["/dev/zero", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "/dev/./urandom", "/dev/pts/0"]
+  for (const device of devices)
+    it.live(`refuses the device ${device} without asking`, () => {
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        const error = yield* access.authorizeRead(device, invocation).pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(FileAccess.DeviceError)
+        expect(error.message).toContain("device or stream")
+        if (process.platform === "win32") expect(error.message).toContain("reserved Windows device names")
+        expect(requests).toEqual([])
+      }).pipe(provide(requests))
+    })
+
+  // A device-namespace spelling of a volume is refused as a share spelling is, with its code, not as a device: the list of
+  // devices answers for the names it holds, and this is checked before it.
+  for (const spelled of [
+    "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\x\\f.txt",
+    "\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\x\\f.txt",
+  ])
+    it.live(`refuses ${spelled} as a share or device spelling without asking`, () => {
+      if (process.platform !== "win32") return Effect.void
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const error = yield* (yield* FileAccess.Service).authorizeRead(spelled, invocation).pipe(Effect.flip)
+        expect(error).toMatchObject({ code: "file.spelling" })
+        expect(requests).toEqual([])
+      }).pipe(provide(requests))
+    })
+
+  it.live("still authorizes a file whose name only starts like a device", () => {
+    const requests: Permission.AssertInput[] = []
+    return Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      yield* access.authorizeRead("console.log", invocation)
+      yield* access.authorizeRead("con-notes.md", invocation)
+
+      expect(requests.map((request) => request.action)).toEqual(["Read", "Read"])
     }).pipe(provide(requests))
   })
 
@@ -254,11 +302,17 @@ describe("FileAccess in a project that is not trusted", () => {
           outsideAt(untrusted[4], "docs/sub", "sub", "sub")
           outsideAt(untrusted[5], "docs", ".", ".")
 
-          // Trusting the project follows links as before, and ending the trust holds them again.
+          // Trusting the project follows links, and the folder they lead to is still asked about, as the shell asks. The
+          // mark that keeps Orbit's own allows from deciding it is for a project that is not trusted.
           yield* trust.grant({ persist: false, via: "test" })
           const trusted = yield* paths()
-          for (const target of trusted) expect(target.externalDirectory).toBeUndefined()
-          for (const target of trusted) expect(target.place).toBe(target.absolute)
+          expect(trusted[0].externalDirectory).toBeUndefined()
+          for (const target of trusted.slice(1)) {
+            expect(target.externalDirectory).toBeDefined()
+            expect(target.externalDirectory?.escaped).toBeUndefined()
+            expect(target.leads).toBe(target.place)
+          }
+          expect(trusted[1].place).toBe(AbsolutePath.make(path.join(outside, "notes.md")))
           expect(trusted[1].resource).toBe("docs/notes.md")
           yield* trust.revoke()
           expect((yield* paths())[1].externalDirectory).toBeDefined()
@@ -383,9 +437,66 @@ describe("FileAccess in a project that is not trusted", () => {
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         yield* access.authorizeRead("docs/notes.md", invocation)
-        yield* access.authorizeExternal([yield* access.resolve({ path: "docs/new.txt", kind: "file" })], invocation)
-        expect(requests).toMatchObject([{ action: "Read", resources: ["docs/notes.md"] }])
+        // The folder is asked about without the mark, so Orbit's own allows still decide it.
+        expect(requests).toMatchObject([
+          { action: "external_directory", resources: [slash(path.join(outside, "*"))] },
+          { action: "Read", resources: ["docs/notes.md"] },
+        ])
+        expect(requests[0]).not.toHaveProperty("escaped")
       }).pipe(provideProject(project, requests, true))
     })
   })
+})
+
+// Class matrix: what refuses a device is what the target is, not only the name it was given. Spellings of the listed
+// devices, a device the list lacks, a pipe, and a link of the repository to a device (decided from the `place` half of
+// the check), each in a trusted and in an untrusted project, with nothing asked and the error type DeviceError.
+describe.skipIf(process.platform !== "linux")("FileAccess.authorizeRead refuses what is not a file", () => {
+  const provideProject = (directory: string, requests: Permission.AssertInput[], trusted: boolean) =>
+    Effect.provide(
+      AppNodeBuilder.build(LayerNode.group([FileAccess.node, Location.node, ProjectTrust.node]), [
+        Location.node.replace(
+          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+        ),
+        Permission.node.replace(permissionLayer({ assert: (input) => Effect.sync(() => void requests.push(input)) })),
+        ...(trusted ? [] : untrustedProjectNodes),
+      ]),
+    )
+
+  for (const trusted of [true, false])
+    it.live(`refuses every spelling, device link and pipe (${trusted ? "trusted" : "untrusted"})`, () => {
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const project = (yield* tmpdirScoped()).path
+        yield* Effect.promise(async () => {
+          await fs.symlink("/dev/zero", path.join(project, "zero-link"))
+          await fs.symlink("/proc/self/fd/0", path.join(project, "fd-link"))
+          await fs.symlink("/dev/stdin", path.join(project, "stdin-link"))
+          await fs.writeFile(path.join(project, "plain.txt"), "plain")
+          const made = Bun.spawnSync(["mkfifo", path.join(project, "pipe")])
+          expect(made.exitCode).toBe(0)
+        })
+        const refused = [
+          "/proc/thread-self/fd/0",
+          `/proc/self/task/${process.pid}/fd/0`,
+          `/proc/${process.pid}/task/${process.pid}/fd/0`,
+          "/dev/ptmx",
+          "zero-link",
+          "fd-link",
+          "stdin-link",
+          "pipe",
+        ]
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          for (const file of refused) {
+            const error = yield* access.authorizeRead(file, invocation).pipe(Effect.flip)
+            expect(error).toBeInstanceOf(FileAccess.DeviceError)
+          }
+          expect(requests).toEqual([])
+          // A plain file still goes through, so the refusals above are not a broken harness.
+          yield* access.authorizeRead("plain.txt", invocation)
+          expect(requests.map((request) => request.action)).toEqual(["Read"])
+        }).pipe(provideProject(project, requests, trusted))
+      })
+    })
 })

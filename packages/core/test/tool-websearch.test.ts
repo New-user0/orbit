@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Layer } from "effect"
+import { TestClock } from "effect/testing"
 import type { HttpClientError } from "effect/unstable/http"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -13,6 +14,10 @@ import { Tool } from "@orbit/core/tool"
 import { WebSearchTool } from "@orbit/core/tool/plugin/websearch"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Image } from "@orbit/core/image"
+import { ToolOutput } from "@orbit/core/tool-output"
+import { FSUtil } from "@orbit/util/fs-util"
+import { Global } from "@orbit/util/global"
+import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
@@ -40,10 +45,11 @@ const providers = [
 class Fixture {
   assertions: Permission.AssertInput[] = []
   events: string[] = []
+  providerInputs: unknown[] = []
   formRequests: Form.CreateInput[] = []
   formResponse: Form.TerminalState = { status: "cancelled" }
   formResponses: Form.TerminalState[] = []
-  formWait = Effect.void
+  formWait: Effect.Effect<void, Form.InvalidFormError> = Effect.void
   error: HttpClientError.HttpClientError | undefined
   results: readonly WebSearch.Result[] = [
     { url: "https://example.com", title: "Search results", content: "search results", time: {} },
@@ -51,7 +57,8 @@ class Fixture {
 }
 
 const it = testEffect(TestWebSearch.layer)
-const setup = Effect.gen(function* () {
+// `realForm` keeps the real Form service, so a test answers, cancels or times out a form the way a client does.
+const makeSetup = (realForm: boolean) => Effect.gen(function* () {
   const fixture = new Fixture()
   const websearch = yield* TestWebSearch.Service
   const kv = yield* KV.Service
@@ -59,9 +66,10 @@ const setup = Effect.gen(function* () {
     providers.forEach((provider) =>
       editor.add({
         ...provider,
-        execute: () =>
+        execute: (input) =>
           Effect.gen(function* () {
             fixture.events.push("query")
+            fixture.providerInputs.push(input)
             if (fixture.error) return yield* fixture.error
             return fixture.results
           }),
@@ -69,7 +77,7 @@ const setup = Effect.gen(function* () {
     ),
   )
   const context = yield* Layer.build(
-    AppNodeBuilder.build(LayerNode.group([Tool.node, webSearchToolNode]), [
+    AppNodeBuilder.build(LayerNode.group([Tool.node, webSearchToolNode, Form.node]), [
       Permission.node.replace(
         permissionLayer({
           assert: (input) =>
@@ -80,21 +88,32 @@ const setup = Effect.gen(function* () {
         }),
       ),
       WebSearch.node.replace(Layer.succeed(WebSearch.Service, websearch)),
-      Form.node.replace(
-        Layer.mock(Form.Service, {
-          ask: (input) =>
-            Effect.gen(function* () {
-              fixture.formRequests.push(input)
-              yield* fixture.formWait
-              return fixture.formResponses.shift() ?? fixture.formResponse
-            }),
-        }),
-      ),
+      ...(realForm
+        ? []
+        : [
+            Form.node.replace(
+              Layer.mock(Form.Service, {
+                ask: (input) =>
+                  Effect.gen(function* () {
+                    fixture.formRequests.push(input)
+                    yield* fixture.formWait
+                    return fixture.formResponses.shift() ?? fixture.formResponse
+                  }),
+              }),
+            ),
+          ]),
       Image.node.replace(imagePassthrough),
     ]),
   )
-  return Object.assign(fixture, { websearch, kv, registry: Context.get(context, Tool.Service) })
+  return Object.assign(fixture, {
+    websearch,
+    kv,
+    registry: Context.get(context, Tool.Service),
+    forms: Context.get(context, Form.Service),
+  })
 })
+const setup = makeSetup(false)
+const setupReal = makeSetup(true)
 
 describe("WebSearchTool registration", () => {
   it.effect("asserts permission before delegating to WebSearch", () =>
@@ -123,7 +142,14 @@ describe("WebSearchTool registration", () => {
         }),
       ).toMatchObject({
         status: "completed",
-        content: [{ type: "text", text: "## [Search results](https://example.com)\n\nsearch results" }],
+        content: [
+          {
+            type: "text",
+            text: `${WebSearchTool.SOURCES_REMINDER}
+
+## [Search results](https://example.com)\n\nsearch results`,
+          },
+        ],
       })
       expect(fixture.assertions).toMatchObject([
         {
@@ -181,7 +207,9 @@ describe("WebSearchTool registration", () => {
         content: [
           {
             type: "text",
-            text: "## [Effect](https://effect.website)\nPublished: 2026-07-25T00:00:00.000Z\n\nparallel results",
+            text: `${WebSearchTool.SOURCES_REMINDER}
+
+## [Effect](https://effect.website)\nPublished: 2026-07-25T00:00:00.000Z\n\nparallel results`,
           },
         ],
         metadata: { provider: "parallel" },
@@ -205,13 +233,139 @@ describe("WebSearchTool registration", () => {
           Effect.map((result) => (result.output as { results: { url: string }[] }).results.map((item) => item.url)),
         )
 
-      expect(yield* search({ allowedDomains: ["python.org"], blockedDomains: ["blog.python.org"] })).toEqual([
+      expect(yield* search({ allowedDomains: ["python.org"] })).toEqual([
         "https://docs.python.org/3/",
+        "https://blog.python.org/x",
       ])
       expect(yield* search({ blockedDomains: ["example.com"] })).toEqual([
         "https://docs.python.org/3/",
         "https://blog.python.org/x",
       ])
+      // Domains filter the results only; the provider and the recorded query see just the query.
+      expect(fixture.providerInputs).toEqual([{ query: "python" }, { query: "python" }])
+      expect(fixture.websearch.queries).toEqual([
+        { query: "python", providerID: undefined },
+        { query: "python", providerID: undefined },
+      ])
+
+      // The model sees only `content`, so the filter must hold there too.
+      const filtered = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-domains-content",
+          name: "WebSearch",
+          input: { query: "python", blockedDomains: ["blog.python.org", "example.com"] },
+        },
+      })
+      const text = (filtered.content?.[0] as { text: string }).text
+      expect(text.startsWith(WebSearchTool.SOURCES_REMINDER)).toBe(true)
+      expect(text).toContain("https://docs.python.org/3/")
+      expect(text).not.toContain("blog.python.org")
+      expect(text).not.toContain("spam.example.com")
+
+      const empty = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-domains-empty",
+          name: "WebSearch",
+          input: { query: "python", allowedDomains: ["nowhere.test"] },
+        },
+      })
+      expect(empty.content).toEqual([{ type: "text", text: WebSearchTool.NO_RESULTS }])
+      expect((empty.output as { results: unknown[] }).results).toEqual([])
+    }),
+  )
+
+  // Refused before permission, a form or a provider: nothing about the call leaves the machine or reaches the person.
+  const refusals: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
+    ["an empty query", { query: "" }, "tool.input-invalid"],
+    ["a one-character query", { query: "x" }, "tool.input-invalid"],
+    ["both domain lists", { query: "python", allowedDomains: ["a.test"], blockedDomains: ["b.test"] }, "websearch.invalid"],
+  ]
+  for (const [label, input, type] of refusals)
+    it.effect(`refuses ${label} with ${type} before permission, a form or a provider`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        yield* fixture.websearch.select(WebSearch.ID.make("parallel"))
+        const result = yield* executeTool(fixture.registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-refused", name: "WebSearch", input },
+        })
+        expect(result).toMatchObject({ status: "error", error: { type } })
+        expect(fixture.events).toEqual([])
+        expect(fixture.formRequests).toEqual([])
+        expect(fixture.websearch.queries).toEqual([])
+      }),
+    )
+
+  it.effect("accepts a query of 2 characters and one domain list", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* fixture.websearch.select(WebSearch.ID.make("parallel"))
+      const result = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-short", name: "WebSearch", input: { query: "go", allowedDomains: ["example.com"] } },
+      })
+      expect(result.status).toBe("completed")
+    }),
+  )
+
+  it.effect("requires a Sources section in the description and starts results with a reminder", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* fixture.websearch.select(WebSearch.ID.make("exa"))
+      const definition = (yield* toolDefinitions(fixture.registry)).find((tool) => tool.name === "WebSearch")
+      expect(definition?.description).toContain('"Sources:" section')
+      expect(definition?.description).toContain("allowedDomains")
+      expect(definition?.description).toContain("blockedDomains")
+      expect(definition?.description).toContain(String(new Date().getFullYear()))
+      const result = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-sources", name: "WebSearch", input: { query: "effect" } },
+      })
+      expect(result.content).toMatchObject([{ type: "text" }])
+      const text = (result.content?.[0] as { text: string }).text
+      expect(text.startsWith(WebSearchTool.SOURCES_REMINDER)).toBe(true)
+      expect(WebSearchTool.SOURCES_REMINDER).toContain('"Sources:"')
+      expect(definition?.description).toContain('"Sources:"')
+
+      // The session runner keeps the head of an oversized result, so the reminder must survive that bound.
+      fixture.results = Array.from({ length: 30 }, (_, i) => ({
+        url: `https://example.com/${i}`,
+        title: `Result ${i}`,
+        content: "line\n".repeat(20),
+        time: {},
+      }))
+      const large = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-large", name: "WebSearch", input: { query: "effect" } },
+      })
+      const bounded = yield* Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          Effect.gen(function* () {
+            const output = yield* ToolOutput.Service
+            yield* output.transform((editor) => editor.configure({ maxLines: 50 }))
+            return yield* output.truncate({ content: large.content as Tool.Content[] })
+          }).pipe(
+            Effect.provide(
+              AppNodeBuilder.build(LayerNode.group([ToolOutput.node, FSUtil.node]), [
+                Global.node.replace(Global.layerWith({ data: tmp.path })),
+              ]),
+            ),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      expect(bounded.metadata).toMatchObject({ truncated: true })
+      expect(JSON.stringify(bounded.content)).toContain("Reminder: when your reply uses these results")
     }),
   )
 
@@ -232,6 +386,7 @@ describe("WebSearchTool registration", () => {
         status: "completed",
         content: [{ type: "text", text: WebSearchTool.NO_RESULTS }],
       })
+      expect(WebSearchTool.NO_RESULTS).not.toContain("Sources")
     }),
   )
 
@@ -499,6 +654,195 @@ describe("WebSearchTool registration", () => {
           }),
         { discard: true },
       )
+    }),
+  )
+})
+
+describe("WebSearchTool consent stays a user decision", () => {
+  const call = (id: string, query = "effect") =>
+    ({ sessionID, ...toolIdentity, call: { type: "tool-call", id, name: "WebSearch", input: { query } } }) as const
+
+  // Waits until a consent form is pending, the way a client sees it.
+  const pending = (fixture: Effect.Success<typeof setupReal>, exclude: readonly string[] = []) =>
+    Effect.gen(function* () {
+      for (let i = 0; i < 200; i++) {
+        const form = (yield* fixture.forms.list({ sessionID })).find((item) => !exclude.includes(item.id))
+        if (form) return form
+        yield* Effect.yieldNow
+      }
+      return yield* Effect.die("no pending form")
+    })
+  const start = (fixture: Effect.Success<typeof setupReal>, id: string, progress: unknown[] = []) =>
+    Effect.gen(function* () {
+      const tools = yield* fixture.registry.snapshot()
+      const fiber = yield* tools
+        .execute({ ...call(id), progress: (metadata) => Effect.sync(() => progress.push(metadata)) })
+        .pipe(Effect.flip, Effect.forkChild)
+      return { fiber, form: yield* pending(fixture) }
+    })
+  const expectNothingHappened = (fixture: Effect.Success<typeof setupReal>, progress: unknown[] = []) =>
+    Effect.gen(function* () {
+      expect(yield* fixture.kv.get(WebSearch.ProviderKey)).toBeUndefined()
+      expect(fixture.events.filter((event) => event === "query")).toHaveLength(0)
+      expect(progress).toEqual([])
+    })
+  const expectNotEnabled = (error: Tool.Error) => {
+    // The raw failure must already be the coded one: mapError may not wrap it as a generic execution failure.
+    expect({ message: error.message, code: error.code, error: error.error }).toEqual({
+      message: WebSearchTool.NOT_ENABLED,
+      code: Tool.ErrorCode.WebSearchNotEnabled,
+      error: undefined,
+    })
+    expect(toSessionError(error)).toEqual({ type: "websearch.not-enabled", message: WebSearchTool.NOT_ENABLED })
+    expect(WebSearchTool.NOT_ENABLED).toContain("websearch")
+    expect(WebSearchTool.NOT_ENABLED).toContain("do not change any Orbit config or settings file yourself")
+    expect(WebSearchTool.NOT_ENABLED).toContain("some other way")
+  }
+
+  // A broken timeout would leave the call holding the provider lock, so the join is bounded in real time: the test
+  // fails by itself instead of cascading into every test after it.
+  const joinBounded = (fiber: Fiber.Fiber<Tool.Error, unknown>) =>
+    Fiber.join(fiber).pipe(Effect.timeout("200 millis"), TestClock.withLive, Effect.orDie)
+
+  it.effect("fails not-enabled when the first form is cancelled, with or without a message", () =>
+    Effect.gen(function* () {
+      for (const options of [undefined, { message: "no thanks" }]) {
+        const fixture = yield* setupReal
+        const progress: unknown[] = []
+        const started = yield* start(fixture, "call-cancel", progress)
+        yield* fixture.forms.cancel(started.form.id, options)
+        expectNotEnabled(yield* Fiber.join(started.fiber))
+        yield* expectNothingHappened(fixture, progress)
+      }
+    }),
+  )
+
+  it.effect("fails not-enabled when the provider form is cancelled after choosing another provider", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const progress: unknown[] = []
+      const started = yield* start(fixture, "call-choose", progress)
+      yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "choose" } })
+      yield* fixture.forms.cancel((yield* pending(fixture, [started.form.id])).id)
+      expectNotEnabled(yield* Fiber.join(started.fiber))
+      yield* expectNothingHappened(fixture, progress)
+    }),
+  )
+
+  it.effect("fails not-enabled after a minute, cancels the form and stores nothing for a late reply", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const started = yield* start(fixture, "call-timeout")
+      yield* TestClock.adjust("1 minute")
+      expectNotEnabled(yield* joinBounded(started.fiber))
+      expect(yield* fixture.forms.state(started.form.id)).toMatchObject({ status: "cancelled" })
+      expect(yield* fixture.forms.list({ sessionID })).toEqual([])
+      const late = yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "allow" } }).pipe(Effect.flip)
+      expect(late).toBeInstanceOf(Form.AlreadySettledError)
+      yield* expectNothingHappened(fixture)
+    }),
+    1_000,
+  )
+
+  it.effect("fails not-enabled when the minute runs out during the provider form", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const started = yield* start(fixture, "call-timeout-2")
+      yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "choose" } })
+      const second = yield* pending(fixture, [started.form.id])
+      yield* TestClock.adjust("1 minute")
+      expectNotEnabled(yield* joinBounded(started.fiber))
+      expect(yield* fixture.forms.state(second.id)).toMatchObject({ status: "cancelled" })
+      yield* expectNothingHappened(fixture)
+    }),
+    1_000,
+  )
+
+  it.effect("fails not-enabled when the form service closes while the form is pending", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const started = yield* start(fixture, "call-close")
+      yield* fixture.forms.close
+      expectNotEnabled(yield* Fiber.join(started.fiber))
+      yield* expectNothingHappened(fixture)
+    }),
+  )
+
+  it.effect("fails not-enabled when the form cannot be created", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      fixture.formWait = Effect.fail(new Form.InvalidFormError({ message: "refused" }))
+      const tools = yield* fixture.registry.snapshot()
+      expectNotEnabled(yield* tools.execute(call("call-invalid")).pipe(Effect.flip))
+      yield* expectNothingHappened(fixture)
+    }),
+  )
+
+  it.effect("keeps an interrupt an interrupt and cancels the form", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const tools = yield* fixture.registry.snapshot()
+      const fiber = yield* tools.execute(call("call-interrupt")).pipe(Effect.forkChild)
+      const form = yield* pending(fixture)
+      yield* Fiber.interrupt(fiber)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+      expect(yield* fixture.forms.state(form.id)).toMatchObject({ status: "cancelled" })
+      yield* expectNothingHappened(fixture)
+    }),
+  )
+
+  it.effect("asks again on the next call, because a cancel is not remembered", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const first = yield* start(fixture, "call-first")
+      yield* fixture.forms.cancel(first.form.id)
+      expectNotEnabled(yield* Fiber.join(first.fiber))
+      const second = yield* start(fixture, "call-second")
+      expect(second.form.id).not.toBe(first.form.id)
+      yield* fixture.forms.cancel(second.form.id)
+      expectNotEnabled(yield* Fiber.join(second.fiber))
+      yield* expectNothingHappened(fixture)
+    }),
+  )
+
+  it.effect("fails both concurrent calls when the form is cancelled", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const tools = yield* fixture.registry.snapshot()
+      const fibers = yield* Effect.forEach(["a", "b"], (id) =>
+        tools.execute(call(`call-${id}`, `query ${id}`)).pipe(Effect.flip, Effect.forkChild),
+      )
+      const first = yield* pending(fixture)
+      yield* fixture.forms.cancel(first.id)
+      const second = yield* pending(fixture, [first.id])
+      yield* fixture.forms.cancel(second.id)
+      yield* Effect.forEach(fibers, (fiber) => Fiber.join(fiber).pipe(Effect.map(expectNotEnabled)))
+      yield* expectNothingHappened(fixture)
+    }),
+  )
+
+  it.effect("still stores and queries when the user allows", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const tools = yield* fixture.registry.snapshot()
+      const fiber = yield* tools.execute(call("call-allow")).pipe(Effect.forkChild)
+      const form = yield* pending(fixture)
+      yield* fixture.forms.reply({ id: form.id, answer: { choice: "allow" } })
+      yield* Fiber.join(fiber)
+      expect(yield* fixture.kv.get(WebSearch.ProviderKey)).toBe("random")
+      expect(fixture.events.filter((event) => event === "query")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("still stores false when the user disables", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupReal
+      const started = yield* start(fixture, "call-disable-real")
+      yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "disable" } })
+      yield* Fiber.join(started.fiber)
+      expect(yield* fixture.kv.get(WebSearch.ProviderKey)).toBe(false)
+      expect(fixture.events.filter((event) => event === "query")).toHaveLength(0)
     }),
   )
 })

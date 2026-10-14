@@ -10,6 +10,7 @@ import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Config } from "@orbit/core/config"
@@ -25,10 +26,12 @@ import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Effect, Exit, Fiber, Layer, Logger, Schema, Stream } from "effect"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
+import { grantWithRecords } from "../fixture/grant"
 import { location, tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
+import { ProjectTrust } from "@orbit/core/project-trust"
 
 // The shared plugin fixture has no shell selection; hooks need it to pick the shell their commands run in.
 const it = testEffect(
@@ -120,6 +123,85 @@ describe("LifecycleHooksPlugin", () => {
       expect(prompt.prompt.text).toBe("Fix the build\n\nCurrent branch: main")
     }),
   )
+
+  it.live("starts a hook with the settings' env under Orbit's own variables, and a removed name stops applying", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      const settings = (env: Record<string, string>) =>
+        new Document({
+          type: "document",
+          info: decode({
+            env,
+            hooks: { UserPromptSubmit: [command(`echo "$ZZ_ENV_A|$ORBIT_PROJECT_DIR"`)] },
+          }),
+        })
+      yield* config.setEntries([settings({ ZZ_ENV_A: "from-settings", ORBIT_PROJECT_DIR: "/evil" })])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const prompt = () => ({
+        sessionID: base.sessionID,
+        messageID: base.messageID,
+        prompt: { text: "go" },
+        delivery: "steer" as const,
+      })
+
+      const first = prompt()
+      yield* registry.trigger("session", "prompt", first)
+      expect(first.prompt.text).toStartWith("go\n\nfrom-settings|")
+      expect(first.prompt.text).not.toContain("/evil")
+
+      yield* config.setEntries([settings({})])
+      const second = prompt()
+      yield* registry.trigger("session", "prompt", second)
+      expect(second.prompt.text).toStartWith("go\n\n|")
+    }),
+  )
+
+  for (const item of [
+    { name: "nothing set", restrictions: {}, ran: ["user", "managed"] },
+    { name: "managed_hooks_only", restrictions: { managed_hooks_only: true }, ran: ["managed"] },
+    { name: "disable_hooks", restrictions: { disable_hooks: true }, ran: [] },
+    { name: "both set", restrictions: { disable_hooks: true, managed_hooks_only: true }, ran: [] },
+    {
+      name: "hooks.managed_only in the managed file",
+      restrictions: {},
+      managedHooks: { managed_only: true },
+      ran: ["managed"],
+    },
+    { name: "hooks.disabled in the managed file", restrictions: {}, managedHooks: { disabled: true }, ran: [] },
+  ] as { name: string; restrictions: object; managedHooks?: object; ran: string[] }[]) {
+    it.live(`runs ${item.ran.length === 0 ? "no" : item.ran.join(" and ")} hooks with ${item.name}`, () =>
+      Effect.gen(function* () {
+        const registry = yield* PluginHooks.Service
+        const config = yield* Config.Test
+        const policy = yield* ManagedPolicy.Service
+        yield* policy.set("file", { statements: [], restrictions: item.restrictions })
+        const entry = (scope: "user" | "managed") =>
+          new Document({
+            type: "document",
+            scope,
+            info: decode({
+              hooks: {
+                UserPromptSubmit: [command(`echo ${scope}-hook`)],
+                ...(scope === "managed" ? item.managedHooks : {}),
+              },
+            }),
+          })
+        yield* config.setEntries([entry("user"), entry("managed")])
+        yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+
+        const prompt = {
+          sessionID: base.sessionID,
+          messageID: base.messageID,
+          prompt: { text: "go" },
+          delivery: "steer" as const,
+        }
+        yield* registry.trigger("session", "prompt", prompt)
+        const context = item.ran.map((scope) => `${scope}-hook`).join("\n")
+        expect(prompt.prompt.text).toBe(context === "" ? "go" : `go\n\n${context}`)
+      }),
+    )
+  }
 
   it.live("gives the reason of the highest-ranked document that blocks, and of the first of its hooks", () =>
     Effect.gen(function* () {
@@ -321,7 +403,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
       Location.Service.of(location({ directory: AbsolutePath.make(project) })),
     )
     return Layer.mergeAll(
-      AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node]), [
+      AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]), [
         Config.node.replace(Config.configured()),
         WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
         Location.node.replace(place),
@@ -349,7 +431,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
       ),
   )
 
-  it.live("runs the user's hooks, and the project's and its other-product settings hooks only once trusted", () =>
+  it.live("runs no hook until the folder is trusted: not the user's, the project's nor another product's", () =>
     Effect.gen(function* () {
       const home = (yield* tmpdirScoped()).path
       const project = path.join(home, "work", "repo")
@@ -374,11 +456,13 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
             .pipe(Effect.exit, Effect.map(Exit.isFailure))
         const everything = Effect.all({ read: blocked("read"), shell: blocked("shell"), grep: blocked("grep") })
 
-        // Untrusted, only what the user wrote runs.
+        // Untrusted, nothing runs: a hook starts in the project's folder, whoever wrote it.
+        // The user's guard on `read` is not read as "no guard", so the call it applies to is refused. The project's and
+        // the other product's documents are withheld from an untrusted folder, so nothing applies to the others.
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
 
         const granted = yield* nextUpdate
-        yield* trust.grant(project, { persist: false, via: "test" })
+        yield* grantWithRecords(project, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         expect(yield* everything).toEqual({ read: true, shell: true, grep: true })
 
@@ -386,6 +470,47 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         yield* trust.revoke(project)
         yield* Fiber.join(revoked)
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
+      }).pipe(Effect.provide(projectConfig(home, project)))
+    }),
+  )
+
+  // The attack as a marker file: the person's own hook runs a program in the clone's folder, and the clone's file is
+  // what the program would read first. Here the hook only writes a file into its working folder, which is where a bunfig
+  // preload, a local .bin or a repository config would be picked up. The control is the same hook once trusted.
+  it.live("starts no hook of the user's in an untrusted folder, and starts it once granted", () =>
+    Effect.gen(function* () {
+      const home = (yield* tmpdirScoped()).path
+      const project = path.join(home, "work", "repo")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(home, ".config", "orbit"), { recursive: true })
+        await fs.mkdir(project, { recursive: true })
+        await fs.writeFile(
+          path.join(home, ".config", "orbit", "orbit.json"),
+          JSON.stringify({
+            hooks: {
+              PreToolUse: [{ matcher: "read", hooks: [{ type: "command", command: "bun -e \"require('fs').writeFileSync('marker.txt','ran')\"" }] }],
+              UserPromptSubmit: [{ hooks: [{ type: "command", command: "bun -e \"require('fs').writeFileSync('prompt-marker.txt','ran')\"" }] }],
+            },
+          }),
+        )
+      })
+      const ran = (file: string) => Effect.promise(() => Bun.file(path.join(project, file)).exists())
+      yield* Effect.gen(function* () {
+        const registry = yield* PluginHooks.Service
+        yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+        const fire = Effect.gen(function* () {
+          yield* registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} }).pipe(Effect.ignore)
+          yield* registry
+            .trigger("session", "prompt", { sessionID: base.sessionID, messageID: base.messageID, prompt: { text: "go" }, delivery: "steer" as const })
+            .pipe(Effect.ignore)
+        })
+        yield* fire
+        expect([yield* ran("marker.txt"), yield* ran("prompt-marker.txt")]).toEqual([false, false])
+
+        // Nothing in the folder is held back, so the grant moves no config: the gate reads the trust when a hook fires.
+        yield* grantWithRecords(project, { persist: false, via: "test" })
+        yield* fire
+        expect([yield* ran("marker.txt"), yield* ran("prompt-marker.txt")]).toEqual([true, true])
       }).pipe(Effect.provide(projectConfig(home, project)))
     }),
   )

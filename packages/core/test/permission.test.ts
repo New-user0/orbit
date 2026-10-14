@@ -11,6 +11,12 @@ import { Location } from "@orbit/core/location"
 import { Permission } from "@orbit/core/permission"
 import { PermissionTable } from "@orbit/core/permission/sql"
 import { PermissionSaved } from "@orbit/core/permission/saved"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
+import { ManagedNetwork } from "@orbit/core/managed-network"
+import { PermissionWeb } from "@orbit/core/permission/web"
+import { CodeModeWeb } from "@orbit/core/codemode/web"
+import type { ConfigManaged } from "@orbit/schema/config/managed"
+import { ConfigPermissionExpand } from "@orbit/core/config/expand-permissions"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Project } from "@orbit/core/project"
 import { ProjectTable } from "@orbit/core/project/sql"
@@ -36,6 +42,7 @@ const it = testEffect(
       PermissionSaved.node,
       Agent.node,
       PluginHooks.node,
+      ManagedPolicy.node,
       Permission.node,
       Global.node,
     ]),
@@ -356,6 +363,26 @@ describe("Permission", () => {
         id: Permission.ID.create("per_test"),
         effect: "deny",
       })
+    }),
+  )
+
+  // A saved grant lifts a command that changes which program runs only when it is that command's exact text (class 8),
+  // so an `env *` or `ls *` saved earlier no longer covers `env PATH=. ls`.
+  it.effect("lifts a program-steering shell command only by an exact saved approval", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: Project.ID.global, action: "bash", resources: ["env *", "ls *", "FOO=1 PATH=. ls"] })
+      const service = yield* Permission.Service
+      // Controls: the wildcard grants still lift commands that do not steer, and the exact text lifts itself.
+      expect((yield* service.ask(assertion({ action: "bash", resources: ["env A=1 ls"] }))).effect).toBe("allow")
+      expect((yield* service.ask(assertion({ action: "bash", resources: ["FOO=1 PATH=. ls"] }))).effect).toBe("allow")
+      for (const [index, resource] of ["env PATH=. ls", "env -i A=1 ls", "FOO=1 PATH=./b ls", "env LD_PRELOAD=./x.so ls"].entries()) {
+        const asked = yield* service.ask(
+          assertion({ id: Permission.ID.create(`per_steer${index}`), action: "bash", resources: [resource] }),
+        )
+        expect([resource, asked.effect]).toEqual([resource, "ask"])
+      }
     }),
   )
 
@@ -852,6 +879,49 @@ describe("Permission for a place a link leads out to", () => {
     }),
   )
 
+  // The very same action, folder and effect as one of Orbit's own allows: Orbit's are marked where they are made, so the
+  // person's copy is the person's rule, and a deny of the same value still wins over it.
+  it.effect("lets the person's rule with the value of one of Orbit's own allows decide a folder a link leads to", () =>
+    Effect.gen(function* () {
+      const fixture = yield* folders
+      const global = yield* Global.Service
+      const same = Agent.folders(global).map((rule) => ({
+        action: rule.action,
+        resource: rule.resource,
+        effect: rule.effect,
+      }))
+      expect(same.map((rule) => rule.resource.replaceAll("\\", "/"))).toContain(fixture.config)
+      // The rules Orbit makes are its own; a plain object with the very same value is not.
+      expect(Agent.folders(global).map(Agent.isOwnFolder)).toEqual([true, true, true, true])
+      expect(same.map(Agent.isOwnFolder)).toEqual([false, false, false, false])
+
+      // Orbit's allows alone do not decide the place; the person's rule with the same value does.
+      yield* setup([
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "external_directory", resource: "*", effect: "ask" },
+        ...Agent.folders(global),
+      ])
+      const service = yield* Permission.Service
+      for (const place of fixture.places) expect((yield* service.ask(external(place, true))).effect).toBe("ask")
+      yield* setRules([
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "external_directory", resource: "*", effect: "ask" },
+        ...Agent.folders(global),
+        ...same,
+      ])
+      for (const place of fixture.places) expect((yield* service.ask(external(place, true))).effect).toBe("allow")
+      // The same value as a deny and as an ask decides as well.
+      for (const effect of ["deny", "ask"] as const) {
+        yield* setRules([
+          { action: "*", resource: "*", effect: "allow" },
+          ...Agent.folders(global),
+          ...same.map((rule) => ({ ...rule, effect })),
+        ])
+        for (const place of fixture.places) expect((yield* service.ask(external(place, true))).effect).toBe(effect)
+      }
+    }),
+  )
+
   it.effect("holds only the resources a link leads to, and lets an always reply save the person's approval", () =>
     Effect.gen(function* () {
       const fixture = yield* folders
@@ -1209,4 +1279,814 @@ describe("shell scanner permission impact", () => {
       )
     }
   }
+})
+
+// Managed enforcement. The order is: configured deny > managed rule > plugin hooks > grants and config rules > default ask.
+describe("Permission under managed settings", () => {
+  const managed = (state: Partial<Parameters<ManagedPolicy.Interface["set"]>[1]>) =>
+    Effect.gen(function* () {
+      const policy = yield* ManagedPolicy.Service
+      yield* policy.set("file", { statements: [], ...state })
+    })
+  const sessionRules = (permission: Permission.Ruleset) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ permission })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+    })
+  const hookSets = (effect: typeof Permission.Effect.Type) =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.sync(() => {
+          event.effect = effect
+        }),
+      )
+    })
+  const deny = [{ action: "bash", resource: "rm *", effect: "deny" as const }]
+  const rm = (input: Partial<Permission.AssertInput> = {}) =>
+    assertion({ action: "bash", resources: ["rm -rf x"], ...input })
+  const next = () => ({ id: Permission.ID.create() })
+
+  // Each source that could allow the call; none of them may outrank a managed deny.
+  const allowers = {
+    "a saved grant": () =>
+      Effect.gen(function* () {
+        const saved = yield* PermissionSaved.Service
+        yield* saved.add({ projectID: Project.ID.global, action: "bash", resources: ["rm *"] })
+      }),
+    "a session allow": () => sessionRules([{ action: "bash", resource: "*", effect: "allow" }]),
+    "an agent allow": () => setRules([{ action: "bash", resource: "*", effect: "allow" }]),
+    "a plugin hook that sets allow": () => hookSets("allow"),
+  }
+  for (const [name, arrange] of Object.entries(allowers)) {
+    it.effect(`a managed deny beats ${name}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        yield* arrange()
+        yield* managed({ rules: deny, organization: "Acme" })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(rm())).toMatchObject({ effect: "deny" })
+        const blocked = yield* service.assert(rm()).pipe(Effect.flip)
+        expect(blocked).toBeInstanceOf(Permission.BlockedError)
+        expect(blocked.message).toBe("Blocked by Acme's managed settings")
+      }),
+    )
+  }
+
+  it.effect("names no organization in the denial when none is set", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* managed({ rules: deny })
+      const service = yield* Permission.Service
+      const blocked = yield* service.assert(rm()).pipe(Effect.flip)
+      expect(blocked.message).toBe("Blocked by managed settings")
+    }),
+  )
+
+  it.effect("a managed ask downgrades a config allow and a hook allow", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+      yield* hookSets("allow")
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "allow" })
+      yield* managed({ rules: [{ action: "bash", resource: "rm *", effect: "ask" }] })
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "ask" })
+      expect(yield* service.ask(rm({ ...next(), resources: ["ls"] }))).toMatchObject({ effect: "allow" })
+    }),
+  )
+
+  it.effect("a managed allow upgrades the default ask, but not a hook's deny", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "ask" })
+      yield* managed({ rules: [{ action: "bash", resource: "rm *", effect: "allow" }] })
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "allow" })
+      yield* hookSets("deny")
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  // An ask from any layer survives a managed allow; only a managed ask or deny changes it (class 8). Each row names the
+  // source of the ask, and the control row shows the default ask, which no rule wrote, is still lifted.
+  const read = (resources: string[]) => assertion({ action: "Read", resources, ...next() })
+  for (const row of [
+    {
+      name: "the person's own ask rule",
+      arrange: () => setup([{ action: "Read", resource: "secrets/*", effect: "ask" }]),
+      resources: ["secrets/key"],
+      effect: "ask",
+    },
+    {
+      name: "a session ask rule",
+      arrange: () => setup().pipe(Effect.andThen(sessionRules([{ action: "Read", resource: "secrets/*", effect: "ask" }]))),
+      resources: ["secrets/key"],
+      effect: "ask",
+    },
+    {
+      name: "the built-in .env ask",
+      arrange: () =>
+        setup([
+          { action: "Read", resource: "*.env", effect: "ask" },
+          { action: "Read", resource: "*.env.*", effect: "ask" },
+          { action: "Read", resource: "*.env.example", effect: "allow" },
+        ]),
+      resources: ["prod.env"],
+      effect: "ask",
+    },
+    {
+      name: "the built-in .env ask beside a resource no rule covers",
+      arrange: () => setup([{ action: "Read", resource: "*.env", effect: "ask" }]),
+      resources: ["plain.txt", "prod.env"],
+      effect: "ask",
+    },
+    {
+      name: "a plugin hook's ask over an allow",
+      arrange: () => setup([{ action: "Read", resource: "*", effect: "allow" }]).pipe(Effect.andThen(hookSets("ask"))),
+      resources: ["a.txt"],
+      effect: "ask",
+    },
+    {
+      name: "the default ask (control)",
+      arrange: () => setup(),
+      resources: ["a.txt"],
+      effect: "allow",
+    },
+    {
+      name: "the default ask beside an allow rule (control)",
+      arrange: () => setup([{ action: "Read", resource: "src/*", effect: "allow" }]),
+      resources: ["src/a.txt", "a.txt"],
+      effect: "allow",
+    },
+  ] as const)
+    it.effect(`a managed Read allow leaves ${row.name} ${row.effect === "ask" ? "as an ask" : "lifted"}`, () =>
+      Effect.gen(function* () {
+        yield* row.arrange()
+        yield* managed({ rules: [{ action: "Read", resource: "*", effect: "allow" }] })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(read([...row.resources]))).toMatchObject({ effect: row.effect })
+        // The managed layer's own ask still decides, with the same rules around it.
+        yield* managed({ rules: [{ action: "Read", resource: "*", effect: "ask" }] })
+        expect(yield* service.ask(read([...row.resources]))).toMatchObject({ effect: "ask" })
+      }),
+    )
+
+  // The production defaults (`Info.default`, marked where the Agent layer makes them): a managed allow lifts the built-in
+  // `external_directory * ask`, and nothing the person or a hook wrote (class 8).
+  const outsideFile = (resource = "/shared/x.txt") =>
+    assertion({ action: "external_directory", resources: [resource], ...next() })
+  for (const row of [
+    { name: "the built-in ask", extra: [], effect: "allow" },
+    {
+      name: "the person's own external_directory ask",
+      extra: [{ action: "external_directory", resource: "/shared/*", effect: "ask" as const }],
+      effect: "ask",
+    },
+  ])
+    it.effect(`a managed external_directory allow over the production defaults and ${row.name} gives ${row.effect}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const agents = yield* Agent.Service
+        yield* agents.transform((editor) =>
+          {
+            // `setup` emptied the agent's rules; a new agent starts from the production defaults.
+            editor.remove(Agent.ID.make("test"))
+            editor.update(Agent.ID.make("test"), (agent) => {
+              agent.permissions.push(...row.extra)
+            })
+          },
+        )
+        yield* managed({ rules: [{ action: "external_directory", resource: "/shared/*", effect: "allow" }] })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(outsideFile())).toMatchObject({ effect: row.effect })
+        // A place the managed rule does not name stays a question.
+        expect(yield* service.ask(outsideFile("/elsewhere/x.txt"))).toMatchObject({ effect: "ask" })
+      }),
+    )
+
+  it.effect("a managed external_directory allow does not lift a place that a link leads out to, nor a .env ask", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        {
+          editor.remove(Agent.ID.make("test"))
+          editor.update(Agent.ID.make("test"), () => {})
+        },
+      )
+      yield* managed({
+        rules: [
+          { action: "external_directory", resource: "/shared/*", effect: "allow" },
+          { action: "Read", resource: "*", effect: "allow" },
+        ],
+      })
+      const service = yield* Permission.Service
+      expect(
+        yield* service.ask(assertion({ ...next(), action: "external_directory", resources: ["/shared/*"], escaped: ["/shared/*"] })),
+      ).toMatchObject({ effect: "ask" })
+      expect(yield* service.ask(read(["prod.env"]))).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("a managed ask does not lift a hook's deny", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* hookSets("deny")
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+      yield* managed({ rules: [{ action: "bash", resource: "rm *", effect: "ask" }] })
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  it.effect("a managed allow does not decide a place that a link leads out to", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* managed({ rules: [{ action: "external_directory", resource: "*", effect: "allow" }] })
+      const service = yield* Permission.Service
+      const outside = (escaped: boolean) =>
+        service.ask(
+          assertion({
+            ...next(),
+            action: "external_directory",
+            resources: ["/outside/*"],
+            ...(escaped ? { escaped: ["/outside/*"] } : {}),
+          }),
+        )
+      expect(yield* outside(false)).toMatchObject({ effect: "allow" })
+      expect(yield* outside(true)).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("the last managed rule that matches decides, and every resource must be covered to allow", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* managed({
+        rules: [
+          { action: "bash", resource: "*", effect: "allow" },
+          { action: "bash", resource: "rm *", effect: "ask" },
+          { action: "bash", resource: "rm -rf /", effect: "deny" },
+        ],
+      })
+      const service = yield* Permission.Service
+      const ask = (resources: string[]) => service.ask(rm({ ...next(), resources }))
+      expect(yield* ask(["ls", "pwd"])).toMatchObject({ effect: "allow" })
+      expect(yield* ask(["ls", "rm a"])).toMatchObject({ effect: "ask" })
+      expect(yield* ask(["rm a", "rm -rf /"])).toMatchObject({ effect: "deny" })
+      // A resource with no managed rule is left to the rest, which asks by default.
+      yield* managed({ rules: [{ action: "bash", resource: "ls", effect: "allow" }] })
+      expect(yield* ask(["ls", "pwd"])).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("a configured deny beats a managed allow, and Plan still denies edit under one", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "rm *", effect: "deny" }])
+      yield* managed({ rules: [{ action: "*", resource: "*", effect: "allow" }] })
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("plan"), (agent) => {
+          agent.permissions = [{ action: "edit", resource: "*", effect: "deny" }]
+        }),
+      )
+      const edit = { action: "edit", resources: ["a.ts"] }
+      expect(yield* service.ask(assertion({ ...edit, ...next(), agent: Agent.ID.make("plan") }))).toMatchObject({
+        effect: "deny",
+      })
+      expect(yield* service.ask(assertion({ ...edit, ...next() }))).toMatchObject({ effect: "allow" })
+    }),
+  )
+
+  it.effect("applies the rules a managed document gives a named agent to that agent only", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("reviewer"), (agent) => {
+          agent.permissions = [{ action: "bash", resource: "*", effect: "allow" }]
+        }),
+      )
+      yield* managed({ agentRules: { reviewer: deny } })
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm({ ...next(), agent: Agent.ID.make("reviewer") }))).toMatchObject({ effect: "deny" })
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "allow" })
+    }),
+  )
+
+  it.effect("applies a named agent's managed rules to an ask and a session that name no agent", () =>
+    Effect.gen(function* () {
+      // The session has no agent, so `test` is only the default agent that agents.resolve(undefined) falls back to.
+      yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ agent: null })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) => editor.default(Agent.ID.make("test")))
+      yield* managed({ agentRules: { test: deny } })
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm({ ...next(), agent: Agent.ID.make("test") }))).toMatchObject({ effect: "deny" })
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  // Class 4 end to end: a rule written with a home spelling must decide the path a tool resolved to. The resource below
+  // is what FSUtil.resolveFrom gives for the matching spelling.
+  const home = path.join(path.parse(process.cwd()).root, "users", "tester")
+  const key = path.join(home, ".ssh", "id_rsa")
+  for (const row of [
+    { spelling: "~/.ssh/*", action: "Read", windows: false },
+    { spelling: "~\\.ssh\\*", action: "Read", windows: true },
+    { spelling: "~/.ssh/*", action: "*", windows: false },
+    { spelling: "~\\.ssh\\*", action: "*", windows: true },
+    { spelling: "~/.ssh/*", action: "Read*", windows: false },
+    { spelling: "$HOME/.ssh/*", action: "*", windows: false },
+  ]) {
+    if (row.windows && process.platform !== "win32") continue
+    for (const where of ["top level", "agent"]) {
+      it.effect(`denies a Read of the home key under ${row.action} ${row.spelling} at ${where}`, () =>
+        Effect.gen(function* () {
+          yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+          const rules = ConfigPermissionExpand.expandPermissions(
+            [{ action: row.action, resource: row.spelling, effect: "deny" }],
+            home,
+          )
+          yield* managed(where === "agent" ? { agentRules: { test: rules } } : { rules })
+          const service = yield* Permission.Service
+          expect(yield* service.ask(assertion({ ...next(), action: "Read", resources: [key] }))).toMatchObject({
+            effect: "deny",
+          })
+          // The rule keeps naming Bash as written; only a path action sees the expanded copy.
+          expect(yield* service.ask(assertion({ ...next(), action: "bash", resources: ["ls"] }))).toMatchObject({
+            effect: "allow",
+          })
+        }),
+      )
+    }
+  }
+
+  // Class 3 and 4: FileAccess asks inside the session folder with a path relative to it, so a rule spelled with `~`,
+  // `$HOME` or a drive path has to decide the place the relative resource really names.
+  const sessionDirectory = path.resolve("/project")
+  for (const where of [
+    { name: "the home folder", home: sessionDirectory, resource: ".ssh/id_rsa" },
+    { name: "a folder under a repository at home", home: path.dirname(sessionDirectory), resource: "../.ssh/id_rsa" },
+    { name: "a folder outside home", home: path.join(sessionDirectory, "..", "elsewhere"), resource: undefined },
+  ]) {
+    const secret = path.join(where.home, ".ssh", "id_rsa")
+    for (const tool of ["Read", "Edit"]) {
+      for (const spelling of [
+        { name: "~", rule: "~/.ssh/*" },
+        { name: "$HOME", rule: "$HOME/.ssh/*" },
+        { name: "absolute", rule: `${path.join(where.home, ".ssh").replaceAll("\\", "/")}/*` },
+      ]) {
+        it.effect(`denies a ${tool} of ${secret} for ${spelling.name} when the session is in ${where.name}`, () =>
+          Effect.gen(function* () {
+            yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+            yield* managed({
+              rules: ConfigPermissionExpand.expandPermissions(
+                [{ action: tool, resource: spelling.rule, effect: "deny" }],
+                where.home,
+              ),
+            })
+            const service = yield* Permission.Service
+            expect(
+              yield* service.ask(assertion({ ...next(), action: tool, resources: [where.resource ?? secret] })),
+            ).toMatchObject({ effect: "deny" })
+          }),
+        )
+      }
+    }
+  }
+
+  // The same table for the person's own rules (an agent's, which is where config and project rules arrive), as the
+  // managed rows above have it, with the shell's deny-only probe (`denied`) as the Bash column: the shell guard asks about
+  // each file a command names with the path relative to the session folder (class 3 and 4).
+  for (const where of [
+    { name: "the home folder", home: sessionDirectory, resource: ".ssh/id_rsa" },
+    { name: "a folder under a repository at home", home: path.dirname(sessionDirectory), resource: "../.ssh/id_rsa" },
+    { name: "a folder outside home", home: path.join(sessionDirectory, "..", "elsewhere"), resource: undefined },
+  ]) {
+    const secret = path.join(where.home, ".ssh", "id_rsa")
+    for (const tool of ["Read", "Edit"]) {
+      for (const spelling of [
+        { name: "~", rule: "~/.ssh/*" },
+        { name: "$HOME", rule: "$HOME/.ssh/*" },
+        { name: "absolute", rule: `${path.join(where.home, ".ssh").replaceAll("\\", "/")}/*` },
+      ]) {
+        for (const effect of ["deny", "ask"] as const) {
+          it.effect(
+            `${effect === "deny" ? "denies" : "asks about"} a ${tool} of ${secret} under the person's ${spelling.name} rule in ${where.name}`,
+            () =>
+              Effect.gen(function* () {
+                yield* setup([
+                  { action: "*", resource: "*", effect: "allow" },
+                  ...ConfigPermissionExpand.expandPermissions(
+                    [{ action: tool, resource: spelling.rule, effect }],
+                    where.home,
+                  ),
+                ])
+                const service = yield* Permission.Service
+                const resources = [where.resource ?? secret]
+                expect(yield* service.ask(assertion({ ...next(), action: tool, resources }))).toMatchObject({ effect })
+                expect(yield* service.denied(assertion({ ...next(), action: tool, resources, probe: true }))).toBe(
+                  effect === "deny",
+                )
+              }),
+          )
+        }
+      }
+    }
+  }
+
+  // An allow written as an absolute path matches the relative resource the same way, which is the side effect for the Plan
+  // agent's absolute Edit allow in a session whose folder holds that folder; a neighbour stays denied.
+  for (const row of [
+    { name: "a file under the allowed folder", resource: ".orbit/plans/p.md", effect: "allow" },
+    { name: "a file beside it", resource: "src/p.md", effect: "deny" },
+  ] as const)
+    it.effect(`an absolute Edit allow decides ${row.name} in a session at home`, () =>
+      Effect.gen(function* () {
+        yield* setup([
+          { action: "Edit", resource: "*", effect: "deny" },
+          { action: "Edit", resource: `${sessionDirectory.replaceAll("\\", "/")}/.orbit/plans/*`, effect: "allow" },
+        ])
+        const service = yield* Permission.Service
+        expect(
+          yield* service.ask(assertion({ ...next(), action: "Edit", resources: [row.resource] })),
+        ).toMatchObject({ effect: row.effect })
+      }),
+    )
+
+  // The kept literal still decides Bash text, and the expanded copy is limited to the path actions.
+  const bashHome = path.join(path.parse(process.cwd()).root, "users", "tester")
+  const bashAbsolute = `${bashHome.replaceAll("\\", "/")}/.ssh/run.sh`
+  for (const row of [
+    { name: "denies the Bash text as written", command: "~/.ssh/run.sh", effect: "deny" },
+    { name: "leaves the absolute Bash text to the agent's rule", command: bashAbsolute, effect: "ask" },
+    { name: "leaves other Bash text to the agent's rule", command: "make build", effect: "ask" },
+  ]) {
+    it.effect(`a wildcard-action managed deny ${row.name}`, () =>
+      Effect.gen(function* () {
+        yield* setup([{ action: "bash", resource: "*", effect: "ask" }])
+        yield* managed({
+          rules: ConfigPermissionExpand.expandPermissions(
+            [
+              { action: "*", resource: "~/.ssh/*", effect: "deny" },
+              { action: "*", resource: "~/tools/*", effect: "allow" },
+            ],
+            bashHome,
+          ),
+        })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(assertion({ ...next(), action: "bash", resources: [row.command] }))).toMatchObject({
+          effect: row.effect,
+        })
+      }),
+    )
+  }
+
+  describe("managed_permissions_only", () => {
+    const only = { restrictions: { managed_permissions_only: true } }
+
+    it.effect("ignores saved grants and drops session allows but keeps session denies", () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const saved = yield* PermissionSaved.Service
+        yield* saved.add({ projectID: Project.ID.global, action: "bash", resources: ["rm *"] })
+        yield* sessionRules([{ action: "bash", resource: "ls", effect: "allow" }])
+        const service = yield* Permission.Service
+        expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "allow" })
+        expect(yield* service.ask(rm({ ...next(), resources: ["ls"] }))).toMatchObject({ effect: "allow" })
+        yield* managed(only)
+        expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "ask" })
+        expect(yield* service.ask(rm({ ...next(), resources: ["ls"] }))).toMatchObject({ effect: "ask" })
+        yield* sessionRules([{ action: "bash", resource: "ls", effect: "deny" }])
+        expect(yield* service.ask(rm({ ...next(), resources: ["ls"] }))).toMatchObject({ effect: "deny" })
+      }),
+    )
+
+    it.effect(
+      "treats an always reply as once for an ask that was made with a save before the restriction turned on",
+      () =>
+        Effect.gen(function* () {
+          yield* setup()
+          const first = yield* waitForRequest({ action: "bash", resources: ["pwd"], save: ["pwd"] })
+          expect(first.request.save).toEqual(["pwd"])
+          const second = yield* waitForRequest({
+            id: Permission.ID.create("per_second"),
+            action: "bash",
+            resources: ["pwd"],
+            save: ["pwd"],
+          })
+          yield* managed(only)
+          yield* first.service.reply({ requestID: first.request.id, reply: "always" })
+          yield* Fiber.join(first.fiber)
+          const { db } = yield* Database.Service
+          expect(
+            yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all(),
+          ).toEqual([])
+          expect(yield* first.service.get(second.request.id)).toBeDefined()
+        }),
+    )
+
+    it.effect("offers no save and treats always as once", () =>
+      Effect.gen(function* () {
+        yield* setup()
+        yield* managed(only)
+        const first = yield* waitForRequest({ action: "bash", resources: ["pwd"], save: ["pwd"] })
+        expect(first.request.save).toBeUndefined()
+        const second = yield* waitForRequest({
+          id: Permission.ID.create("per_second"),
+          action: "bash",
+          resources: ["pwd"],
+          save: ["pwd"],
+        })
+        yield* first.service.reply({ requestID: first.request.id, reply: "always" })
+        yield* Fiber.join(first.fiber)
+        const { db } = yield* Database.Service
+        expect(
+          yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all(),
+        ).toEqual([])
+        // The other pending ask is not lifted by it.
+        expect(yield* first.service.get(second.request.id)).toBeDefined()
+      }),
+    )
+  })
+})
+
+// denied_domains binds every URL-bearing action and beats every source of an allow. allowed_domains and
+// allow_managed_domains_only are for the shell sandbox and never deny a fetch.
+describe("Permission under managed network settings", () => {
+  const network = (state: NonNullable<ConfigManaged.Restrictions["network"]>, organization?: string) =>
+    Effect.gen(function* () {
+      const policy = yield* ManagedPolicy.Service
+      yield* policy.set("file", {
+        statements: [],
+        restrictions: { network: state },
+        ...(organization === undefined ? {} : { organization }),
+      })
+    })
+  const fetchOf = (url: string, method = "GET") => {
+    const web = PermissionWeb.request(url, method)
+    return assertion({ action: "WebFetch", resources: web.resources, aliases: web.aliases, save: web.save })
+  }
+
+  // The sources that could allow the fetch; none of them may outrank the deny.
+  const allowers = {
+    "no allow at all": () => Effect.void,
+    "a config allow rule": () => setRules([{ action: "WebFetch", resource: "*", effect: "allow" }]),
+    "a saved grant": () =>
+      Effect.gen(function* () {
+        const saved = yield* PermissionSaved.Service
+        yield* saved.add({ projectID: Project.ID.global, action: "WebFetch", resources: ["*"] })
+      }),
+    "a plugin hook that sets allow": () =>
+      Effect.gen(function* () {
+        const hooks = yield* PluginHooks.Service
+        yield* hooks.register("permission", "evaluate", (event) =>
+          Effect.sync(() => {
+            event.effect = "allow"
+          }),
+        )
+      }),
+  }
+  for (const [name, arrange] of Object.entries(allowers)) {
+    it.effect(`denies a fetch of a denied host with ${name}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        yield* arrange()
+        yield* network({ denied_domains: ["evil.example"] }, "Acme")
+        const service = yield* Permission.Service
+        expect(yield* service.ask(fetchOf("https://evil.example/x"))).toMatchObject({ effect: "deny" })
+        const blocked = yield* service.assert(fetchOf("https://evil.example/x")).pipe(Effect.flip)
+        expect(blocked).toBeInstanceOf(Permission.BlockedError)
+        expect(blocked.message).toBe("Blocked by Acme's managed settings")
+      }),
+    )
+  }
+
+  // WebFetch asks the same gate for each same-site redirect hop (tool-webfetch.test.ts pins that every hop is asked), so a
+  // page on an allowed host cannot send the fetch onto a denied www. sibling.
+  it.effect("denies a same-site redirect hop onto a denied www host while the first URL is not denied", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["www.example.com"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("https://example.com/a"))).effect).toBe("ask")
+      expect((yield* service.ask(fetchOf("https://www.example.com/b"))).effect).toBe("deny")
+    }),
+  )
+
+  const cases: ReadonlyArray<readonly [string, string, string, boolean]> = [
+    ["an exact host", "example.com", "https://example.com/x", true],
+    ["an exact host in another case with a trailing dot", "example.com", "https://EXAMPLE.com./x", true],
+    ["an exact host with a default port", "example.com", "https://example.com:443/x", true],
+    ["an exact host does not cover its subdomains", "example.com", "https://a.example.com/", false],
+    ["a wildcard covers a subdomain", "*.example.com", "https://a.example.com/", true],
+    ["a wildcard covers any depth", "*.example.com", "https://a.b.example.com/", true],
+    ["a wildcard does not cover the domain itself", "*.example.com", "https://example.com/", false],
+    ["a wildcard does not cover a lookalike", "*.example.com", "https://notexample.com/", false],
+    ["an internationalized pattern", ManagedNetwork.pattern("bücher.example")!, "https://bücher.example/", true],
+    ["a numeric IPv4 shorthand", "127.0.0.1", "http://127.1/", true],
+    ["a single-number IPv4", "127.0.0.1", "http://2130706433/", true],
+    ["an IPv6 literal", "[::1]", "http://[0:0:0:0:0:0:0:1]/", true],
+    ["a single-label host", "intranet", "http://intranet/", true],
+    // Class 6: an IPv4 entry and every IPv6 spelling of that address are one entry, in both directions.
+    ["an IPv4 entry and its mapped spelling", "203.0.113.5", "http://[::ffff:203.0.113.5]/", true],
+    ["an IPv4 entry and its hex mapped spelling", "203.0.113.5", "http://[::ffff:cb00:7105]/", true],
+    ["an IPv4 entry and its compatible spelling", "203.0.113.5", "http://[::203.0.113.5]/", true],
+    ["an IPv4 entry and its translated spelling", "203.0.113.5", "http://[::ffff:0:203.0.113.5]/", true],
+    ["an IPv4 entry and its NAT64 spelling", "203.0.113.5", "http://[64:ff9b::203.0.113.5]/", true],
+    ["an IPv4 entry and the shorthand of its mapped spelling", "203.0.113.5", "http://[0:0:0:0:0:ffff:cb00:7105]/", true],
+    ["a mapped entry and the dotted URL", ManagedNetwork.pattern("[::ffff:203.0.113.5]")!, "http://203.0.113.5/", true],
+    ["a NAT64 entry and the mapped URL", ManagedNetwork.pattern("[64:ff9b::203.0.113.5]")!, "http://[::ffff:203.0.113.5]/", true],
+    ["an IPv4 entry does not cover another address mapped", "203.0.113.5", "http://[::ffff:203.0.113.6]/", false],
+    ["an IPv4 entry does not cover the address in a 6to4 prefix", "203.0.113.5", "http://[2002:cb00:7105::]/", false],
+    ["the IPv6 loopback is no IPv4 address", "0.0.0.1", "http://[::1]/", false],
+  ]
+  for (const [name, pattern, url, denied] of cases) {
+    it.effect(`${denied ? "denies" : "allows"} ${name}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        yield* network({ denied_domains: [pattern] })
+        const service = yield* Permission.Service
+        expect((yield* service.ask(fetchOf(url))).effect).toBe(denied ? "deny" : "ask")
+      }),
+    )
+  }
+
+  it.effect("a wildcard pattern never matches an IP address", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["*.0.0.1"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("http://127.0.0.1/"))).effect).toBe("ask")
+    }),
+  )
+
+  it.effect("denies a write to a denied host through its METHOD resource too", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("https://evil.example/x", "POST"))).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("a Code Mode fetch redirect hop that lands on a denied host is denied at that hop", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      // Code Mode asks again for every hop with the same action and the request it is about to send.
+      const first = CodeModeWeb.request(["https://ok.example/start"])
+      const hop = CodeModeWeb.request(["https://evil.example/landing", { method: "GET" }])
+      expect((yield* service.ask(assertion({ action: "WebFetch", ...first }))).effect).toBe("ask")
+      expect((yield* service.ask(assertion({ action: "WebFetch", ...hop }))).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("fails closed on a URL action whose resource is not an http(s) URL while a deny list exists", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      for (const resource of ["not a url", "file:///etc/passwd", "ftp://ok.example/"])
+        expect((yield* service.ask(assertion({ action: "WebFetch", resources: [resource] }))).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("leaves an action that carries no URL alone", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(assertion({ action: "read", resources: ["not a url"] }))).effect).not.toBe("deny")
+    }),
+  )
+
+  it.effect("allowed_domains and allow_managed_domains_only do not restrict a fetch", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ allowed_domains: ["ok.example"], allow_managed_domains_only: true })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("https://elsewhere.example/x"))).effect).toBe("ask")
+    }),
+  )
+})
+
+// `denied` is the deny half of `assert` and nothing else: the shell tool asks it for every request of a call before the
+// first question, so a call that a rule blocks shows no question at all.
+describe("Permission.denied", () => {
+  const managed = (state: Partial<Parameters<ManagedPolicy.Interface["set"]>[1]>) =>
+    Effect.gen(function* () {
+      const policy = yield* ManagedPolicy.Service
+      yield* policy.set("file", { statements: [], ...state })
+    })
+  const sessionRules = (permission: Permission.Ruleset) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ permission })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+    })
+  const rm = (input: Partial<Permission.AssertInput> = {}) =>
+    assertion({ action: "bash", resources: ["rm -rf x"], ...input })
+
+  it.effect("is true for an agent deny, a session deny, a managed deny and a managed denied domain", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "rm *", effect: "deny" }])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(rm())).toBe(true)
+
+      yield* setRules([])
+      expect(yield* service.denied(rm())).toBe(false)
+      yield* sessionRules([{ action: "bash", resource: "rm *", effect: "deny" }])
+      expect(yield* service.denied(rm())).toBe(true)
+
+      yield* sessionRules([])
+      yield* managed({ rules: [{ action: "bash", resource: "rm *", effect: "deny" }] })
+      expect(yield* service.denied(rm())).toBe(true)
+
+      yield* managed({ rules: [], restrictions: { network: { denied_domains: ["evil.example"] } } })
+      expect(yield* service.denied(assertion({ action: "WebFetch", resources: ["https://evil.example/x"] }))).toBe(true)
+      expect(yield* service.denied(assertion({ action: "WebFetch", resources: ["https://fine.example/x"] }))).toBe(false)
+    }),
+  )
+
+  it.effect("is false for an ask and for an allow, and a rule on another resource does not deny", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "ls *", effect: "allow" }])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(rm())).toBe(false)
+      expect(yield* service.denied(rm({ resources: ["ls -a"] }))).toBe(false)
+      yield* setRules([{ action: "bash", resource: "rm *", effect: "ask" }])
+      expect(yield* service.denied(rm())).toBe(false)
+    }),
+  )
+
+  it.effect("skips the rules a mode puts on the agent for a probe, and for a probe only", () =>
+    Effect.gen(function* () {
+      const edit = (input: Partial<Permission.AssertInput> = {}) =>
+        assertion({ action: "Edit", resources: ["notes.md"], ...input })
+      yield* setup([Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const })])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(edit())).toBe(true)
+      expect(yield* service.denied(edit({ probe: true }))).toBe(false)
+      // The same rule written by the person, or a copy of the mode's, still denies the probe.
+      yield* setRules([{ action: "Edit", resource: "*", effect: "deny" }])
+      expect(yield* service.denied(edit({ probe: true }))).toBe(true)
+      yield* setRules([{ ...Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }) }])
+      expect(yield* service.denied(edit({ probe: true }))).toBe(true)
+      // The mode's rule beside the person's deny of one file: the file stays denied.
+      yield* setRules([
+        Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }),
+        { action: "Edit", resource: "notes.md", effect: "deny" },
+      ])
+      expect(yield* service.denied(edit({ probe: true }))).toBe(true)
+      expect(yield* service.denied(edit({ probe: true, resources: ["other.md"] }))).toBe(false)
+    }),
+  )
+
+  it.effect("creates no request, publishes nothing, runs no hook and reads no grant", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const bus = yield* Bus.Service
+      const events: string[] = []
+      const unsubscribe = yield* bus.listen((event) => Effect.sync(() => void events.push(event.type)))
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const hooks = yield* PluginHooks.Service
+      const ran: string[] = []
+      yield* hooks.register("permission", "evaluate", () => Effect.sync(() => void ran.push("hook")))
+
+      expect(yield* service.denied(rm())).toBe(false)
+      expect(events).toEqual([])
+      expect(ran).toEqual([])
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("honours aliases, as assert does", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "Remove-Item *", effect: "deny" }])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(rm({ resources: ["rm x"], aliases: { "rm x": ["Remove-Item x"] } }))).toBe(true)
+      expect(yield* service.denied(rm({ resources: ["rm x"] }))).toBe(false)
+    }),
+  )
 })

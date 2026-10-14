@@ -3,6 +3,7 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import type { TuiInput } from "../../src/app"
 import type { Config } from "../../src/config"
+import { clearDrafts } from "../../src/component/prompt/draft-stash"
 import { tmpdir } from "./fixture"
 import { createEventStream, createFetch, type FetchHandler } from "./tui-client"
 
@@ -16,6 +17,10 @@ export async function createAppFixture(
     configPath?: string
     args?: TuiInput["args"]
     fetch?: FetchHandler
+    /** How a package spec becomes a folder; a test passes its own to see which specs the TUI asks for. */
+    packages?: TuiInput["packages"]
+    /** Where log lines go; a test passes its own to see what was logged. */
+    log?: TuiInput["log"]
   } = {},
 ) {
   const { run } = await import("../../src/app")
@@ -40,10 +45,10 @@ export async function createAppFixture(
         get: async () => input.config ?? { animations: false },
         update: async () => ({}),
       },
-      packages: { prepare: async () => ({ directory: "" }) },
+      packages: input.packages ?? { prepare: async () => ({ directory: "" }) },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
       args: input.args ?? {},
-      log: () => {},
+      log: input.log ?? (() => {}),
     }).pipe(
       Effect.provide(Global.layerWith({ state: input.state ?? state?.path })),
       Effect.provide(FileSystem.layerNoop({})),
@@ -58,6 +63,8 @@ export async function createAppFixture(
         if (!setup.renderer.isDestroyed) setup.renderer.destroy()
         await task
       } finally {
+        // Drafts live in a module-level stash, so they would reach the next app of the same process.
+        clearDrafts()
         await server.stop()
         await state?.[Symbol.asyncDispose]()
       }

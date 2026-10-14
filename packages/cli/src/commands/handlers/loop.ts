@@ -3,8 +3,10 @@ import { Service } from "@orbit/client/effect/service"
 import { SessionID } from "@orbit/schema/session-id"
 import { Effect, Option } from "effect"
 import { Commands } from "../commands"
+import { ConfigOverlay } from "../../config-overlay"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { bypassRefusal } from "../../util/managed-bypass"
 import { requireTrust } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -26,20 +28,35 @@ export default Runtime.handler(Commands.commands.loop, (input) =>
         new Error(`Invalid interval "${input.interval}": use a number with s, m or h, at least 10s`),
       )
     const { runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
+    // A --settings file or JSON reaches a private server, so it is read here, before anything starts.
+    const overlay = yield* ConfigOverlay.apply({
+      settings: input.settings,
+      server: Option.getOrUndefined(input.server),
+    })
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
-      standalone: input.standalone,
+      standalone: input.standalone || overlay,
       trust: input.trust,
     })
+    yield* Effect.promise(() => ConfigOverlay.release())
+    const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+    // A private server shares the database with the background service, so a session the service is running is not
+    // driven a second time.
+    const named = Option.getOrUndefined(input.session)
+    const target = overlay
+      ? yield* ConfigOverlay.refuseActive({ client, session: named, continue: false, directory: directory() })
+      : named
     // Once, before the first run: a refusal that came with every run would only repeat itself on each interval. The
     // folder is the one the runs happen in, which is the folder of the session when --session names one that exists.
-    yield* requireTrust(
-      Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+    yield* requireTrust(client, directory(), { grant: input.trust, session: target })
+    const bypass = yield* bypassRefusal(
+      client,
       directory(),
-      { grant: input.trust, session: Option.getOrUndefined(input.session) },
+      input.auto || input.yolo || input.dangerouslySkipPermissions,
     )
+    if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
     // One session for the whole loop, so each run sees what the previous ones found.
-    const session = Option.getOrElse(input.session, () => SessionID.create())
+    const session = target ?? SessionID.create()
     const times = Option.getOrUndefined(input.times)
     for (let run = 1; times === undefined || run <= times; run++) {
       process.stderr.write(`\nLoop run ${run}${times ? ` of ${times}` : ""} · session ${session}\n`)

@@ -1,11 +1,15 @@
 import { Orbit } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { ManagedPath } from "@orbit/util/managed-path"
 import { Network } from "@orbit/util/network"
+import { plain } from "@orbit/util/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
+import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { sandboxCheck, sandboxState } from "../../util/doctor-sandbox"
 import { settledModels } from "../../util/models"
 import { ORBIT_VERSION } from "../../version"
 
@@ -27,6 +31,10 @@ export default Runtime.handler(
   Commands.commands.doctor,
   Effect.fn("cli.doctor")(function* (input) {
     const model = Option.getOrUndefined(input.model)
+    const { ServerManaged } = yield* Effect.promise(() => import("@orbit/server/managed"))
+    const managed = yield* ServerManaged.read(ManagedPath.directory(process.platform, process.env))
+    // The runner's own answer to "what would a shell command meet", so the line cannot disagree with it.
+    const probed = ServerManaged.sandboxProbe()
     const checks = [
       { ok: undefined, label: "orb", detail: `${ORBIT_VERSION} on ${process.platform}-${process.arch}` },
       network(),
@@ -37,7 +45,9 @@ export default Runtime.handler(
       },
       ripgrep(),
       git(),
+      sandboxCheck(probed, sandboxState(managed.info.sandbox)),
       tachyon(),
+      ...managedChecks(managed),
     ] satisfies Check[]
     print(checks)
     if (!input.probe && model === undefined) {
@@ -83,6 +93,32 @@ function network(): Check {
       ...(configured.cert ? ["client certificate configured (mutual TLS)"] : []),
     ].join("; "),
   }
+}
+
+// The managed settings files by name, relative to their folder, and what could not be used in them; never a value.
+function managedChecks(managed: {
+  readonly directory: string
+  readonly sources: readonly string[]
+  readonly diagnostics: readonly { readonly source: string; readonly path: string; readonly message: string }[]
+}): Check[] {
+  return [
+    managed.sources.length === 0
+      ? { ok: undefined, label: "managed", detail: `no managed settings in ${managed.directory}` }
+      : {
+          ok: undefined,
+          label: "managed",
+          detail: plain(managed.sources.map((source) => path.relative(managed.directory, source)).join(", ")),
+        },
+    ...managed.diagnostics.map(
+      (diagnostic): Check => ({
+        ok: false,
+        label: "managed",
+        detail: plain(
+          `${path.relative(managed.directory, diagnostic.source)} ${diagnostic.path}: ${diagnostic.message}`,
+        ),
+      }),
+    ),
+  ]
 }
 
 function ripgrep(): Check {
@@ -170,16 +206,20 @@ function names(list: readonly string[]) {
   return list.filter((name) => process.env[name] || process.env[name.toLowerCase()]).join(", ")
 }
 
+// Every label and detail is escaped here, at the sink: a PATH folder, a model ID, a provider error or a model name can
+// hold control characters, and no check should have to remember to escape its own.
+export function lines(checks: readonly Check[]) {
+  const width = Math.max(...checks.map((check) => plain(check.label).length))
+  return checks
+    .map(
+      (check) =>
+        `${check.ok === undefined ? "  " : check.ok ? "ok" : "!!"} ${plain(check.label).padEnd(width)}  ${plain(check.detail)}${EOL}`,
+    )
+    .join("")
+}
+
 function print(checks: readonly Check[]) {
-  const width = Math.max(...checks.map((check) => check.label.length))
-  process.stdout.write(
-    checks
-      .map(
-        (check) =>
-          `${check.ok === undefined ? "  " : check.ok ? "ok" : "!!"} ${check.label.padEnd(width)}  ${check.detail}${EOL}`,
-      )
-      .join(""),
-  )
+  process.stdout.write(lines(checks))
 }
 
 function finish(checks: readonly Check[]) {

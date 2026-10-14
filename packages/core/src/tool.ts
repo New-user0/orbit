@@ -76,6 +76,13 @@ type Data = {
 export interface Interface extends State.Transformable<Editor> {
   readonly list: () => Effect.Effect<ReadonlyArray<Tool.Info & { readonly id: string }>>
   readonly snapshot: (permissions?: Permission.Ruleset) => Effect.Effect<Snapshot>
+  /**
+   * Checks where a web request to `host` may go, with the settings of `fetch` in Code Mode, and answers with the addresses
+   * it must connect to instead of the host (none for a host that is an address). Resolving a name is a request to the
+   * network, so ask permission for the host first. It fails for an address that is not public (unless the configuration
+   * allows local servers), for any link-local or metadata address, and for a name that resolves to nothing.
+   */
+  readonly resolveWeb: (host: string) => Effect.Effect<ReadonlyArray<string>, Error>
 }
 
 /** The context of a call before `execute` resolves its tool's traits and adds them. */
@@ -130,22 +137,34 @@ const layer = Layer.effect(
 
     type NormalizedItem = Tool.Content | "decode" | "size"
     const normalizeImages = Effect.fnUntraced(function* (content: ReadonlyArray<Tool.Content>) {
-      const normalized = yield* Effect.forEach(content, (item): Effect.Effect<NormalizedItem> => {
-        if (item.type !== "file" || !item.mime.startsWith("image/")) return Effect.succeed(item)
+      const normalized = yield* Effect.forEach(content, (item): Effect.Effect<ReadonlyArray<NormalizedItem>> => {
+        if (item.type !== "file" || !item.mime.startsWith("image/")) return Effect.succeed([item])
         const base64 = /^data:[^,]*;base64,(.*)$/s.exec(item.uri)?.[1]
-        if (base64 === undefined) return Effect.succeed(item)
+        if (base64 === undefined) return Effect.succeed([item])
         const resource = item.name ?? `${item.mime} tool output`
         return image.normalize(resource, { uri: resource, content: base64, encoding: "base64", mime: item.mime }).pipe(
-          Effect.map((result) => ({
-            ...item,
-            uri: `data:${result.mime};base64,${result.content}`,
-            mime: result.mime,
-          })),
-          Effect.catchTag("Image.ResizerUnavailableError", () => Effect.succeed(item)),
-          Effect.catchTag("Image.DecodeError", () => Effect.succeed("decode" as const)),
-          Effect.catchTag("Image.SizeError", () => Effect.succeed("size" as const)),
+          Effect.map((result): ReadonlyArray<NormalizedItem> => [
+            // Built field by field: a recorded item keeps keys its schema would drop, so nothing of `result` may spread in.
+            {
+              type: "file",
+              uri: `data:${result.content.mime};base64,${result.content.content}`,
+              mime: result.content.mime,
+              ...(item.name === undefined ? {} : { name: item.name }),
+            },
+            ...(result.resized
+              ? [
+                  {
+                    type: "text" as const,
+                    text: `[Shown at ${result.resized.to.width}×${result.resized.to.height} px; the file itself is ${result.resized.from.width}×${result.resized.from.height} px. Scale positions on the shown image by ${(result.resized.from.width / result.resized.to.width).toFixed(2)} to map them onto the file.]`,
+                  },
+                ]
+              : []),
+          ]),
+          Effect.catchTag("Image.ResizerUnavailableError", () => Effect.succeed([item])),
+          Effect.catchTag("Image.DecodeError", () => Effect.succeed(["decode" as const])),
+          Effect.catchTag("Image.SizeError", () => Effect.succeed(["size" as const])),
         )
-      })
+      }).pipe(Effect.map((items) => items.flat()))
       const note = (reason: "decode" | "size", text: string) => {
         const count = normalized.filter((item) => item === reason).length
         if (count === 0) return []
@@ -261,7 +280,9 @@ const layer = Layer.effect(
         Effect.flatMap((checked) =>
           checked.allowed
             ? Effect.succeed(checked.connect)
-            : Effect.fail(new Tool.Error({ message: refusedMessage(host, checked.refusal) })),
+            : Effect.fail(
+                new Tool.Error({ message: refusedMessage(host, checked.refusal), code: Tool.ErrorCode.WebFetchRefused }),
+              ),
         ),
       )
 
@@ -274,7 +295,11 @@ const layer = Layer.effect(
         )
       return Effect.try({
         try: () => CodeModeWeb.request(call.args),
-        catch: (error) => new Tool.Error({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new Tool.Error({
+            message: error instanceof Error ? error.message : String(error),
+            code: Tool.ErrorCode.WebFetchRefused,
+          }),
       }).pipe(
         Effect.flatMap((web) =>
           permission
@@ -381,6 +406,7 @@ const layer = Layer.effect(
     return Service.of({
       transform: state.transform,
       reload: state.reload,
+      resolveWeb: resolve,
       list: () => Effect.sync(() => Array.from(state.get().tools.values())),
       snapshot: Effect.fn("Tool.snapshot")((permissions) =>
         Effect.sync(() => {

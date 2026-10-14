@@ -5,6 +5,7 @@ import { Document, Info } from "@orbit/schema/config"
 import { Mcp } from "@orbit/schema/mcp"
 import type { AbsolutePath } from "@orbit/schema/schema"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import type { CompatDiagnostic } from "./diagnostic.js"
 
 /**
@@ -60,7 +61,9 @@ export const read = Effect.fn("CompatMcpJson.read")(function* (input: {
   readonly env: Variables
 }) {
   const fs = yield* FSUtil.Service
-  const text = yield* fs.readFileStringSafe(input.file).pipe(Effect.orElseSucceed(() => undefined))
+  const text = (yield* LinkShare.blocked(fs, input.file))
+    ? undefined
+    : yield* fs.readFileStringSafe(input.file).pipe(Effect.orElseSucceed(() => undefined))
   return text === undefined ? empty : parse(text, input.file, input.env)
 })
 

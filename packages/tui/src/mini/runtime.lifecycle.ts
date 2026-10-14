@@ -17,7 +17,9 @@ import {
   type ScrollbackWriter,
 } from "@opentui/core"
 import { isFallbackTitle } from "@orbit/util/session-title-fallback"
-import { terminalTitle } from "../util/renderer"
+import { createMiniTitle } from "../util/renderer"
+import { createTuiAttention } from "../attention"
+import { createAttentionEvents, isAttentionEvent } from "../attention-events"
 import { monoSnapshot } from "./mono"
 import { entrySplash, exitSplash } from "./splash"
 import { resolveRunTheme } from "./theme"
@@ -55,6 +57,8 @@ type CycleResult = {
 
 export type LifecycleInput = {
   host: MiniHost
+  // A seam for tests, which draw into a test renderer instead of the terminal.
+  createRenderer?: typeof createCliRenderer
   getDirectory: () => string
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
@@ -85,6 +89,8 @@ export type LifecycleInput = {
 
 export type Lifecycle = {
   footer: FooterApi
+  /** Reports a session event that may need the person, so Mini notifies like the TUI does. */
+  observe?(event: { type: string; data?: unknown }): void
   onResize(fn: () => void): () => void
   refreshTheme(): void
   setTitle(title?: string): void
@@ -155,7 +161,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   const tuiConfig = await input.tuiConfig
   const miniSettings = resolveMiniSettings(tuiConfig)
   const mono = miniSettings.mono
-  const renderer = await createCliRenderer({
+  const renderer = await (input.createRenderer ?? createCliRenderer)({
     stdin: input.host.terminal.stdin,
     targetFps: 30,
     maxFps: 60,
@@ -173,12 +179,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     clearOnShutdown: false,
   })
   if (mono) renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
-  const setTitle = (title?: string) => {
-    if (input.host.platform !== "linux") return
-    if (!title || isFallbackTitle(title)) return renderer.setTerminalTitle("Orbit")
-    renderer.setTerminalTitle(terminalTitle(title))
-  }
-  setTitle(input.sessionTitle)
+  const title = createMiniTitle(renderer, input.host.platform, input.sessionTitle)
   const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono)
   renderer.setBackgroundColor(theme.background)
   const state: SplashState = {
@@ -206,6 +207,15 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   if (mono) renderer.off(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
 
   const { RunFooter } = await footerTask
+  let sessionTitle = input.sessionTitle
+  const attention = createTuiAttention({ renderer, config: tuiConfig })
+  const attentionEvents = createAttentionEvents({
+    attention,
+    // Mini follows one session tree: the root, and the subagents it started.
+    session: (sessionID) =>
+      sessionID === (input.getSessionID?.() ?? input.sessionID) ? { title: sessionTitle } : { parentID: "root" },
+  })
+  renderer.keyInput.on("keypress", attentionEvents.keypress)
   let closed = false
   let sigintRegistered = false
   let detachSigintListener: (() => void) | undefined
@@ -230,6 +240,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     miniSettings: {
       current: miniSettings,
       update: input.onMiniSettingChange,
+    },
+    onActivity: (next) => {
+      title.setActivity(next)
     },
     onMonoChange: (mono) => {
       if (mono) {
@@ -310,6 +323,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
     closed = true
     detachSigint()
+    renderer.keyInput.off("keypress", attentionEvents.keypress)
+    attentionEvents.dispose()
+    attention.dispose()
     let wroteExit = false
 
     try {
@@ -345,10 +361,16 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
   return {
     footer,
+    observe: (event) => {
+      if (isAttentionEvent(event)) attentionEvents.handle(event)
+    },
     refreshTheme() {
       footer.refreshTheme()
     },
-    setTitle,
+    setTitle(next) {
+      sessionTitle = next
+      title.setTitle(next)
+    },
     onResize(fn) {
       let width = renderer.terminalWidth
       let height = renderer.terminalHeight

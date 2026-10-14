@@ -7,6 +7,7 @@ import type { Session } from "@orbit/schema/session"
 import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { Cause, Context, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
+import { Trust } from "@orbit/schema/trust"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Credential } from "../credential.js"
 import { Bus } from "../bus.js"
@@ -14,7 +15,12 @@ import { Environment } from "../environment/index.js"
 import { Form } from "../form.js"
 import { Integration } from "../integration.js"
 import { KeyedMutex } from "../effect/keyed-mutex.js"
+import { Config } from "../config.js"
+import { ConfigEnv } from "../config/env.js"
 import { Location } from "../location.js"
+import { ManagedPolicy } from "../managed-policy.js"
+import { ProjectTrust } from "../project-trust.js"
+import { McpRestriction } from "./restriction.js"
 import { waitForAbort } from "@orbit/util/process"
 import { State } from "../state.js"
 import type { McpClient } from "./client.js"
@@ -53,6 +59,21 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("MCP.NotF
 }) {
   override get message() {
     return `MCP server not found: ${this.server}`
+  }
+}
+
+/** The organization's MCP lists do not let this server exist, so `add` refused it and nothing was stored. */
+export class BlockedError extends Schema.TaggedError<BlockedError>()("MCP.BlockedError", {
+  server: ServerName,
+  reason: Schema.Literals(["managed_only", "denied", "not_allowed"]),
+  organization: Schema.String.pipe(Schema.optional),
+}) {
+  override get message() {
+    if (this.reason === "managed_only")
+      return `MCP server "${this.server}" was not added: ${this.organization === undefined ? "managed settings allow" : `${this.organization}'s managed settings allow`} only the MCP servers they define`
+    return this.reason === "denied"
+      ? `MCP server "${this.server}" is blocked by managed settings`
+      : `MCP server "${this.server}" is not on the allow list in managed settings`
   }
 }
 
@@ -112,7 +133,7 @@ const cloneConfig = (config: Mcp.ServerConfig) => structuredClone(config) as Typ
 
 export interface Interface extends State.Transformable<Editor> {
   readonly servers: () => Effect.Effect<ServerInfo[]>
-  readonly add: (server: ServerName | string, config: Mcp.ServerConfig) => Effect.Effect<void>
+  readonly add: (server: ServerName | string, config: Mcp.ServerConfig) => Effect.Effect<void, BlockedError>
   readonly connect: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
   readonly disconnect: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
   readonly remove: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
@@ -155,11 +176,14 @@ export const layer = (options?: Options) =>
     Service,
     Effect.gen(function* () {
       const location = yield* Location.Service
+      const config = yield* Config.Service
       const environment = yield* Environment.Service
       const bus = yield* Bus.Service
       const forms = yield* Form.Service
       const integration = yield* Integration.Service
       const credentials = yield* Credential.Service
+      const policy = yield* ManagedPolicy.Service
+      const trust = yield* ProjectTrust.Service
       const root = yield* Effect.scope
       const fork = yield* FiberSet.makeRuntime<never, void, never>()
 
@@ -424,8 +448,21 @@ export const layer = (options?: Options) =>
         connection.onResourcesChanged(() => live(bus.publish(McpEvent.ResourcesChanged, { server: name })))
       }
 
+      // Stdio servers that did not start because the project folder is not trusted.
+      const waiting = new Set<ServerName>()
       const startServer = (name: ServerName, entry: ServerEntry) =>
         Effect.gen(function* () {
+          // A stdio server starts with the project's folder as its working folder unless its config says otherwise, and the
+          // programs it runs (bun, npx, uvx, git) read that folder's own files first. Until the person trusts the folder none
+          // starts, the user's and the organization's included; a grant starts them (`resumeTrusted`).
+          if (entry.config.type === "local" && !(yield* trust.trusted())) {
+            waiting.add(name)
+            entry.status = { status: "failed", error: "Waiting for this project folder to be trusted before it starts." }
+            yield* Effect.logWarning("mcp server waits for the project folder to be trusted", { server: name })
+            yield* bus.publish(McpEvent.StatusChanged, { server: name })
+            return
+          }
+          waiting.delete(name)
           // Announce the handshake so connect() and credential reconnects don't show a stale
           // disabled/failed status for the duration of the connection attempt.
           entry.status = { status: "pending" }
@@ -443,6 +480,8 @@ export const layer = (options?: Options) =>
             authProvider,
             elicitation,
             options?.clientInfo,
+            // The settings' `env` sits under the server's own `environment`. A workspace-bound location takes none.
+            location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
           ).pipe(
             Effect.flatMap((connection) => connection.tools().pipe(Effect.map((tools) => ({ connection, tools })))),
             // A stdio server is spawned on this location's execution plane, not the host's.
@@ -494,6 +533,7 @@ export const layer = (options?: Options) =>
       })
 
       const disposeServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
+        waiting.delete(name)
         yield* stopServer(name, entry)
         if (entry.integrationID) owned.delete(entry.integrationID)
         if (entry.registration) yield* entry.registration.dispose
@@ -534,8 +574,45 @@ export const layer = (options?: Options) =>
       let applied: Map<ServerName, Mcp.ServerConfig> | undefined
       const overrides = new Map<ServerName, Mcp.ServerConfig | false>()
       const reconcileLock = Semaphore.makeUnsafe(1)
+      // What the last reconcile blocked, so a block is logged when it starts or changes and not on every reconcile.
+      let blocked = new Map<ServerName, string>()
       const reconcile = Effect.fnUntraced(function* () {
-        const servers = state.get().servers
+        // The organization's lists are applied here, after every door has merged its servers, so no transform that
+        // runs later can bring a blocked one back. The filtered set is what `applied` remembers: lifting a restriction
+        // starts the server on the next reconcile, and a new one stops it.
+        const current = policy.current()
+        const restrictions = current.restrictions.mcp
+        const now = new Map<ServerName, string>()
+        // When managed settings run only their own servers, the input is their definitions and not the transformed
+        // state: a transform that claims a managed name first, or edits a managed server in place, cannot change what
+        // runs. Each definition is shaped as the config plugin shapes one, from the managed timeout alone.
+        const managedOnly = restrictions?.managed_only === true
+        const candidates = managedOnly
+          ? Object.entries(current.mcp.servers).flatMap(([key, server]) => {
+              const name = ServerName.make(key)
+              return state.get().removed.has(name)
+                ? []
+                : [[name, { ...cloneConfig(server), timeout: { ...current.mcp.timeout, ...server.timeout } }] as const]
+            })
+          : Array.from(state.get().servers)
+        if (managedOnly)
+          Array.from(state.get().servers.keys())
+            .filter((name) => !Object.hasOwn(current.mcp.servers, name))
+            .forEach((name) => now.set(name, "managed_only"))
+        const servers = new Map(
+          candidates.filter(([name, server]) => {
+            const checked = McpRestriction.check(restrictions, name, server)
+            if (!checked.allowed) now.set(name, checked.reason)
+            return checked.allowed
+          }),
+        )
+        // The name and reason only: a command or URL may carry a secret.
+        yield* Effect.forEach(
+          Array.from(now).filter(([name, reason]) => blocked.get(name) !== reason),
+          ([name, reason]) => Effect.logWarning("blocked an MCP server by managed settings", { server: name, reason }),
+          { discard: true },
+        )
+        blocked = now
         if (!applied && entries.size === 0) {
           for (const [name, server] of servers) {
             entries.set(name, {
@@ -596,6 +673,24 @@ export const layer = (options?: Options) =>
           Stream.runForEach((event) => Effect.sync(() => fork(reconnect(event.data.integrationID)))),
         ),
       )
+      // A trust grant starts the servers that waited for it. A revoke leaves running servers to the next reload.
+      const resumeTrusted = Effect.fnUntraced(function* () {
+        yield* Effect.forEach(
+          Array.from(waiting),
+          (name) =>
+            Effect.gen(function* () {
+              const entry = entries.get(name)
+              if (!entry || !waiting.has(name) || !(yield* trust.trusted())) return
+              yield* startServer(name, entry)
+            }).pipe(locks.withLock(name)),
+          { discard: true },
+        )
+      })
+      fork(
+        bus.subscribe(Trust.Event.Updated).pipe(
+          Stream.runForEach(() => Effect.sync(() => fork(resumeTrusted()))),
+        ),
+      )
       const state: State.Interface<Data, Editor> = State.create<Data, Editor>({
         name: "mcp",
         initial: () => ({
@@ -634,6 +729,15 @@ export const layer = (options?: Options) =>
         }),
         add: Effect.fn("MCP.add")(function* (server, config) {
           const name = ServerName.make(server)
+          // Refused at the door so nothing is stored; the reconcile filter is the backstop for every other door.
+          const current = policy.current()
+          const checked = McpRestriction.admit(current.restrictions.mcp, name, config)
+          if (!checked.allowed)
+            return yield* new BlockedError({
+              server: name,
+              reason: checked.reason,
+              ...(current.organization === undefined ? {} : { organization: current.organization }),
+            })
           overrides.set(name, config)
           yield* state.reload()
         }),
@@ -775,7 +879,7 @@ export function configured(options?: Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node],
+    deps: [Config.node, Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node, ManagedPolicy.node, ProjectTrust.node],
   })
 }
 

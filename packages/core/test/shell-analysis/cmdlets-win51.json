@@ -1,0 +1,4445 @@
+{
+ "version": "5.1.26100.9444",
+ "kinds": [
+  {
+   "name": "mkdir",
+   "type": "Function"
+  },
+  {
+   "name": "md",
+   "type": "Alias"
+  }
+ ],
+ "cmdlets": [
+  {
+   "cmdlet": "Set-Content",
+   "parameters": [
+    {
+     "name": "Value",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "NoNewline",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Encoding",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Stream",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Add-Content",
+   "parameters": [
+    {
+     "name": "Value",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "NoNewline",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Encoding",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Stream",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Clear-Content",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Stream",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Remove-Item",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Recurse",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Stream",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Out-File",
+   "parameters": [
+    {
+     "name": "FilePath",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Encoding",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Append",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "NoClobber",
+     "aliases": [
+      "NoOverwrite"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Width",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "NoNewline",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "InputObject",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Tee-Object",
+   "parameters": [
+    {
+     "name": "InputObject",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "FilePath",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Append",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Variable",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Export-Csv",
+   "parameters": [
+    {
+     "name": "InputObject",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "NoClobber",
+     "aliases": [
+      "NoOverwrite"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Encoding",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Append",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Delimiter",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "UseCulture",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "NoTypeInformation",
+     "aliases": [
+      "NTI"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Export-Clixml",
+   "parameters": [
+    {
+     "name": "Depth",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InputObject",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "NoClobber",
+     "aliases": [
+      "NoOverwrite"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Encoding",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "New-Item",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "Name",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ItemType",
+     "aliases": [
+      "Type"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Value",
+     "aliases": [
+      "Target"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Copy-Item",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Destination",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Container",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Recurse",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "FromSession",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ToSession",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Move-Item",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Destination",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Rename-Item",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "NewName",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Set-Item",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Value",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Clear-Item",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Set-ItemProperty",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Name",
+     "aliases": [
+      "PSProperty"
+     ],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Value",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      2
+     ]
+    },
+    {
+     "name": "InputObject",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "New-ItemProperty",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Name",
+     "aliases": [
+      "PSProperty"
+     ],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "PropertyType",
+     "aliases": [
+      "Type"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Value",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Remove-ItemProperty",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Name",
+     "aliases": [
+      "PSProperty"
+     ],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Filter",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Include",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Exclude",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Export-Alias",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Name",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "As",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Append",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "NoClobber",
+     "aliases": [
+      "NoOverwrite"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Description",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Scope",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Expand-Archive",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "DestinationPath",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Compress-Archive",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "DestinationPath",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "CompressionLevel",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Update",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Force",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Invoke-WebRequest",
+   "parameters": [
+    {
+     "name": "UseBasicParsing",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Uri",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "WebSession",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "SessionVariable",
+     "aliases": [
+      "SV"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UseDefaultCredentials",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "CertificateThumbprint",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Certificate",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UserAgent",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "DisableKeepAlive",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "TimeoutSec",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Headers",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "MaximumRedirection",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Method",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Proxy",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ProxyCredential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ProxyUseDefaultCredentials",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Body",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ContentType",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "TransferEncoding",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InFile",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutFile",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Invoke-RestMethod",
+   "parameters": [
+    {
+     "name": "Method",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UseBasicParsing",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Uri",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "WebSession",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "SessionVariable",
+     "aliases": [
+      "SV"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UseDefaultCredentials",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "CertificateThumbprint",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Certificate",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UserAgent",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "DisableKeepAlive",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "TimeoutSec",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Headers",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "MaximumRedirection",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Proxy",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ProxyCredential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ProxyUseDefaultCredentials",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Body",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ContentType",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "TransferEncoding",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InFile",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutFile",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Set-Location",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "StackName",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Push-Location",
+   "parameters": [
+    {
+     "name": "Path",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "LiteralPath",
+     "aliases": [
+      "PSPath"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "StackName",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "Pop-Location",
+   "parameters": [
+    {
+     "name": "PassThru",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "StackName",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  },
+  {
+   "cmdlet": "New-PSDrive",
+   "parameters": [
+    {
+     "name": "Name",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      0
+     ]
+    },
+    {
+     "name": "PSProvider",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      1
+     ]
+    },
+    {
+     "name": "Root",
+     "aliases": [],
+     "switch": false,
+     "positions": [
+      2
+     ]
+    },
+    {
+     "name": "Description",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Scope",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Persist",
+     "aliases": [],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Credential",
+     "aliases": [],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "Verbose",
+     "aliases": [
+      "vb"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Debug",
+     "aliases": [
+      "db"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "ErrorAction",
+     "aliases": [
+      "ea"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningAction",
+     "aliases": [
+      "wa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationAction",
+     "aliases": [
+      "infa"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "ErrorVariable",
+     "aliases": [
+      "ev"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WarningVariable",
+     "aliases": [
+      "wv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "InformationVariable",
+     "aliases": [
+      "iv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutVariable",
+     "aliases": [
+      "ov"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "OutBuffer",
+     "aliases": [
+      "ob"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "PipelineVariable",
+     "aliases": [
+      "pv"
+     ],
+     "switch": false,
+     "positions": []
+    },
+    {
+     "name": "WhatIf",
+     "aliases": [
+      "wi"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "Confirm",
+     "aliases": [
+      "cf"
+     ],
+     "switch": true,
+     "positions": []
+    },
+    {
+     "name": "UseTransaction",
+     "aliases": [
+      "usetx"
+     ],
+     "switch": true,
+     "positions": []
+    }
+   ]
+  }
+ ]
+}
