@@ -2928,7 +2928,7 @@ wording of those notes, and models that sent a one-character query or both domai
 
 **Affects:** people who answer "always" on `env`, `sudo`, `timeout` or similar commands, or on `PATH=` commands.
 
-**What to do:** Answer "always" on such a command only for a program you trust everywhere; otherwise answer once. For a command that steers its program as in the first point, "always" saves the pattern of the command's first word (`env *`, `sudo *`, `timeout *`, `nice *`, `printf *`), or nothing for a plain `IFS=` command, and that does not lift the command again (`tool-shell.test.ts`). For `env`, `sudo` or `timeout`, that pattern covers every program behind the word (the bullet above), so answer "always" only when you would let every command starting with that word run unasked. To stop the question for the command itself, write a Bash allow rule with its exact text.
+**What to do:** Answer "always" on such a command only for a program you trust everywhere; otherwise answer once. For a command that steers its program as in the first point, "always" saves the pattern of the first word after any leading assignments (`env *`, `sudo *`, `timeout *`, `nice *`, `printf *`), or nothing for a plain `IFS=` command, and that does not lift the command again (`tool-shell.test.ts`). For `env`, `sudo` or `timeout`, that pattern covers every program behind the word (the bullet above), so answer "always" only when you would let every command starting with that word run unasked. To stop the question for the command itself, write a Bash allow rule with its exact text.
 
 ## A project ID file shipped in a folder is ignored unless the folder is trusted
 
