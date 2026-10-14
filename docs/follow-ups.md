@@ -110,7 +110,6 @@ Each row waits for a decision. A row marked major is also an open major.
 | FU-M3-148 | Windows sort and find may resolve to the System32 programs | minor | Accept the gap, or schedule the fix (size S) | PR #90 C0-C9 (owner item) |
 | FU-M3-156 | LSP: hiding the tool when no server is connected is unassigned; no result-count envelope; field names differ from the reference | minor | Accept the gap, or schedule the fix (size M) | PR #92 body Deviations; C0-C4 |
 | FU-M3-161 | Page text can steer the small model or close `<page>` early | minor | Accept the gap, or schedule the fix (size M) | PR #93 C0 |
-| FU-M3-166 | Repository config runs programs during read-only git (core.fsmonitor, diff.external, textconv, gpg.program, core.sshCommand) | major | the owner chooses, before the M7 flip, between allowing read-only git only in trusted folders and -c overrides that disable those keys (plan shell-safety-5 amendment) | PR #95 C0-C4 and body Deviations |
 | FU-M3-167 | gh auth status --hostname sends GH_ENTERPRISE_TOKEN to a named host; gh read-only with no staff gate (owner Q1); dotnet --version/--info ask pending owner | minor | Accept the gap, or schedule the fix (size S) | PR #95 C0-C4 and body Deviations |
 | FU-M3-172 | No task draws question previews in any client | minor | Accept the gap, or schedule the fix (size M) | PR #96 body Deviations; C2-C4 |
 | FU-M3-176 | Unreadable managed file loses managed_only (fail-open) | minor | Accept the gap, or schedule the fix (size S) | PR #97 C0-C2 |
@@ -121,7 +120,6 @@ Each row waits for a decision. A row marked major is also an open major.
 | FU-M3-206 | User env for Orbit's own work: formatter and LSP detection ignore env.PATH; workspace-bound locations; boot env not re-applied on managed change | minor | Accept the gap, or schedule the fix (size M) | PR #103 C0-C2 and body Deviations |
 | FU-M3-243 | os.tmpdir() is not always internal (reverses the plan appendix) | minor | Accept the gap, or schedule the fix (size S) | PR #110 body deviation 2 |
 | FU-M3-249 | PR bodies of merged M3 PRs left appended, not regenerated (stale counts, footers, claims) | minor | Accept the gap, or schedule the fix (size S) | Review minors on #68, #70, #72, #74, #75, #79, #80, #84, #86, #88, #89, #90, #91, #92, #95, #96, #97, #99, #101, #102, #104, #106, #107, #108, #110 |
-| FU-M3-300 | M3 scenario 'a 40 KB inline --settings works on Windows' cannot pass (32,767-character command line) | major | Accept the gap, or schedule the fix (size XS) | M3 r1 fu27, fu38; major r1 maj1 |
 | FU-M3-301 | Shell findings only describe until shell-safety-12 (M7); the interim ships to main with M3 | major | Accept the gap, or schedule the fix (size S) | M3 r5 fu119 (parts a, b); major r5 maj28 |
 | FU-M3-303 | Pinned WebFetch tries the next checked address only after the OS gives up | minor | Accept the gap, or schedule the fix (size M) | M3 r1 fu17; r3 fu72 |
 | FU-M3-304 | WebSearch domain fields are camelCase, not the reference's allowed_domains / blocked_domains | minor | Accept the gap, or schedule the fix (size S) | M3 r1 fu15; r3 fu70 (field naming part) |
@@ -150,6 +148,7 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 | FU-M3-121 | A managed plugins.block by package name is bypassed by an npm alias, git, file: or UNC spelling (only allow lists hold) | 8 | An administrator's block list misses another spelling of the same package: x@npm:evil-pkg installs and runs a blocked package. | low (trusted config writer) | S | agents-extensibility-20 | M3 r5 fu127; major r5 maj30; PR #86 C0-C6 (FU-M3-121) | plugin/src/restriction.ts:46-50 keeps the raw spec when registryName is undefined (util/src/npm.ts:79); packages/core/src/plugin/supervisor.ts:79-83 (identity by spec) |
 | FU-M3-364 | stream-json end does not stop a turn that started just before it | 13 | A back-to-back user+end runs the model call to the end and reports success with exit 0. | every back-to-back user+end; flakes the gate row under load | S (about 10 lines) | clients-ux-47 | M3 r4 fu113; major r4 maj27 | cli/src/run/stream.ts:948 interrupts only when a period exists |
 | FU-M3-365 | Strict -p and stream-json trust gate runs past its 300 s limit on Windows | 12, tests | A gate fails on Windows when re-run alone though every row refuses correctly. | high on a loaded Windows machine | XS | sweep | M3 r3 fu78; major r3 maj22 | cli/test/trust.test.ts:374-469 runs every start serially under 300_000 |
+| FU-M3-166 | Repository config runs programs during read-only git (core.fsmonitor, diff.external, textconv, gpg.program, core.sshCommand) | 1, 8 | A clone's git config names a program that a read-only git command runs with no question. | medium; default path | S-M. Owner decision 2026-10-14 ("What ever reference is doing"; the reference adds no `-c` overrides and nothing runs before the folder is trusted): before the M7 flip, read-only git auto-allows only when the folder git runs in is trusted; in an untrusted folder it asks like any other command, with no `-c` overrides. `-c`, `--exec-path`, `--config-env`, `-C`, `--git-dir`, `--work-tree`, `--attr-source` and their attached forms are never read-only. The startup git snapshot runs only after trust (prompts-context-4) | shell-safety-12 | PR #95 C0-C4 and body Deviations; owner decision 2026-10-14 | not re-probed; read-only git in the shell guard (PR #95) |
 
 ## Open, by carrier milestone
 
@@ -229,7 +228,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-411 | Permission's exact-text filter for program-steering commands reads raw text, so a quoted or escaped assignment is lifted by an env `*` grant | 8 | After an always on env A=1 ls, env "PATH"=. ls, env PA''TH=. ls, `env P\ATH=. ls` and env -S 'PATH=. ls' are lifted and a repository's ./ls ran unasked on Windows (Git Bash) and Linux in temporary rows. | low; needs an always on an env command first | S: decide steering from the unquoted argv values, or close the root with a bash never-save set | permissions-13 | M3 verification round 8, follow-up 41 | packages/core/src/permission.ts:133 STEERING tested on the raw resource; docs/upgrading.md:2928 says '(follow-up)' |
 | FU-M3-415 | STEERING counts any dash after env as an env option, so 'always' never sticks for an env-prefixed command with a flag | 8 | An always on env A=1 ls -la or env A=1 rm -rf x saves env `*` again and the question repeats every time. Safe side, not a hole. | common | S: match options only among the words between env and the first non NAME=VALUE word, keep the quoted spellings in mind, add rows | permissions-13 | M3 verification round 8, follow-up 55 | packages/core/src/permission.ts:133 `env\s+(?:\S+\s+)*?-` |
 
-### M7 (67)
+### M7 (68)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -300,6 +299,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-416 | A git output file (git diff/log/show --output, git format-patch -o, git archive -o) is not recorded as a write | 8 | An Edit deny on the output file and the folder question do not apply to a git output option; the command is still not read-only, so it is asked as a Bash command wherever Bash asks. Same in PowerShell, with or without -C; the -C, drive, UNC and root-relative placements looped for three rounds. | low; needs the model to pick a git output option outside the project | M: place the output under -C, --git-dir, --work-tree, GIT_DIR/GIT_WORK_TREE and core.worktree, or treat git output options as unplaceable (ask, no save) | shell-safety-12 | M3 verification round 9, follow-up 56 | packages/core/src/shell/paths.ts outputs() has no git branch since 4c88f0b; docs/untrusted-repositories.md:1963-1967; paths.test.ts rows pin the reverted analysis |
 | FU-M3-417 | An assignment-shaped word with `~` (cat `x=~/s`, `x+=~/s`, `x=a:~/s`, `a[0]=~/s`, `h+=~/z`) is read literally, while bash expands the `~` | 4 | With a planted link named x=, a bash read or write reaches the person's home folder while the analysis places it in the project, so a Read/Edit deny on the home path is not met. Also: HOME assigned later in a loop, bash posix mode, subscripted names and quoted halves are not modelled. | low; needs a planted link and an unusual spelling | S-M: bash-only, quote-aware, cover += and `:~`, or mark such a word not literal (dynamic) | shell-safety-12 | M3 verification round 9, follow-up 57; also round 8 follow-up 43, round 8 follow-up 52, round 8 follow-up 53, round 8 follow-up 54 | packages/core/src/shell/analysis.ts word() (no expansion); paths.test.ts pins 'cat `x=~/s`' as `/work/x=~/s`; dd `if=~/of=~` are expanded at paths.ts:475 |
 | FU-M3-420 | paths.ts records git diff operand reads only for an explicit --no-index, although git reads both path operands in implicit no-index mode | 8 | A git diff that fails the read-only check (-U5, --textconv, --output) with a file outside the work tree makes only a Bash request, so the external_directory question and Read denies never see the file; under the default allow posture the diff reaches the model. | low to medium; needs the model to name an outside file | S: list the first two path operands of git diff as reads in operands() (words after -- included, relative to -C), update the round 9 row | shell-safety-12 | M3 verification round 9, follow-up 62 | packages/core/src/shell/paths.ts operands(); paths.test.ts row ["git -C `~` diff --output=o f1 f2", []]; readonly.ts git() already models it |
+| FU-M3-423 | Check Orbit's handling of unparsable shell input against the reference's matrix | 8 | A prefix allow lifting unparsable input, or a missing per-fragment deny, would let input Orbit cannot analyse run unasked after the M7 flip. | low | S. Owner decision 2026-10-14 ("Add that in m7"): the M3 exit criterion "syntax errors refused" is reworded to "syntax errors ask, with no 'always'". The reference never refuses such input. Input that does not parse, or is too complex to analyse, meets deny rules on the whole text and on each fragment, then an exact whole-command rule; otherwise it gets a plain ask with no "always". Bypass and a tool-wide shell allow lift it; a prefix allow does not; it is not bypass-immune. PowerShell also ignores an exact allow when the head looks like a path to a program (PowerShell parts: shell-safety-14) | shell-safety-12 | owner decision 2026-10-14; M3 exit-criteria audit | not re-probed |
 
 ### M8 (27)
 
@@ -340,7 +340,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-122 | A stopped background child gets a second 'succeeded' idle marker | behaviour | Clients show a stopped child as succeeded. | low | S | agents-extensibility-34 | #65 round 6 re-check 30 | not re-probed; background job stop path |
 | FU-M3-379 | git worktree add is serialised only within one process | behaviour | Two orb processes in one repository can still hit the commondir race. | low | S | agents-extensibility-28 | M3 r6 fu160 | flow/src/git.ts in-memory chain |
 
-### M10 (17)
+### M10 (18)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -361,6 +361,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-366 | Overlay deep-merges the legacy mcp.`<name>` server spelling and does not count it for managed_only | 8 | A later url keeps an earlier Authorization header under the V1 spelling. | low | S | clients-ux-17 | M3 r6 fu187 | cli/src/config-overlay.ts:497 WHOLE_ENTRIES and :417-420 serverCount read only mcp.servers |
 | FU-M3-367 | An unset {env:VAR} in --mcp-config becomes empty instead of stopping the run | 7 | `https://{env:HOST}/mcp` becomes `https://mcp/` and the headers go there. | low | S | clients-ux-17 | M3 r4 fu108 part a | cli/src/config-overlay.ts mcp layer has no unset-variable check |
 | FU-M3-383 | cross-spawn's bundled `which@2` looks in the working folder first on Windows | 10 | A folder decoy is read (shebang) or chosen before PATH for a bare name started in an untrusted folder. | low (trust gate keeps MCP out) | S-M review | agents-extensibility-23 | M3 r4 fu116 (side note) | node_modules `which@2.0.2` which.js:21 prepends process.cwd(); never reviewed per surface |
+| FU-M3-300 | M3 scenario 'a 40 KB inline --settings works on Windows' cannot pass (32,767-character command line) | tests | The reworded M3 check could drift from what the overlay does. | low | S. Owner decision 2026-10-14 ("What ever reference is doing"): the reference has no long-value handling; inline JSON is bounded by the OS command line and a file path works at any size, and it writes inline JSON once to a file named by a hash of its content and gives child processes that path. The plan's M3 check is reworded to "A 40 KB `--settings` file works on Windows; inline JSON works up to the OS command-line limit (about 28 KB pinned)", which M3 shipped and pins. Remaining work: check that Orbit's overlay matches the hashed-file and child-path behaviour, keeping the file in clients-ux-4's per-user folder | clients-ux-17 | M3 r1 fu27, fu38; major r1 maj1; owner decision 2026-10-14 | packages/cli/test/config-overlay-flags.test.ts (the 40 KB file and near-limit inline rows) |
 
 ### M12 (2)
 
@@ -824,11 +825,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) = 704.
-- Output: 621 rows plus 83 listed duplicates = 704. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 621 register rows have a table entry.
-- Open minors by carrier: M4: 17, M5: 5, M6: 37, M7: 67, M8: 27, M9: 2, M10: 17, M12: 2, Sweep: 145, Owner: 90.
-- Open majors: 14 open, plus 7 marked major in "For the owner" that wait for a decision = 21.
-- For the owner: 88.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 = 705.
+- Output: 622 rows plus 83 listed duplicates = 705. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 622 register rows have a table entry.
+- Open minors by carrier: M4: 17, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 145, Owner: 90.
+- Open majors: 15 open, plus 5 marked major in "For the owner" that wait for a decision = 20.
+- For the owner: 86.
 - Fixed: 110.
 - Duplicates: 83.
-- Check: 423 open + 88 owner + 110 fixed + 83 duplicates = 704, the 704 inputs.
+- Check: 426 open + 86 owner + 110 fixed + 83 duplicates = 705, the 705 inputs.
