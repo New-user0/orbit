@@ -4,7 +4,8 @@ import path from "path"
 // Class 15: docs/follow-ups.md is the one register of follow-ups, and a table cell that is cut mid-sentence, a placeholder
 // that Markdown reads as HTML, or a duplicate that points at a row that is not there loses what the register is for.
 const register = await Bun.file(path.join(import.meta.dir, "../../../docs/follow-ups.md")).text()
-const lines = register.split("\n")
+// A default Windows checkout (core.autocrlf) has CRLF, which would leave a \r on every line and match no heading.
+const lines = register.split(/\r?\n/)
 
 // The text of a line without its code spans, which is what Markdown reads as prose.
 const prose = (line: string) => line.replace(/`[^`]*`/g, "")
@@ -20,6 +21,10 @@ describe("the follow-up register", () => {
   test("every table row has a different id", () => {
     const ids = rows.map((line) => line.split("|")[1].trim())
     expect(ids.filter((id, index) => ids.indexOf(id) !== index)).toEqual([])
+  })
+
+  test("the duplicates list is found, so the checks on it do not pass on nothing", () => {
+    expect(duplicates.length).toBeGreaterThan(0)
   })
 
   test("every duplicate points at a row that has a table entry", () => {
