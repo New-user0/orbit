@@ -1259,6 +1259,8 @@ describe("ConfigInstructionPlugin.Plugin reads the list of the documents that th
           expect(placesOf(revoked)).toEqual([where.rootFile])
         }).pipe(Effect.provide(stamped(where, false)))
       }),
+      // Each wait ends on the first read that has changed, and gives up after five seconds.
+      30_000,
     )
   }
 

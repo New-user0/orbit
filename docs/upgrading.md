@@ -493,12 +493,12 @@ finds it later:
   still sent whole. The warning never reaches the model, and no client shows it yet.
 - **`instructions_exclude`.** A new list of glob patterns or absolute paths of instruction files that Orbit does not
   load. A pattern is matched against the whole absolute path of the file, written with forward slashes, and `*` also
-  matches names that start with a dot. A pattern with no folder in it, such as `AGENTS.md`, matches nothing, and neither
-  does one that starts with `~`, which is not expanded, so write `**/third_party/**/AGENTS.md` to skip a folder's file
-  wherever the project lives. The lists of your settings, the project's, the local file's, the flag's and the
-  organization's are added up. An excluded file is not read at all, and the next name in its folder takes its place. A
-  project's or local file's list is ignored until its folder is trusted, because it would otherwise let a repository
-  hide your own instruction files from the model.
+  matches names that start with a dot. The match is case-sensitive, except for a drive letter. A pattern with no folder in
+  it, such as `AGENTS.md`, matches nothing, and neither does one that starts with `~`, which is not expanded, so write
+  `**/third_party/**/AGENTS.md` to skip a folder's file wherever the project lives. The lists of your settings, the
+  project's, the local file's, the flag's and the organization's are added up. An excluded file is not read at all, and
+  the next name in its folder takes its place. A project's or local file's list is ignored until its folder is trusted,
+  because it would otherwise let a repository hide your own instruction files from the model.
 
 A session that already has instruction files with comments or front matter gets one instruction update at its next
 boundary, because what is stored for it is now the text that is left. Changing only a comment, or only the front
