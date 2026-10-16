@@ -145,6 +145,13 @@ export function name(file: string) {
   return path.basename(file).toLowerCase()
 }
 
+const PLATFORMS: Partial<Record<string, string>> = { darwin: "macOS", win32: "Windows", linux: "Linux" }
+
+/** What people call a platform (`process.platform`'s `darwin` is macOS); a platform with no common name keeps its own. */
+export function platformName(platform: string) {
+  return PLATFORMS[platform] ?? platform
+}
+
 export function login(file: string) {
   return meta(file)?.login === true
 }
