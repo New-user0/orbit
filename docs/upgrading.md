@@ -2439,7 +2439,7 @@ from the accepted `StructuredOutput` call; make the schema an object schema; upd
 
 What the model is told about itself and the place it works in.
 
-### The environment names the shell and the system, the identity a knowledge cutoff, and each session a scratchpad
+### The model learns its shell, its system, its knowledge cutoff and a scratchpad folder
 
 The environment block of the baseline now names the shell that the shell tool runs and the version of the operating
 system (`Windows 11 Pro 10.0.26200`, `Darwin 24.6.0`, `Linux 6.8.0-45-generic`). The platform line gives the usual name
