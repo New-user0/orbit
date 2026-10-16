@@ -93,6 +93,14 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { Expected } from "./lib/session-message"
 import { permissionLayer } from "./lib/permission"
 import { overloaded } from "./lib/provider-failure"
+import { tempGlobalLayer } from "./fixture/global"
+import { SessionContext } from "@orbit/core/session/context"
+import { SessionHistory } from "@orbit/core/session/history"
+import { SessionScratchpad } from "@orbit/core/session/scratchpad"
+import { SessionTitle } from "@orbit/core/session/title"
+import { Global } from "@orbit/util/global"
+import fs from "fs/promises"
+import path from "path"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
 
@@ -235,6 +243,8 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    // The sessions that a drain made the scratchpad of, and how many model requests had been made by then.
+    scratchpads: new Array<{ readonly sessionID: Session.ID; readonly requests: number }>(),
     // Busy periods the coordinator started and settled; one continuation must stay inside one of them.
     drains: { started: 0, settled: 0 },
     turnEnd: ((_input: SessionTurnEnd.Input) => Effect.succeed(undefined)) as SessionTurnEnd.Check["run"],
@@ -317,9 +327,29 @@ const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string,
       editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } }),
     ),
   )
-const makeLayer = (persist: boolean) =>
+// With `real` the scratchpad is the service itself on a temporary folder, as a person has it. Otherwise a stand-in names
+// no folder, so that no request holds a path of this machine, and it records each drain that made one.
+const makeLayer = (persist: boolean, real = false) =>
   Layer.unwrap(
   Effect.map(RunnerState, (state) => {
+    const scratchpad: LayerNode.Replacements = real
+      ? [Global.node.replace(tempGlobalLayer)]
+      : [
+          SessionScratchpad.node.replace(
+            Layer.effect(
+              SessionScratchpad.Service,
+              Effect.gen(function* () {
+                const llm = yield* TestLLM.Service
+                return SessionScratchpad.Service.of({
+                  path: () => undefined,
+                  source: () => Instructions.empty,
+                  ensure: (session) =>
+                    Effect.sync(() => void state.scratchpads.push({ sessionID: session.id, requests: llm.requests.length })),
+                })
+              }),
+            ).pipe(Layer.provide(testLLM)),
+          ),
+        ]
     const modelTransport = Layer.succeed(
       SessionModelTransport.Service,
       SessionModelTransport.Service.of({
@@ -546,6 +576,7 @@ const makeLayer = (persist: boolean) =>
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(systemContext),
       InstructionDiscovery.node.replace(instructionContext),
+      ...scratchpad,
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SkillInstructions.node.replace(skillInstructions),
       ReferenceInstructions.node.replace(referenceInstructions),
@@ -617,6 +648,9 @@ const makeLayer = (persist: boolean) =>
         Snapshot.node,
         SessionCompaction.node,
         LayerNodePlatform.llmClient,
+        SessionContext.node,
+        SessionScratchpad.node,
+        SessionTitle.node,
         SessionRunnerLLM.node,
         SessionExecution.node,
         Session.node,
@@ -640,6 +674,8 @@ const layer = makeLayer(true)
 const productionLayer = makeLayer(false)
 const it = testEffect(layer)
 const productionIt = testEffect(productionLayer)
+// The scratchpad service itself, on a temporary folder: the only scenarios that read what the baseline says of it.
+const scratchpadIt = testEffect(makeLayer(true, true))
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
 
@@ -9818,5 +9854,118 @@ describe("SessionRunnerLLM", () => {
 
     expect(s.requests).toHaveLength(2)
     expect(s.requests.map((request) => request.toolChoice)).toMatchObject([{ type: "none" }, { type: "none" }])
+  })
+})
+
+// The folder that the baseline names is made when a drain starts, once, and by nothing else.
+describe("SessionRunnerLLM scratchpad", () => {
+  const exists = (file: string) =>
+    Effect.promise(() =>
+      fs.lstat(file).then(
+        () => true,
+        () => false,
+      ),
+    )
+  const scratchpadScenario = scenarioOn(scratchpadIt)
+
+  scenario("makes the scratchpad once when a drain starts, before its first model request", function* (s) {
+    yield* s.admit("Use the tool, then answer")
+    yield* s.llm.push(TestLLM.tool("call-scratch", "echo", { text: "a" }), TestLLM.text("Done", "done-scratch"))
+
+    yield* s.resume
+
+    // Two steps ran in one drain, and the folder was asked for once, before either request.
+    expect(s.requests).toHaveLength(2)
+    expect(s.scratchpads).toEqual([{ sessionID, requests: 0 }])
+
+    yield* s.admit("Again")
+    yield* s.llm.push(TestLLM.text("Done again", "again-scratch"))
+    yield* s.resume
+
+    expect(s.scratchpads).toEqual([
+      { sessionID, requests: 0 },
+      { sessionID, requests: 2 },
+    ])
+  })
+
+  scenario("makes no scratchpad for a drain that has nothing to run", function* (s) {
+    const runner = yield* SessionRunner.Service
+    yield* runner.drain({ sessionID, force: false })
+    expect(s.scratchpads).toEqual([])
+  })
+
+  scratchpadScenario("makes the folder when a drain starts, and not for an admitted prompt or a preview", function* (s) {
+    const context = yield* SessionContext.Service
+    const scratchpad = yield* SessionScratchpad.Service
+    const stored = yield* s.session.get(sessionID)
+    const folder = scratchpad.path(stored)
+    if (folder === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+
+    yield* s.admit("Hello")
+    // What a preview or a generation reads, and the section a request would hold: neither makes the folder.
+    const selected = yield* context.select(sessionID)
+    yield* Instructions.read(selected.instructions)
+    yield* SessionHistory.preview(s.db, sessionID, selected.instructions, "local")
+    expect(yield* exists(folder)).toBe(false)
+
+    yield* s.llm.push(TestLLM.text("Hi", "hi-scratch"))
+    yield* s.resume
+
+    expect((yield* Effect.promise(() => fs.lstat(folder))).isDirectory()).toBe(true)
+    expect(s.requests[0]?.system.map((part) => part.text).join("\n")).toContain(`\`${folder}\``)
+
+    // The next drain makes it again if it is gone, which is all that "once per drain" needs.
+    yield* Effect.promise(() => fs.rm(folder, { recursive: true, force: true }))
+    yield* s.admit("Again")
+    yield* s.llm.push(TestLLM.text("Hi again", "hi-again-scratch"))
+    yield* s.resume
+    expect(yield* exists(folder)).toBe(true)
+  })
+
+  scratchpadScenario("does not make the folder when a title is generated", function* (s) {
+    const title = yield* SessionTitle.Service
+    const scratchpad = yield* SessionScratchpad.Service
+    const folder = scratchpad.path(yield* s.session.get(sessionID))
+    if (folder === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+
+    // A first drain makes the folder and delivers the prompt, which a title is made from; then the folder is taken away.
+    yield* s.admit("Hello")
+    yield* s.llm.push(TestLLM.text("Hi", "hi-title-scratch"))
+    yield* s.resume
+    yield* Effect.promise(() => fs.rm(folder, { recursive: true, force: true }))
+
+    yield* prepareTitleGeneration
+    yield* s.llm.push(TestLLM.text("Generated title", "text-title-scratch"))
+    yield* title.generate(sessionID)
+
+    expect((yield* s.session.get(sessionID)).title).toBe("Generated title")
+    expect(yield* exists(folder)).toBe(false)
+  })
+
+  scratchpadScenario("makes the folder of the session that a subagent goes back to", function* (s) {
+    const scratchpad = yield* SessionScratchpad.Service
+    const stored = yield* s.session.get(sessionID)
+    const child = Session.ID.make("ses_runner_scratch_child")
+    yield* s.db
+      .insert(SessionTable)
+      .values({
+        id: child,
+        project_id: Project.ID.global,
+        slug: child,
+        directory: "/project",
+        title: "child",
+        version: "test",
+        parent_id: sessionID,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    const folder = scratchpad.path(stored)
+    if (folder === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+
+    yield* s.session.prompt({ sessionID: child, text: "Hello from the subagent", resume: false })
+    yield* s.llm.push(TestLLM.text("Hi", "hi-child-scratch"))
+    yield* s.session.resume(child)
+
+    expect(yield* Effect.promise(() => fs.readdir(path.dirname(folder)))).toEqual([path.basename(folder)])
   })
 })

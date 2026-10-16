@@ -56,6 +56,7 @@ import { asc, eq } from "drizzle-orm"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
+import { noScratchpad } from "./lib/scratchpad"
 import { stubSnapshot } from "./lib/tool"
 
 const requests: LLMRequest[] = []
@@ -161,6 +162,7 @@ const it = testEffect(
       llmClient.replace(client),
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(builtins),
+      noScratchpad,
       InstructionDiscovery.node.replace(discovery),
       SkillInstructions.node.replace(skills),
       ReferenceInstructions.node.replace(references),

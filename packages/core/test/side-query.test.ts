@@ -43,6 +43,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Context, Duration, Effect, Fiber, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
+import { noScratchpad } from "./lib/scratchpad"
 import { stubSnapshot } from "./lib/tool"
 
 const sessionID = SessionSchema.ID.make("ses_side_query_test")
@@ -129,6 +130,7 @@ const it = testEffect(
         Model.node.replace(catalogModels),
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(builtins),
+        noScratchpad,
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),

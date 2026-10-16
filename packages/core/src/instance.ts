@@ -49,6 +49,7 @@ import { InstructionDiscovery } from "./instruction-discovery.js"
 import { InstructionBuiltIns } from "./instructions/builtins.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
 import { SessionInstructions } from "./session/instructions.js"
+import { SessionScratchpad } from "./session/scratchpad.js"
 import { McpTool } from "./tool/mcp.js"
 import { ReadToolFileSystem } from "./tool/read-filesystem.js"
 import { Tool } from "./tool.js"
@@ -103,6 +104,7 @@ const nodes = [
   ReadToolFileSystem.node,
   McpTool.node,
   SessionInstructions.node,
+  SessionScratchpad.node,
   SessionRunnerModel.node,
   SessionCompaction.node,
   SessionTitle.node,

@@ -45,6 +45,7 @@ import { testEffect } from "./lib/effect"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { permissionLayer } from "./lib/permission"
+import { noScratchpad } from "./lib/scratchpad"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 
 const cassetteName = "session-runner/openai-chat-streams-text"
@@ -100,6 +101,7 @@ const runnerLayer = (llmClient: Layer.Layer<LLMClientService>) =>
     SessionRunnerModel.node.replace(models),
     InstructionBuiltIns.node.replace(systemContext),
     InstructionDiscovery.node.replace(instructionContext),
+    noScratchpad,
     Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
     SkillInstructions.node.replace(skillInstructions),
     ReferenceInstructions.node.replace(referenceInstructions),
@@ -157,6 +159,7 @@ const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(systemContext),
       InstructionDiscovery.node.replace(instructionContext),
+      noScratchpad,
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SkillInstructions.node.replace(skillInstructions),
       ReferenceInstructions.node.replace(referenceInstructions),

@@ -40,8 +40,6 @@ export const folders = (
   global: Pick<Global.Interface, "data" | "tmp" | "config">,
   real: Pick<Global.Interface, "data" | "tmp" | "config"> = global,
 ): Info["permissions"] => {
-  // A folder reached through a link is decided by where it really leads, so each allow is also written for the real path.
-  const places = (spelled: string, leads: string) => (spelled === leads ? [spelled] : [spelled, leads])
   const allow = (resource: string) => ({ action: "external_directory", resource, effect: "allow" as const })
   const rules = [
     ...places(global.data, real.data).flatMap((data) => [allow(SHELL_OUTPUT_GLOB(data)), allow(TOOL_OUTPUT_GLOB(data))]),
@@ -54,6 +52,66 @@ export const folders = (
 
 const orbitOwn = new WeakSet<object>()
 export const isOwnFolder = (rule: object) => orbitOwn.has(rule)
+
+// A folder reached through a link is decided by where it really leads, so each allow is also written for the real path.
+const places = (spelled: string, leads: string) => (spelled === leads ? [spelled] : [spelled, leads])
+
+/** The folder under the temporary folder that holds the scratchpads, one per session lineage (`SessionScratchpad`). */
+export const scratchpadRoot = (tmp: string) => path.join(tmp, "sessions")
+
+/**
+ * The scratchpad allows, each with the folders of scratchpads it was written for: the one it names and the other
+ * spelling of it, when the temporary folder is reached through a link. The allow is the same kind of rule as Plan's allow
+ * for its folder, and it is Orbit's own like `folders`, so it never decides a place that a link leads out to.
+ */
+const scratchpads = new WeakMap<object, { readonly root: string; readonly roots: readonly string[] }>()
+
+/** The allows that `narrowScratchpad` cut, and the folders of the one scratchpad each is for. */
+const narrowed = new WeakMap<object, readonly string[]>()
+
+/**
+ * The scratchpad folders that `rule` allows editing in, when `narrowScratchpad` made it: the folder as it is spelled and
+ * as it really is. A name is not where a file is: a link inside the folder can point out of it, so `Permission` lets the
+ * rule decide only a place whose real path is in one of these folders too.
+ */
+export const scratchpadFolders = (rule: object) => narrowed.get(rule)
+
+/**
+ * The allow that lets an agent edit in its session's scratchpad without a question, written for each spelling of the
+ * temporary folder. It sits next to the allows of `folders`, before the rules of the person, so a deny of theirs still
+ * wins. As written it names every session's scratchpad; `narrowScratchpad` cuts it to the folder of the session that asks.
+ */
+export const scratchpad = (
+  global: Pick<Global.Interface, "tmp">,
+  real: Pick<Global.Interface, "tmp"> = global,
+): Info["permissions"] => {
+  const roots = places(global.tmp, real.tmp).map(scratchpadRoot)
+  return roots.map((root) => {
+    const rule = { action: "Edit", resource: path.join(root, "*"), effect: "allow" as const }
+    scratchpads.set(rule, { root, roots })
+    orbitOwn.add(rule)
+    return rule
+  })
+}
+
+/**
+ * `rules` as they apply to the session whose scratchpad folder is `key`: each allow that `scratchpad` made names only
+ * that folder, and a session with no scratchpad (`key` is undefined) has none. The order of the rules is kept, so a
+ * later rule of the person's still wins. The cut allow is Orbit's own, as the one it came from is.
+ */
+export const narrowScratchpad = (rules: Info["permissions"], key: string | undefined) =>
+  rules.flatMap((rule) => {
+    const written = scratchpads.get(rule)
+    if (written === undefined) return [rule]
+    if (key === undefined) return []
+    const cut = { ...rule, resource: path.join(written.root, key, "*") }
+    narrowed.set(
+      cut,
+      written.roots.map((root) => path.join(root, key)),
+    )
+    orbitOwn.add(cut)
+    return [cut]
+  })
 
 /**
  * Marks a rule that a mode puts on an agent, such as Plan's deny of every edit, and returns it. The mode decides what the
@@ -123,11 +181,12 @@ const layer = Layer.effect(
         // Any failure keeps the spelled path: `resolve` dies, not fails, on a link loop at the folder.
         Effect.catchCause(() => Effect.succeed(folder)),
       )
-    const permissions = folders(global, {
+    const real = {
       data: yield* lead(global.data),
       tmp: yield* lead(global.tmp),
       config: yield* lead(global.config),
-    })
+    }
+    const permissions = [...folders(global, real), ...scratchpad(global, real)]
     const state = State.create<Data, Editor>({
       name: "agent",
       initial: () => ({ agents: new Map() }),

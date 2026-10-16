@@ -281,6 +281,82 @@ describe("Agent", () => {
   )
 })
 
+describe("Agent.scratchpad", () => {
+  const spelled = Global.make({ data: "/data", config: "/config", tmp: "/tmp/orbit" })
+  const real = Global.make({ data: "/data", config: "/config", tmp: "/real/tmp" })
+  const person = { action: "Edit", resource: "src/*", effect: "deny" as const }
+
+  test("is one allow for editing under the folder of sessions, Orbit's own, for each spelling of the temporary folder", () => {
+    const one = Agent.scratchpad(spelled)
+    expect(one.map((rule) => rule.resource)).toEqual([path.join("/tmp/orbit", "sessions", "*")])
+    expect(one.every((rule) => rule.action === "Edit" && rule.effect === "allow" && Agent.isOwnFolder(rule))).toBe(true)
+    const two = Agent.scratchpad(spelled, real)
+    expect(two.map((rule) => rule.resource)).toEqual([
+      path.join("/tmp/orbit", "sessions", "*"),
+      path.join("/real/tmp", "sessions", "*"),
+    ])
+  })
+
+  test("is cut to the folder of one session, in the place of the rule it came from", () => {
+    const [first, second] = Agent.scratchpad(spelled, real)
+    const rules = [person, first!, person, second!]
+    const cut = Agent.narrowScratchpad(rules, "ses_a")
+    // Other rules are the same objects, and a later rule of the person's still comes after the allow.
+    expect(cut[0]).toBe(person)
+    expect(cut[2]).toBe(person)
+    expect(cut.map((rule) => rule.resource)).toEqual([
+      "src/*",
+      path.join("/tmp/orbit", "sessions", "ses_a", "*"),
+      "src/*",
+      path.join("/real/tmp", "sessions", "ses_a", "*"),
+    ])
+    expect(cut.map((rule) => rule.effect)).toEqual(["deny", "allow", "deny", "allow"])
+    // Orbit's own, like the one it came from, and the rule that came from is not changed.
+    expect([cut[1], cut[3]].every((rule) => Agent.isOwnFolder(rule!))).toBe(true)
+    expect(first!.resource).toBe(path.join("/tmp/orbit", "sessions", "*"))
+    // Each names its folder for both spellings, so a call through a link is held to the real place.
+    expect(Agent.scratchpadFolders(cut[1]!)).toEqual([
+      path.join("/tmp/orbit", "sessions", "ses_a"),
+      path.join("/real/tmp", "sessions", "ses_a"),
+    ])
+    expect(Agent.scratchpadFolders(first!)).toBeUndefined()
+    expect(Agent.scratchpadFolders(person)).toBeUndefined()
+  })
+
+  test("leaves a session that has no scratchpad with none of them", () => {
+    const [first, second] = Agent.scratchpad(spelled, real)
+    expect(Agent.narrowScratchpad([person, first!, second!], undefined)).toEqual([person])
+  })
+
+  test("is not made by copying a rule: a copy is the person's", () => {
+    const [first] = Agent.scratchpad(spelled)
+    const copy = { ...first! }
+    expect(Agent.narrowScratchpad([copy], "ses_a")).toEqual([copy])
+    expect(Agent.narrowScratchpad([copy], "ses_a")[0]).toBe(copy)
+    expect(Agent.isOwnFolder(copy)).toBe(false)
+  })
+
+  it.effect("is in every agent, before the rules that a mode or a plugin adds", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* agent.transform((editor) =>
+        editor.update(Agent.ID.make("reviewer"), (info) => {
+          info.permissions.push({ action: "Edit", resource: "*", effect: "deny" })
+        }),
+      )
+      const info = yield* agent.get(Agent.ID.make("reviewer"))
+      const rules = info?.permissions ?? []
+      const at = rules.findIndex(
+        (rule) => rule.action === "Edit" && rule.resource === path.join(global.tmp, "sessions", "*"),
+      )
+      expect(at).toBeGreaterThan(-1)
+      expect(Agent.isOwnFolder(rules[at]!)).toBe(true)
+      // The plugin's deny comes later, so for this agent it decides the folder, as the person's rules do for every agent.
+      expect(rules.findIndex((rule) => rule.action === "Edit" && rule.resource === "*" && rule.effect === "deny")).toBeGreaterThan(at)
+    }),
+  )
+})
+
 describe("Agent.folders", () => {
   const spelled = Global.make({ data: "/data", config: "/config", tmp: "/tmp/orbit" })
   const leads = Global.make({ data: "/real/data", config: "/real/config", tmp: "/real/tmp" })

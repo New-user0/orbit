@@ -11,6 +11,7 @@ import { Location } from "./location.js"
 import { Agent } from "./agent.js"
 import { SessionErrors } from "./session/error.js"
 import { SessionSchema } from "./session/schema.js"
+import { SessionScratchpad } from "./session/scratchpad.js"
 import { SessionStore } from "./session/store.js"
 import { Wildcard } from "./util/wildcard.js"
 import { ToolNames } from "./tool/names.js"
@@ -252,8 +253,18 @@ const layer = Layer.effect(
       rules: Permission.Ruleset,
       approvals: Permission.Ruleset = [],
     ) => {
+      // The allow for a scratchpad is written for the spelling that a call gives, and a link inside the folder can lead
+      // out of it, so the allow decides only a call whose real place is in the folder too. A link that points out is
+      // decided by the rules for the place it points to (class 4).
+      const scratch = (rule: Permission.Rule) => {
+        const folders = Agent.scratchpadFolders(rule)
+        return (
+          folders === undefined ||
+          (input.leads?.[resource] ?? []).every((lead) => folders.some((folder) => FSUtil.contains(folder, lead)))
+        )
+      }
       const all = [
-        ...(input.escaped?.includes(resource) ? own(rules) : rules),
+        ...(input.escaped?.includes(resource) ? own(rules) : rules).filter(scratch),
         ...(steersProgram(input.action, resource)
           ? approvals.filter((rule) => rule.resource === resource && !/[*?]/.test(rule.resource))
           : approvals),
@@ -310,7 +321,8 @@ const layer = Layer.effect(
         // managed rules.
         agent: agent?.id ?? name,
         rules: merge(
-          agent?.permissions ?? missingAgentPermissions,
+          // The allow for editing in a scratchpad names the scratchpad of this session's lineage and no other.
+          Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
           managed.current().restrictions.managed_permissions_only ? own.filter((rule) => rule.effect !== "allow") : own,
         ),
       }
