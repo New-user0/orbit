@@ -451,6 +451,10 @@ const layer = Layer.effect(
           ChildProcess.make(
             gitExecutable,
             repositoryArgs(input.repository, [
+              // The config of the repository is the folder's own, and `core.fsmonitor` in it names a program that git runs
+              // whenever it reads the index. Asking whether a path is ignored needs no such program.
+              "-c",
+              "core.fsmonitor=false",
               "check-ignore",
               ...(input.tracked === "keep" ? [] : ["--no-index"]),
               "--stdin",

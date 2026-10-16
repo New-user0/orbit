@@ -8,6 +8,7 @@ import { Git } from "@orbit/core/git"
 import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { VcsPatch } from "@orbit/core/vcs/patch"
 import { branch, commit, initRepo, read, withRemote } from "./fixture/git"
+import { keys, live, planted } from "./fixture/git-keys"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -295,4 +296,51 @@ describe("Git trees", () => {
       expect(yield* read(path.join(root.path, "outside.txt"))).toBe("changed outside\n")
     }),
   )
+})
+
+// Class 1: the config of the repository is the folder's own, and git runs the program of `core.fsmonitor` whenever it reads
+// the index. Asking whether a path is ignored does not need one (`Lsp.ignored` asks only in a trusted folder, and Snapshot
+// asks with `--no-index`), so no program the config names runs for it. A plain `git status` in a repository set up the same
+// way is the control that the key is live there.
+describe("the read-only calls of Git and the config of the repository", () => {
+  // Snapshot, the workspace dialogs and the worktree strategies ask these in a folder that nobody has decided about, and git
+  // applies that folder's config to them. Each key of the table is planted, and none of the calls runs a program.
+  for (const key of keys)
+    it.live(`run no program that the config names for ${key.name}`, () =>
+      Effect.gen(function* () {
+        if (key.trigger) expect(yield* live(key)).not.toEqual([])
+        const found = yield* planted(key)
+        const git = yield* Git.Service
+
+        const repository = yield* git.repo.discover(AbsolutePath.make(found.root))
+        expect(repository).toBeDefined()
+        yield* git.remote.get(repository!)
+        yield* git.history.head(repository!)
+        yield* git.history.branch(repository!)
+        yield* git.history.defaultRemoteBranch(repository!)
+        yield* git.history.rootCommits(repository!)
+        yield* git.worktree.list(repository!)
+
+        expect(yield* found.ran()).toEqual([])
+      }),
+    )
+})
+
+describe("Git.index.ignored and the config of the repository", () => {
+  const fsmonitor = keys.find((key) => key.name === "core.fsmonitor")!
+
+  for (const tracked of [undefined, "keep"] as const)
+    it.live(`runs no fsmonitor program (${tracked === undefined ? "ignoring the index" : "reading the index"})`, () =>
+      Effect.gen(function* () {
+        expect(yield* live(fsmonitor)).not.toEqual([])
+        const found = yield* planted(fsmonitor)
+        const git = yield* Git.Service
+        const repository = yield* git.repo.discover(AbsolutePath.make(found.root))
+
+        const ignored = yield* git.index.ignored({ repository: repository!, paths: [RelativePath.make("a.txt")], tracked })
+
+        expect([...ignored]).toEqual([])
+        expect(yield* found.ran()).toEqual([])
+      }),
+    )
 })

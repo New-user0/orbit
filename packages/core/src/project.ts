@@ -10,6 +10,7 @@ import { Database } from "./database/database.js"
 import { Worktree } from "@orbit/schema/worktree"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Git } from "./git.js"
+import { GitLayout } from "./git/layout.js"
 import { AppProcess } from "@orbit/util/process"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Hash } from "@orbit/util/hash"
@@ -270,12 +271,13 @@ const layer = Layer.effect(
       )
     })
 
+    const remoteID = (origin: string | undefined) => {
+      const normalized = origin ? url(origin) : undefined
+      return normalized ? ID.make(Hash.fast(`git-remote:${normalized}`)) : undefined
+    }
+
     const remote = Effect.fnUntraced(function* (repo: Git.Repository) {
-      const origin = yield* git.remote.get(repo)
-      if (!origin) return undefined
-      const normalized = url(origin)
-      if (!normalized) return undefined
-      return ID.make(Hash.fast(`git-remote:${normalized}`))
+      return remoteID(yield* git.remote.get(repo))
     })
 
     function url(input: string) {
@@ -371,10 +373,23 @@ const layer = Layer.effect(
         Effect.map((matches) => matches[0]),
         Effect.orElseSucceed(() => undefined),
       )
-      const repo =
-        native && path.basename(native) === ".git"
-          ? yield* git.repo.discover(AbsolutePath.make(path.dirname(native)))
-          : undefined
+      const holder = native && path.basename(native) === ".git" ? AbsolutePath.make(path.dirname(native)) : undefined
+      // Git applies the config of the folder it runs in, and a clone chooses that file: it can name a program for git to
+      // run, and a project is resolved when a client opens the folder, before anyone is asked about it (class 1). So git
+      // starts only for a folder that is trusted. The decision is the main checkout's for a linked worktree, as
+      // `ProjectTrust` takes it, and the layout says which that is without asking git. Any other folder is read from its
+      // files, and is its own project when they name no remote, as an untrusted Mercurial folder is.
+      const layout = holder ? yield* GitLayout.locate(fs, holder) : undefined
+      const trusted = holder ? (yield* trust.status(layout?.canonical ?? holder)).trusted : false
+      const repo = holder && trusted ? yield* git.repo.discover(holder) : undefined
+      if (layout && !trusted) {
+        return yield* persist({
+          id: remoteID(yield* GitLayout.remote(fs, layout)) ?? ID.make(Hash.fast(`directory:${layout.worktree}`)),
+          directory: layout.worktree,
+          canonical: layout.canonical,
+          vcs: { type: "git" as const, store: layout.commonDirectory },
+        })
+      }
       if (repo) {
         const previous = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
         const id = (yield* remote(repo)) ?? previous ?? (yield* rootCommit(repo))

@@ -11,6 +11,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
+import { Hash } from "@orbit/util/hash"
 import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
 import { tempGlobalLayer } from "./fixture/global"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -153,7 +154,8 @@ describe("a shipped .hg/orbit", () => {
 })
 
 // The git counterpart (class 5, class 3): `.git/orbit` is also a file the folder supplies. A folder that is not trusted
-// is identified by its root commit, whatever ID a shipped file names; a trusted one reads it.
+// is identified by its path, whatever ID a shipped file names, and a trusted one reads it. (Its first commit would need git,
+// which starts only in a trusted folder: `project-git-trust.test.ts`.)
 describe("a shipped .git/orbit", () => {
   const other = "a".repeat(40)
   const git = Effect.gen(function* () {
@@ -170,12 +172,13 @@ describe("a shipped .git/orbit", () => {
   })
 
   untrusted.live(
-    "an untrusted folder resolves to its root commit, not the shipped ID",
+    "an untrusted folder is named by its path, not by the shipped ID",
     () =>
       Effect.gen(function* () {
         const found = yield* git
         const result = yield* (yield* Project.Service).resolve(AbsolutePath.make(found.dir))
-        expect(result.id).toBe(Project.ID.make(found.root))
+        expect(result.id).toBe(Project.ID.make(Hash.fast(`directory:${yield* Effect.promise(() => fs.realpath(found.dir))}`)))
+        expect(result.id).not.toBe(Project.ID.make(other))
         expect(result.previous).toBeUndefined()
       }),
     60_000,

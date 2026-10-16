@@ -6,7 +6,7 @@ import { FileSystem } from "@orbit/schema/filesystem"
 import path from "path"
 import { Bus } from "../bus.js"
 import { FSUtil } from "@orbit/util/fs-util"
-import { Git } from "../git.js"
+import { GitLayout } from "../git/layout.js"
 import { Location } from "../location.js"
 import { Plugin } from "../plugin.js"
 import { LocationWatcherPolicy } from "./location-watcher-policy.js"
@@ -23,7 +23,6 @@ const layer = Layer.effect(
     const watcher = yield* Watcher.Service
     const bus = yield* Bus.Service
     const fs = yield* FSUtil.Service
-    const git = yield* Git.Service
     const policy = yield* LocationWatcherPolicy.Service
     const publish = (update: { type: "create" | "update" | "delete"; path: string }) =>
       bus.publish(FileSystem.Event.Changed, {
@@ -33,9 +32,15 @@ const layer = Layer.effect(
     const target = yield* Effect.cached(
       Effect.gen(function* () {
         if (location.vcs?.type === "git") {
-          const resolved = (yield* git.repo.discover(location.directory))?.gitDirectory
-          const vcs = resolved ? yield* fs.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved)) : undefined
-          if (vcs) return { path: path.join(vcs, "HEAD"), aliases: [".git", vcs, ...(resolved ? [resolved] : [])] }
+          // The watcher starts with the Location, before anyone has been asked about the folder, and git would apply the
+          // config of the folder it runs in (class 1). The git directory is read from the files instead: this folder's own,
+          // or the entry of a linked worktree that its repository lists. For another layout, which is read only as far as
+          // its name, the Location's store is the git directory, and it has a `HEAD` to watch only if it is a folder.
+          const layout = yield* GitLayout.locate(fs, location.project.directory)
+          const resolved = layout?.verified ? layout.gitDirectory : location.vcs.store
+          if (!layout?.verified && !(yield* fs.isDir(resolved))) return undefined
+          const vcs = yield* fs.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved))
+          return { path: path.join(vcs, "HEAD"), aliases: [".git", vcs, resolved] }
         }
         if (location.vcs?.type === "hg") {
           const store = location.vcs.store
@@ -104,5 +109,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Watcher.node, FSUtil.node, Location.node, Git.node, Bus.node, Plugin.node, LocationWatcherPolicy.node],
+  deps: [Watcher.node, FSUtil.node, Location.node, Bus.node, Plugin.node, LocationWatcherPolicy.node],
 })
