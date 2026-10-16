@@ -95,6 +95,7 @@ import { permissionLayer } from "./lib/permission"
 import { overloaded } from "./lib/provider-failure"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
+import { Token } from "@orbit/core/util/token"
 
 const emptyCodeMode = `${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}\n\n`
 type ToolBarrier = {
@@ -123,7 +124,12 @@ const testModel = (id: string, limit: ModelLimit = defaultModelLimit) => {
   return LanguageModel.make({ id, provider: "fake", route: OpenAIChat.route })
 }
 const model = testModel("fake-model")
-const defaultSystem = SessionSystemPrompt.make([])
+// Every request of these tests offers the Code Mode tool, which `testLLM` takes out of the request it records, and the
+// base prompt carries that tool's guidance line.
+const defaultSystem = SessionSystemPrompt.make(["Execute"])
+// A window for the compaction tests below: the base prompt, which every request counts, and `tokens` of room beside it.
+// Their windows were 12,000 and 9,000 tokens when the base prompt was 1,048 tokens, so they keep 10,952 and 7,952.
+const withPrompt = (tokens: number) => Token.estimate(defaultSystem) + tokens
 const identity = (providerID: string, id: string) =>
   ["# Your Model", `- Name: ${id}`, `- Provider ID: ${providerID}`, `- Model ID: ${id}`].join("\n")
 const fakeIdentity = identity("fake", "fake-model")
@@ -3189,17 +3195,19 @@ describe("SessionRunnerLLM", () => {
 
   scenario("resends compaction as text after payload too large, then shrinks later rejections", function* (s) {
     const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    const filler = "context ".repeat(1_000)
+    // Enough large exchanges that each of the three shrinking attempts still keeps one beside the base prompt, which
+    // every attempt counts, and drops fewer than the attempt before.
+    const filler = "context ".repeat(3_000)
     yield* s.session.prompt({
       sessionID,
       text: "Request 0 with an image",
       files: [{ uri: `data:image/png;base64,${image}` }],
       resume: false,
     })
-    yield* s.llm.push(...Array.from({ length: 7 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
+    yield* s.llm.push(...Array.from({ length: 11 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
     yield* s.resume
     yield* Effect.forEach(
-      Array.from({ length: 6 }, (_, index) => index + 1),
+      Array.from({ length: 10 }, (_, index) => index + 1),
       (index) => s.runPrompt(`Request ${index}: ${filler}`),
     )
     s.currentModel = unknownContextModel
@@ -3254,7 +3262,7 @@ describe("SessionRunnerLLM", () => {
       Array.from({ length: 6 }, (_, index) => index),
       (index) => s.runPrompt(`Request ${index}: ${"x".repeat(8_000)}`),
     )
-    s.currentModel = testModel("smaller-history", { context: 12_000, output: 1_000 })
+    s.currentModel = testModel("smaller-history", { context: withPrompt(10_952), output: 1_000 })
     s.requests.length = 0
     yield* s.llm.push(Stream.fail(payloadTooLarge()), TestLLM.text("## Objective\n- Recovered", "summary"))
     const compaction = yield* s.session.compact({ sessionID })
@@ -3342,7 +3350,7 @@ describe("SessionRunnerLLM", () => {
       Array.from({ length: 4 }, (_, index) => index),
       (index) => s.runPrompt(`Request ${index}: ${"x".repeat(8_000)}`),
     )
-    s.currentModel = testModel("smaller-history", { context: 9_000, output: 1_000 })
+    s.currentModel = testModel("smaller-history", { context: withPrompt(7_952), output: 1_000 })
     s.requests.length = 0
     yield* s.llm.push(TestLLM.text("## Objective\n- Recovered", "summary"))
     const compaction = yield* s.session.compact({ sessionID })

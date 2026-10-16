@@ -3,7 +3,7 @@ import fs from "fs/promises"
 import path from "path"
 import { SystemPart } from "@orbit/ai"
 import { CompatNames } from "@orbit/compat/names"
-import { Directory, Document, Info } from "@orbit/schema/config"
+import { Directory, Document, Info, type Entry } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { Config } from "@orbit/core/config"
 import { Plugin } from "@orbit/core/plugin"
@@ -29,20 +29,39 @@ const base = SessionSystemPrompt.make([])
 const decode = Schema.decodeUnknownSync(Info)
 const styled = (name: string) => new Document({ type: "document", info: decode({ output_style: name }) })
 
-const context = (): SessionHooks["context"] => ({
+const context = (text = base): SessionHooks["context"] => ({
   sessionID: Session.ID.make("ses_output_style"),
   agent: Agent.ID.make("build"),
   model: Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") }),
-  system: [SystemPart.make(base)],
+  system: [SystemPart.make(text)],
   messages: [],
   tools: {},
   options: {},
 })
 
-const writeStyle = (root: string, name: string, body: string) =>
+// The default prompt with the opening line a style puts in its place.
+const styledBase = `${OutputStylePlugin.STYLED_INTRO}${base.slice(SessionSystemPrompt.INTRO.length)}`
+const headings = (text: string) => Array.from(text.matchAll(/^# (.+)$/gm), (match) => match[1])
+const codingSections: readonly string[] = SessionSystemPrompt.CODING_SECTIONS
+const withoutCoding = SessionSystemPrompt.SECTIONS.filter((name) => !codingSections.includes(name))
+
+// `front` is more front matter lines, such as `keep-coding-instructions: true\n`.
+const writeStyle = (root: string, name: string, body: string, front = "") =>
   Effect.promise(async () => {
     await fs.mkdir(path.join(root, "output-styles"), { recursive: true })
-    await Bun.write(path.join(root, "output-styles", `${name}.md`), `---\nname: ${name}\n---\n${body}\n`)
+    await Bun.write(path.join(root, "output-styles", `${name}.md`), `---\nname: ${name}\n${front}---\n${body}\n`)
+  })
+
+// The system prompt of one request, for the given config entries and the given text in `system[0]`. The plugin must
+// already be active.
+const requestWith = (entries: Entry[], text = base) =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    const config = yield* Config.Test
+    yield* config.setEntries(entries)
+    const event = context(text)
+    yield* hooks.trigger("session", "context", event)
+    return event.system[0]?.text ?? ""
   })
 
 // Activates the plugin over a config that reports the given compatibility state, and returns the system prompt a
@@ -117,7 +136,8 @@ describe("OutputStylePlugin", () => {
       yield* config.setEntries([styled("explanatory")])
       const explanatory = context()
       yield* hooks.trigger("session", "context", explanatory)
-      expect(explanatory.system[0]?.text.startsWith(base)).toBe(true)
+      // A style that keeps the coding sections changes the opening line and adds its own text at the end.
+      expect(explanatory.system[0]?.text.startsWith(styledBase)).toBe(true)
       expect(explanatory.system[0]?.text).toContain("# Output style: Explanatory\n")
 
       yield* config.setEntries([
@@ -131,6 +151,119 @@ describe("OutputStylePlugin", () => {
       expect(text).toContain("# Communication")
       expect(text).not.toContain("# Doing tasks")
       expect(text).not.toContain("# Verification")
+    }),
+  )
+
+  // `keep-coding-instructions: false` drops exactly the sections that the prompt lists as coding sections, and the rest
+  // of the contract stays for a style that has nothing to do with code.
+  it.live("drops exactly the coding sections for keep-coding-instructions: false, and keeps the rest in order", () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      yield* writeStyle(directory, "reviewer", "Only review.", "keep-coding-instructions: false\n")
+      yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+
+      const text = yield* requestWith([
+        new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+        styled("reviewer"),
+      ])
+
+      expect(withoutCoding).toEqual([
+        "Harness",
+        "Executing actions with care",
+        "Using tools",
+        "Communication",
+        "Output efficiency",
+      ])
+      expect(headings(text)).toEqual([...withoutCoding, "Output style: reviewer"])
+      for (const dropped of SessionSystemPrompt.CODING_SECTIONS) expect(text).not.toContain(`# ${dropped}\n`)
+    }),
+  )
+
+  // The coding sections stay only when the style asks for them with `true`, as a boolean or as the string. A style that
+  // says nothing, or says anything else, gets none of the rules about writing code.
+  it.live('keeps the coding sections only for keep-coding-instructions true or "true"', () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      const cases = [
+        ["true-boolean", "keep-coding-instructions: true\n", true],
+        ["true-string", 'keep-coding-instructions: "true"\n', true],
+        ["false-boolean", "keep-coding-instructions: false\n", false],
+        ["false-string", 'keep-coding-instructions: "false"\n', false],
+        ["missing", "", false],
+        ["other-string", "keep-coding-instructions: maybe\n", false],
+        ["number", "keep-coding-instructions: 1\n", false],
+      ] as const
+      for (const [name, front] of cases) yield* writeStyle(directory, name, "Styled.", front)
+      yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+
+      for (const [name, , keep] of cases) {
+        const text = yield* requestWith([
+          new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+          styled(name),
+        ])
+        const kept = keep ? SessionSystemPrompt.SECTIONS : withoutCoding
+        expect([name, headings(text)]).toEqual([name, [...kept, `Output style: ${name}`]])
+        expect(text).toEndWith(`# Output style: ${name}\nStyled.`)
+      }
+    }),
+  )
+
+  it.live("keeps every section for the built-in styles", () =>
+    Effect.gen(function* () {
+      yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+
+      for (const [name, title] of [
+        ["explanatory", "Explanatory"],
+        ["learning", "Learning"],
+      ] as const)
+        expect([name, headings(yield* requestWith([styled(name)]))]).toEqual([
+          name,
+          [...SessionSystemPrompt.SECTIONS, `Output style: ${title}`],
+        ])
+    }),
+  )
+
+  // The opening line says what the agent is for, which the style has changed. It is swapped only where it stands, so an
+  // overlay or an agent with a prompt of its own keeps the first line that its author wrote.
+  it.live("replaces the opening line while a style applies, and only a prompt that opens with it", () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      yield* writeStyle(directory, "keeps", "Keeps.", "keep-coding-instructions: true\n")
+      yield* writeStyle(directory, "drops", "Drops.")
+      yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const entries = (name: string) => [
+        new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+        styled(name),
+      ]
+
+      for (const text of [
+        yield* requestWith([styled("explanatory")]),
+        yield* requestWith(entries("keeps")),
+        yield* requestWith(entries("drops")),
+      ]) {
+        expect(text.startsWith(OutputStylePlugin.STYLED_INTRO)).toBe(true)
+        expect(text).not.toContain(SessionSystemPrompt.INTRO)
+      }
+      expect(yield* requestWith(entries("keeps"))).toBe(`${styledBase}${OutputStylePlugin.STYLE_HEADING}keeps\nKeeps.`)
+      // Without a style, or with the default one, the prompt is as it was.
+      expect(yield* requestWith([])).toBe(base)
+      expect(yield* requestWith([styled("default")])).toBe(base)
+
+      // An overlay that is appended to the default prompt still opens with the default intro.
+      const appended = `${base}\n\n# Code comments\nAppended.`
+      expect(yield* requestWith(entries("keeps"), appended)).toStartWith(styledBase)
+
+      // A replacement overlay and an agent's own prompt open with their own lines.
+      const overlay = "You are an overlay.\n\n# Harness\n- Overlay rule.\n\n# Doing tasks\n- Overlay task."
+      expect(yield* requestWith(entries("keeps"), overlay)).toBe(
+        `${overlay}${OutputStylePlugin.STYLE_HEADING}keeps\nKeeps.`,
+      )
+      expect(yield* requestWith(entries("drops"), overlay)).toBe(
+        `You are an overlay.\n\n# Harness\n- Overlay rule.${OutputStylePlugin.STYLE_HEADING}drops\nDrops.`,
+      )
+      expect(yield* requestWith(entries("drops"), "Custom agent prompt")).toBe(
+        `Custom agent prompt${OutputStylePlugin.STYLE_HEADING}drops\nDrops.`,
+      )
     }),
   )
 
