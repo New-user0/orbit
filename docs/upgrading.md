@@ -2876,7 +2876,9 @@ file called `git` that a repository could ship. A git that is not found now fail
 **Affects:** anyone who opens a clone before trusting it, in the terminal UI or with `orb`, and on Windows anyone whose git
 is not on PATH.
 
-**What to do:** Nothing; trust the folder, or put git on PATH.
+**What to do:** Run `orb trust` in the folder, or choose "Trust this folder" when the terminal UI asks, which it does only
+for a folder that holds config of its own back, so for a repository with none no dialog or indicator says that the
+branch and the changes wait (`/trust` does not show either); or put git on PATH.
 
 ### Declarations that print the environment ask like any command
 

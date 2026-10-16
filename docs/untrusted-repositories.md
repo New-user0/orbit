@@ -2011,7 +2011,9 @@ The program-wide register of every follow-up, these gaps included, with each one
   folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
   git in the shell tool (`shell-safety-12`); the `orb flow` commands that open the run store (`ls`, `show`, `cost`, `trace`,
   `approve`, `watch` and `clean`), which ask git for the repository root with no trust check, and `clean` removes
-  worktrees with it (register row FU-M4-002, task `sweep`); and fingerprints, which do not cover `.git`. A project is still named by the remote URL in the folder's config, which a
+  worktrees with it (register row FU-M4-002, task `sweep`); a repository with no config of its own, which shows no
+  branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
+  for hooks and stdio MCP servers below); and fingerprints, which do not cover `.git`. A project is still named by the remote URL in the folder's config, which a
   clone can write (Shared approvals, above). Mercurial was never part of this gap: neither `Project.resolve` nor the
   Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
   (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does
