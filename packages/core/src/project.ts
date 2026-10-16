@@ -367,19 +367,39 @@ const layer = Layer.effect(
       }
     })
 
+    // The nearest `.git` or `.hg`. Git passes over a `.git` directory that has no `HEAD` and looks in the folder above, and
+    // stops at a `.git` file that is no good, so a `.git` directory counts when `GitLayout` finds a layout in it.
+    const marker = (
+      start: string,
+    ): Effect.Effect<
+      | { readonly type: "git"; readonly holder: AbsolutePath; readonly layout?: GitLayout.Layout }
+      | { readonly type: "hg"; readonly native: AbsolutePath }
+      | undefined
+    > =>
+      Effect.gen(function* () {
+        const native = yield* fs.up({ targets: [".git", ".hg"], start, mode: "first" }).pipe(
+          Effect.map((matches) => matches[0]),
+          Effect.orElseSucceed(() => undefined),
+        )
+        if (!native) return undefined
+        if (path.basename(native) === ".hg") return { type: "hg" as const, native: AbsolutePath.make(native) }
+        const holder = AbsolutePath.make(path.dirname(native))
+        const layout = yield* GitLayout.locate(fs, holder)
+        const above = path.dirname(holder)
+        if (layout || !(yield* fs.isDir(native)) || above === holder) return { type: "git" as const, holder, layout }
+        return yield* marker(above)
+      })
+
     const resolve = Effect.fn("Project.resolve")(function* (input: AbsolutePath) {
       const directory = AbsolutePath.make(yield* fs.resolve(input))
-      const native = yield* fs.up({ targets: [".git", ".hg"], start: directory, mode: "first" }).pipe(
-        Effect.map((matches) => matches[0]),
-        Effect.orElseSucceed(() => undefined),
-      )
-      const holder = native && path.basename(native) === ".git" ? AbsolutePath.make(path.dirname(native)) : undefined
+      const found = yield* marker(directory)
+      const holder = found?.type === "git" ? found.holder : undefined
+      const layout = found?.type === "git" ? found.layout : undefined
       // Git applies the config of the folder it runs in, and a clone chooses that file: it can name a program for git to
       // run, and a project is resolved when a client opens the folder, before anyone is asked about it (class 1). So git
       // starts only for a folder that is trusted. The decision is the main checkout's for a linked worktree, as
       // `ProjectTrust` takes it, and the layout says which that is without asking git. Any other folder is read from its
       // files, and is its own project when they name no remote, as an untrusted Mercurial folder is.
-      const layout = holder ? yield* GitLayout.locate(fs, holder) : undefined
       const trusted = holder ? (yield* trust.status(layout?.canonical ?? holder)).trusted : false
       const repo = holder && trusted ? yield* git.repo.discover(holder) : undefined
       if (layout && !trusted) {
@@ -403,7 +423,7 @@ const layer = Layer.effect(
         })
       }
 
-      const hg = native && path.basename(native) === ".hg" ? yield* hgDiscover(AbsolutePath.make(native)) : undefined
+      const hg = found?.type === "hg" ? yield* hgDiscover(found.native) : undefined
       if (hg) {
         return yield* persist({
           ...hg,

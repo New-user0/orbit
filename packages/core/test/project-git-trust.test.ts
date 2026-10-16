@@ -227,6 +227,70 @@ describe("Project.resolve gives a folder that names a trusted repository none of
   )
 })
 
+// Git passes over a `.git` directory that has no `HEAD` and uses the repository above it, and stops at a `.git` file that is no
+// good. The project is the one git would find, in a folder that is trusted and in one that is not.
+describe("Project.resolve and a .git that git would not take for a repository", () => {
+  const nested = (make: (sub: string) => Promise<void>) =>
+    Effect.gen(function* () {
+      const found = yield* planted(keys[0]!)
+      const sub = path.join(found.root, "sub")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(sub)
+        await make(sub)
+      })
+      return { found, sub }
+    })
+  const empty = (sub: string) => fs.mkdir(path.join(sub, ".git"))
+  const garbage = (sub: string) => fs.writeFile(path.join(sub, ".git"), "this is not a pointer\n")
+
+  untrusted.live(
+    "uses the repository above a .git directory with no HEAD, and starts no git while it is not trusted",
+    () =>
+      Effect.gen(function* () {
+        const { found, sub } = yield* nested(empty)
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(sub))))
+
+        expect(git).toEqual([])
+        expect(value.directory).toBe(yield* real(found.root))
+        expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+      }),
+    SLOW,
+  )
+
+  untrusted.live(
+    "uses the repository above a .git directory with no HEAD, from git once that repository is trusted",
+    () =>
+      Effect.gen(function* () {
+        const { found, sub } = yield* nested(empty)
+        yield* WorkspaceTrust.Service.use((trust) => trust.grant(found.root, { persist: false, via: "test" }))
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(sub))))
+
+        expect(git.some((command) => command.includes("rev-parse"))).toBe(true)
+        expect(value.directory).toBe(yield* real(found.root))
+        expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+      }),
+    SLOW,
+  )
+
+  untrusted.live(
+    "stops at a .git file that is no good, as git does, and is a folder without a repository",
+    () =>
+      Effect.gen(function* () {
+        const { sub } = yield* nested(garbage)
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(sub))))
+
+        expect(git).toEqual([])
+        expect(value.vcs).toBeUndefined()
+        expect(value.directory).toBe(yield* real(sub))
+        expect(value.id).toBe(pathID(yield* real(sub)))
+      }),
+    SLOW,
+  )
+})
+
 describe("Project.resolve names a folder that is not trusted as it names a trusted one", () => {
   // Each shape is resolved twice, in a graph that trusts nothing and in one that trusts everything. The answers differ only
   // in the project ID of a repository with no remote, which git names by its first commit.

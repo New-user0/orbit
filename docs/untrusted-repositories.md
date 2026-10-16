@@ -100,12 +100,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   - `Project.resolve` reads `.git` and the shared `config` itself (`GitLayout`, `packages/core/src/git/layout.ts`). It
     opens only what git wrote for the folder: its own `.git` directory, or the entry that its repository keeps for a linked
     worktree, which names the folder back. A `.git` that is a link, a submodule or separate git directory, and a layout
-    that names another repository's directories, are named and left alone. A read that fails, is blocked (a share), is
-    over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there", never an error, and each
-    folder is judged alone (class 7). The project is named by the remote URL in that config as written, which
-    `git remote get-url` gives a trusted folder too unless an include or `url.<base>.insteadOf` rewrites it, and by the
-    folder's path when there is none (a trusted folder uses its first commit). The provider answers an empty branch,
-    status, diff and review base, and reloads on `Trust.Event.Updated`. The watcher finds `HEAD` from the same files.
+    that names another repository's directories, are named and left alone. It passes over a `.git` directory that has no
+    `HEAD` and uses the repository above it, and stops at a `.git` file that is no good, as git does. A read that fails,
+    is blocked (a share), is over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there",
+    never an error, and each folder is judged alone (class 7). The project is named by the remote URL in that config as
+    written, which `git remote get-url` gives a trusted folder too unless an include or `url.<base>.insteadOf` rewrites it,
+    and by the folder's path when there is none (a trusted folder uses its first commit). The provider answers an empty
+    branch, status, diff and review base, and reloads on `Trust.Event.Updated`. The watcher finds `HEAD` from the same
+    files.
   - Snapshot (git in Orbit's own git directory, plus one ignore check in the project's repository) and the read-only
     calls of the `Git` service (`discover`, `remote`, `history`, `worktree.list`) still run in an untrusted folder with its
     config in effect, and reach no key of the table (`test/snapshot-trust.test.ts`, `test/git.test.ts`). The ignore check
