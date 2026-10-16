@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import { describe, expect } from "bun:test"
+import { realpathSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
 import { Deferred, Duration, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect"
@@ -533,7 +534,7 @@ describe("LocationWatcher finds the git directory without git", () => {
       }).pipe(provide(directory, vcs, watcher)),
     )
   }
-  const real = (file: string) => Effect.promise(() => fs.realpath(file))
+  const real = (file: string) => Effect.sync(() => realpathSync.native(file))
 
   for (const key of keys)
     it.live(

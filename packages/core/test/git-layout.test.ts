@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { realpathSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
@@ -45,7 +46,8 @@ const locate = (folder: string) =>
     return yield* GitLayout.locate(yield* FSUtil.Service, folder)
   })
 
-const real = (file: string) => Effect.promise(() => fs.realpath(file))
+// The path as the file system spells it (`native` also expands a short Windows name), which is how git and Orbit spell it.
+const real = (file: string) => Effect.sync(() => realpathSync.native(file))
 
 describe("GitLayout.locate, where git makes the layout", () => {
   it.live("reads a repository as git does", () =>
@@ -322,6 +324,11 @@ describe("GitLayout.remoteUrl", () => {
     ["a url in another section", '[branch "origin"]\n\turl = https://example.test/a.git\n', undefined],
     ["a url under the include section", '[include]\n\turl = https://example.test/a.git\n', undefined],
     ["a url under a url section", '[url "https://example.test/x/"]\n\tinsteadOf = https://example.test/y/\n', undefined],
+    [
+      "a rewrite rule, which is not applied",
+      '[url "git@example.test:"]\n\tinsteadOf = https://example.test/\n[remote "origin"]\n\turl = https://example.test/a/b.git\n',
+      "https://example.test/a/b.git",
+    ],
     ["the url before any section", "url = https://example.test/a.git\n", undefined],
     ["a header that is not closed", '[remote "origin"\n\turl = https://example.test/a.git\n', undefined],
     ["a commented url", '[remote "origin"]\n\t# url = https://example.test/a.git\n', undefined],

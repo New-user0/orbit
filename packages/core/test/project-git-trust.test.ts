@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { realpathSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
@@ -42,7 +43,8 @@ const SLOW = 90_000
 
 const remoteID = (name: string) => Project.ID.make(Hash.fast(`git-remote:${name}`))
 const pathID = (folder: string) => Project.ID.make(Hash.fast(`directory:${folder}`))
-const real = (file: string) => Effect.promise(() => fs.realpath(file)).pipe(Effect.map(abs))
+// The path as the file system spells it (`native` also expands a short Windows name), which is how git and Orbit spell it.
+const real = (file: string) => Effect.sync(() => abs(realpathSync.native(file)))
 
 /** Resolves a folder in a graph of its own that trusts every folder, or none. */
 const resolveIn = (implicit: boolean, folder: string) =>
@@ -98,6 +100,24 @@ describe("Project.resolve in a git folder that is not trusted, whatever its conf
         const project = yield* Project.Service
 
         const { value, git } = yield* traced(project.resolve(abs(path.join(found.root, "a", "b"))))
+
+        expect(git).toEqual([])
+        expect(value.directory).toBe(yield* real(found.root))
+        expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+      }),
+    SLOW,
+  )
+
+  // Windows ignores case, so a folder spelled in capitals is the same folder: the same trust key, and the same project.
+  untrusted.live(
+    "starts no git for a differently cased spelling of the folder, on Windows",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+        const found = yield* planted(keys[0]!)
+        const project = yield* Project.Service
+
+        const { value, git } = yield* traced(project.resolve(abs(found.root.toUpperCase())))
 
         expect(git).toEqual([])
         expect(value.directory).toBe(yield* real(found.root))

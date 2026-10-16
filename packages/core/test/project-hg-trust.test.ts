@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { $ } from "bun"
+import { realpathSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
@@ -177,7 +178,9 @@ describe("a shipped .git/orbit", () => {
       Effect.gen(function* () {
         const found = yield* git
         const result = yield* (yield* Project.Service).resolve(AbsolutePath.make(found.dir))
-        expect(result.id).toBe(Project.ID.make(Hash.fast(`directory:${yield* Effect.promise(() => fs.realpath(found.dir))}`)))
+        expect(result.id).toBe(
+          Project.ID.make(Hash.fast(`directory:${realpathSync.native(found.dir)}`)),
+        )
         expect(result.id).not.toBe(Project.ID.make(other))
         expect(result.previous).toBeUndefined()
       }),

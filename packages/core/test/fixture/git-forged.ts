@@ -1,3 +1,4 @@
+import { realpathSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
@@ -18,7 +19,8 @@ export interface Found {
   readonly entry: string
 }
 
-const real = (file: string) => Effect.promise(() => fs.realpath(file)).pipe(Effect.map(AbsolutePath.make))
+// The path as the file system spells it (`native` also expands a short Windows name), which is how git and Orbit spell it.
+const real = (file: string) => Effect.sync(() => AbsolutePath.make(realpathSync.native(file)))
 
 export const folders = Effect.gen(function* () {
   const root = (yield* tmpdirScoped()).path
