@@ -45,6 +45,12 @@ export interface Ref extends Schema.Schema.Type<typeof Ref> {}
 export const Family = Schema.String.pipe(Schema.brand("Model.Family"))
 export type Family = typeof Family.Type
 
+/** The month a model's training data ends, as `YYYY-MM`. The catalog may give a day too; only the month is kept. */
+export const Knowledge = Schema.String.check(Schema.isPattern(/^\d{4}-(?:0[1-9]|1[0-2])$/)).pipe(
+  Schema.brand("Model.Knowledge"),
+)
+export type Knowledge = typeof Knowledge.Type
+
 export type ReasoningField = "reasoning" | "reasoning_content" | "reasoning_text" | (string & {})
 export const ReasoningField: Schema.Codec<ReasoningField> = Schema.Union([
   Schema.Literals(["reasoning", "reasoning_content", "reasoning_text"]),
@@ -125,6 +131,8 @@ export const Info = Schema.Struct({
   canonical: Provider.ID.pipe(optional),
   family: Family.pipe(optional),
   name: Schema.String,
+  /** When the model's training data ends, if the catalog says. The model is told it; nothing is ever fetched to find it. */
+  knowledge: Knowledge.pipe(optional),
   compatibility: Compatibility.pipe(optional),
   package: Provider.Package.pipe(optional),
   ...Overlays,

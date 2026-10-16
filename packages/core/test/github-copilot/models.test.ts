@@ -88,6 +88,7 @@ test("defensively syncs advertised Copilot models", async () => {
       ...Model.Info.default(Provider.ID.githubCopilot, Model.ID.make("gpt-5")),
       modelID: Model.ID.make("gpt-5"),
       name: "GPT-5 local",
+      knowledge: Model.Knowledge.make("2025-03"),
     })
     const stale = Model.Info.make({
       ...Model.Info.default(Provider.ID.githubCopilot, Model.ID.make("stale")),
@@ -97,6 +98,9 @@ test("defensively syncs advertised Copilot models", async () => {
     const model = models.get(Model.ID.make("gpt-5"))
 
     expect(model?.name).toBe("GPT-5 local")
+    // The provider reports no cutoff, so the catalog's entry for the model is kept, and a model with none has none.
+    expect(model?.knowledge).toBe(Model.Knowledge.make("2025-03"))
+    expect(models.get(Model.ID.make("claude-sonnet"))?.knowledge).toBeUndefined()
     expect(model?.package).toBe(Provider.aisdk("@ai-sdk/github-copilot"))
     expect(model?.settings).toMatchObject({ baseURL: server.url.origin, endpoint: "responses" })
     expect(model?.cost[0]).toMatchObject({ input: 0, output: 0, cache: { read: 0, write: 0 } })

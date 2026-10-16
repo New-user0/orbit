@@ -53,7 +53,7 @@ test("maps live Modal models onto catalog templates", async () => {
   })
 
   try {
-    const base = template("base-model")
+    const base = template("base-model", { knowledge: Model.Knowledge.make("2025-03") })
     const stale = template("stale")
     const models = await ModalModels.get(`${server.url.origin}/v1`, "test-key", [base, stale])
 
@@ -63,6 +63,9 @@ test("maps live Modal models onto catalog templates", async () => {
     const model = models.get(Model.ID.make("live-model"))
     expect(model?.name).toBe("Live Model")
     expect(model?.family).toBe(Model.Family.make("catalog-family"))
+    // The provider reports no cutoff, so the template's is kept, and a model with no template has none.
+    expect(model?.knowledge).toBe(Model.Knowledge.make("2025-03"))
+    expect(models.get(Model.ID.make("standalone"))?.knowledge).toBeUndefined()
     expect(model?.providerID).toBe(providerID)
     expect(model?.modelID).toBe(Model.ID.make("live-model"))
     expect(model?.package).toBe("@orbit/ai/providers/openai-compatible")
