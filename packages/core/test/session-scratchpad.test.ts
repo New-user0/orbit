@@ -334,7 +334,9 @@ describe("making the folder", () => {
           if (process.platform !== "win32") expect(info.mode & 0o777).toBe(0o700)
           yield* Effect.promise(() => Bun.write(path.join(l.folder("ses_root"), "notes.txt"), "keep"))
           yield* scratchpad.ensure(session)
-          expect(yield* Effect.promise(() => Bun.file(path.join(l.folder("ses_root"), "notes.txt")).text())).toBe("keep")
+          expect(yield* Effect.promise(() => Bun.file(path.join(l.folder("ses_root"), "notes.txt")).text())).toBe(
+            "keep",
+          )
         }),
       ),
     timeout,

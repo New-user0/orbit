@@ -39,7 +39,10 @@ const worktreeLayer = Layer.succeed(
   Location.Service.of({
     ...location(
       { directory: linkedWorktree },
-      { projectDirectory: linkedWorktree, vcs: { type: "git", store: AbsolutePath.make(FSUtil.resolve("/repo/.git")) } },
+      {
+        projectDirectory: linkedWorktree,
+        vcs: { type: "git", store: AbsolutePath.make(FSUtil.resolve("/repo/.git")) },
+      },
     ),
     project: { id: Project.ID.global, directory: linkedWorktree, canonical: projectDirectory },
   }),
@@ -68,7 +71,11 @@ describe("InstructionBuiltIns.environment", () => {
     root: "/repo",
     git: true,
     platform: "linux",
-    os: { type: "Linux", release: "6.8.0-45-generic", version: "#45-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug 30 12:02:04 UTC 2024" },
+    os: {
+      type: "Linux",
+      release: "6.8.0-45-generic",
+      version: "#45-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug 30 12:02:04 UTC 2024",
+    },
     shell: "zsh",
   } satisfies InstructionBuiltIns.EnvironmentInput
   const windows = {

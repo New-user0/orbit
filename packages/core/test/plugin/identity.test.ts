@@ -122,42 +122,44 @@ it.effect("inserts the structured model block after the agent prompt", () =>
   }),
 )
 
-it.effect("tells the model its cutoff when the catalog gives one, in the same place, and nothing for a model it lacks", () =>
-  Effect.gen(function* () {
-    const catalog = yield* Provider.Service
-    const hooks = yield* PluginHooks.Service
-    const plugins = yield* Plugin.Service
-    const pluginHost = yield* PluginHost.make(plugins)
-    yield* catalog.transform((editor) => {
-      editor.models.update(Provider.ID.make("test"), Model.ID.make("meta/muse-spark-1.1"), (model) => {
-        model.name = "Muse Spark"
-        model.knowledge = Model.Knowledge.make("2025-01")
+it.effect(
+  "tells the model its cutoff when the catalog gives one, in the same place, and nothing for a model it lacks",
+  () =>
+    Effect.gen(function* () {
+      const catalog = yield* Provider.Service
+      const hooks = yield* PluginHooks.Service
+      const plugins = yield* Plugin.Service
+      const pluginHost = yield* PluginHost.make(plugins)
+      yield* catalog.transform((editor) => {
+        editor.models.update(Provider.ID.make("test"), Model.ID.make("meta/muse-spark-1.1"), (model) => {
+          model.name = "Muse Spark"
+          model.knowledge = Model.Knowledge.make("2025-01")
+        })
+        editor.models.update(Provider.ID.make("test"), Model.ID.make("meta/muse-flash-1.1"), (model) => {
+          model.name = "Muse Flash"
+        })
       })
-      editor.models.update(Provider.ID.make("test"), Model.ID.make("meta/muse-flash-1.1"), (model) => {
-        model.name = "Muse Flash"
-      })
-    })
-    yield* IdentityPlugin.Plugin.effect(pluginHost)
+      yield* IdentityPlugin.Plugin.effect(pluginHost)
 
-    // The hook splices at index 1 for the request, the compaction and the generation alike.
-    for (const name of ["context", "compaction", "generate"] as const) {
-      const named = context("meta/muse-spark-1.1")
-      yield* hooks.trigger("session", name, named)
-      expect(named.system.map((part) => part.text)).toEqual([
-        "Agent prompt",
-        identity("Muse Spark", "meta/muse-spark-1.1", "January 2025"),
-        "Initial context",
-      ])
-    }
+      // The hook splices at index 1 for the request, the compaction and the generation alike.
+      for (const name of ["context", "compaction", "generate"] as const) {
+        const named = context("meta/muse-spark-1.1")
+        yield* hooks.trigger("session", name, named)
+        expect(named.system.map((part) => part.text)).toEqual([
+          "Agent prompt",
+          identity("Muse Spark", "meta/muse-spark-1.1", "January 2025"),
+          "Initial context",
+        ])
+      }
 
-    // A model in the catalog with no cutoff, and one the catalog lacks, get none.
-    for (const [id, name] of [
-      ["meta/muse-flash-1.1", "Muse Flash"],
-      ["unknown-model", "unknown-model"],
-    ] as const) {
-      const other = context(id)
-      yield* hooks.trigger("session", "context", other)
-      expect(other.system.map((part) => part.text)).toEqual(["Agent prompt", identity(name, id), "Initial context"])
-    }
-  }),
+      // A model in the catalog with no cutoff, and one the catalog lacks, get none.
+      for (const [id, name] of [
+        ["meta/muse-flash-1.1", "Muse Flash"],
+        ["unknown-model", "unknown-model"],
+      ] as const) {
+        const other = context(id)
+        yield* hooks.trigger("session", "context", other)
+        expect(other.system.map((part) => part.text)).toEqual(["Agent prompt", identity(name, id), "Initial context"])
+      }
+    }),
 )

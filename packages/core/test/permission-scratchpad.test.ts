@@ -157,23 +157,113 @@ describe("the allow for the scratchpad of the session that asks", () => {
     readonly effect: "allow" | "ask"
     readonly stage: "Edit" | "external_directory"
   }> = [
-    { name: "a file in its own folder", session: ids.main, file: (l) => path.join(l.scratch(ids.main), "a.txt"), effect: "allow", stage: "Edit" },
-    { name: "a file in a folder below its own", session: ids.main, file: (l) => path.join(l.scratch(ids.main), "sub", "deep", "a.txt"), effect: "allow", stage: "Edit" },
-    { name: "a file beside the folder in the temporary folder", session: ids.main, file: (l) => path.join(l.tmp, "other.txt"), effect: "ask", stage: "Edit" },
-    { name: "a file in the folder of sessions", session: ids.main, file: (l) => path.join(l.tmp, "sessions", "a.txt"), effect: "ask", stage: "Edit" },
-    { name: "a file in the folder of another session", session: ids.main, file: (l) => path.join(l.scratch(ids.other), "a.txt"), effect: "ask", stage: "Edit" },
-    { name: "the other session's own folder", session: ids.other, file: (l) => path.join(l.scratch(ids.other), "a.txt"), effect: "allow", stage: "Edit" },
-    { name: "a folder that merely starts with the same name", session: ids.main, file: (l) => path.join(`${l.scratch(ids.main)}x`, "a.txt"), effect: "ask", stage: "Edit" },
+    {
+      name: "a file in its own folder",
+      session: ids.main,
+      file: (l) => path.join(l.scratch(ids.main), "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a file in a folder below its own",
+      session: ids.main,
+      file: (l) => path.join(l.scratch(ids.main), "sub", "deep", "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a file beside the folder in the temporary folder",
+      session: ids.main,
+      file: (l) => path.join(l.tmp, "other.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
+    {
+      name: "a file in the folder of sessions",
+      session: ids.main,
+      file: (l) => path.join(l.tmp, "sessions", "a.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
+    {
+      name: "a file in the folder of another session",
+      session: ids.main,
+      file: (l) => path.join(l.scratch(ids.other), "a.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
+    {
+      name: "the other session's own folder",
+      session: ids.other,
+      file: (l) => path.join(l.scratch(ids.other), "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a folder that merely starts with the same name",
+      session: ids.main,
+      file: (l) => path.join(`${l.scratch(ids.main)}x`, "a.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
     // A subagent and a fork use the folder of the session they came from, and not the one named after themselves.
-    { name: "a subagent in its parent's folder", session: ids.child, file: (l) => path.join(l.scratch(ids.main), "a.txt"), effect: "allow", stage: "Edit" },
-    { name: "a subagent in the folder named after itself", session: ids.child, file: (l) => path.join(l.scratch(ids.child), "a.txt"), effect: "ask", stage: "Edit" },
-    { name: "a fork in its source's folder", session: ids.fork, file: (l) => path.join(l.scratch(ids.main), "a.txt"), effect: "allow", stage: "Edit" },
-    { name: "a fork in the folder named after itself", session: ids.fork, file: (l) => path.join(l.scratch(ids.fork), "a.txt"), effect: "ask", stage: "Edit" },
+    {
+      name: "a subagent in its parent's folder",
+      session: ids.child,
+      file: (l) => path.join(l.scratch(ids.main), "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a subagent in the folder named after itself",
+      session: ids.child,
+      file: (l) => path.join(l.scratch(ids.child), "a.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
+    {
+      name: "a fork in its source's folder",
+      session: ids.fork,
+      file: (l) => path.join(l.scratch(ids.main), "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a fork in the folder named after itself",
+      session: ids.fork,
+      file: (l) => path.join(l.scratch(ids.fork), "a.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
     // The key is the immediate parent, or the fork source, so a lineage of three has two folders.
-    { name: "a subagent's subagent in its parent's folder", session: ids.grandchild, file: (l) => path.join(l.scratch(ids.child), "a.txt"), effect: "allow", stage: "Edit" },
-    { name: "a subagent's subagent in the root's folder", session: ids.grandchild, file: (l) => path.join(l.scratch(ids.main), "a.txt"), effect: "ask", stage: "Edit" },
-    { name: "a fork of a subagent in the subagent's folder", session: ids.forkOfChild, file: (l) => path.join(l.scratch(ids.child), "a.txt"), effect: "allow", stage: "Edit" },
-    { name: "a fork of a subagent in the root's folder", session: ids.forkOfChild, file: (l) => path.join(l.scratch(ids.main), "a.txt"), effect: "ask", stage: "Edit" },
+    {
+      name: "a subagent's subagent in its parent's folder",
+      session: ids.grandchild,
+      file: (l) => path.join(l.scratch(ids.child), "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a subagent's subagent in the root's folder",
+      session: ids.grandchild,
+      file: (l) => path.join(l.scratch(ids.main), "a.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
+    {
+      name: "a fork of a subagent in the subagent's folder",
+      session: ids.forkOfChild,
+      file: (l) => path.join(l.scratch(ids.child), "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a fork of a subagent in the root's folder",
+      session: ids.forkOfChild,
+      file: (l) => path.join(l.scratch(ids.main), "a.txt"),
+      effect: "ask",
+      stage: "Edit",
+    },
   ]
   for (const row of rows)
     it.live(
@@ -305,7 +395,16 @@ describe("the allow for the scratchpad of the session that asks", () => {
 // gets no allow at all, whether the ID is its own, its parent's or its fork source's, so a folder that the ID would name
 // is asked about like any other file of the temporary folder.
 describe("the allow for a session whose ID cannot name a folder", () => {
-  const hostile = ["ses_..", "ses_a.", "ses_a b", "ses_a/b", "ses_a\\b", "ses/../../x", "ses:x", `ses_${"a".repeat(300)}`]
+  const hostile = [
+    "ses_..",
+    "ses_a.",
+    "ses_a b",
+    "ses_a/b",
+    "ses_a\\b",
+    "ses/../../x",
+    "ses:x",
+    `ses_${"a".repeat(300)}`,
+  ]
   for (const id of hostile)
     for (const position of ["id", "parent", "fork source"] as const)
       it.live(
@@ -390,19 +489,21 @@ describe("a link in the scratchpad", () => {
     )
   }
 
-  it.live("asks about a link to a folder outside the temporary folder before the file, for the folder it leads to", () =>
-    Effect.gen(function* () {
-      const l = yield* layout
-      const out = yield* Effect.gen(function* () {
-        yield* Effect.promise(async () => {
-          await fs.mkdir(l.scratch(ids.main), { recursive: true })
-          await fs.symlink(l.elsewhere, path.join(l.scratch(ids.main), "out"), linkType)
-        })
-        yield* seed(l)
-        return yield* decide(ids.main, path.join(l.scratch(ids.main), "out", "b.txt"))
-      }).pipe(provide(l.project, { tmp: l.tmp, data: l.data, config: l.config }, true))
-      expect(out).toEqual({ effect: "ask", stage: "external_directory" })
-    }),
+  it.live(
+    "asks about a link to a folder outside the temporary folder before the file, for the folder it leads to",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const out = yield* Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(l.scratch(ids.main), { recursive: true })
+            await fs.symlink(l.elsewhere, path.join(l.scratch(ids.main), "out"), linkType)
+          })
+          yield* seed(l)
+          return yield* decide(ids.main, path.join(l.scratch(ids.main), "out", "b.txt"))
+        }).pipe(provide(l.project, { tmp: l.tmp, data: l.data, config: l.config }, true))
+        expect(out).toEqual({ effect: "ask", stage: "external_directory" })
+      }),
   )
 
   const dangling = canLinkFile ? it.live : it.live.skip
@@ -500,12 +601,39 @@ describe("the spellings of a file in the scratchpad", () => {
   }> = [
     { name: "its plain path", file: (scratch) => path.join(scratch, "a.txt"), effect: "allow" },
     { name: "forward slashes", file: (scratch) => `${scratch.replaceAll("\\", "/")}/a.txt`, effect: "allow" },
-    { name: "a `..` that comes back into the folder", file: (scratch) => `${scratch}${path.sep}sub${path.sep}..${path.sep}a.txt`, effect: "allow" },
-    { name: "a `..` that climbs out of the folder", file: (scratch) => `${scratch}${path.sep}..${path.sep}a.txt`, effect: "ask" },
-    { name: "a `..` that climbs out and into another folder", file: (scratch) => `${scratch}${path.sep}..${path.sep}${ids.other}${path.sep}a.txt`, effect: "ask" },
-    { name: "a lowercase drive letter", windows: true, file: (scratch) => `${scratch[0]!.toLowerCase()}${scratch.slice(1)}${path.sep}a.txt`, effect: "allow" },
-    { name: "an uppercase path in a folder of different case", windows: true, file: (scratch) => `${scratch.toUpperCase()}${path.sep}a.txt`, effect: "allow" },
-    { name: "a trailing period on the file name", windows: true, file: (scratch) => `${scratch}${path.sep}a.txt.`, effect: "allow" },
+    {
+      name: "a `..` that comes back into the folder",
+      file: (scratch) => `${scratch}${path.sep}sub${path.sep}..${path.sep}a.txt`,
+      effect: "allow",
+    },
+    {
+      name: "a `..` that climbs out of the folder",
+      file: (scratch) => `${scratch}${path.sep}..${path.sep}a.txt`,
+      effect: "ask",
+    },
+    {
+      name: "a `..` that climbs out and into another folder",
+      file: (scratch) => `${scratch}${path.sep}..${path.sep}${ids.other}${path.sep}a.txt`,
+      effect: "ask",
+    },
+    {
+      name: "a lowercase drive letter",
+      windows: true,
+      file: (scratch) => `${scratch[0]!.toLowerCase()}${scratch.slice(1)}${path.sep}a.txt`,
+      effect: "allow",
+    },
+    {
+      name: "an uppercase path in a folder of different case",
+      windows: true,
+      file: (scratch) => `${scratch.toUpperCase()}${path.sep}a.txt`,
+      effect: "allow",
+    },
+    {
+      name: "a trailing period on the file name",
+      windows: true,
+      file: (scratch) => `${scratch}${path.sep}a.txt.`,
+      effect: "allow",
+    },
   ]
   for (const row of spellings) {
     const run = row.windows && process.platform !== "win32" ? it.live.skip : it.live

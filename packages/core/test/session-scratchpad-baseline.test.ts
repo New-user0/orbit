@@ -142,19 +142,21 @@ describe("the scratchpad among the sources of the baseline", () => {
     }),
   )
 
-  it.live("holds the same folder for a session, its subagent and its fork, and another for a fork of the subagent", () =>
-    Effect.gen(function* () {
-      const { value, scratchpad } = yield* setup
-      const folder = scratchpad.path({ id: ids.main })
-      expect(typeof folder).toBe("string")
-      expect(yield* value(ids.main)).toBe(folder)
-      expect(yield* value(ids.child)).toBe(folder)
-      expect(yield* value(ids.fork)).toBe(folder)
-      // A fork of the subagent goes back only as far as the subagent.
-      const forkOfChild = yield* value(ids.forkOfChild)
-      expect(forkOfChild).toBe(scratchpad.path({ id: ids.child }))
-      expect(forkOfChild).not.toBe(folder)
-    }),
+  it.live(
+    "holds the same folder for a session, its subagent and its fork, and another for a fork of the subagent",
+    () =>
+      Effect.gen(function* () {
+        const { value, scratchpad } = yield* setup
+        const folder = scratchpad.path({ id: ids.main })
+        expect(typeof folder).toBe("string")
+        expect(yield* value(ids.main)).toBe(folder)
+        expect(yield* value(ids.child)).toBe(folder)
+        expect(yield* value(ids.fork)).toBe(folder)
+        // A fork of the subagent goes back only as far as the subagent.
+        const forkOfChild = yield* value(ids.forkOfChild)
+        expect(forkOfChild).toBe(scratchpad.path({ id: ids.child }))
+        expect(forkOfChild).not.toBe(folder)
+      }),
   )
 
   it.live("says nothing of the scratchpad when a subagent or a fork starts from its session's values", () =>
