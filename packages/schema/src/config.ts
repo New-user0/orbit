@@ -131,6 +131,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   instructions: Schema.String.pipe(Schema.Array, optional).annotate({
     description: "Additional paths or URLs supplying ambient instructions",
   }),
+  instructions_exclude: Schema.String.pipe(Schema.Array, optional).annotate({
+    description:
+      "Instruction files that Orbit does not load: glob patterns or absolute paths, matched against the whole absolute path of a file written with forward slashes. A pattern with no folder in it, such as AGENTS.md, matches nothing; start a pattern with **/ to match wherever the project lives, for example **/third_party/**/AGENTS.md. The lists of every config level are combined, and a project's or local file's list applies once its folder is trusted",
+  }),
   references: ConfigReference.Info.pipe(optional).annotate({
     description: "Named local directories or Git repositories available as external context",
   }),

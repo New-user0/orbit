@@ -226,7 +226,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the text, `ConfigTrust.sanitize` and `sanitizeCommands` for what they may say. Proof: `project-trust.test.ts`,
   `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`.
 - Instruction files (`AGENTS.md`, `ORBIT.md`): `ProjectTrust.reachable`, asked by `ConfigInstructionPlugin` and
-  `SessionInstructions`. Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`.
+  `SessionInstructions`. Both then process every file with `ConfigInstructionFile.parse` (class 11). Its front matter is
+  taken off by `ConfigMarkdown.split`, which finds the delimiter lines and parses and evaluates nothing, so a `---js`
+  opener is not front matter and its text is kept as written, and a bare block is removed whatever it holds. Its comment
+  blocks are found by a scanner that reads the file once, line by line, because the block lexer of a Markdown library
+  takes seconds on a list item of a few thousand lines, and a clone chooses the file before anyone has trusted it.
+  `instructions_exclude` names files to leave out. Exclusion only removes files, and comes before `reachable` in both
+  readers. A project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind
+  `settings`): the lists of every scope are added up, so a repository's would hide the user's own files from the model.
+  Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
+  `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
+  `test/config/trust.test.ts`.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
   reads the file before any permission is asked, so it reads only when `resolve` reports no `externalDirectory`: a link
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
@@ -1545,6 +1555,12 @@ gray-matter's default engines, or a marker test per reader written with the spec
   `packages/core/src/config/plugin/`, `OutputStylePlugin` (`packages/core/src/plugin/output-style.ts`) and
   `ProjectTrust.status`, which reads through the first two. JavaScript front matter is refused in every config
   directory, the user's own included.
+- An instruction file is a reader of front matter too, and it does not parse it at all. `ConfigInstructionFile.parse`
+  cuts a block off with `ConfigMarkdown.split`, which looks only for delimiter lines. A reader that needs the block, such
+  as the `paths` of a rule file, takes the span that `split` returns and parses that through `parseOption`, so that one
+  splitter decides what front matter is. A file whose first line carries a language after the dashes is not front
+  matter, and its text is kept, which is what the reference does: nothing evaluates it, and it is the same instruction
+  text that Orbit already loads from that folder.
 - For a new parser or file format, read its default engines, tags, caches and what it loads on its own. A spec's claim
   that a file kind is "just text" is a claim to verify against the parser, not to assume. Workflow YAML is read with
   `Bun.YAML.parse` and JSON with `Bun.file().json()`, and neither evaluates anything.
@@ -1558,6 +1574,12 @@ gray-matter's default engines, or a marker test per reader written with the spec
   `packages/core/test/config/markdown.test.ts`.
 - The control: the unprotected parser runs the file. Parse the same content three times and compare, to catch the cache
   bug.
+- For instruction files the same spellings are written through `ConfigInstructionFile.parse`, `ConfigInstructionPlugin`
+  and `SessionInstructions` (`test/config/instruction-file.test.ts`, `test/instruction-discovery.test.ts`,
+  `test/session-instructions.test.ts`). The marker is absent, the text of a tagged opener is kept as written instead of
+  the file being skipped, and a bare block is removed, one with CRLF line endings through all three and one that holds
+  a `!!js/function` tag through `parse`. The control is `gray-matter` without the guard, which writes the marker for the
+  JavaScript spellings (`coffee` has no engine in it, so that row has no control).
 
 **Review questions:**
 

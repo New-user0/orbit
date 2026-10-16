@@ -4,11 +4,11 @@ import type { Context } from "@orbit/plugin/effect/plugin"
 import { basename, dirname, join } from "path"
 import { ToolFailure } from "@orbit/ai"
 import { Tool } from "../../tool.js"
-import { CompatInstructions } from "@orbit/compat/instructions"
 import { createHash } from "crypto"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Config } from "../../config.js"
+import { ConfigInstructionFile } from "../../config/instruction-file.js"
 import { Location } from "../../location.js"
 import { FileAccess } from "../../file-access.js"
 import { SessionInstructions } from "../../session/instructions.js"
@@ -112,12 +112,19 @@ export const Plugin = {
                 // The Location and its ancestors are already supplied by initial instructions,
                 // even when an upward walk from elsewhere in the project cannot reach root.
                 const discovered = yield* fs.up({
-                  targets: [...CompatInstructions.filenames(yield* config.compatEnabled())],
+                  targets: [...ConfigInstructionFile.names(yield* config.compatEnabled())],
                   start: result.content.type === "list-page" ? resolved : dirname(resolved),
                   stop: root,
                   type: "file",
                 })
-                const candidates = (yield* Effect.forEach(discovered, fs.resolve))
+                // A name that the settings exclude is as good as absent, as it is when the session starts, so the next name
+                // in its folder is the one that loads. `SessionInstructions` asks again for every path it is given.
+                const patterns = yield* ConfigInstructionFile.prepare(
+                  ConfigInstructionFile.excludes(yield* config.entries()),
+                  fs.resolve,
+                )
+                const candidates = (yield* ConfigInstructionFile.included(patterns, discovered, fs.resolve))
+                  .map((candidate) => candidate.real)
                   .filter((file, index, all) => all.findIndex((other) => dirname(other) === dirname(file)) === index)
                   .filter((file) => !FSUtil.contains(dirname(file), root) && file !== resolved)
                 if (candidates.length === 0) return

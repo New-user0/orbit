@@ -2,6 +2,7 @@ import path from "path"
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Config } from "@orbit/core/config"
+import { ConfigInstructionFile } from "@orbit/core/config/instruction-file"
 import { ConfigTrust } from "@orbit/core/config/trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { CompatNames } from "@orbit/compat/names"
@@ -59,6 +60,8 @@ describe("ConfigTrust.sanitize", () => {
     ["formatter", { prettier: { disabled: true } }, "formatter"],
     ["lsp", { gopls: { command: ["gopls"] } }, "lsp"],
     ["skills", ["./skills"], "skills"],
+    // The lists of every scope are added up, so a repository's list could hide the user's own instruction files.
+    ["instructions_exclude", ["**/AGENTS.md"], "settings"],
     ["references", { docs: "https://example.com/docs.git" }, "settings"],
     ["worktree", { directory: "../worktrees" }, "settings"],
     ["experimental", { subagent_depth: 4 }, "settings"],
@@ -90,6 +93,7 @@ describe("ConfigTrust.sanitize", () => {
     ["experimental", {}],
     ["experimental", { portable_shell_scanner: false }],
     ["skills", []],
+    ["instructions_exclude", []],
     ["references", {}],
     ["default_agent", "build"],
   ] as const)("withholds %p even as %p", (field, value) => {
@@ -546,6 +550,50 @@ describe("ConfigTrust.stamp", () => {
   test("lists nothing for a document that held nothing back", () => {
     const stamped = ConfigTrust.stamp(document("project", { username: "dev" }), place)
     expect(stamped).toMatchObject({ trusted: false, withheld: [] })
+  })
+
+  // `instructions_exclude`: the project's and the local file's lists wait for the folder, and the lists of the scopes that
+  // no folder decides are the person's own, or the organization's, and stay.
+  describe("instructions_exclude", () => {
+    const listed = { instructions_exclude: ["**/third_party/**/AGENTS.md"], username: "dev" }
+
+    test("is taken from a project and a local document that is not trusted, and listed as settings", () => {
+      for (const scope of ["project", "local"] as const) {
+        const stamped = ConfigTrust.stamp(document(scope, listed), place)
+        if (stamped.type !== "document") throw new Error("Expected a document")
+        expect(stamped.info.instructions_exclude).toBeUndefined()
+        expect(stamped.info.username).toBe("dev")
+        expect(stamped.withheld).toEqual(["settings"])
+      }
+    })
+
+    test("stays in the document of every scope that no folder decides", () => {
+      for (const scope of ["remote", "user", "flag", "managed", undefined] as const) {
+        const entry = document(scope, listed)
+        expect(ConfigTrust.stamp(entry, place)).toBe(entry)
+        expect(entry.info.instructions_exclude).toEqual(["**/third_party/**/AGENTS.md"])
+      }
+    })
+
+    test("is not added to what the user's list says, and a repository's list does not mask it", () => {
+      const user = document("user", { instructions_exclude: ["/home/me/AGENTS.md"] })
+      const project = document("project", { instructions_exclude: [] })
+      const stamped = ConfigTrust.stamp(project, place)
+      if (stamped.type !== "document") throw new Error("Expected a document")
+      expect(ConfigInstructionFile.excludes([user, stamped])).toEqual(["/home/me/AGENTS.md"])
+      // The control: trusted, the project's own list is counted as well.
+      const own = document("project", { instructions_exclude: ["/repo/AGENTS.md"] })
+      expect(ConfigInstructionFile.excludes([user, own])).toEqual(["/home/me/AGENTS.md", "/repo/AGENTS.md"])
+    })
+
+    test("stays when a trusted folder is held back for the kinds that changed since the grant", () => {
+      const entry = document("project", listed)
+      for (const kind of ["hooks", "mcp", "plugins", "providers", "shell", "formatter", "lsp", "env", "sandbox", "skills"] as const) {
+        const partial = ConfigTrust.partial(entry, place, [kind])
+        if (partial.type !== "document") throw new Error("Expected a document")
+        expect(partial.info.instructions_exclude).toEqual(["**/third_party/**/AGENTS.md"])
+      }
+    })
   })
 
   test("keeps a repository from masking the values the user set", () => {

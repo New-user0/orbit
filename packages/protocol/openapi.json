@@ -14453,6 +14453,12 @@
               "type": "string"
             }
           },
+          "instructions_exclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "references": {
             "type": "object",
             "additionalProperties": {

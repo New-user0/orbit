@@ -2361,6 +2361,7 @@ export type ConfigEntry =
           }
         }
         instructions?: Array<string>
+        instructions_exclude?: Array<string>
         references?: {
           [x: string]:
             | string

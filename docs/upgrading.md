@@ -472,6 +472,47 @@ in a folder you have not trusted.
 
 **What to do:** Export the variable in the environment you start Orbit from instead.
 
+### Instruction files lose their comments and front matter, and `instructions_exclude` skips files
+
+Every instruction file (`ORBIT.md`, `AGENTS.md`, and the file of another product that compatibility reads) now goes
+through one step before the model reads it, whether a session loads it when it starts or a read of a file in its folder
+finds it later:
+
+- **Comments.** An HTML comment that stands at the top level of the file, on a line of its own and indented by at most
+  three spaces, is removed, a comment that runs over several lines included. A comment inside fenced or indented code,
+  inside a sentence or an inline code span, or inside a list item, a quote or another HTML block is text and stays. Text
+  after the closing marker on its line stays, and so does a comment that is never closed. A file with a comment loses
+  its CRLF line endings in what the model reads.
+- **Front matter.** A block at the top of the file is removed whatever it says and is never read as code: the first line
+  is exactly three dashes, spaces after them allowed, and the block ends at the next such line. A first line with
+  anything after the dashes, such as `---js`, or with more dashes is not front matter, and the text stays as written.
+- **Empty files.** A file with nothing left (empty, only comments, only front matter) adds nothing. It used to load as a
+  heading with no text. In a folder with several instruction names the first one present still wins, so an empty
+  `ORBIT.md` does not hand its place to `AGENTS.md`.
+- **Size.** A file of more than 40,000 characters, counted after the two steps above, is recorded as a warning and is
+  still sent whole. The warning never reaches the model, and no client shows it yet.
+- **`instructions_exclude`.** A new list of glob patterns or absolute paths of instruction files that Orbit does not
+  load. A pattern is matched against the whole absolute path of the file, written with forward slashes, and `*` also
+  matches names that start with a dot. A pattern with no folder in it, such as `AGENTS.md`, matches nothing, and neither
+  does one that starts with `~`, which is not expanded, so write `**/third_party/**/AGENTS.md` to skip a folder's file
+  wherever the project lives. The lists of your settings, the project's, the local file's, the flag's and the
+  organization's are added up. An excluded file is not read at all, and the next name in its folder takes its place. A
+  project's or local file's list is ignored until its folder is trusted, because it would otherwise let a repository
+  hide your own instruction files from the model.
+
+A session that already has instruction files with comments or front matter gets one instruction update at its next
+boundary, because what is stored for it is now the text that is left. Changing only a comment, or only the front
+matter, of a loaded file starts no update.
+
+**Affects:** anyone whose instruction files hold comments or front matter, including a file that opens with a rule line,
+some text and another rule line (the text between them is now front matter and goes); sessions that were running
+during the upgrade; and code that implements `InstructionDiscovery`, which has a new `warnings()` method and a `warn`
+method on its editor.
+
+**What to do:** Nothing for most setups. Keep a note for the model out of a comment, and start a file that needs a
+leading rule line with a heading. Add `instructions_exclude` to your own config to skip instruction files that you do
+not want the model to read.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.

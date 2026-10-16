@@ -30,7 +30,10 @@ import { FSUtil } from "@orbit/util/fs-util"
 // (`ConfigVariable`). Every other reader of a file that the repository supplies asks `ProjectTrust` before it reads one,
 // and these are the readers, so that the next one added has a list to join:
 //
-// - `reachable`: an instruction file (`ConfigInstructionPlugin`, `SessionInstructions`);
+// - `reachable`: an instruction file (`ConfigInstructionPlugin`, `SessionInstructions`). Both then process the text with
+//   `ConfigInstructionFile.parse`, which takes the front matter off with `ConfigMarkdown.split`, by its delimiter lines
+//   alone and without parsing it, and leave out what `instructions_exclude` names, a list that an untrusted folder does
+//   not supply;
 // - `supplies`: a file of a config directory, or of another product's root, which is the agents of `ConfigAgentPlugin`,
 //   the commands of `ConfigCommandPlugin`, the skills of `ConfigSkillPlugin` and `ConfigCompatibilityPlugin`, and the
 //   output styles of `OutputStylePlugin`;
@@ -242,6 +245,9 @@ export const classification = {
     skills: withhold("skills"),
     commands: filter(sanitizeCommands),
     instructions: filter(instructionPaths),
+    // The lists of every scope are combined, so a repository's list would hide the user's own instruction files from the
+    // model. Withheld whole, even when empty, as the other lists are.
+    instructions_exclude: withhold("settings"),
     references: withhold("settings"),
     websearch: filter(webSearch),
     webfetch: filter(webFetch),
