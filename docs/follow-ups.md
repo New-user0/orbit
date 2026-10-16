@@ -2,8 +2,9 @@
 
 This is the one register of every follow-up the Orbit parity program has raised: the Known gaps in
 [untrusted-repositories.md](untrusted-repositories.md), the follow-ups of every pull request, and the open items of each
-milestone's verification rounds. It covers milestones M1 and M2, the M3 task pull requests, and M3 verification rounds 1
-to 9. The class numbers are the classes of [untrusted-repositories.md](untrusted-repositories.md).
+milestone's verification rounds. It covers milestones M1 and M2, the M3 task pull requests, M3 verification rounds 1
+to 9, and the rows that M4 task pull requests raise and close. The class numbers are the classes of
+[untrusted-repositories.md](untrusted-repositories.md).
 
 ## How a row moves
 
@@ -134,7 +135,6 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
-| FU-M1-022 | Project.resolve runs git in an untrusted folder that applies its .git/config | 1 | A clone's .git/config can name a program (fsmonitor, hooks) that git runs before trust. | medium; default path on open | M: read identity from files or disable program-valued keys | prompts-context-4 | Known gaps (Git in the folder); plan M1 table; PR #23 review 12 | packages/core/src/project.ts:380 calls git remote/rev-list for any folder; hg is gated (project-hg-trust.test.ts) but git is not |
 | FU-M2-018 | Turn cost and token limits ignore side-query spend | 8 | --max-cost and --max-tokens miss WebFetch's small-model spend. | certain once a side query runs in a turn (WebFetch answers, #93) | S | loop-robustness-18 | #62 follow-ups 8 and 25; #65 round 5 discussion | packages/core/src/session/turn.ts:296 reads session_usage WHERE kind = 'usage' only |
 | FU-M2-062 | The result object of a failed run has no error text | 13 | Scripts cannot read why a run failed. | certain on every failure under the result format | S | clients-ux-40 | #62 follow-up 15 | packages/cli/src/run/format.ts:188 sets is_error only; reason goes to stderr |
 | FU-M2-072 | orb -p runs in $PWD instead of the folder it was started in | 3 | A parent that passes cwd but keeps its own PWD runs the agent in the wrong project. | moderate for POSIX automation | S | clients-ux-3 | #62 follow-up 35 | packages/cli/src/run/run.ts:95 root = PWD ?? cwd |
@@ -154,11 +154,10 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (17)
+### M4 (16)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
-| FU-M1-012 | Bare git fallback has no decoy test under Node | 10, 14 | Under a Node host a git.exe in the folder could run, and no test would catch it. | low; needs no git on PATH | S: decoy test per host | prompts-context-4 | Known gaps; plan M1 table; PR #22 follow-ups; PR #23 | packages/core/src/util/git-executable.ts:5 returns bare 'git' when which finds none |
 | FU-M1-014 | External editor starts with shell:true and has no decoy test | 10, 14 | A regression could let a repository's vim.bat or code.cmd run in place of the editor. | low today (variable is set) | S: route like openFile via which | clients-ux-14 | Known gaps; plan Found while mapping; PR #27 review | packages/tui/src/editor.ts:27 shell: process.platform === 'win32' |
 | FU-M1-023 | Dormant instructions config key needs a real-path guard when wired | 4 | Wiring the key without the guard would read files through links out of the project. | low; dormant | S when wired | prompts-context-9b | Known gaps; plan M1 table | packages/schema/src/config.ts:131 instructions key; docs/untrusted-repositories.md:1948 |
 | FU-M2-014 | A pre-output retry that carried usage records no spend | behaviour | Billed input is missing from cost and limits. | low | S | loop-robustness-18 | PR #36 review 8 | packages/core/src/session/runner/step.ts:339 returns Outcome.Retry before the usage block |
@@ -370,7 +369,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M1-098 | An AI SDK provider's own timeout is not counted as a Timeout | behaviour | A user timeout on an AI SDK provider is retried as a generic failure. | low; needs a timeout setting | S | loop-robustness-20 | PR #31 review minor 1 | packages/core/src/aisdk.ts:1009 networkFailure has no DOMException TimeoutError case |
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 
-### Sweep (145)
+### Sweep (147)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -520,6 +519,8 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M3-414 | Notes and comments after the round 7 to 9 reverts claim more than a test pins (steering 'What to do', wrapper deny advice, assignment-tilde wording, test comments) | 15 | The steering note says always saves 'env `*` or the program's pattern', but a wrapper saves its own prefix (sudo `*`, timeout `*`) and IFS= offers no save; 'deny the wrapper too' has no form for a leading assignment; the tool-shell comment calls the four rm -rf x rows steering; agent.ts still says a grant's lead stays explicit; the docs do not mention dd's expanded `if=~/of=~`. | low; wording only, the cautious direction | XS: reword from the final tree and add the probe commands as rows beside the save table | sweep | M3 verification round 8, follow-up 50; also round 7 follow-up 29, round 8 follow-up 46, round 8 follow-up 47, round 8 follow-up 51, round 9 follow-up 59, round 9 follow-up 60, round 9 follow-up 67 | docs/upgrading.md:2931; packages/core/test/tool-shell.test.ts:466-481; packages/core/src/agent.ts:72-76 |
 | FU-M3-419 | Record the steering rows' mutation in the M3 PR body (3c75b11 says 'Mutation: not run') | 14 | The mutation record is missing: removing the steering filter in permission.ts decide() fails the four env rows; dropping rules for steering resources fails the eight 'an exact-text Bash allow rule lifts' rows. | certain until written | XS: put the two mutations in the M3 PR body | sweep | M3 verification round 9, follow-up 61 | commit 3c75b11 body; packages/core/test/tool-shell.test.ts:466-482 |
 | FU-M3-421 | cli flow-team.test.ts: a resumed team's lead sees an extra user message under load (lead#3 instead of lead#2) | 14 | In the full parallel Linux cli run at bcfcfd7 the lead's continued session held one more user-role message than expected. Cause not established: a frozen instruction rendered as a user message, or a prompt whose delivery wait (DELIVERY_GRACE_MS, 10 s) expired. If it is a product cause, a resumed member's model sees a spurious turn input. | 1 of 1 full Linux cli run in round 9; passes alone (3 pass) | S-M: log the lead's request messages when turn differs, re-run the package in parallel to capture the extra message, then fix or record | sweep | M3 verification round 9, follow-up 64 | packages/cli/test/flow-team.test.ts:268; docs/known-failures.md row added with this register |
+| FU-M4-001 | A bare name that is on no PATH is resolved by cross-spawn in the working folder, and a file with a shebang there starts its interpreter | 10 | On Windows a file called hg or az with a #! line in the folder runs when Orbit starts that program and it is on no PATH. | low; needs the program missing from PATH, and a trusted folder for hg | M: find the program with which in the spawner and fail for one it does not find, which changes what a relative PATH entry of a child does (FU-M1-013, owner) | sweep | git-untrusted PR (the decoy rows of FU-M1-012); Known gaps (A bare name that is on no PATH) | packages/util/src/cross-spawn-spawner.ts:298 hands command.command to cross-spawn; bare names at packages/core/src/project.ts:335 and packages/core/src/plugin/vcs/hg.ts:174 (hg), packages/core/src/plugin/provider/azure.ts:86 (az); the control row of packages/core/test/util/git-executable.test.ts starts a file called git through cross-spawn |
+| FU-M4-002 | The orb flow commands that open the run store ask git in the folder with no trust check, and flow clean removes worktrees with it | 1, 12 | Every one starts git rev-parse in the folder, which follows a core.worktree that the clone names to a store elsewhere, and in a downloaded folder with a crafted run store and worktree entries flow clean runs git worktree remove, which can run the core.fsmonitor or a hook that the folder's config names. | low; a person has to run the command in a clone they have not trusted | S: requireTrust before the first git call, and a row for each in the entry-point table of packages/cli/test/trust.test.ts | sweep | git-untrusted PR (walk of class 1 over every git call) | packages/flow/src/runner.ts:757 openStore calls Git.root, which the handlers ls, show, cost, trace, approve, watch and clean reach with no call to requireTrust or trustRefusal, and packages/cli/src/commands/handlers/flow/clean.ts:11 then calls Git.clean; not run end to end: a worktree that git added and that has no changes ran no program under git 2.52 on Windows |
 | FU-M3-422 | core config/normalization.test.ts property test hits the 5 s limit under load (timeout only, passes alone) | 14 | 100 FastCheck round-trips took 5958 ms under 8 workers in the full Linux core run at bcfcfd7; the file passes alone (50 pass). | 1 of 1 full Linux core run in round 9 | XS: give the test an explicit 30 s limit | sweep | M3 verification round 9, follow-up 65 | packages/core/test/config/normalization.test.ts:172 |
 
 ### Owner (90)
@@ -733,6 +734,8 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 | FU-M2-099 | TUI trust question and Mini notice drew folder paths raw | d0b0038 (#107) | packages/tui/test/cli/tui/dialog-trust.test.tsx 'writes out the control characters in the name of a source' (draws the frame) and packages/tui/test/mini/trust.shared.test.ts 'shows a project folder whose name acts on a terminal without its control characters' |
 | FU-M2-027 | /cost skipped failed responses and unpriced subagents | 8581194 (#40), 23da2b0 | packages/tui/test/component/dialog-cost.test.tsx 'a response that failed with no cost and no tokens is unknown spend' and 'subagent spend is split from the session's own and keeps the rows against the own cost' |
 | FU-M2-005 | Desktop notification text carried the raw failure message | 2a3ce94 (#81) | packages/tui/test/attention.test.ts 'shows one operating system notification while blurred, without asking the terminal' |
+| FU-M1-022 | Project.resolve ran git in an untrusted folder that applies its .git/config | c19de0c | packages/core/test/project-git-trust.test.ts 'starts no git and runs no program for `<key>`' (eleven keys, each with a plain git control) and 'starts no git, and names the folder itself, for `<layout>`' (nine forged layouts, the victim trusted); packages/core/test/vcs-git-trust.test.ts; packages/core/test/filesystem/watcher.test.ts 'starts no git for an ordinary repository that sets `<key>`'; packages/core/test/git-layout.test.ts |
+| FU-M1-012 | Bare git fallback had no decoy test under Node, and was the bare name | c19de0c | packages/core/test/util/git-executable.test.ts 'bun: starts no git.(no extension) that the folder holds' and the same under node (with a git.exe, git.bat and git.cmd alone in a folder each, controls that each runs, and the git of PATH as control); the fallback on Windows is now a path that is not there |
 
 ## Duplicates
 
@@ -825,11 +828,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 = 705.
-- Output: 622 rows plus 83 listed duplicates = 705. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 622 register rows have a table entry.
-- Open minors by carrier: M4: 17, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 145, Owner: 90.
-- Open majors: 15 open, plus 5 marked major in "For the owner" that wait for a decision = 20.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 2 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002) = 707.
+- Output: 624 rows plus 83 listed duplicates = 707. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 624 register rows have a table entry.
+- Open minors by carrier: M4: 16, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 147, Owner: 90.
+- Open majors: 14 open, plus 5 marked major in "For the owner" that wait for a decision = 19.
 - For the owner: 86.
-- Fixed: 110.
+- Fixed: 112.
 - Duplicates: 83.
-- Check: 426 open + 86 owner + 110 fixed + 83 duplicates = 705, the 705 inputs.
+- Check: 426 open + 86 owner + 112 fixed + 83 duplicates = 707, the 707 inputs.

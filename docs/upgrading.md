@@ -2852,6 +2852,32 @@ folders; a trusted folder with no `hg` or no changeset is `global`, as before.
 
 **What to do:** Nothing; trust the folder.
 
+### Git is not run in a folder that is not trusted
+
+When a client opened a folder that holds `.git`, Orbit ran `git rev-parse`, `git remote get-url`, `git rev-list` and
+`git worktree list` there to name the project, and `git status`, `git diff` and `git reflog show` for the branch and the
+changes, and the location watcher asked git where `HEAD` is. Git applies the folder's own `.git/config`, which can name
+programs for it to run: `core.fsmonitor`, hooks, the filter and text-conversion drivers that `.gitattributes` selects, and
+`gpg.program` for a commit that carries a signature. None of them is run now until you trust the folder. The project is
+named from the files of `.git` (the remote URL in its config, or the path of the folder when it names none), the branch is
+unknown and there are no changes, diffs or review base, and they appear once you trust the folder, with no restart. A
+repository with a remote keeps the project ID that it had. One with no remote is named by its path until you trust it (never
+`global`, whose saved "always allow" answers every such folder would share), and by its first commit afterwards, as before.
+The URL is read as written, so a remote that an include or a `url.<base>.insteadOf` rule supplies or rewrites gives the
+folder another project ID until you trust it. A linked worktree follows the decision for its main checkout. A `.git` that is a link, a submodule or a separate git
+directory, or that names another repository's directories, is read for its remote only after you trust the folder, and
+counts as a project of its own until then. The check that asks git whether a path is ignored runs without
+`core.fsmonitor`.
+
+On Windows, when git is on no PATH, Orbit no longer starts the bare name `git`. The library that starts programs looks in
+the working folder for a bare name, with and without an extension, and started the interpreter named by the first line of a
+file called `git` that a repository could ship. A git that is not found now fails as a git that is not installed fails.
+
+**Affects:** anyone who opens a clone before trusting it, in the terminal UI or with `orb`, and on Windows anyone whose git
+is not on PATH.
+
+**What to do:** Nothing; trust the folder, or put git on PATH.
+
 ### Declarations that print the environment ask like any command
 
 `export -p`, a bare `export`, `declare` or `typeset` (with or without `-p`, `-f`, `-F`), a bare `local` or `readonly`, and any of them with a print or function flag list every variable with its value, which would send credentials in the environment to the model. They are now shell requests that a `Bash` rule (yours or your organization's) can allow, ask about or deny. Declarations that only set named variables (`export A=1`, `declare -x B=2`, `export A`) and `unset`, `cd`, `pushd` and `popd` still run without a question.
