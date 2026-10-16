@@ -2435,6 +2435,39 @@ matched the old `The answer was not valid JSON.` error, and schemas that were no
 **What to do:** Pass the schema as `--json-schema` (or `turn.output`) and read `structured_output` from the result or
 from the accepted `StructuredOutput` call; make the schema an object schema; update an older server.
 
+## Prompts and instructions
+
+What the model is told about itself and the place it works in.
+
+### The environment names the shell and the system, the identity a knowledge cutoff, and each session a scratchpad
+
+The environment block of the baseline now names the shell that the shell tool runs and the version of the operating
+system (`Windows 11 Pro 10.0.26200`, `Darwin 24.6.0`, `Linux 6.8.0-45-generic`). The platform line gives the usual name
+beside the system's own value, such as `Windows (win32)`. On Windows a Unix shell such as Git Bash is marked as one, with
+a reminder to write Unix syntax. A directory that is a linked git worktree is named as one, with the folder of the main
+checkout, and the model is told to stay out of it. The line that told the model to prefer Orbit's temporary folder over
+`/tmp` is gone.
+
+The model's identity part adds a `Knowledge cutoff` line (a month and a year) for a model whose entry in the model
+catalog has one. The cutoff is read from the catalog Orbit already uses, the bundled one unless you configured a mirror,
+and nothing is fetched to find it. A model that the catalog has no cutoff for gets no line. `Model.Info` has a new
+optional `knowledge` field (`YYYY-MM`), so the generated client changed too.
+
+Each session has a scratchpad: the folder `sessions/<ID of the session its lineage goes back to>` in Orbit's temporary
+folder, which a subagent and a fork share with the session they came from. The baseline names it and tells the model to
+keep its temporary files there instead of in the system temp folder. Orbit makes it when a run starts. Every agent that
+may edit files may edit in the folder of the session that asks without a question, and only where the real place of the
+file is in that folder (a link inside it that leads elsewhere is decided by where it leads), and your own rules for the
+folder still win. The folder is removed when its session is deleted, unless a fork of that session is left. A session
+whose ID is anything but `ses_` followed by letters, digits and underscores gets none of this.
+
+A session that exists already is told once, at its next step, that its environment changed and what the scratchpad is.
+
+**Affects:** every session (the baseline text changes), SDK and client callers that read `Model.Info`, and plugins that
+edit the model catalog.
+
+**What to do:** Nothing.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
