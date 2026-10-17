@@ -25,6 +25,13 @@ const prefix = process.platform === "win32" ? "\\\\?\\too-many-links\\" : "/\\?\
  */
 export const unresolved = (file: string) => `${prefix}${file.replace(/[\\/:]+/g, "\\")}`
 
+/**
+ * Whether a path names a share or a device by its spelling: two separators (`\\host\share`, `//host/share`, `\\?\UNC\`,
+ * `\\.\`), or a rooted `\??\` (the NT spelling, which Windows opens as a share too). Such a path is never walked part by
+ * part, because reading a link on it connects to the host.
+ */
+export const isShare = (file: string) => /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(file)
+
 export const isUnresolved = (file: string) => file.startsWith(prefix)
 
 /**
@@ -59,7 +66,7 @@ export const follow = (
     if (process.platform !== "win32") return { real: undefined }
     if (depth >= LIMIT) return { share: unresolved(file) }
     // Already a share or device spelling: it is the answer, and its root is not read as a folder.
-    if (/^[\\/]{2}/.test(file)) return { share: file }
+    if (isShare(file)) return { share: file }
     const root = path.parse(file).root
     const parts = path.relative(root, file).split(path.sep)
     for (const index of parts.keys()) {
@@ -85,7 +92,7 @@ export const follow = (
 export const ofSync = (file: string, depth = 0, reads: Reads = new Map()): string | undefined => {
   if (process.platform !== "win32") return undefined
   if (depth >= LIMIT) return unresolved(file)
-  if (/^[\\/]{2}/.test(file)) return file
+  if (isShare(file)) return file
   const root = path.parse(file).root
   const parts = path.relative(root, file).split(path.sep)
   for (const index of parts.keys()) {

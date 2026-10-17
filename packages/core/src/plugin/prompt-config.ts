@@ -201,6 +201,4 @@ export function promptKeys(entries: readonly Entry[]) {
 }
 
 // A rooted `\??\` is the NT spelling of a device path. Two separators start a share (`\\host\share`, `//host/share`) or a device path (`\\?\UNC\`, `\\.\`).
-function network(file: string) {
-  return /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(file)
-}
+const network = LinkShare.isShare

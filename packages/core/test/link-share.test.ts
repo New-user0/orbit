@@ -21,6 +21,12 @@ describe("LinkShare", () => {
     "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\",
     "\\\\localhost\\C$\\Windows",
     "\\\\example.invalid@8765\\x\\",
+    // The rooted NT spellings: Windows opens each as a share or a device, so none is walked part by part.
+    "\\??\\UNC\\example.invalid\\share\\skills",
+    "\\??\\unc\\example.invalid\\share",
+    "\\??\\GLOBALROOT\\Device\\Mup\\example.invalid\\share",
+    "\\??\\Global\\UNC\\example.invalid\\share",
+    "/??/UNC/example.invalid/share",
   ]
 
   for (const spelling of spellings) {
@@ -32,6 +38,9 @@ describe("LinkShare", () => {
         expect(yield* LinkShare.of(fs, spelling)).toBe(spelling)
         expect(recorded.calls).toEqual([])
         expect(LinkShare.ofSync(spelling)).toBe(spelling)
+        expect(LinkShare.isShare(spelling)).toBe(true)
+        expect(yield* LinkShare.blocked(fs, spelling)).toBe(true)
+        expect(yield* LinkShare.scan(fs, spelling, ["**"])).toEqual([])
       }),
     )
   }

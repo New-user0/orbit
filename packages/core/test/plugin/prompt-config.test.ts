@@ -602,6 +602,22 @@ describe("system prompt keys", () => {
     }),
   )
 
+  it.effect("gives a real fork of a subagent child the default prompt", () =>
+    Effect.gen(function* () {
+      const { child } = yield* setup()
+      const sessions = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const entries = [document({ system_prompt: "BASE-MARK", append_system_prompt: "APPEND-MARK" })]
+      yield* sessions.prompt({ sessionID: child.id, text: "Fork context", resume: false })
+      yield* SessionInbox.promote(db, bus, child.id, "steer")
+      const forked = yield* sessions.fork({ sessionID: child.id })
+      expect(yield* templateRequest(entries, { sessionID: forked.id })).toBe(
+        `${base}\n\n${SessionSystemPrompt.renderGit(defaults)}`,
+      )
+    }),
+  )
+
   it.effect("keeps the identity part second and the baseline last next to a replacement", () =>
     Effect.gen(function* () {
       const { root } = yield* setup()
@@ -676,6 +692,25 @@ describe("system prompt keys", () => {
       expect(text).toContain("# Doing tasks\nMy own tasks.")
       // Orbit's own coding sections are still cut: the base has none left.
       expect(text.indexOf("# Doing tasks")).toBeGreaterThan(git)
+    }),
+  )
+
+  it.effect("keeps appended text after an agent prompt that ends in a coding section, under a style", () =>
+    Effect.gen(function* () {
+      const { host, root } = yield* setup()
+      yield* OutputStylePlugin.Plugin.effect(host)
+      const directory = yield* reviewerStyle
+      // An agent prompt that ends in a coding section, and no shell tool, so nothing of Orbit's stands between that prompt
+      // and the appended text.
+      const text = yield* request(
+        [...styled(directory), document({ append_system_prompt: "APPEND-MARK" })],
+        { sessionID: root.id, agent: "own", text: "Own prompt\n\n# Verification\nRun the tests.", tools: ["Read"] },
+      )
+      // The coding section of the prompt is cut, the appended text is not, and the style comes after it.
+      expect(text).not.toContain("# Verification")
+      expect(text.startsWith("Own prompt")).toBe(true)
+      expect(text.indexOf("APPEND-MARK")).toBeGreaterThan(0)
+      expect(text.indexOf("# Output style: reviewer")).toBeGreaterThan(text.indexOf("APPEND-MARK"))
     }),
   )
 
