@@ -824,6 +824,62 @@ describe("ProjectTrust.supplies", () => {
   )
 })
 
+// What `supplies` asks first, said on its own for what a source's text may speak for: the output style plugin changes the
+// prompt's opening line only for a style whose folder is trusted. One row for each kind of source, before a grant, after
+// one and after a revoke.
+describe("ProjectTrust.trustedSource", () => {
+  it.live("answers for the folder that holds a source, as supplies does, and follows the decision at once", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const orbit = path.join(folders.repo, ".orbit")
+      const above = path.join(folders.work, ".orbit")
+      // [what the source is, whether it is trusted before a grant, after a grant and after a revoke]
+      const rows = [
+        // The person's own sources, and a directory that no scope speaks for.
+        ...(["user", "remote", "flag", "managed"] as const).map(
+          (scope) => [`a ${scope} directory`, { path: folders.globalConfig, scope }, [true, true, true]] as const,
+        ),
+        ["a directory with no scope", { path: orbit }, [true, true, true]] as const,
+        // Where the person's own source is, and what its stamp says, does not matter.
+        ["a user directory inside the project", { path: orbit, scope: "user" }, [true, true, true]] as const,
+        ["a user directory stamped untrusted", { path: above, scope: "user", trusted: false }, [true, true, true]] as const,
+        // The project's own folders follow the decision just made, whatever the stamp says.
+        ["a project directory", { path: orbit, scope: "project", trusted: false }, [false, true, false]] as const,
+        ["a project directory with no stamp", { path: orbit, scope: "project" }, [false, true, false]] as const,
+        ["a local directory", { path: orbit, scope: "local", trusted: false }, [false, true, false]] as const,
+        [
+          "a project directory whose stamp trails",
+          { path: orbit, scope: "project", trusted: true },
+          [false, true, false],
+        ] as const,
+        // A folder above the project follows its own stamp, which trusting the project does not change.
+        [
+          "a directory above, stamped untrusted",
+          { path: above, scope: "project", trusted: false },
+          [false, false, false],
+        ] as const,
+        ["a directory above, stamped trusted", { path: above, scope: "project", trusted: true }, [true, true, true]] as const,
+        ["a directory above, with no stamp", { path: above, scope: "project" }, [true, true, true]] as const,
+      ]
+
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const asked = () =>
+          Effect.forEach(rows, ([name, source]) =>
+            project.trustedSource(source).pipe(Effect.map((answer) => [name, answer] as const)),
+          )
+        const expected = (when: 0 | 1 | 2) => rows.map(([name, , answers]) => [name, answers[when]] as const)
+
+        expect(yield* asked()).toEqual(expected(0))
+        yield* project.grant({ persist: false, via: "test" })
+        expect(yield* asked()).toEqual(expected(1))
+        yield* project.revoke()
+        expect(yield* asked()).toEqual(expected(2))
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
 // The plugins that read a config directory take part in the decision through the config that stamps it: a grant reloads
 // the config, which publishes `config.updated`, and they read the files again. Nothing here says that the config has
 // reloaded, so this is the whole path, from a junction in a project that nothing trusts to the agent and the skill it

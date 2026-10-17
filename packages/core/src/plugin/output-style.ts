@@ -9,28 +9,38 @@ import path from "path"
 import { Config } from "../config.js"
 import { ConfigMarkdown } from "../config/markdown.js"
 import { ProjectTrust } from "../project-trust.js"
+import { SessionSystemPrompt } from "../session/system-prompt.js"
 import type { PluginInternal } from "./internal.js"
 
 /**
  * Output styles change how the agent talks, not what it can do. The `output_style` config names a built-in style or a
  * Markdown file in an `output-styles` directory of any Orbit config directory or, while compatibility is enabled, of
- * another agent product's root; the file's body is appended to the system prompt. Frontmatter
- * `keep-coding-instructions: false` also drops the coding sections of Orbit's default prompt, for styles meant for
- * work other than writing code.
+ * another agent product's root; the file's body is appended to the system prompt. A style drops the coding sections of
+ * Orbit's default prompt (`SessionSystemPrompt.CODING_SECTIONS`) unless its frontmatter sets
+ * `keep-coding-instructions` to `true` (a boolean or the string `"true"`); a missing key, `false` and any other value
+ * drop them. The built-in styles keep them. While a style applies, the prompt's opening line (`SessionSystemPrompt.INTRO`)
+ * is replaced by one that points at the style; a prompt that does not begin with that line keeps its own.
  *
  * The name is one file name, so a repository's config cannot make it climb out of the directory, and a file in a
  * directory whose folder is not trusted is read only when its real path is inside that folder (`ProjectTrust.supplies`).
+ * Reading it is all that gate allows: a style from a folder that is not trusted still goes last in the prompt under its
+ * own heading, but it does not replace the opening line, because that line says what the agent is for and would pass the
+ * clone's text off as Orbit's. The folder is asked at each request (`ProjectTrust.trustedSource`), so a grant or a revoke
+ * takes effect at once. Every kind of style leaves the sections that govern approvals as they are.
  */
 
 interface Style {
   readonly name: string
   readonly body: string
   readonly keepCodingInstructions: boolean
+  /** Whether the folder that holds the style is trusted. A built-in style is Orbit's own. */
+  readonly trusted: boolean
 }
 
 const BUILT_IN: Record<string, Style> = {
   explanatory: {
     name: "Explanatory",
+    trusted: true,
     keepCodingInstructions: true,
     body: [
       "While you work, help the user understand the codebase and your choices.",
@@ -41,6 +51,7 @@ const BUILT_IN: Record<string, Style> = {
   },
   learning: {
     name: "Learning",
+    trusted: true,
     keepCodingInstructions: true,
     body: [
       "The user wants to learn by doing, so share the work with them.",
@@ -52,8 +63,9 @@ const BUILT_IN: Record<string, Style> = {
   },
 }
 
-// Sections of the default prompt about writing code, dropped for styles that replace coding work.
-const CODING_SECTIONS = ["Doing tasks", "Code style", "Verification"]
+/** Takes the place of `SessionSystemPrompt.INTRO` while a style applies. */
+export const STYLED_INTRO =
+  "You are Orbit. You help the user in the way the output style at the end of this prompt describes, using the tools you are given."
 
 export const Plugin = define({
   id: "orbit.prompt.output-style",
@@ -85,10 +97,12 @@ export const Plugin = define({
         if (content === undefined) continue
         const markdown = ConfigMarkdown.parseOption(content)
         if (!markdown) continue
+        const keep = markdown.data["keep-coding-instructions"]
         return {
           name: typeof markdown.data.name === "string" ? markdown.data.name : name,
           body: markdown.content.trim(),
-          keepCodingInstructions: markdown.data["keep-coding-instructions"] !== false,
+          keepCodingInstructions: keep === true || keep === "true",
+          trusted: yield* trust.trustedSource(source),
         } satisfies Style
       }
       yield* Effect.logWarning("output style not found", { name })
@@ -102,7 +116,13 @@ export const Plugin = define({
         if (!system) return
         const style = yield* load(name)
         if (!style) return
-        const base = style.keepCodingInstructions ? system.text : withoutSections(system.text, CODING_SECTIONS)
+        const sections = style.keepCodingInstructions
+          ? system.text
+          : withoutSections(system.text, SessionSystemPrompt.CODING_SECTIONS)
+        const base =
+          style.trusted && sections.startsWith(SessionSystemPrompt.INTRO)
+            ? `${STYLED_INTRO}${sections.slice(SessionSystemPrompt.INTRO.length)}`
+            : sections
         event.system[0] = { ...system, text: `${base}${STYLE_HEADING}${style.name}\n${style.body}` }
       }).pipe(Effect.catch(() => Effect.void))
 
