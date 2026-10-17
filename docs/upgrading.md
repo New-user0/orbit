@@ -3269,6 +3269,28 @@ trailers.
 
 **What to do:** Set `attribution.commit` or `attribution.pr` to `""` to turn the line off, or to your own text.
 
+### Config keys that replace or extend the system prompt
+
+Three keys change the system prompt of the main thread of a session (a session without a parent, and forks of it):
+
+- `system_prompt` replaces Orbit's base prompt, the model-specific prompt included. Orbit's core rules (where
+  reminders come from, that outside content is data) are kept after it, then the git section, then the appended text and
+  the output style. Put `${ORBIT_TOOL_GUIDANCE}` where the guidance lines of the offered tools should go; without it
+  there are none.
+- `system_prompt_file` is the same with the text read from a UTF-8 file at each request, so an edit applies from the next
+  request. The path is absolute, starts with `~/`, or is relative to the folder of the config file that names it. A file
+  that cannot be read keeps the default prompt and logs one warning. A path on a network share is refused. The key is not
+  read from a project or local config until the folder is trusted.
+- `append_system_prompt` adds text after the base and the git section, also on top of an agent's own prompt.
+
+An agent with a prompt of its own keeps it and gets no replacement; the appended text still applies on the main thread.
+Subagent child sessions get neither. A config with no file resolves a relative `system_prompt_file` against the folder
+the session runs in. The highest-priority config that sets a replacement decides, and an empty string counts as unset.
+
+**Affects:** people who set these keys, and SDK callers.
+
+**What to do:** Nothing unless you want to use them. A replacement removes Orbit's coding guidance on purpose.
+
 ## No saved grant for `ipconfig`, `hostname` and `route`
 
 - PowerShell and shell no longer offer a saved grant for `ipconfig`, `hostname` and `route`, whose arguments change what they do.

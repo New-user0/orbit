@@ -111,7 +111,7 @@ const reachable = Effect.fnUntraced(function* (
   reference: string,
   file: string,
 ) {
-  if (/^[\\/]{2}/.test(reference)) return false
+  if (LinkShare.isShare(reference)) return false
   const inside = (candidate: string) => within.some((folder) => FSUtil.contains(folder, candidate))
   if (!inside(file) || (yield* LinkShare.blocked(fs, file))) return false
   return inside(yield* fs.resolve(file))

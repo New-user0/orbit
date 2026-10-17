@@ -553,9 +553,14 @@ export const AdvertisePlugin = {
         const gitAt = system.text.indexOf(`\n\n${SessionSystemPrompt.GIT_HEADING}\n`)
         const styleAt = system.text.indexOf(STYLE_HEADING)
         const at = Math.min(...[gitAt, styleAt].filter((index) => index >= 0), system.text.length)
+        // The person's own text from the prompt keys keeps the word it used.
+        const pieces = SessionSystemPrompt.personal.get(event) ?? []
         event.system[0] = {
           ...system,
-          text: system.text.slice(0, at).replace(/\bBash\b/g, ToolNames.powershell) + system.text.slice(at),
+          text:
+            SessionSystemPrompt.outsidePersonal(system.text.slice(0, at), pieces, (part) =>
+              part.replace(/\bBash\b/g, ToolNames.powershell),
+            ) + system.text.slice(at),
         }
       })
     yield* ctx.session.hook("context", hook)

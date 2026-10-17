@@ -221,7 +221,7 @@ const bind = Effect.fnUntraced(function* (fs: FSUtil.Interface, within: readonly
 
 // A path on a network share is never touched, not even to look at it: connecting is a request to a host that the
 // repository chose. That includes a share that a link on the way to it names.
-const network = (file: string) => /^[\\/]{2}/.test(file)
+const network = LinkShare.isShare
 
 // Where `file` stands: absent, `inside` the bound, or `outside` it (a link out, an absolute path elsewhere, a share).
 const reach = Effect.fnUntraced(function* (bound: Bound, file: string) {

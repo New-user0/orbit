@@ -6,12 +6,18 @@ import GIT from "./runner/prompt/git.txt"
 /**
  * What a request's system prompt is made of, in order.
  *
- * - `system[0]`: the base template (`runner/prompt/system.txt`), then the model overlay (`OptimizePlugin`: a replacement
- *   that ends with `core-rules.txt`, or a block appended to the base), then the git section (`PromptConfigPlugin`), then
- *   the output style (`OutputStylePlugin`), which can drop `CODING_SECTIONS` and swaps `INTRO` for its own opening line.
+ * - `system[0]`, in this order:
+ *   1. The base: the template (`runner/prompt/system.txt`) and the model overlay (`OptimizePlugin`: a replacement that
+ *      ends with `core-rules.txt`, or a block appended to the base). On the main thread of a session whose agent has no
+ *      prompt of its own, the `system_prompt` or `system_prompt_file` config replaces the whole base, overlay included,
+ *      and is followed by `core-rules.txt` (`PromptConfigPlugin`).
+ *   2. The git section (`PromptConfigPlugin`), when the shell tool is offered.
+ *   3. The `append_system_prompt` text, on the main thread (`PromptConfigPlugin`).
+ *   4. The output style (`OutputStylePlugin`), which can drop `CODING_SECTIONS` from Orbit's own text and swaps `INTRO`
+ *      for its own opening line.
  *   `ShellTool.AdvertisePlugin` runs last and renames `Bash` to `PowerShell` in everything before the git section when
- *   that is the session's shell, so the template and
- *   the guidance spell the shell tool only as the tool's name.
+ *   that is the session's shell, so the template and the guidance spell the shell tool only as the tool's name. The
+ *   person's own text from the two config keys (`personal`) is left as written by both plugins.
  * - `system[1]`: the model and agent identity of this request (`IdentityPlugin`).
  * - The last part: the instruction baseline.
  *
@@ -254,3 +260,26 @@ export const GUIDANCE = [
     ],
   },
 ]
+
+/**
+ * The pieces of a request's `system[0]` that the person wrote (the `system_prompt` text around the guidance, and the
+ * `append_system_prompt` text), by request. `OutputStylePlugin` and `ShellTool.AdvertisePlugin` change only Orbit's own
+ * text, so a section of the person's text that is named like a coding section is not dropped, and the person's word for
+ * the shell is not renamed.
+ */
+export const personal = new WeakMap<object, readonly string[]>()
+
+/** Applies `change` to the parts of `text` outside every piece in `pieces`, and keeps the pieces as they are. */
+export function outsidePersonal(text: string, pieces: readonly string[], change: (part: string) => string): string {
+  const found = pieces
+    .filter((piece) => piece !== "")
+    .map((piece) => ({ piece, at: text.indexOf(piece) }))
+    .filter((entry) => entry.at >= 0)
+    .sort((a, b) => a.at - b.at || b.piece.length - a.piece.length)[0]
+  if (!found) return change(text)
+  return (
+    change(text.slice(0, found.at)) +
+    found.piece +
+    outsidePersonal(text.slice(found.at + found.piece.length), pieces, change)
+  )
+}
