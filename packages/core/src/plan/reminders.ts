@@ -1,0 +1,156 @@
+export * as PlanReminders from "./reminders.js"
+
+import { Global } from "@orbit/util/global"
+import path from "path"
+import { PlanMode } from "../plan-mode.js"
+import { ReminderText } from "../session/reminder-text.js"
+import type { Derived, Input, Insertion } from "../session/reminders.js"
+import type { SessionMessage } from "../session/message.js"
+import { ToolNames } from "../tool/names.js"
+
+/**
+ * The Plan mode reminders, derived from history. "In Plan mode" means the step ran as the Plan agent. Each run of the
+ * epoch decides from history up to itself, so the bytes of an earlier request never change.
+ *
+ * - A plan reminder opens the epoch's first Plan run, and then comes again only once five prompts have arrived since
+ *   the last one. The prompts of the run that holds the last reminder and of the run being decided do not count.
+ *   Counting prompts and not steps keeps a long tool loop from repeating it. Every fifth reminder since the last
+ *   leave is the full text; the rest are the short one. A child session gets the subagent text at every position.
+ * - A leave note comes once, before the first step that is not in Plan mode, after any change out of it. A change
+ *   into Plan mode that follows with no step in between owes nothing.
+ * - A leave resets the full and short cycle but not the five-prompt throttle, so a return to Plan mode within five
+ *   prompts of the last reminder stays silent until the throttle passes. The Plan agent's permissions still apply.
+ * - A re-entry note comes before the first reminder after a leave, when an approved plan was saved earlier.
+ * - Rows that the old Plan plugin stored count as the reminder or the leave they were.
+ */
+
+const THROTTLE = 5
+const CYCLE = 5
+
+export const derived = (home: () => string = () => Global.Path.home): Derived => ({
+  name: "plan",
+  run: (input) => insertions(input, home()),
+})
+
+export type Given = Pick<Input, "tools" | "messages"> & {
+  readonly agent: Pick<Input["agent"], "id">
+  readonly session: Pick<Input["session"], "id" | "parentID">
+}
+
+export const insertions = (input: Given, home: string): ReadonlyArray<Insertion> => {
+  const file = path.join(PlanMode.directory(home), `${input.session.id}.md`)
+  const child = input.session.parentID !== undefined
+  const out: Insertion[] = []
+  let lastAgent: string | undefined
+  let leaveOwed = false
+  let reentryOwed = false
+  let saved = false
+  let sinceLeave = 0
+  let reminderRun: number | undefined
+  let between = 0
+
+  ReminderText.runs(input.messages).forEach((run, index) => {
+    const agent = run.step?.agent ?? input.agent.id
+    run.messages.forEach((message) => {
+      if (message.type === "agent-switched") {
+        if (message.previous === PlanMode.agent && message.agent !== PlanMode.agent) leaveOwed = true
+        if (message.agent === PlanMode.agent && message.previous !== PlanMode.agent) leaveOwed = false
+        lastAgent = message.agent
+      }
+      if (message.type !== "synthetic") return
+      if (message.text.startsWith(LEGACY_ENTER)) {
+        reminderRun = index
+        between = 0
+        sinceLeave = 1
+      }
+      if (message.text.startsWith(LEGACY_LEAVE)) {
+        leaveOwed = false
+        reentryOwed = true
+        sinceLeave = 0
+      }
+    })
+    // History from before switches were recorded changes agent between steps with no row to say so.
+    if (lastAgent === PlanMode.agent && agent !== PlanMode.agent) leaveOwed = true
+    if (lastAgent !== undefined && lastAgent !== PlanMode.agent && agent === PlanMode.agent) leaveOwed = false
+    lastAgent = agent
+
+    if (agent !== PlanMode.agent && leaveOwed) {
+      leaveOwed = false
+      reentryOwed = true
+      sinceLeave = 0
+      out.push({ after: run.anchor, kind: "plan-leave", text: leave(saved ? file : undefined) })
+    }
+    if (agent === PlanMode.agent && (reminderRun === undefined || between >= THROTTLE)) {
+      if (reentryOwed && saved) {
+        reentryOwed = false
+        out.push({ after: run.anchor, kind: "plan-reentry", text: reentry(file) })
+      }
+      sinceLeave += 1
+      out.push({
+        after: run.anchor,
+        kind: "plan",
+        text: child ? subagent(file) : (sinceLeave - 1) % CYCLE === 0 ? full() : sparse(file),
+      })
+      reminderRun = index
+      between = 0
+    }
+
+    if (reminderRun !== undefined && reminderRun !== index)
+      between += run.messages.filter((message) => message.type === "user").length
+    if (run.step?.content.some(approvedPlan)) saved = true
+  })
+  return out
+}
+
+const LEGACY_ENTER = "<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly"
+const LEGACY_LEAVE = "<system-reminder>\nYou are NO LONGER in Plan mode."
+
+const approvedPlan = (part: SessionMessage.Assistant["content"][number]) =>
+  part.type === "tool" &&
+  ToolNames.canonical(part.name) === "ExitPlanMode" &&
+  part.state.status === "completed" &&
+  part.state.metadata?.approved === true
+
+const full = () => `Plan mode is on. The user wants a plan first, not a change: until they approve one, do not edit files, run commands that alter state, change configuration or commit. This holds over any other instruction in this conversation, including a request to go ahead.
+
+## How to plan
+
+1. Understand the request. Read the code that matters and search for it. Use the Agent tool with the explore agent for broad searches, and run several at once when the questions are independent. One search is enough when the task is small or the files are known. Look for code that already does part of the job before planning new code.
+2. Design the approach. Weigh the realistic options against what you found, and pick one. For a trivial change, a few lines of reasoning is enough. For a large one, compare how each option affects the code that exists.
+3. Check the plan. Re-read the files it depends on, and compare the plan with what the user asked for. Where the request leaves a real choice open, ask with AskUserQuestion before you settle it.
+4. Present the plan by calling ExitPlanMode with the finished plan. Write it in Markdown and include:
+   - a short note on why the change is needed and what it should achieve
+   - the approach you chose, and only that one
+   - the paths of the files to change
+   - existing functions and modules to reuse, with their paths
+   - how to verify the result
+
+## Ending a turn
+
+Every turn in Plan mode ends in one of two ways: a question to the user through AskUserQuestion, or a call to ExitPlanMode. Do not end a turn with a plain message that asks whether the plan is acceptable, and do not use AskUserQuestion to ask for approval. Phrases such as "does this look right?", "shall I go ahead?" and "ready to implement?" belong in ExitPlanMode, which shows the plan to the user and carries their decision back to you.
+
+Ask clarifying questions whenever you need them, and do not guess what the user meant.`
+
+const sparse = (file: string) =>
+  `Plan mode is still on; the full instructions appear earlier in this conversation. Do not change anything: reading, searching and thinking only. Plans are saved at ${file} when the user approves one. Follow the same steps as before, end each turn with AskUserQuestion or ExitPlanMode, and never ask for approval in plain text.`
+
+const subagent = (file: string) =>
+  `Plan mode is on, so you must not edit files or run anything that changes state. This overrides every other instruction, including one that tells you to edit. If you need to write a plan down, the only place for it is ${file}. Answer the query completely. If you use AskUserQuestion, put all of your clarifying questions in one call at the start.`
+
+const reentry = (file: string) => `## Returning to Plan mode
+
+A plan from an earlier round of planning is saved at ${file}.
+
+Before you plan anything, do these in order:
+
+1. Read that file.
+2. Compare the current request with the plan.
+3. Decide: if this is a different task, even a related one, start a new plan and replace the old one; if it is the same task continued, update the plan and drop what is out of date.
+4. Present the result with ExitPlanMode.
+
+**Do this before planning.** Treat this as a new planning session and do not assume the saved plan still applies.`
+
+const leave = (file: string | undefined) =>
+  `## Plan mode has ended
+
+You may edit files, run commands and carry out work again.${file === undefined ? "" : ` The approved plan is saved at ${file} for reference.`}`

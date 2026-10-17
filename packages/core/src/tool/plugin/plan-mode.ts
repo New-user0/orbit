@@ -114,6 +114,8 @@ export const Plugin = {
             })
             return {
               output: { approved: true },
+              // The plan reminders read this from history to tell that a plan was saved for the session.
+              metadata: { approved: true },
               content: `The user approved the plan, saved at ${file}. Plan mode has ended; carry out the plan.`,
             }
           }).pipe(Effect.mapError(failure("present the plan"))),
