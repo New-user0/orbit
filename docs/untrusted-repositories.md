@@ -2199,6 +2199,25 @@ The program-wide register of every follow-up, these gaps included, with each one
   without `--trust` now runs no hook and starts no stdio server. The owner has not yet said whether headless runs keep
   the reference's implicit trust for hooks.
 
+- **Envelope look-alikes are escaped at the sinks `reminder-text.ts` is called from, and at no others.** While a request
+  is lowered, `ReminderText.neutralize` escapes the opening bracket of a `<system-reminder>` or `<system-update>` tag in
+  tool results and tool errors (local and MCP, including a wrapped error's response body, and a text or JSON file in a result, such as an MCP resource: its base64 data URL is decoded, escaped and encoded again, while images and PDFs stay byte for byte), text and directory
+  attachments (an ACP editor's embedded text resource is sent as one) and an attached file's location, the Code Mode
+  tool listing (MCP tool descriptions; baseline and updates), a tool result's text parts together (an adapter joins them
+  with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
+  command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
+  `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text. Synthetic messages are
+  recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
+  Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`
+  (most rows build each message through its real producer; the nested instruction file row writes the message by hand),
+  `session-reminder-files.test.ts` (a text file in a tool result, 12 spellings, compiled for two provider adapters, with an image control), `session-reminder-joins.test.ts` (the request bodies of two chat-completions adapters, one joining parts with nothing and one with a line break), `codemode/instructions.test.ts`, the ACP subprocess
+  row in `prompt-content.subprocess.test.ts`, the end-to-end case in `session-shell.test.ts`, `mcp-instructions.test.ts` and
+  `instruction-discovery.test.ts`. Not covered (register row FU-M4-36): skill and reference listings, the text of a
+  plugin-supplied system part, host-supplied instruction entries, a hosted tool's provider-format result, and the opaque
+  window of a native compaction; instruction text the person chose to run (an activated skill's body, command templates, MCP prompt commands); image and PDF bytes, which cannot be escaped; Unicode spellings of the tag are FU-M4-38. A new sink that puts text from a file or a
+  tool into a request needs the same call and a row in that table.
+
 ## Review checklist
 
 Walk this list for any change that reads project files, runs commands, makes network requests, prints text or changes
