@@ -42,12 +42,61 @@ describe("ConfigTrust classification", () => {
   })
 })
 
+describe("ConfigTrust.sanitize: the keys of an agent definition", () => {
+  // Every key an agent definition can carry, with the kind it is reported under, or none when it survives.
+  const keys: ReadonlyArray<readonly [string, unknown, Trust.Kind | undefined]> = [
+    ["model", "small", "providers"],
+    ["effort", "high", "providers"],
+    ["max_turns", 5, "providers"],
+    ["tools", ["read"], "permissions"],
+    ["disallowed_tools", ["shell"], undefined],
+    ["permission_mode", "bypass", "permissions"],
+    ["mcp_servers", ["docs"], "mcp"],
+    ["hooks", { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] }, "hooks"],
+    ["skills", ["deploy"], "skills"],
+    ["initial_prompt", "/deploy", "commands"],
+    ["memory", "user", "permissions"],
+    ["background", true, undefined],
+    ["isolation", "worktree", "settings"],
+    ["context", { instructions: false, git_status: false }, undefined],
+  ]
+
+  test.each(keys)("treats agents.*.%s as the classification says", (key, value, kind) => {
+    const result = sanitize({ agents: { mine: { description: "Kept", [key]: value } } })
+    const agent = result.info.agents?.mine
+    expect(agent?.description).toBe("Kept")
+    expect(result.withheld).toEqual(kind === undefined ? [] : [kind])
+    expect(key in (agent ?? {})).toBe(kind === undefined)
+    // Control: the same document, unsanitized, carries the key.
+    expect(key in (decode({ agents: { mine: { [key]: value } } }).agents?.mine ?? {})).toBe(true)
+  })
+
+  test("keeps an initial prompt that is plain text", () => {
+    const result = sanitize({ agents: { mine: { initial_prompt: "check the tests" } } })
+    expect(result.info.agents?.mine?.initial_prompt).toBe("check the tests")
+    expect(result.withheld).toEqual([])
+  })
+
+  test("withholds an initial prompt that starts with a slash command after blanks", () => {
+    expect(sanitize({ agents: { mine: { initial_prompt: "  /deploy" } } }).withheld).toEqual(["commands"])
+  })
+
+  test("withholds model_aliases from an untrusted folder, and a trusted one keeps it", () => {
+    const input = { model_aliases: { small: "acme/cheap" } }
+    const result = sanitize(input)
+    expect(result.info.model_aliases).toBeUndefined()
+    expect(result.withheld).toEqual(["providers"])
+    expect<unknown>(decode(input).model_aliases).toEqual({ small: { providerID: "acme", model: "cheap" } })
+  })
+})
+
 describe("ConfigTrust.sanitize", () => {
   // One sample of every field that is withheld whole, with the kind it is reported under.
   const withheldWhole: ReadonlyArray<readonly [string, unknown, Trust.Kind]> = [
     ["shell", "/bin/zsh", "shell"],
     ["default_agent", "mine", "permissions"],
     ["fallback_model", "acme/backup", "providers"],
+    ["model_aliases", { small: "acme/cheap", large: "acme/big" }, "providers"],
     ["output_token_cap", 8000, "providers"],
     ["update", "auto", "network"],
     ["share", "auto", "network"],

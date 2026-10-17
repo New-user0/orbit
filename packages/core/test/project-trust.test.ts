@@ -199,10 +199,6 @@ describe("ProjectTrust.status", () => {
           ),
           // A file that is not a command is not loaded, so a snippet in it holds nothing back.
           write(path.join(folders.repo, ".orbit", "commands", "broken.md"), "---\nsubagent: maybe\n---\n!`rm -rf /`"),
-          write(
-            path.join(folders.repo, ".orbit", "agents", "careful.md"),
-            `---\ndescription: Careful\npermissions:\n  - action: shell\n    resource: "rm *"\n    effect: deny\n---\nBe careful.`,
-          ),
           write(path.join(folders.repo, ".orbit", "skills", "demo", "SKILL.md"), "---\nname: demo\n---\nDemo."),
           write(path.join(folders.repo, ".orbit", "themes", "dark.json"), {}),
         ]),
@@ -210,6 +206,26 @@ describe("ProjectTrust.status", () => {
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
         expect(yield* project.status()).toMatchObject({ trusted: false, withheld: [] })
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("lists every file under agents/ as held back, whatever it names", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.repo, ".orbit", "agents", "explore.md"), "---\ndescription: Mine\n---\nMine."),
+          // Whether an id exists depends on the entries before the file, the person's own agents included, so a file for
+          // a name that nothing ships is listed as well; the stricter answer wins.
+          write(path.join(folders.work, ".orbit", "agents", "fresh.md"), "---\ndescription: Mine\n---\nMine."),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const status = held(folders.root, yield* project.status())
+        expect<unknown>(status).toContainEqual([path.join("work", "repo", ".orbit"), ["permissions"]])
+        expect<unknown>(status).toContainEqual([path.join("work", ".orbit"), ["permissions"]])
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -313,22 +329,24 @@ describe("ProjectTrust.status", () => {
     }),
   )
 
-  it.live("lists nothing for a folder above the project the moment its own grant is made, before the config reloads", () =>
-    Effect.gen(function* () {
-      const folders = yield* bare
-      yield* Effect.promise(() => write(path.join(folders.work, ".orbit", "plugins", "shared.ts"), plugin))
-      yield* Effect.gen(function* () {
-        const project = yield* ProjectTrust.Service
-        const trust = yield* WorkspaceTrust.Service
-        expect(yield* project.status().pipe(Effect.map((status) => status.withheld.length))).toBe(1)
-        // No wait for the reload: the entry's stamp still says untrusted, and the store says otherwise.
-        yield* project.grant({ persist: false, via: "test", holder: AbsolutePath.make(folders.work) })
-        expect((yield* project.status()).withheld).toEqual([])
-        // And the other way: a revoke lists it again at once, though the stamp still says trusted.
-        yield* trust.revoke(folders.work)
-        expect(held(folders.root, yield* project.status())).toEqual([[path.join("work", ".orbit"), ["plugins"]]])
-      }).pipe(Effect.provide(loader(folders)))
-    }),
+  it.live(
+    "lists nothing for a folder above the project the moment its own grant is made, before the config reloads",
+    () =>
+      Effect.gen(function* () {
+        const folders = yield* bare
+        yield* Effect.promise(() => write(path.join(folders.work, ".orbit", "plugins", "shared.ts"), plugin))
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          const trust = yield* WorkspaceTrust.Service
+          expect(yield* project.status().pipe(Effect.map((status) => status.withheld.length))).toBe(1)
+          // No wait for the reload: the entry's stamp still says untrusted, and the store says otherwise.
+          yield* project.grant({ persist: false, via: "test", holder: AbsolutePath.make(folders.work) })
+          expect((yield* project.status()).withheld).toEqual([])
+          // And the other way: a revoke lists it again at once, though the stamp still says trusted.
+          yield* trust.revoke(folders.work)
+          expect(held(folders.root, yield* project.status())).toEqual([[path.join("work", ".orbit"), ["plugins"]]])
+        }).pipe(Effect.provide(loader(folders)))
+      }),
   )
 
   it.live("names the folder around an Orbit file or a file in a `.orbit` directory above the project", () =>
@@ -433,18 +451,28 @@ describe("ProjectTrust.allows", () => {
           command: path.join(folders.globalConfig, "commands", "mine.md"),
           plugin: path.join(folders.globalConfig, "plugins", "mine.ts"),
         }
-        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => false))
-        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(Object.values(mine).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(
+          Object.values(own).map(() => false),
+        )
+        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(
+          Object.values(mine).map(() => true),
+        )
 
         // Trusting the project allows its files once the config has reloaded, which stamps its entries trusted. A file
         // is not allowed on a stamp that is out of date, so a revoke refuses at once.
         const granted = yield* nextUpdate
         yield* project.grant({ persist: false, via: "test" })
         yield* Fiber.join(granted)
-        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(
+          Object.values(own).map(() => true),
+        )
         yield* project.revoke()
-        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => false))
-        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(Object.values(mine).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(
+          Object.values(own).map(() => false),
+        )
+        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(
+          Object.values(mine).map(() => true),
+        )
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -455,7 +483,9 @@ describe("ProjectTrust.status, plugins planted after the grant", () => {
     Effect.gen(function* () {
       const folders = yield* bare
       const config = path.join(folders.repo, ".orbit")
-      yield* Effect.promise(() => write(path.join(config, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nText."))
+      yield* Effect.promise(() =>
+        write(path.join(config, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nText."),
+      )
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
         const next = yield* nextUpdate
@@ -842,7 +872,11 @@ describe("ProjectTrust.trustedSource", () => {
         ["a directory with no scope", { path: orbit }, [true, true, true]] as const,
         // Where the person's own source is, and what its stamp says, does not matter.
         ["a user directory inside the project", { path: orbit, scope: "user" }, [true, true, true]] as const,
-        ["a user directory stamped untrusted", { path: above, scope: "user", trusted: false }, [true, true, true]] as const,
+        [
+          "a user directory stamped untrusted",
+          { path: above, scope: "user", trusted: false },
+          [true, true, true],
+        ] as const,
         // The project's own folders follow the decision just made, whatever the stamp says.
         ["a project directory", { path: orbit, scope: "project", trusted: false }, [false, true, false]] as const,
         ["a project directory with no stamp", { path: orbit, scope: "project" }, [false, true, false]] as const,
@@ -858,7 +892,11 @@ describe("ProjectTrust.trustedSource", () => {
           { path: above, scope: "project", trusted: false },
           [false, false, false],
         ] as const,
-        ["a directory above, stamped trusted", { path: above, scope: "project", trusted: true }, [true, true, true]] as const,
+        [
+          "a directory above, stamped trusted",
+          { path: above, scope: "project", trusted: true },
+          [true, true, true],
+        ] as const,
         ["a directory above, with no stamp", { path: above, scope: "project" }, [true, true, true]] as const,
       ]
 

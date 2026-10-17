@@ -9,7 +9,7 @@ import { Project } from "@orbit/core/project"
 import { Provider } from "@orbit/core/provider"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WebSearch } from "@orbit/core/websearch"
-import { Effect, Stream } from "effect"
+import { Effect, Stream, type Types } from "effect"
 
 type Overrides = Partial<Omit<Plugin.Context, "options" | "session">> & {
   readonly session?: Partial<Plugin.Context["session"]>
@@ -466,16 +466,7 @@ function internalMethod(value: IntegrationMethod): Integration.Method {
 }
 
 function agentInfo(value: Agent.Info) {
-  return {
-    ...value,
-    model: value.model && { ...value.model },
-    request: {
-      settings: { ...value.request.settings },
-      headers: { ...value.request.headers },
-      body: { ...value.request.body },
-    },
-    permissions: value.permissions.map((permission) => ({ ...permission })),
-  }
+  return structuredClone(value) as Types.DeepMutable<Agent.Info>
 }
 
 function located<A>(data: A) {

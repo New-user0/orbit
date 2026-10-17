@@ -906,7 +906,9 @@ permissions:
         yield* trust.grant({ persist: false, via: "test" })
         yield* bus.publish(Event.Updated, {})
         yield* advance(() => reloads >= 1)
-        expect(yield* agents.get(build)).toMatchObject({ system: "STOLEN PROMPT" })
+        // The entry is still stamped untrusted until the config reloads it, and a file of an untrusted folder never
+        // tunes an agent that exists; `extra` is new, so the file that was behind the link defines it.
+        expect((yield* agents.get(build))?.system).toBeUndefined()
         expect(yield* agents.get(Agent.ID.make("extra"))).toMatchObject({ system: "Another stolen prompt" })
       }).pipe(Effect.provide(untrustedProject({ directory: project })))
     }),
