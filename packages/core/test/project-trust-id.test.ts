@@ -15,7 +15,7 @@ import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Hash } from "@orbit/util/hash"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
-import { repository } from "./fixture/git"
+import { git, repository } from "./fixture/git"
 import { tempGlobalLayer } from "./fixture/global"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -126,5 +126,38 @@ describe("the project ID of a folder with no remote across the trust decision", 
         expect(row?.project_id).toBe(after.id)
       }),
     SLOW,
+  )
+
+  // Review of #118, round 3: which checkout was resolved first decides which path hash the old row holds, and a checkout
+  // that is not that one must still find the project trust made after a revoke.
+  ;(["main", "linked"] as const).forEach((first) =>
+    it.live(
+      `keeps each checkout's trusted ID after a revoke when ${first} was resolved first`,
+      () =>
+        Effect.gen(function* () {
+          const base = (yield* tmpdirScoped()).path
+          const folders = { main: path.join(base, "clone"), linked: path.join(base, "linked") }
+          yield* repository(folders.main)
+          yield* Effect.promise(() => git(folders.main, "worktree", "add", "-b", "side", folders.linked))
+          const project = yield* Project.Service
+          const trust = yield* WorkspaceTrust.Service
+          const names = first === "main" ? (["main", "linked"] as const) : (["linked", "main"] as const)
+          const resolve = Effect.forEach(names, (name) =>
+            project.resolve(abs(folders[name])).pipe(Effect.map((found) => [name, found.id] as const)),
+          ).pipe(Effect.map((entries) => Object.fromEntries(entries)))
+
+          yield* resolve
+          yield* trust.grant(folders.main, { persist: false, via: "test" })
+          const trusted = yield* resolve
+          yield* trust.revoke(folders.main)
+          const revoked = yield* resolve
+          yield* trust.grant(folders.main, { persist: false, via: "test" })
+          const again = yield* resolve
+
+          expect(revoked).toEqual(trusted)
+          expect(again).toEqual(trusted)
+        }),
+      SLOW,
+    ),
   )
 })
