@@ -636,6 +636,10 @@ describe("ConfigInstructionFile.imports", () => {
     ["a fence in a list item that goes on, across a blank line", "- ```\n  code\n\n  @./a.md"],
     ["a comment block that spans lines and leaves nothing", "<!--\n@./a.md\n-->\n"],
     ["an escaped at sign after a hard break", "text\\\n\\@./a.md"],
+    ["a fence in a list item that unindented text does not end", "- ```\n  code\nplain @./a.md"],
+    ["a fence in a numbered item that unindented text does not end", "1. ```\n   code\nplain @./a.md"],
+    ["a fence in a list item that a quoted line does not end", "- ```\n  code\n> @./a.md"],
+    ["a fence in a list item that a line at the margin does not end", "- ```\n  code\n@./a.md"],
   ]
   for (const [name, text] of notText)
     test(`finds nothing in ${name}`, () => {
@@ -668,7 +672,15 @@ describe("ConfigInstructionFile.imports", () => {
     ["after a backslash before a letter", "C:\\x @./a.md"],
     ["after a quote that ends and closed the fence it held", "> ```\n> code\n\n@./a.md"],
     ["after a quote that ends without a blank line and closed the fence it held", "> ```\n> code\n@./a.md"],
-    ["after a list item that ends and closed the fence it held", "- ```\n  code\n@./a.md"],
+    ["after a list item that ends at a blank line and closed the fence it held", "- ```\n  code\n\n@./a.md"],
+    ["after the opener of a fence in a list item that its next line leaves", "- ```\n@./a.md"],
+    ["after a list item whose fence a heading ends", "- ```\n  code\n# @./a.md"],
+    ["after a list item whose fence a new list item ends", "- ```\n  code\n- @./a.md"],
+    ["after a list item whose fence a break ends", "- ```\n  code\n---\n@./a.md"],
+    ["after the residue of a comment block that leaves a backtick open", "<!--\nnote\n--> use `foo\n@./a.md and bar`"],
+    ["after the residue of a comment line that leaves a backtick open", "<!-- x --> use `foo\n@./a.md and bar`"],
+    ["after an escaped asterisk", "\\*@./a.md"],
+    ["after an escaped bracket", "\\[@./a.md"],
   ]
   for (const [name, source] of text)
     test(`finds a token ${name}`, () => {

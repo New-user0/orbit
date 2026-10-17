@@ -453,6 +453,9 @@ export function imports(content: string): string[] {
   // The column that a line must reach to belong to the list item above it.
   let offset: number | undefined
   let paragraph = false
+  // Whether the line before in a fence was blank or opened it, which lets a line that is not indented enough end a fence
+  // in a list item. Any other line of text goes on being code, as a lazy continuation of the item does.
+  let loose = false
 
   const flush = () => {
     if (segment.length === 0) return
@@ -473,6 +476,7 @@ export function imports(content: string): string[] {
     if (opening) {
       flush()
       fence = { ...opening, indent, quoted, item: offset !== undefined && indent >= offset ? offset : undefined }
+      loose = true
       paragraph = false
       return
     }
@@ -485,7 +489,11 @@ export function imports(content: string): string[] {
         return
       }
       const left = withoutSpans(text)
-      if (left.trim() !== "") segment.push(left)
+      if (left.trim() !== "") {
+        segment.push(left)
+        // What is left of the line is a run of its own, so a backtick or tag in it opens nothing on the next line.
+        flush()
+      }
       return
     }
     const end = htmlBlock(text, relative, paragraph)
@@ -529,14 +537,19 @@ export function imports(content: string): string[] {
     if (fence) {
       const trimmed = unquoted.replace(/^[ \t]*/, "")
       const margin = unquoted.length - trimmed.length
-      // A line outside the quote, or not indented enough for the item, ends the fence that one holds, and is read as usual.
+      // A line outside the quote ends the fence that one holds. One not indented enough for the item ends it only after
+      // a blank line or the opener, or when it starts a block of its own; any other text is a lazy line of the code.
       if (
         (fence.quoted && !quoted) ||
-        (fence.item !== undefined && trimmed !== "" && width(unquoted.slice(0, margin), 0) < fence.item)
+        (fence.item !== undefined &&
+          trimmed !== "" &&
+          width(unquoted.slice(0, margin), 0) < fence.item &&
+          (loose || startsBlock(trimmed, margin)))
       )
         fence = undefined
       else {
         if (margin < fence.indent + 4 && closes(fence, trimmed)) fence = undefined
+        loose = trimmed === ""
         continue
       }
     }
@@ -545,7 +558,10 @@ export function imports(content: string): string[] {
       // The line that ends a comment block goes on as text after the marker that closes it.
       if (html === COMMENT_END && line.includes("-->")) {
         const left = line.slice(line.indexOf("-->") + 3)
-        if (left.trim() !== "") segment.push(left.trimStart())
+        if (left.trim() !== "") {
+          segment.push(left.trimStart())
+          flush()
+        }
       }
       html = undefined
       continue
@@ -609,8 +625,10 @@ function tokens(text: string): string[] {
       }
       // Only ASCII punctuation is escaped, and an escaped character never starts anything, an at sign included. A
       // backslash before anything else is a character of its own.
-      at += next !== undefined && /[!-/:-@[-`{-~]/.test(next) ? 2 : 1
-      start = false
+      const punctuation = next !== undefined && /[!-/:-@[-`{-~]/.test(next)
+      at += punctuation ? 2 : 1
+      // The escaped character is text on its own, so what follows it starts a new run unless it was the at sign.
+      start = punctuation && next !== "@"
       continue
     }
     if (char === "`") {

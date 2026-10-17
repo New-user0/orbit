@@ -1708,8 +1708,17 @@ describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from
     return { where, key, notes }
   })
 
+  // Home is never trusted implicitly, so a row that wants it trusted grants it for the session, and says so first.
+  const settle = (granted: boolean) =>
+    Effect.gen(function* () {
+      const trust = yield* ProjectTrust.Service
+      if (granted) yield* trust.grant({ persist: false, via: "test" })
+      expect(yield* trust.trusted()).toBe(granted)
+    })
+
   for (const trusted of [true, false]) {
-    it.live(`sends no home file named by ~, by .. or by an absolute path, and sends the one beside it, in a project that is ${trusted ? "implicitly trusted" : "not trusted"}`, () =>
+    const name = trusted ? "trusted for the session" : "not trusted"
+    it.live(`sends no home file named by ~, by .. or by an absolute path, and sends the one beside it, in a project that is ${name}`, () =>
       Effect.gen(function* () {
         const { where, key, notes } = yield* layout
         yield* write(
@@ -1717,6 +1726,7 @@ describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from
           ["@~/.ssh/id_rsa", "@../../.ssh/id_rsa", `@${slashed(key)}`, "@./notes.md"].join("\n"),
         )
         yield* Effect.gen(function* () {
+          yield* settle(trusted)
           const discovery = yield* start()
           expect(placesOf(yield* discovery.list())).toEqual([where.packageFile, notes])
           const text = (yield* readInitial(yield* discovery.load())).text
@@ -1724,21 +1734,39 @@ describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from
           expect(text).not.toContain("PRIVATE KEY MARKER")
           const watcher = yield* Watcher.Test
           expect((yield* watcher.subscriptions()).map((item) => slashed(item.path))).not.toContain(slashed(key))
-        }).pipe(scoped(where, trusted))
+        }).pipe(scoped(where, false))
       }),
     )
 
-    ;(canLinkFile ? it.live : it.live.skip)(`sends no home file that a link names, in a project that is ${trusted ? "implicitly trusted" : "not trusted"}`, () =>
+    ;(canLinkFile ? it.live : it.live.skip)(`sends no home file that a link names, in a project that is ${name}`, () =>
       Effect.gen(function* () {
         const { where, key, notes } = yield* layout
         yield* Effect.promise(() => fs.symlink(key, path.join(where.directory, "link")))
         yield* write(where.packageFile, "@./link\n@./notes.md")
         yield* Effect.gen(function* () {
+          yield* settle(trusted)
           const discovery = yield* start()
           expect(placesOf(yield* discovery.list())).toEqual([where.packageFile, notes])
           const text = (yield* readInitial(yield* discovery.load())).text
           expect(text).not.toContain("PRIVATE KEY MARKER")
-        }).pipe(scoped(where, trusted))
+        }).pipe(scoped(where, false))
+      }),
+    )
+    it.live(`with the session at the home folder, the file there imports a file beside it only in a project that is ${name}`, () =>
+      Effect.gen(function* () {
+        const { where, key, notes } = yield* layout
+        const atHome = { ...where, directory: where.home, packageFile: where.rootFile }
+        yield* write(path.join(where.home, "notes.md"), "HOME NOTES MARKER")
+        yield* write(where.rootFile, ["@./notes.md", "@./.ssh/id_rsa"].join("\n"))
+        yield* Effect.gen(function* () {
+          yield* settle(trusted)
+          const discovery = yield* start()
+          const text = (yield* readInitial(yield* discovery.load())).text
+          expect(text.includes("HOME NOTES MARKER")).toBe(trusted)
+          expect(text.includes("PRIVATE KEY MARKER")).toBe(trusted)
+          expect(notes).toBeDefined()
+          expect(key).toBeDefined()
+        }).pipe(scoped(atHome, false))
       }),
     )
   }
