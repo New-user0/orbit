@@ -17,6 +17,7 @@ import { SessionEvent } from "../event.js"
 import { SessionInbox } from "../inbox.js"
 import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
+import { SessionReminders } from "../reminders.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionOutput } from "../output.js"
@@ -110,6 +111,7 @@ const layer = Layer.effect(
     const scratchpad = yield* SessionScratchpad.Service
     const title = yield* SessionTitle.Service
     const turnEnd = yield* SessionTurnEnd.Service
+    const reminders = yield* SessionReminders.Service
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -244,6 +246,7 @@ const layer = Layer.effect(
                   if (promoted > 0) step = 1
                   return {
                     _tag: "Ready" as const,
+                    selection: selected,
                     context: yield* loadSelected(selected, (yield* SessionTurn.current(db, sessionID)).fallback),
                   }
                 }),
@@ -257,7 +260,7 @@ const layer = Layer.effect(
       while (true) {
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
-        const stopped = yield* runStep(next.context, step)
+        const stopped = yield* runStep(next.context, next.selection, step)
         // A turn that stops at the agent's step allowance never reaches the turn-end checks, so it is checked here.
         if (stopped === "limited") yield* requireOutput(next.context, yield* SessionTurn.current(db, sessionID))
         continuing = stopped === "continue" || (stopped === "ended" && (yield* endTurn(next.context)))
@@ -378,7 +381,11 @@ const layer = Layer.effect(
       context.load(fallback ? { ...selected, session: { ...selected.session, model: fallback } } : selected)
 
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
-    const runStep = Effect.fn("SessionRunner.runStep")(function* (first: SessionContext.Loaded, step: number) {
+    const runStep = Effect.fn("SessionRunner.runStep")(function* (
+      first: SessionContext.Loaded,
+      firstSelection: SessionContext.Selection,
+      step: number,
+    ) {
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
       let retry = yield* SessionRunnerRetry.make(bus, sessionID)
@@ -386,6 +393,11 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      let selection = firstSelection
+      // Durable reminders are collected once per logical step. Retries, a fallback switch, an incomplete-stream
+      // continuation, an output-limit escalation and a resume all resend the step's request, so they keep the flag; a
+      // compaction moves the epoch the reminders were collected into, so it clears it.
+      let collected = false
       // The notice is the durable record that the turn moved, so a drain that reloads or restarts keeps the fallback.
       const switchToFallback = Effect.fnUntraced(function* (
         outcome: { readonly overloaded: boolean },
@@ -410,21 +422,30 @@ const layer = Layer.effect(
       while (true) {
         const current = yield* SessionTurn.current(db, sessionID)
         // Reuse boundary preparation once; retries refresh context without delivering more input.
-        const loaded =
+        const before =
           initial ??
-          (yield* prepareContext(sessionID).pipe(
-            Effect.flatMap((selected) => loadSelected(selected, current.fallback)),
-          ))
+          (yield* Effect.gen(function* () {
+            selection = yield* prepareContext(sessionID)
+            return yield* loadSelected(selection, current.fallback)
+          }))
         initial = undefined
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
-        const limit = yield* turnLimit(loaded, current.options)
+        const limit = yield* turnLimit(before, current.options)
         if (limit) return yield* new StepFailedError({ error: limit })
-        const output = yield* outputFor(loaded, current)
-        const compacted = yield* compaction.compact({ reason: "auto", context: loaded })
+        const output = yield* outputFor(before, current)
+        const compacted = yield* compaction.compact({ reason: "auto", context: before })
         if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
         if (compacted.status === "completed") {
           assistantMessageID = SessionMessage.ID.create()
+          collected = false
           continue
+        }
+        // After compaction has settled, so the reminders land in the epoch the request is made in. The reload applies
+        // the turn's fallback, or a turn that moved to its fallback model would snap back to the session's.
+        let loaded = before
+        if (!collected) {
+          collected = true
+          if (yield* reminders.collect({ loaded: before, step })) loaded = yield* loadSelected(selection, current.fallback)
         }
         const recovery = yield* outputRecovery(db, sessionID)
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
@@ -437,6 +458,7 @@ const layer = Layer.effect(
           tools: loaded.tools,
           initial: loaded.initial,
           messages: loaded.messages,
+          insertions: yield* reminders.derive(loaded, step),
         })
         const prepared = yield* context.request.primary({
           session: loaded.session,
@@ -543,6 +565,7 @@ const layer = Layer.effect(
           }),
           Compacted: Effect.fnUntraced(function* () {
             recoverOverflow = false
+            collected = false
             assistantMessageID = SessionMessage.ID.create()
           }),
           RecoverFull: Effect.fnUntraced(function* () {
@@ -632,6 +655,7 @@ export const node = makeLocationNode({
     SessionScratchpad.node,
     SessionTitle.node,
     SessionTurnEnd.node,
+    SessionReminders.node,
     Snapshot.node,
     ToolOutput.node,
     Database.node,

@@ -2171,6 +2171,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   without `--trust` now runs no hook and starts no stdio server. The owner has not yet said whether headless runs keep
   the reference's implicit trust for hooks.
 
+- **Envelope look-alikes are escaped at the sinks `reminder-text.ts` is called from, and at no others.** While a request
+  is lowered, `ReminderText.neutralize` escapes the opening bracket of a `<system-reminder>` or `<system-update>` tag in
+  tool results and tool errors (local and MCP), text and directory attachments, user shell output, a checkpoint's
+  summary and recent text, and the instruction files `InstructionDiscovery` renders (baseline and updates). Pinned by the
+  sink table in `session-reminders.test.ts` and the case in `instruction-discovery.test.ts`. Not covered: MCP server
+  instructions, skill and reference listings, the text of a plugin-supplied system part, host-supplied instruction
+  entries, a hosted tool's provider-format result, and the opaque window of a native compaction. A new sink that puts
+  text from a file or a tool into a request needs the same call and a row in that table.
 ## Review checklist
 
 Walk this list for any change that reads project files, runs commands, makes network requests, prints text or changes

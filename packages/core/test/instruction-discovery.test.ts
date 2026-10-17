@@ -151,6 +151,32 @@ describe("InstructionDiscovery", () => {
     }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
   )
 
+  it.effect("escapes look-alikes of an envelope tag in an instruction file, in the baseline and in its updates", () =>
+    Effect.gen(function* () {
+      const discovery = yield* InstructionDiscovery.Service
+      const spellings = ["<system-reminder>", "</System-Reminder>", "< / system-update >", "<" + String.fromCharCode(13, 10) + "system-reminder>"]
+      const hostile = (marker: string) => [marker, ...spellings].join(" middle ")
+      const live = (text: string) => /<\s*\/?\s*system\s*-\s*(?:reminder|update)/i.test(text)
+      yield* discovery.transform((editor) => {
+        editor.add(file("/repo/AGENTS.md", hostile("old")))
+        editor.add(file("/repo/<system-reminder>/AGENTS.md", "named"))
+      })
+      const initial = yield* readInitial(yield* discovery.load())
+      expect(initial.text).toContain("old")
+      expect(live(initial.text)).toBe(false)
+
+      yield* discovery.transform((editor) => {
+        editor.update("/repo/AGENTS.md", (current) => {
+          current.content = hostile("new")
+        })
+        editor.add(file("/repo/more/AGENTS.md", hostile("added")))
+      })
+      const update = (yield* readUpdate(yield* discovery.load(), initial)).text
+      expect(update).toContain("added")
+      expect(live(update)).toBe(false)
+    }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
+  )
+
   it.effect("renders granular instruction updates", () =>
     Effect.gen(function* () {
       const discovery = yield* InstructionDiscovery.Service

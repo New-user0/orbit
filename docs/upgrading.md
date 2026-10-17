@@ -2540,6 +2540,27 @@ session is unaffected until its next step), and SDK callers that read `Config.In
 
 **What to do:** Nothing, or set `git_status` to `false` to keep git state out of the prompt.
 
+### Text that looks like a reminder is escaped wherever it comes from a file or a tool
+
+Orbit now has a reminder framework: model-facing context that the harness adds beside the conversation, stored as hidden
+`session.synthetic` rows (`metadata.reminder.kind`) or worked out each time a request is built. No built-in reminder is
+added by this change; later changes add producers. A reminder holds harness text in a `<system-reminder>` envelope, and
+anything it quotes from a file or a tool follows in a labelled fenced block outside the envelope.
+
+The base prompt has always said that a `<system-reminder>` or `<system-update>` block comes only from Orbit. To make that
+true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lowers text that is data: tool results and
+tool errors (local and MCP), attached files and folder listings, the output of a shell command you ran, the summary and
+recent text of a compaction checkpoint, and instruction files with their updates. The stored row keeps the original
+bytes; only the request changes, and only for text that held such a tag. A prompt you type is not changed.
+
+A compaction no longer reads reminder rows, because the next step collects them again after the checkpoint.
+
+**Affects:** people whose files or tool output quote `<system-reminder>` or `<system-update>` tags (for example when
+documenting them), who now see `&lt;system-reminder>` in what the model is sent; clients that list `session.synthetic`
+messages, which should hide those with `metadata.reminder`.
+
+**What to do:** Nothing.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
