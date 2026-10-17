@@ -33,11 +33,43 @@ const server: FetchHandler = async (url) => {
     return json({ location, data: [{ id: "model", providerID: "demo", name: modelName, variants: [] }] })
 }
 
-async function mount(input: { vim?: boolean; width?: number; session?: boolean; style?: "line" | "block" } = {}) {
+// A clipboard the test controls: `read` waits for whatever the test releases, `written` holds what the app wrote.
+function fakeClipboard(text?: string) {
+  const written: string[] = []
+  const gate = Promise.withResolvers<void>()
+  const state = { held: false, reads: 0 }
+  return {
+    written,
+    state,
+    release: () => gate.resolve(),
+    service: {
+      async read() {
+        state.reads++
+        if (state.held) await gate.promise
+        return text === undefined ? undefined : { data: text, mime: "text/plain" }
+      },
+      async write(value: string) {
+        written.push(value)
+      },
+      async dispose() {},
+    },
+  }
+}
+
+async function mount(
+  input: {
+    vim?: boolean
+    width?: number
+    session?: boolean
+    style?: "line" | "block"
+    clipboard?: ReturnType<typeof fakeClipboard>["service"]
+  } = {},
+) {
   takeDraft(undefined)
   const state = await tmpdir()
   const setup = await createAppFixture({
     state: state.path,
+    clipboard: input.clipboard,
     width: input.width ?? 120,
     fetch: server,
     args: input.session === false ? undefined : { sessionID },
@@ -177,7 +209,49 @@ test("a change command is one undo step even though it deletes and inserts", asy
   expect(app.textarea().plainText).toBe("xyz bar")
 })
 
-test("the paste of a register lands as one command and the register survives a submit", async () => {
+test('"+yy writes the line to the clipboard, "+p pastes what it reads, and a read that outlives an edit pastes nothing', async () => {
+  const yanked = fakeClipboard()
+  await using copy = await mount({ clipboard: yanked.service })
+  await copy.type("ab")
+  await copy.normal()
+  await copy.type('"+yy')
+  expect(yanked.written).toEqual(["ab\n"])
+
+  const pasted = fakeClipboard("XY")
+  await using paste = await mount({ clipboard: pasted.service })
+  await paste.type("ab")
+  await paste.normal()
+  await paste.press("0")
+  await paste.type('"+p')
+  await Bun.sleep(50)
+  await paste.setup.renderOnce()
+  expect(paste.textarea().plainText).toBe("aXYb")
+
+  const late = fakeClipboard("XY")
+  late.state.held = true
+  await using stale = await mount({ clipboard: late.service })
+  await stale.type("ab")
+  await stale.normal()
+  await stale.press("0")
+  await stale.type('"+p')
+  await stale.press("x")
+  late.release()
+  await Bun.sleep(50)
+  await stale.setup.renderOnce()
+  expect(late.state.reads).toBe(1)
+  expect(stale.textarea().plainText).toBe("b")
+}, 20_000)
+
+test("Escape at the start of a line stays there", async () => {
+  await using app = await mount()
+  await app.type("ab")
+  await app.press("j", { ctrl: true })
+  await app.normal()
+  expect(app.textarea().plainText).toBe("ab\n")
+  expect(app.textarea().cursorOffset).toBe(3)
+})
+
+test("the paste of a register lands as one command", async () => {
   await using app = await mount()
   await app.type("hello")
   await app.normal()
@@ -227,16 +301,17 @@ test("Enter submits from normal mode and normal mode stays for the next prompt",
     state: state.path,
     fetch: async (url, request) => {
       if (url.pathname === `/api/session/${sessionID}/prompt`) {
-        prompts.push(((await request.json()) as { prompt?: { text?: string } }).prompt?.text ?? "")
+        prompts.push(((await request.json()) as { text?: string }).text ?? "")
         return json({ data: { id: "msg_x" } })
       }
       return server(url, request)
     },
     args: { sessionID },
+    width: 120,
     config: { animations: false, prompt: { vim: true } },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => frame.includes("›"))
   takeDraft(undefined)
   await setup.mockInput.typeText("ship it")
   setup.mockInput.pressEscape()
@@ -245,6 +320,6 @@ test("Enter submits from normal mode and normal mode stays for the next prompt",
   setup.mockInput.pressEnter()
   await Bun.sleep(300)
   await setup.renderOnce()
-  expect(prompts.length).toBe(1)
+  expect(prompts).toEqual(["ship it"])
   expect(setup.captureCharFrame()).not.toContain(label)
 })

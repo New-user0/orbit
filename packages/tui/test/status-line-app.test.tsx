@@ -340,6 +340,12 @@ console.log("L mode=" + input.vim_mode + " style=" + input.output_style)
   await until("L mode=insert style=concise")
 
   style = "terse"
-  setup.events.emit({ id: "evt_config", created: 3, type: "config.updated", location: { directory }, data: {} } as never)
+  setup.events.emit({
+    id: "evt_config",
+    created: 3,
+    type: "config.updated",
+    location: { directory },
+    data: {},
+  } as never)
   await until("L mode=insert style=terse")
 }, 30_000)

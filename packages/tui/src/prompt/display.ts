@@ -2,11 +2,20 @@ import { stringWidth } from "../util/string-width"
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
+// The textarea gives these a cell count that terminal width does not: a newline one, a tab its tab width, and the
+// invisible direction marks and soft hyphen one each.
+const offsetCells: Record<string, number> = {
+  "\n": 1,
+  "\t": 2,
+  [String.fromCharCode(0xad)]: 1,
+  [String.fromCharCode(0x200e)]: 1,
+  [String.fromCharCode(0x200f)]: 1,
+}
+
 export function promptOffsetWidth(value: string) {
   let width = 0
   for (const part of graphemes.segment(value)) {
-    // Textarea offsets count newlines as one position; terminal width counts them as zero.
-    width += part.segment === "\n" ? 1 : stringWidth(part.segment)
+    width += offsetCells[part.segment] ?? stringWidth(part.segment)
   }
   return width
 }

@@ -4,7 +4,7 @@ export * as Vim from "./vim-state"
  * Vim-style editing for the prompt, as a pure engine. Insert mode is the ordinary editor; Escape enters normal mode,
  * where keys move and edit instead of typing. The engine reads a snapshot of the prompt (text, cursor, parts) and a key,
  * and returns the next state plus what to do: edits to apply, the new cursor and the mode. It knows nothing of the
- * renderer, so the adapter in `index.tsx` applies the edits through the textarea and tests drive it over a string.
+ * renderer, so the adapter in `vim-adapter.ts` applies the edits through the textarea and tests drive it over a string.
  *
  * Every offset here is a UTF-16 index into `text` that sits on a grapheme boundary. The textarea counts display width
  * instead, so the adapter converts at its edge.
@@ -84,7 +84,9 @@ export interface Result {
   readonly pass?: boolean
   /** Run the textarea's undo. */
   readonly undo?: boolean
-  readonly clipboard?: { readonly write: string } | { readonly read: { readonly before: boolean; readonly count: number } }
+  readonly clipboard?:
+    | { readonly write: string }
+    | { readonly read: { readonly before: boolean; readonly count: number } }
   readonly record?: Command
 }
 
@@ -280,8 +282,7 @@ function normalKey(run: Run, count: number, ch: string): Result {
       return join(run, n)
     case "p":
     case "P": {
-      if (state.clipboard)
-        return result(state, { cursor, clipboard: { read: { before: ch === "P", count: n } } })
+      if (state.clipboard) return result(state, { cursor, clipboard: { read: { before: ch === "P", count: n } } })
       return paste(reset(state), run.snap, state.register, ch === "P", n)
     }
     case "u":
@@ -328,11 +329,22 @@ function operatorKey(run: Run, pending: Extract<Pending, { kind: "operator" }>, 
     // A count between the operator and its double is not understood.
     if (pending.inner > 0) return stay(reset(state), cursor)
     const first = ctx.lineIndex(cursor)
-    return lines(run, pending.operator, first, first + (pending.count || 1) - 1, pending.operator + pending.operator, pending.count || 1)
+    return lines(
+      run,
+      pending.operator,
+      first,
+      first + (pending.count || 1) - 1,
+      pending.operator + pending.operator,
+      pending.count || 1,
+    )
   }
-  if (ch === "g") return stay({ ...state, pending: { kind: "operatorG", operator: pending.operator, count: total } }, cursor)
+  if (ch === "g")
+    return stay({ ...state, pending: { kind: "operatorG", operator: pending.operator, count: total } }, cursor)
   if (ch === "i" || ch === "a")
-    return stay({ ...state, pending: { kind: "object", operator: pending.operator, count: total, around: ch === "a" } }, cursor)
+    return stay(
+      { ...state, pending: { kind: "object", operator: pending.operator, count: total, around: ch === "a" } },
+      cursor,
+    )
   if (MOTIONS.has(ch)) return operatorMotion(run, pending.operator, ch, total)
   return stay(reset(state), cursor)
 }
@@ -373,11 +385,23 @@ function operatorObject(run: Run, operator: Operator, kind: string, around: bool
   const { state, ctx, cursor } = run
   const found = ctx.object(kind, around, cursor)
   if (!found) return stay(reset(state), cursor)
-  return operate(run, operator, ctx.widen(found), { command: operator, operator, object: (around ? "a" : "i") + kind, count: 1 }, true)
+  return operate(
+    run,
+    operator,
+    ctx.widen(found),
+    { command: operator, operator, object: (around ? "a" : "i") + kind, count: 1 },
+    true,
+  )
 }
 
 /** Applies an operator to a characterwise range. */
-function operate(run: Run, operator: Operator, range: { start: number; end: number }, record: Command, allowEmpty = false): Result {
+function operate(
+  run: Run,
+  operator: Operator,
+  range: { start: number; end: number },
+  record: Command,
+  allowEmpty = false,
+): Result {
   const { state, snap } = run
   const text = snap.text.slice(range.start, range.end)
   if (!text) {
@@ -396,7 +420,15 @@ function operate(run: Run, operator: Operator, range: { start: number; end: numb
 }
 
 /** Applies an operator to whole lines `first` to `last` (clamped to the text). */
-function lines(run: Run, operator: Operator, first: number, last: number, command: string, count: number, record?: Command): Result {
+function lines(
+  run: Run,
+  operator: Operator,
+  first: number,
+  last: number,
+  command: string,
+  count: number,
+  record?: Command,
+): Result {
   const { state, ctx, snap } = run
   const end = Math.min(last, ctx.lineStarts.length - 1)
   const start = ctx.lineStarts[first]!
@@ -405,12 +437,16 @@ function lines(run: Run, operator: Operator, first: number, last: number, comman
   const rec = record ?? { command, operator, count }
   if (operator === "y") return result(state, { cursor: start, register, record: rec })
   if (operator === "c")
-    return result(state, { edits: [{ start, end: stop, insert: "" }], cursor: start, mode: "insert", register, record: rec })
+    return result(state, {
+      edits: [{ start, end: stop, insert: "" }],
+      cursor: start,
+      mode: "insert",
+      register,
+      record: rec,
+    })
   // The lines go with one of their line breaks; at the end of the text it is the one before them.
   const edits =
-    stop < ctx.len
-      ? [{ start, end: stop + 1, insert: "" }]
-      : [{ start: Math.max(0, start - 1), end: stop, insert: "" }]
+    stop < ctx.len ? [{ start, end: stop + 1, insert: "" }] : [{ start: Math.max(0, start - 1), end: stop, insert: "" }]
   return result(state, {
     edits,
     cursor: clampCursor(apply(snap.text, edits), edits[0]!.start),
@@ -454,7 +490,9 @@ function replace(run: Run, n: number, char: string): Result {
   if (cells.length < n) return stay(reset(state), cursor)
   const edits = cells.filter((cell) => !cell.part).map((cell) => ({ start: cell.start, end: cell.end, insert: char }))
   const last = cells[cells.length - 1]!
-  const shift = edits.filter((edit) => edit.start < last.start).reduce((sum, edit) => sum + edit.insert.length - (edit.end - edit.start), 0)
+  const shift = edits
+    .filter((edit) => edit.start < last.start)
+    .reduce((sum, edit) => sum + edit.insert.length - (edit.end - edit.start), 0)
   return result(state, { edits, cursor: last.start + shift, record: { command: "r", count: n } })
 }
 
@@ -499,7 +537,11 @@ function join(run: Run, n: number): Result {
     spaced = snap.text.slice(start, end).endsWith(" ")
     at = end
   }
-  return result(state, { edits: edits.filter((edit) => edit.end > edit.start || edit.insert), cursor: joinAt, record: { command: "J", count: n } })
+  return result(state, {
+    edits: edits.filter((edit) => edit.end > edit.start || edit.insert),
+    cursor: joinAt,
+    record: { command: "J", count: n },
+  })
 }
 
 /** `>>` and `<<`: shift n lines from the cursor's line by two columns. */
@@ -509,7 +551,7 @@ function shift(run: Run, direction: ">" | "<", n: number): Result {
   const edits = ctx.lineStarts.slice(line, line + n).flatMap((start): Edit[] => {
     const end = ctx.lineEnd(start)
     const body = snap.text.slice(start, end)
-    if (direction === ">") return body ? [{ start, end: start, insert: "  " }] : []
+    if (direction === ">") return [{ start, end: start, insert: "  " }]
     const width = body.startsWith("  ") ? 2 : body.startsWith("\t") ? 1 : (/^\s{1,2}/.exec(body)?.[0].length ?? 0)
     return width ? [{ start, end: start + width, insert: "" }] : []
   })
@@ -520,7 +562,7 @@ function shift(run: Run, direction: ">" | "<", n: number): Result {
   const indent = rest.slice(0, eol).length - rest.slice(0, eol).trimStart().length
   return result(state, {
     edits,
-    cursor: lineStart + (indent === eol ? 0 : indent),
+    cursor: lineStart + indent,
     record: { command: direction + direction, count: n },
   })
 }
@@ -543,8 +585,9 @@ function context(snap: Snapshot) {
     let hi = starts.length - 1
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1
-      if (starts[mid]! <= i) lo = mid
-      else hi = mid - 1
+      const atOrBefore = starts[mid]! <= i
+      lo = atOrBefore ? mid : lo
+      hi = atOrBefore ? hi : mid - 1
     }
     return starts[lo]!
   }
@@ -560,8 +603,9 @@ function context(snap: Snapshot) {
     let hi = starts.length - 1
     while (lo < hi) {
       const mid = (lo + hi) >> 1
-      if (starts[mid]! > i) hi = mid
-      else lo = mid + 1
+      const after = starts[mid]! > i
+      hi = after ? mid : hi
+      lo = after ? lo : mid + 1
     }
     const n = starts[lo]!
     return inside(n)?.end ?? n
@@ -704,12 +748,15 @@ function context(snap: Snapshot) {
       const before = repeat(steps[name]!, from, n - 1)
       let end = steps[name]!(before)
       // Over the last word of a line the range stops at the line break instead of running on to the next line.
-      const wordStop = cls(before, big) === 0 ? before : (() => {
-        const c = cls(before, big)
-        let q = before
-        while (q < len && cls(q, big) === c) q = next(q)
-        return q
-      })()
+      const wordStop =
+        cls(before, big) === 0
+          ? before
+          : (() => {
+              const c = cls(before, big)
+              let q = before
+              while (q < len && cls(q, big) === c) q = next(q)
+              return q
+            })()
       const lineBreak = text.indexOf("\n", wordStop)
       if (lineBreak >= 0 && lineBreak < end) end = lineBreak
       return { start: from, end }
@@ -762,11 +809,15 @@ function context(snap: Snapshot) {
   }
   const quoteObject = (quote: string, around: boolean, cursor: number) => {
     const first = lineStart(cursor)
-    const marks = Array.from(text.slice(first, lineEnd(cursor)).matchAll(new RegExp(quote, "g")), (m) => first + m.index)
+    const marks = Array.from(
+      text.slice(first, lineEnd(cursor)).matchAll(new RegExp(quote, "g")),
+      (m) => first + m.index,
+    )
     for (let k = 0; k + 1 < marks.length; k += 2) {
       const open = marks[k]!
       const close = marks[k + 1]!
-      if (open <= cursor && cursor <= close) return around ? { start: open, end: close + 1 } : { start: open + 1, end: close }
+      if (open <= cursor && cursor <= close)
+        return around ? { start: open, end: close + 1 } : { start: open + 1, end: close }
     }
   }
   const bracketObject = (open: string, close: string, around: boolean, cursor: number) => {
@@ -774,22 +825,20 @@ function context(snap: Snapshot) {
     let start = -1
     for (let i = text[cursor] === close ? cursor - 1 : Math.min(cursor, len - 1); i >= 0; i--) {
       if (text[i] === close) depth++
-      else if (text[i] === open) {
-        if (depth === 0) {
-          start = i
-          break
-        }
-        depth--
+      if (text[i] !== open) continue
+      if (depth === 0) {
+        start = i
+        break
       }
+      depth--
     }
     if (start < 0) return
     depth = 0
     for (let i = start + 1; i < len; i++) {
       if (text[i] === open) depth++
-      else if (text[i] === close) {
-        if (depth === 0) return around ? { start, end: i + 1 } : { start: start + 1, end: i }
-        depth--
-      }
+      if (text[i] !== close) continue
+      if (depth === 0) return around ? { start, end: i + 1 } : { start: start + 1, end: i }
+      depth--
     }
   }
 

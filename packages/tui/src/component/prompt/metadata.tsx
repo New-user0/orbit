@@ -31,7 +31,9 @@ export function PromptMetadataRow(props: {
       // The label's width (and the gap after it) comes off the budget first, so the model name truncates, not the label.
       width: Math.max(
         0,
-        dimensions().width - (dimensions().width < 44 ? 9 : 13) - (props.vimInsert ? stringWidth(VIM_INSERT_LABEL) + 1 : 0),
+        dimensions().width -
+          (dimensions().width < 44 ? 9 : 13) -
+          (props.vimInsert ? stringWidth(VIM_INSERT_LABEL) + 1 : 0),
       ),
       terminalWidth: dimensions().width,
       agent: props.agent ?? "",

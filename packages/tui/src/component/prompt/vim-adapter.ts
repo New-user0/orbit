@@ -11,13 +11,7 @@ import { Vim } from "./vim-state"
 
 type Input = Pick<
   TextareaRenderable,
-  | "plainText"
-  | "cursorOffset"
-  | "setSelection"
-  | "deleteSelection"
-  | "insertText"
-  | "moveCursorUp"
-  | "moveCursorDown"
+  "plainText" | "cursorOffset" | "setSelection" | "deleteSelection" | "insertText" | "moveCursorUp" | "moveCursorDown"
 >
 
 export const toOffset = (text: string, index: number) => promptOffsetWidth(text.slice(0, index))
@@ -33,7 +27,7 @@ export function snapshot(input: Input, parts: ReadonlyArray<{ start: number; end
     row(cursor, direction) {
       input.cursorOffset = toOffset(text, cursor)
       if (direction === "down") input.moveCursorDown()
-      else input.moveCursorUp()
+      if (direction === "up") input.moveCursorUp()
       return toIndex(text, input.cursorOffset)
     },
   }
@@ -44,9 +38,20 @@ export function snapshot(input: Input, parts: ReadonlyArray<{ start: number; end
  * cursor where the engine says. Returns how many native editing steps it took: `u` undoes that many.
  */
 export function apply(input: Input, snap: Vim.Snapshot, result: Vim.Result) {
+  // One pass over the text instead of one per edit boundary: a count like 500>> has hundreds of edits.
+  const offsets = new Map<number, number>()
+  const total = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(snap.text)].reduce(
+    (at, part) => {
+      offsets.set(part.index, at)
+      return at + promptOffsetWidth(part.segment)
+    },
+    0,
+  )
+  offsets.set(snap.text.length, total)
+  const offsetOf = (index: number) => offsets.get(index) ?? toOffset(snap.text, index)
   const steps = [...result.edits].reverse().reduce((count, edit) => {
-    const start = toOffset(snap.text, edit.start)
-    const end = toOffset(snap.text, edit.end)
+    const start = offsetOf(edit.start)
+    const end = offsetOf(edit.end)
     const removed = end > start
     if (removed) {
       input.setSelection(start, end)

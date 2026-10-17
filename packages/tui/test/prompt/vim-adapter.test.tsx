@@ -9,10 +9,13 @@ import { Vim } from "../../src/component/prompt/vim-state"
 // are what is read back.
 async function mount(text: string, width = 20) {
   let input!: TextareaRenderable
-  const setup = await testRender(() => <textarea ref={(node: TextareaRenderable) => (input = node)} focused width={width} height={8} />, {
-    width,
-    height: 8,
-  })
+  const setup = await testRender(
+    () => <textarea ref={(node: TextareaRenderable) => (input = node)} focused width={width} height={8} />,
+    {
+      width,
+      height: 8,
+    },
+  )
   await setup.renderOnce()
   input.insertText(text)
   await setup.renderOnce()
@@ -26,7 +29,11 @@ async function mount(text: string, width = 20) {
     press(keys: string) {
       for (const char of keys) {
         const snap = VimAdapter.snapshot(input, [])
-        const result = Vim.step(state, { name: char.toLowerCase(), sequence: char, shift: char !== char.toLowerCase() }, snap)
+        const result = Vim.step(
+          state,
+          { name: char.toLowerCase(), sequence: char, shift: char !== char.toLowerCase() },
+          snap,
+        )
         state = result.state
         VimAdapter.apply(input, snap, result)
       }
@@ -47,6 +54,41 @@ test("offsets round-trip through wide characters and an emoji", async () => {
   // Two wide characters take four offsets, the emoji two more.
   expect(VimAdapter.toOffset(text, 2)).toBe(4)
   expect(VimAdapter.toOffset(text, 5)).toBe(7)
+})
+
+test("offsets match the textarea's own count for a tab, soft hyphen, CJK, ZWJ emoji and combining mark", async () => {
+  for (const text of ["\tfoo", "a­b", "日本語", "x👨‍👩‍👧y", "éz", "a\tb\nc"]) {
+    using e = await mount(text)
+    const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)]
+    for (const part of [...segments.map((s) => s.index), text.length]) {
+      e.input.cursorOffset = VimAdapter.toOffset(text, part)
+      expect(e.input.getTextRange(0, e.input.cursorOffset)).toBe(text.slice(0, part))
+      expect(VimAdapter.toIndex(text, VimAdapter.toOffset(text, part))).toBe(part)
+    }
+  }
+})
+
+test("a tab-indented line edits the right characters", async () => {
+  using dw = await mount("\tfoo bar")
+  dw.press("$")
+  dw.press("b")
+  dw.press("dw")
+  expect(dw.input.plainText).toBe("\tfoo ")
+
+  using shift = await mount("\tx")
+  shift.cursor(1)
+  shift.press("<<")
+  expect(shift.input.plainText).toBe("x")
+
+  using word = await mount("\tabc def")
+  word.cursor(0)
+  word.press("w")
+  expect(word.index()).toBe(1)
+
+  using escape = await mount("\tabc")
+  const snap = VimAdapter.snapshot(escape.input, [])
+  escape.input.cursorOffset = VimAdapter.toOffset(snap.text, Vim.leaveInsert(snap))
+  expect(VimAdapter.toIndex(escape.input.plainText, escape.input.cursorOffset)).toBe(3)
 })
 
 test("w and x work by grapheme on a textarea that holds wide characters and an emoji", async () => {
@@ -100,7 +142,11 @@ test("a command that deletes and inserts takes two native steps, and the adapter
   using editor = await mount("foo bar")
   editor.cursor(0)
   const snap = VimAdapter.snapshot(editor.input, [])
-  const result = Vim.step({ ...Vim.initial, mode: "normal", pending: { kind: "replace", count: 0 } }, { name: "q", sequence: "q" }, snap)
+  const result = Vim.step(
+    { ...Vim.initial, mode: "normal", pending: { kind: "replace", count: 0 } },
+    { name: "q", sequence: "q" },
+    snap,
+  )
   expect(VimAdapter.apply(editor.input, snap, result)).toBe(2)
   expect(editor.input.plainText).toBe("qoo bar")
   editor.input.undo()

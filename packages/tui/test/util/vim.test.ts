@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import { Vim } from "../../src/component/prompt/vim-state"
 
 // An in-memory editor over a plain string. `|` in a fixture marks the cursor, before the character it precedes.
@@ -20,7 +21,12 @@ function editor(fixture: string, input: { mode?: Vim.Mode; register?: string; cl
     } else if (fixture[i] === "|") cursor = text.length
     else text += fixture[i]
   }
-  const state = { text, cursor, parts, vim: { ...Vim.initial, mode: input.mode ?? "normal", register: input.register ?? "" } }
+  const state = {
+    text,
+    cursor,
+    parts,
+    vim: { ...Vim.initial, mode: input.mode ?? "normal", register: input.register ?? "" },
+  }
   const history: Array<{ text: string; cursor: number }> = []
   const written: string[] = []
   const snapshot = (): Vim.Snapshot => ({
@@ -269,6 +275,12 @@ table("line commands and single commands", [
   ["  a|b", "a", "  ab|", { mode: "insert" }],
   ["ab|\ncd", "a", "ab|\ncd", { mode: "insert" }],
   ["|abc", "?", "|abc"],
+  ["|abc", "f", "|abc"],
+  ["|abc", "t", "|abc"],
+  ["|", ">>", "  |"],
+  ["|a\n\nb", "3>>", "  |a\n  \n  b"],
+  ["a\n|\nb", ">>", "a\n  |\nb"],
+  ["|  a", ">>", "    |a"],
   ["|abc", "2s", "|c", { reg: "ab", mode: "insert" }],
   ["a\n  |b", "S", "a\n|", { reg: "  b\n", mode: "insert" }],
   ["ab|c", "X", "a|c", { reg: "b" }],
@@ -352,16 +364,17 @@ describe("registers", () => {
     expect(e.state.vim.register).toBe("keep")
     e.press("J>>")
     expect(e.state.vim.register).toBe("keep")
-    for (const [keys, reg] of [
-      ["yiw", ""],
-      ["x", ""],
-      ["dd", ""],
-      ["s", ""],
+    for (const [start, keys, reg] of [
+      ["|one two", "yiw", "one"],
+      ["|one two", "x", "o"],
+      ["|one two", "dd", "one two\n"],
+      ["|one two", "s", "o"],
+      ["|one two", "cw", "one"],
+      ["o|ne two", "X", "o"],
     ] as const) {
-      const fresh = editor("|one two", { register: "keep" })
+      const fresh = editor(start, { register: "keep" })
       fresh.press(keys)
-      expect(fresh.state.vim.register).not.toBe("keep")
-      expect(reg).toBe("")
+      expect(fresh.state.vim.register).toBe(reg)
     }
   })
 
@@ -486,11 +499,46 @@ describe("display rows", () => {
   })
 })
 
+describe("long first line that wraps (C4)", () => {
+  const long = "x".repeat(25)
+  test("J, linewise p and o act on the logical line", () => {
+    const joined = editor(`|${long}\nb`, { width: 10 }).press("J")
+    expect(joined.state.text).toBe(`${long} b`)
+    const pasted = editor(`|${long}\nb`, { width: 10, register: "L\n" }).press("p")
+    expect(pasted.state.text).toBe(`${long}\nL\nb`)
+    const opened = editor(`${long}\n|b`, { width: 10 }).press("o")
+    expect(opened.state.text).toBe(`${long}\nb\n`)
+  })
+})
+
+// A loop that never advances blocks the event loop, so these run in a child process with a deadline.
 describe("loops", () => {
-  test("a huge count on a long text finishes at once", () => {
-    const text = "word ".repeat(2000)
-    const start = performance.now()
-    editor("|" + text).press("9999w")
-    expect(performance.now() - start).toBeLessThan(2000)
+  test("a huge count, a bracket search and a word motion next to a part finish at once", async () => {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `const { Vim } = await import(${JSON.stringify(path.join(import.meta.dir, "../../src/component/prompt/vim-state.ts"))})
+const press = (text, cursor, parts, keys) => {
+  let state = { ...Vim.initial, mode: "normal" }
+  let at = cursor
+  let body = text
+  for (const char of keys) {
+    const result = Vim.step(state, { name: char.toLowerCase(), sequence: char, shift: char !== char.toLowerCase() }, { text: body, cursor: at, parts, row: (x) => x })
+    state = result.state
+    body = Vim.apply(body, result.edits)
+    at = result.cursor
+  }
+  return at
+}
+press("word ".repeat(2000), 0, [], "9999w")
+press("(".repeat(5000) + "x" + ")".repeat(5000), 5000, [], "di(")
+press("ab cd ef", 0, [{ start: 3, end: 5 }], "www")
+console.log("done")`,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    )
+    expect(await new Response(child.stdout).text()).toBe("done\n")
+    expect(await child.exited).toBe(0)
   })
 })

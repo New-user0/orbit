@@ -21,6 +21,8 @@ export async function createAppFixture(
     packages?: TuiInput["packages"]
     /** Where log lines go; a test passes its own to see what was logged. */
     log?: TuiInput["log"]
+    /** The clipboard the app reads and writes; a test passes its own. */
+    clipboard?: TuiInput["clipboard"]
   } = {},
 ) {
   const { run } = await import("../../src/app")
@@ -49,6 +51,7 @@ export async function createAppFixture(
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
       args: input.args ?? {},
       log: input.log ?? (() => {}),
+      clipboard: input.clipboard,
     }).pipe(
       Effect.provide(Global.layerWith({ state: input.state ?? state?.path })),
       Effect.provide(FileSystem.layerNoop({})),
