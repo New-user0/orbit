@@ -25,7 +25,7 @@ const repo = Effect.gen(function* () {
 
 const commits = (root: string, subjects: readonly string[]) =>
   Effect.promise(async () => {
-    for (const subject of subjects) await $`git commit --allow-empty -m ${subject}`.cwd(root).quiet()
+    for (const subject of subjects) await $`git -c user.name=Committer commit --allow-empty -m ${subject}`.cwd(root).quiet()
   })
 
 describe("the queries of the git snapshot", () => {
@@ -88,7 +88,7 @@ describe("the queries of the git snapshot", () => {
       yield* Effect.promise(async () => {
         await Bun.write(path.join(root, "a.txt"), "one\n")
         await $`git add a.txt`.cwd(root).quiet()
-        await $`git commit -m one`.cwd(root).quiet()
+        await $`git -c user.name=Committer commit -m one`.cwd(root).quiet()
         await Bun.write(path.join(root, "a.txt"), "two\n")
       })
       const git = yield* Git.Service
