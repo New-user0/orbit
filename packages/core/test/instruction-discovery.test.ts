@@ -151,6 +151,37 @@ describe("InstructionDiscovery", () => {
     }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
   )
 
+  it.effect("escapes look-alikes of an envelope tag in an instruction file, in the baseline and in its updates", () =>
+    Effect.gen(function* () {
+      const discovery = yield* InstructionDiscovery.Service
+      const spellings = [
+        "<system-reminder>",
+        "</System-Reminder>",
+        "< / system-update >",
+        "<" + String.fromCharCode(13, 10) + "system-reminder>",
+      ]
+      const hostile = (marker: string) => [marker, ...spellings].join(" middle ")
+      const live = (text: string) => /<\s*\/?\s*system\s*-\s*(?:reminder|update)/i.test(text)
+      yield* discovery.transform((editor) => {
+        editor.add(file("/repo/AGENTS.md", hostile("old")))
+        editor.add(file("/repo/<system-reminder>/AGENTS.md", "named"))
+      })
+      const initial = yield* readInitial(yield* discovery.load())
+      expect(initial.text).toContain("old")
+      expect(live(initial.text)).toBe(false)
+
+      yield* discovery.transform((editor) => {
+        editor.update("/repo/AGENTS.md", (current) => {
+          current.content = hostile("new")
+        })
+        editor.add(file("/repo/more/AGENTS.md", hostile("added")))
+      })
+      const update = (yield* readUpdate(yield* discovery.load(), initial)).text
+      expect(update).toContain("added")
+      expect(live(update)).toBe(false)
+    }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
+  )
+
   it.effect("renders granular instruction updates", () =>
     Effect.gen(function* () {
       const discovery = yield* InstructionDiscovery.Service
@@ -853,7 +884,10 @@ const recordingFS = (reads: string[]) =>
     FSUtil.Service,
     FSUtil.Service.pipe(
       Effect.map((fs) =>
-        FSUtil.Service.of({ ...fs, readFileStringSafe: (target) => (reads.push(target), fs.readFileStringSafe(target)) }),
+        FSUtil.Service.of({
+          ...fs,
+          readFileStringSafe: (target) => (reads.push(target), fs.readFileStringSafe(target)),
+        }),
       ),
     ),
   ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
@@ -884,7 +918,10 @@ describe("ConfigInstructionPlugin.Plugin processes the files it loads", () => {
   it.live("loads what is left of a file once its front matter and comments are off", () =>
     Effect.gen(function* () {
       const where = yield* folders
-      yield* write(where.rootFile, "---\ntitle: x\n---\n\n<!-- note to self -->\n\n# Rules\n\nUse tabs.\n<!-- tail -->\n")
+      yield* write(
+        where.rootFile,
+        "---\ntitle: x\n---\n\n<!-- note to self -->\n\n# Rules\n\nUse tabs.\n<!-- tail -->\n",
+      )
       yield* write(where.globalFile, "<!-- private -->\n\nBe brief.\n")
       yield* Effect.gen(function* () {
         const discovery = yield* start()
@@ -1023,13 +1060,33 @@ describe("ConfigInstructionPlugin.Plugin applies instructions_exclude", () => {
   // What loads, for each list of patterns that the user's own settings hold, from the three files of `everywhere`.
   const rows: ReadonlyArray<readonly [string, (where: Folders) => string[], (where: Folders) => string[]]> = [
     ["nothing", () => [], (w) => [w.globalFile, w.packageFile, w.rootFile]],
-    ["a nested file, by a pattern that works wherever the project is", () => ["**/packages/**/AGENTS.md"], (w) => [w.globalFile, w.rootFile]],
+    [
+      "a nested file, by a pattern that works wherever the project is",
+      () => ["**/packages/**/AGENTS.md"],
+      (w) => [w.globalFile, w.rootFile],
+    ],
     ["a nested file, by its absolute path", (w) => [slashed(w.packageFile)], (w) => [w.globalFile, w.rootFile]],
-    ["the file of the user's own config, by its absolute path", (w) => [slashed(w.globalFile)], (w) => [w.packageFile, w.rootFile]],
+    [
+      "the file of the user's own config, by its absolute path",
+      (w) => [slashed(w.globalFile)],
+      (w) => [w.packageFile, w.rootFile],
+    ],
     ["every file, by a pattern for the name", () => ["**/AGENTS.md"], () => []],
-    ["files by braces, and not the one they do not name", (w) => [`{${slashed(w.globalFile)},${slashed(w.rootFile)}}`], (w) => [w.packageFile]],
-    ["nothing, by a bare name, a relative path or a path with `~`", () => ["AGENTS.md", "packages/core/AGENTS.md", "./AGENTS.md", "~/AGENTS.md", "*.md", ""], (w) => [w.globalFile, w.packageFile, w.rootFile]],
-    ["nothing, by a pattern that is too long for the matcher, and the others still apply", (w) => [`/${"x".repeat(70_000)}`, slashed(w.rootFile)], (w) => [w.globalFile, w.packageFile]],
+    [
+      "files by braces, and not the one they do not name",
+      (w) => [`{${slashed(w.globalFile)},${slashed(w.rootFile)}}`],
+      (w) => [w.packageFile],
+    ],
+    [
+      "nothing, by a bare name, a relative path or a path with `~`",
+      () => ["AGENTS.md", "packages/core/AGENTS.md", "./AGENTS.md", "~/AGENTS.md", "*.md", ""],
+      (w) => [w.globalFile, w.packageFile, w.rootFile],
+    ],
+    [
+      "nothing, by a pattern that is too long for the matcher, and the others still apply",
+      (w) => [`/${"x".repeat(70_000)}`, slashed(w.rootFile)],
+      (w) => [w.globalFile, w.packageFile],
+    ],
   ]
   for (const [name, patterns, loads] of rows)
     it.live(`loads what is left of three files when the list excludes ${name}`, () =>
@@ -1121,20 +1178,26 @@ describe("ConfigInstructionPlugin.Plugin applies instructions_exclude", () => {
   // A file that is a link is matched by the name that the walk built, and by the file that the link leads to.
   const linked = canLinkFile ? it.live : it.live.skip
   for (const pattern of [undefined, "**/packages/core/AGENTS.md", "**/shared/rules.md"])
-    linked(`leaves out a link ${pattern === undefined ? "to nothing that a pattern names" : `that the pattern ${pattern} names`}`, () =>
-      Effect.gen(function* () {
-        const where = yield* folders
-        const target = path.join(where.repo, "shared", "rules.md")
-        yield* write(target, "shared rules")
-        yield* write(where.rootFile, "root")
-        yield* Effect.promise(() => fs.symlink(target, where.packageFile))
-        yield* Effect.gen(function* () {
-          const discovery = yield* start()
-          expect(placesOf(yield* discovery.list())).toEqual(pattern === undefined ? [target, where.rootFile] : [where.rootFile])
-        }).pipe(
-          Effect.provide(layerFor(where, { configLayer: Config.testLayer(pattern === undefined ? [] : [excluding([pattern])]) })),
-        )
-      }),
+    linked(
+      `leaves out a link ${pattern === undefined ? "to nothing that a pattern names" : `that the pattern ${pattern} names`}`,
+      () =>
+        Effect.gen(function* () {
+          const where = yield* folders
+          const target = path.join(where.repo, "shared", "rules.md")
+          yield* write(target, "shared rules")
+          yield* write(where.rootFile, "root")
+          yield* Effect.promise(() => fs.symlink(target, where.packageFile))
+          yield* Effect.gen(function* () {
+            const discovery = yield* start()
+            expect(placesOf(yield* discovery.list())).toEqual(
+              pattern === undefined ? [target, where.rootFile] : [where.rootFile],
+            )
+          }).pipe(
+            Effect.provide(
+              layerFor(where, { configLayer: Config.testLayer(pattern === undefined ? [] : [excluding([pattern])]) }),
+            ),
+          )
+        }),
     )
 
   it.live("applies a changed list at once, and the file leaves the baseline as one that no longer applies", () =>
@@ -1167,7 +1230,8 @@ describe("ConfigInstructionPlugin.Plugin applies instructions_exclude", () => {
   const skippedNotices = () => {
     const skipped: unknown[] = []
     const logger = Logger.map(Logger.formatStructured, (entry) => {
-      if (Array.isArray(entry.message) && entry.message[0] === "instruction file skipped") skipped.push(entry.message[1])
+      if (Array.isArray(entry.message) && entry.message[0] === "instruction file skipped")
+        skipped.push(entry.message[1])
     })
     return { skipped, logger: Logger.layer([logger]) }
   }
@@ -1190,7 +1254,9 @@ describe("ConfigInstructionPlugin.Plugin applies instructions_exclude", () => {
           expect(skipped).toMatchObject(reported ? [{ path: above }] : [])
           expect(skipped).toHaveLength(reported ? 1 : 0)
         }).pipe(
-          Effect.provide(layerFor(where, { trusted: false, configLayer: Config.testLayer([excluding([...patterns])]) })),
+          Effect.provide(
+            layerFor(where, { trusted: false, configLayer: Config.testLayer([excluding([...patterns])]) }),
+          ),
           Effect.provide(logger),
         )
       }),
@@ -1240,25 +1306,27 @@ describe("ConfigInstructionPlugin.Plugin reads the list of the documents that th
       }),
     )
 
-    it.live(`withholds the list of ${document} while the project is not trusted, and applies it once it is`, () =>
-      Effect.gen(function* () {
-        const where = yield* folders
-        yield* write(where.rootFile, "project rules")
-        yield* write(path.join(where.repo, document), JSON.stringify({ instructions_exclude: ["**/AGENTS.md"] }))
-        yield* Effect.gen(function* () {
-          const discovery = yield* startWithConfigEvents
-          const trust = yield* ProjectTrust.Service
-          expect(placesOf(yield* discovery.list())).toEqual([where.rootFile])
+    it.live(
+      `withholds the list of ${document} while the project is not trusted, and applies it once it is`,
+      () =>
+        Effect.gen(function* () {
+          const where = yield* folders
+          yield* write(where.rootFile, "project rules")
+          yield* write(path.join(where.repo, document), JSON.stringify({ instructions_exclude: ["**/AGENTS.md"] }))
+          yield* Effect.gen(function* () {
+            const discovery = yield* startWithConfigEvents
+            const trust = yield* ProjectTrust.Service
+            expect(placesOf(yield* discovery.list())).toEqual([where.rootFile])
 
-          yield* trust.grant({ persist: false, via: "test" })
-          const granted = yield* eventually(discovery.list(), (files) => Array.isArray(files) && files.length === 0)
-          expect(placesOf(granted)).toEqual([])
+            yield* trust.grant({ persist: false, via: "test" })
+            const granted = yield* eventually(discovery.list(), (files) => Array.isArray(files) && files.length === 0)
+            expect(placesOf(granted)).toEqual([])
 
-          yield* trust.revoke()
-          const revoked = yield* eventually(discovery.list(), (files) => Array.isArray(files) && files.length > 0)
-          expect(placesOf(revoked)).toEqual([where.rootFile])
-        }).pipe(Effect.provide(stamped(where, false)))
-      }),
+            yield* trust.revoke()
+            const revoked = yield* eventually(discovery.list(), (files) => Array.isArray(files) && files.length > 0)
+            expect(placesOf(revoked)).toEqual([where.rootFile])
+          }).pipe(Effect.provide(stamped(where, false)))
+        }),
       // Each wait ends on the first read that has changed, and gives up after five seconds.
       30_000,
     )

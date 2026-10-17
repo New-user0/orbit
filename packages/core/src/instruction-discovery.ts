@@ -7,6 +7,7 @@ import { Bus } from "./bus.js"
 import { Instructions } from "./instructions/index.js"
 import { AbsolutePath, PositiveInt } from "./schema.js"
 import { State } from "./state.js"
+import { ReminderText } from "./session/reminder-text.js"
 
 /** An instruction file, with the text the model reads: what is left of it once it is processed (`ConfigInstructionFile`). */
 export class File extends Schema.Class<File>("InstructionDiscovery.File")({
@@ -149,7 +150,8 @@ export const node = configured(
 )
 
 function render(files: ReadonlyArray<File>) {
-  return files.map((file) => `Instructions from: ${file.path}\n${file.content}`).join("\n\n")
+  // Instruction files come from the folder, so a look-alike of an envelope tag in one is escaped where it is rendered.
+  return files.map((file) => ReminderText.neutralize(`Instructions from: ${file.path}\n${file.content}`)).join("\n\n")
 }
 
 function renderUpdate(previous: ReadonlyArray<File>, current: ReadonlyArray<File>) {
@@ -167,7 +169,7 @@ function renderUpdate(previous: ReadonlyArray<File>, current: ReadonlyArray<File
       const diff = [
         `The instructions from ${after.path} changed. Here's the diff:`,
         "```diff",
-        patch.slice(patch.indexOf("@@")).trimEnd(),
+        ReminderText.neutralize(patch.slice(patch.indexOf("@@")).trimEnd()),
         "```",
       ].join("\n")
       const replacement = `The instructions changed:\n${render([after])}`

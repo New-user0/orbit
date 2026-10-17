@@ -2608,6 +2608,29 @@ session is unaffected until its next step), and SDK callers that read `Config.In
 
 **What to do:** Nothing, or set `git_status` to `false` to keep git state out of the prompt.
 
+### Text that looks like a reminder is escaped wherever it comes from a file or a tool
+
+Orbit now has a reminder framework: model-facing context that the harness adds beside the conversation, stored as hidden
+`session.synthetic` rows (`metadata.reminder.kind`) or worked out each time a request is built. No built-in reminder is
+added by this change; later changes add producers. A reminder holds harness text in a `<system-reminder>` envelope, and
+anything it quotes from a file or a tool follows in a labelled fenced block outside the envelope.
+
+The base prompt has always said that a `<system-reminder>` or `<system-update>` block comes only from Orbit. To make that
+true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lowers text that is data: tool results and
+tool errors (local and MCP, also when a server splits one result into several text parts and a tag is cut across them, and also a text or JSON file that a result carries, such as an MCP resource), attached files (including a file that an ACP editor embeds in a prompt) and folder listings, the Code Mode tool listing (which carries MCP tool descriptions), the output of a shell command you ran or that ran in the
+background, the reply of a background subagent, the summary and recent text of a compaction checkpoint, instruction files
+with their updates (including the ones loaded when a file is read), MCP server instructions, and the git snapshot (branch,
+user, status and commit subjects). The stored row keeps the original
+bytes; only the request changes, and only for text that held such a tag. A prompt you type is not changed.
+
+A compaction no longer reads reminder rows, because the next step collects them again after the checkpoint.
+
+**Affects:** people whose files or tool output quote `<system-reminder>` or `<system-update>` tags (for example when
+documenting them), who now see `&lt;system-reminder>` in what the model is sent; clients that list `session.synthetic`
+messages, which should hide those with `metadata.reminder`.
+
+**What to do:** Nothing.
+
 ### The model-family prompts are rewritten
 
 The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general prompt, which `optimize.ts` picks by a substring of the model ID and which the Astra IDs replace with their own, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their `Doing tasks`, `Code style` and `Verification` sections as it does the base's. The five full prompts and the local-model prompt tell the model to follow the user's and the project's instruction files, which come later in the prompt and win over the family guidance; on one point a project's file ranks lower, because it cannot approve a risky action ahead of time, while the user can in their own instructions or in the conversation (the base prompt is stricter and takes a standing yes only from the user's instructions). Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, sets a limit on reply length in lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.

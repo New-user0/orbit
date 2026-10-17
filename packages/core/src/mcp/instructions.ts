@@ -6,6 +6,7 @@ import { Permission } from "../permission.js"
 import { McpTool } from "../tool/mcp.js"
 import { Mcp } from "./index.js"
 import { Instructions } from "../instructions/index.js"
+import { ReminderText } from "../session/reminder-text.js"
 
 const Summary = Schema.Struct({
   server: Schema.String,
@@ -16,12 +17,17 @@ type Summary = typeof Summary.Type
 
 const entries = (servers: ReadonlyArray<Summary>) =>
   servers.flatMap((server) => {
-    const result = [`  <server name="${server.server}">`]
+    const result = [`  <server name="${ReminderText.neutralize(server.server)}">`]
     if (server.codemode !== false)
       result.push(
         `    Use tools from this server through \`Execute\` under \`tools[${JSON.stringify(McpTool.namespace(server.server))}]\`.`,
       )
-    result.push(...server.instructions.split("\n").map((line) => `    ${line}`), "  </server>")
+    result.push(
+      ...ReminderText.neutralize(server.instructions)
+        .split("\n")
+        .map((line) => `    ${line}`),
+      "  </server>",
+    )
     return result
   })
 
@@ -90,8 +96,7 @@ export const layer = Layer.effect(
             if (codemode && !canExecute) return []
             if (
               !owned.some(
-                (tool) =>
-                  Permission.evaluate(McpTool.name(tool.server, tool.name), "*", permissions).effect !== "deny",
+                (tool) => Permission.evaluate(McpTool.name(tool.server, tool.name), "*", permissions).effect !== "deny",
               )
             )
               return []

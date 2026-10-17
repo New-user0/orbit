@@ -50,22 +50,16 @@ export function contentBlockToParts(block: ContentBlock): PromptPart[] {
       return [resourceLinkToPart(block)]
     case "resource":
       if ("text" in block.resource) {
-        try {
-          const parsed = new URL(block.resource.uri)
-          if (parsed.protocol === "file:") {
-            const line = parsed.hash.match(/^#L(\d+)/)?.[1]
-            const decoded = (() => {
-              try {
-                return fileURLToPath(parsed)
-              } catch {
-                return decodeURIComponent(parsed.pathname)
-              }
-            })()
-            const filepath = path.sep === "\\" ? decoded.replace(/\\/g, "/") : decoded
-            return [{ type: "text", text: `[${filepath}${line ? `:${line}` : ""}]\n${block.resource.text}` }]
-          }
-        } catch {}
-        return [{ type: "text", text: `[${block.resource.uri}]\n${block.resource.text}` }]
+        // Sent as a text attachment, not as prompt text: the core escapes an attachment's text as data, while a plain
+        // text part would reach the model as the person's own words.
+        return [
+          {
+            type: "file",
+            url: `data:text/plain;base64,${Buffer.from(block.resource.text, "utf8").toString("base64")}`,
+            filename: resourceLabel(block.resource.uri),
+            mime: "text/plain",
+          },
+        ]
       }
       if (!block.resource.mimeType) return []
       return [
@@ -130,6 +124,13 @@ export function partsToContentChunks(parts: readonly ReplayPart[]): ContentChunk
         },
       ]
     }
+    // A label that is a URL (mcp://server/context) stays as it is; a file name gets a file URL without a :line suffix.
+    const uri = (fallback: string) => {
+      const label = part.filename ?? fallback
+      return /^[a-z][a-z0-9+.-]+:\/\//i.test(label) && URL.canParse(label)
+        ? label
+        : pathToFileURL(label.replace(/:\d+(?:-\d+)?$/, "")).href
+    }
     return [
       {
         content: {
@@ -137,12 +138,12 @@ export function partsToContentChunks(parts: readonly ReplayPart[]): ContentChunk
           resource:
             mime.startsWith("text/") || mime === "application/json"
               ? {
-                  uri: pathToFileURL(part.filename ?? "file").href,
+                  uri: uri("file"),
                   mimeType: mime,
                   text: Buffer.from(data, "base64").toString("utf8"),
                 }
               : {
-                  uri: pathToFileURL(part.filename ?? "file").href,
+                  uri: uri("file"),
                   mimeType: mime,
                   blob: data,
                 },
@@ -150,6 +151,21 @@ export function partsToContentChunks(parts: readonly ReplayPart[]): ContentChunk
       },
     ]
   })
+}
+
+function resourceLabel(uri: string) {
+  if (!URL.canParse(uri)) return uri
+  const parsed = new URL(uri)
+  if (parsed.protocol !== "file:") return uri
+  const line = parsed.hash.match(/^#L(\d+)/)?.[1]
+  const decoded = (() => {
+    try {
+      return fileURLToPath(parsed)
+    } catch {
+      return decodeURIComponent(parsed.pathname)
+    }
+  })()
+  return `${path.sep === "\\" ? decoded.replace(/\\/g, "/") : decoded}${line ? `:${line}` : ""}`
 }
 
 function resourceLinkToPart(link: ResourceLink): PromptPart {

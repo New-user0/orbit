@@ -154,7 +154,7 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (16)
+### M4 (17)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -174,6 +174,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-043 | vim_mode and output_style are not in the status line watch list | behaviour | The line keeps the old mode or style until the next trigger. | medium | S | clients-ux-8 | PR #73 C8 follow-up | packages/tui/src/component/prompt/index.tsx:1729-1738 |
 | FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file; share stat after the write; lexical fallback when a hook strips Write output | 14,13 | Misleading reason; regressions unnoticed. | low | S | file-web-tools-9 | PR #84 C0-C8 | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
 | FU-M3-154 | LSP: content-modified retry re-sends the document; server starts before the size cap and read; git check-ignore batch fails whole on one bad path; junction Location hides nothing | perf,7 | Extra didChange; one bad path shows every ignored file. | low | S | file-web-tools-9 | PR #92 C0-C4 | packages/core/src/lsp/index.ts ignored() |
+| FU-M4-37 | The reminder tests carry a 699-line copy of the runner harness beside the one in session-runner.test.ts | test hygiene | Two harnesses must be kept in step; a change to one can leave the other testing old behaviour. | low | M: move session-runner.test.ts onto packages/core/test/lib/runner.ts and delete the copy | loop-robustness-17 | prompts-context-5 review (minor) | packages/core/test/lib/runner.ts, packages/core/test/session-runner.test.ts |
 
 ### M5 (5)
 
@@ -369,7 +370,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M1-098 | An AI SDK provider's own timeout is not counted as a Timeout | behaviour | A user timeout on an AI SDK provider is retried as a generic failure. | low; needs a timeout setting | S | loop-robustness-20 | PR #31 review minor 1 | packages/core/src/aisdk.ts:1009 networkFailure has no DOMException TimeoutError case |
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 
-### Sweep (146)
+### Sweep (148)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -521,6 +522,8 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M3-421 | cli flow-team.test.ts: a resumed team's lead sees an extra user message under load (lead#3 instead of lead#2) | 14 | In the full parallel Linux cli run at bcfcfd7 the lead's continued session held one more user-role message than expected. Cause not established: a frozen instruction rendered as a user message, or a prompt whose delivery wait (DELIVERY_GRACE_MS, 10 s) expired. If it is a product cause, a resumed member's model sees a spurious turn input. | 1 of 1 full Linux cli run in round 9; passes alone (3 pass) | S-M: log the lead's request messages when turn differs, re-run the package in parallel to capture the extra message, then fix or record | sweep | M3 verification round 9, follow-up 64 | packages/cli/test/flow-team.test.ts:268; docs/known-failures.md row added with this register |
 | FU-M4-001 | A bare name that is on no PATH is resolved by cross-spawn in the working folder, and a file with a shebang there starts its interpreter | 10 | On Windows a file called hg or az with a #! line in the folder runs when Orbit starts that program and it is on no PATH. | low; needs the program missing from PATH, and a trusted folder for hg | M: find the program with which in the spawner and fail for one it does not find, which changes what a relative PATH entry of a child does (FU-M1-013, owner) | sweep | git-untrusted PR (the decoy rows of FU-M1-012); Known gaps (A bare name that is on no PATH) | packages/util/src/cross-spawn-spawner.ts:298 hands command.command to cross-spawn; bare names at packages/core/src/project.ts:335 and packages/core/src/plugin/vcs/hg.ts:174 (hg), packages/core/src/plugin/provider/azure.ts:86 (az); the control row of packages/core/test/util/git-executable.test.ts starts a file called git through cross-spawn |
 | FU-M3-422 | core config/normalization.test.ts property test hits the 5 s limit under load (timeout only, passes alone) | 14 | 100 FastCheck round-trips took 5958 ms under 8 workers in the full Linux core run at bcfcfd7; the file passes alone (50 pass). | 1 of 1 full Linux core run in round 9 | XS: give the test an explicit 30 s limit | sweep | M3 verification round 9, follow-up 65 | packages/core/test/config/normalization.test.ts:172 |
+| FU-M4-36 | Reminder look-alikes are not escaped in skill and reference listings, plugin-supplied system parts, host-supplied instruction entries, a hosted tool's provider-format result, the opaque window of a native compaction, the descriptions of direct MCP tools (`codemode: false`) in the tools array, instruction text the person chose to run (an activated skill's body, a prompt's skill text, command templates, MCP prompt commands), image and PDF bytes, or file text that a client puts inside its own envelope (the TUI's `formatEditorContext`, VS Code's `editorContext`, ACP assistant-audience text, which lowers as an unmarked synthetic) | 9 | Text from a file or a tool that reaches the model through one of these sinks can still pose as a `<system-reminder>` block. Tool results (also when split across parts, and text or JSON files in them), attachments (also an ACP embedded text resource), shell and subagent output, instruction files, MCP server instructions, the Code Mode tool listing and the git snapshot are escaped and pinned. The client envelopes belong to prompts-context-13 as carrier. | low | S per sink | sweep | prompts-context-5 review (Known gaps) | packages/core/src/session/runner/to-llm-message.ts (syntheticText), packages/core/src/skill/instructions.ts, packages/core/src/reference/instructions.ts, packages/core/src/session/provider-context.ts; docs/untrusted-repositories.md Known gaps |
+| FU-M4-38 | ReminderText.neutralize matches ASCII hyphens and white space only | 9 | A tag spelled with a Unicode hyphen (U+2010 to U+2015, U+2212), a soft hyphen, a zero-width character, a fullwidth bracket or an ASCII underscore (`system_reminder`) is not escaped. The reference escapes nothing, and a model reads such a spelling as text, so this is hardening only. | low | S | sweep | prompts-context-5 review (follow-up) | packages/core/src/session/reminder-text.ts (TAG) |
 
 ### Owner (93)
 
@@ -831,11 +834,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) = 710.
-- Output: 627 rows plus 83 listed duplicates = 710. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 627 register rows have a table entry.
-- Open minors by carrier: M4: 16, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 146, Owner: 93.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) = 713.
+- Output: 630 rows plus 83 listed duplicates = 713. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 630 register rows have a table entry.
+- Open minors by carrier: M4: 17, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 148, Owner: 93.
 - Open majors: 14 open, plus 5 marked major in "For the owner" that wait for a decision = 19.
 - For the owner: 86.
 - Fixed: 113.
 - Duplicates: 83.
-- Check: 428 open + 86 owner + 113 fixed + 83 duplicates = 710, the 710 inputs.
+- Check: 431 open + 86 owner + 113 fixed + 83 duplicates = 713, the 713 inputs.
