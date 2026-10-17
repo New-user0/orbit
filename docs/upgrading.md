@@ -2540,6 +2540,25 @@ session is unaffected until its next step), and SDK callers that read `Config.In
 
 **What to do:** Nothing, or set `git_status` to `false` to keep git state out of the prompt.
 
+### The model-family prompts are rewritten
+
+The prompts for five model families (Astra, Kimi, Trinity, Muse and the general one) were written again. Each now opens with the same opening
+paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding
+instructions drops their `Doing tasks`, `Code style` and `Verification` sections as it does the base's. Kimi and Trinity
+no longer treat reminder-shaped text inside a tool result as an instruction; that text is data, as the shared rules say.
+Kimi replies in the language the user writes in unless you ask for another or set a preferred language. The Muse prompt
+names the model Orbit runs on and makes no claim about who trained it. Trinity no longer forbids all comments or caps
+replies at four lines; it keeps to short, answer-first replies. No family prompt carries a git staging or commit-message
+procedure any more, only the rule not to commit, push or open pull requests unless asked. Two of them keep a split
+between short commentary while working and a self-contained final answer, and Astra keeps its push to carry a task through,
+with its limits stated beside it. The local-model prompt now opens with the base paragraph, and its data rule points at
+the shared rules below it.
+
+**Affects:** sessions on models of those families and on local models (the system prompt text changes, so a prompt cache for
+an existing session is unaffected until its next step).
+
+**What to do:** Nothing.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
