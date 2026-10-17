@@ -225,6 +225,18 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Agent, command, skill, compat skill and output style files: `ProjectTrust.supplies` for the path, `ConfigMarkdown` for
   the text, `ConfigTrust.sanitize` and `sanitizeCommands` for what they may say. Proof: `project-trust.test.ts`,
   `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`.
+- What a style and a skill may say to the model (class 8, prompt form): reading is the entry above, and it lets the text
+  of a folder that is not trusted reach the prompt, so two things limit what that text is taken for. An output style from
+  such a folder goes last under its own heading but does not replace the prompt's opening line, which says what the agent
+  is for: `OutputStylePlugin` asks `ProjectTrust.trustedSource` at each request, the question `supplies` starts from (a
+  source that is not a project's or a local one is the person's own, one in the project's folders follows the decision
+  just made, one above them follows its own stamp). No style removes "Harness" or "Executing actions with care", where
+  the rule about who can approve an action stands before the style's text. A skill's instructions are followed for the
+  task it was loaded for, and the prompt says that a skill's claim of an earlier approval does not count. Whether a
+  project's styles and skills should reach the prompt before the folder is trusted is the owner's open question. Proof:
+  `test/plugin/output-style.test.ts` (six places a style can come from, three spellings of the key, before a grant, after
+  one and after a revoke, the clone's claim of approval as the body), `test/project-trust.test.ts` (`trustedSource`),
+  `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval).
 - Instruction files (`AGENTS.md`, `ORBIT.md`): `ProjectTrust.reachable`, asked by `ConfigInstructionPlugin` and
   `SessionInstructions`. Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
