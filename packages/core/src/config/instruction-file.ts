@@ -116,7 +116,7 @@ const realForm = Effect.fnUntraced(function* (
   resolve: (directory: string) => Effect.Effect<string>,
   platform: NodeJS.Platform,
 ) {
-  const absolute = platform === "win32" ? /^[A-Z]:\//.test(pattern) : pattern.startsWith("/") && !pattern.startsWith("//")
+  const absolute = (platform === "win32" && /^[A-Z]:\//.test(pattern)) || (pattern.startsWith("/") && !pattern.startsWith("//"))
   if (!absolute) return []
   // The fixed part is what comes before the first character that a glob gives a meaning, and the folder is the one it
   // names or, when it ends in a name, the one it is in.
@@ -135,15 +135,15 @@ const realForm = Effect.fnUntraced(function* (
 // Comment blocks
 //
 // An HTML comment is taken off only when it is a block of its own at the top level of the document, the way the block
-// lexer that the reference uses splits it: it starts a line that is indented by at most three columns, outside fenced
+// block lexer splits it: it starts a line that is indented by at most three columns, outside fenced
 // code, outside another HTML block, and outside the list item, quote or paragraph that it could belong to. The
 // document is read once, line by line, and every kind of block that can hold a comment line without being one is
 // followed just far enough to tell where it ends, so the time is linear in the size of the file, whatever it holds
 // (`test/config/instruction-file.test.ts` runs hostile files under a deadline). The block lexer of a Markdown library is
 // not: it is far from linear on a long list item, and a clone chooses these files before anyone has trusted it.
 //
-// Where that lexer reads a construct other than the CommonMark rules say, this follows the lexer, because it is the
-// reference's: a comment indented under a paragraph line is more of the paragraph, and a line that opens with a tag
+// Where that lexer reads a construct other than the CommonMark rules say, this follows the lexer:
+// a comment indented under a paragraph line is more of the paragraph, and a line that opens with a tag
 // ends a list item. The tests pin each of those, and name the cases that the two readings split.
 
 type Fence = { readonly char: string; readonly length: number }
@@ -345,7 +345,7 @@ const lonelyTag =
 
 // What ends the HTML block that a line starts, other than a comment, or `undefined` for a line that starts none. Inside a
 // paragraph only a block of a script, pre, style or textarea tag or of a block-level tag takes over, and only from the
-// first column: the lexer that the reference uses reads the others, and an indented one, as more of the paragraph.
+// first column: the block lexer reads the others, and an indented one, as more of the paragraph.
 function htmlBlock(rest: string, indent: number, paragraph: boolean): End | undefined {
   if (!rest.startsWith("<") || (paragraph && indent > 0)) return undefined
   const raw = /^<(script|pre|style|textarea)(?:[ \t>]|$)/i.exec(rest)
@@ -387,7 +387,7 @@ function textual(rest: string) {
 }
 
 // Whether a line that is not indented enough for the list above it starts a block, and so is not a continuation of it.
-// Any line that opens with a tag or a comment ends the item, as the lexer that the reference uses has it.
+// Any line that opens with a tag or a comment ends the item, as the block lexer has it.
 function interrupts(rest: string) {
   return (
     rest.startsWith(">") ||

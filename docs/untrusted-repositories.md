@@ -1559,7 +1559,7 @@ gray-matter's default engines, or a marker test per reader written with the spec
   cuts a block off with `ConfigMarkdown.split`, which looks only for delimiter lines. A reader that needs the block, such
   as the `paths` of a rule file, takes the span that `split` returns and parses that through `parseOption`, so that one
   splitter decides what front matter is. A file whose first line carries a language after the dashes is not front
-  matter, and its text is kept, which is what the reference does: nothing evaluates it, and it is the same instruction
+  matter, and its text is kept as written: nothing evaluates it, and it is the same instruction
   text that Orbit already loads from that folder.
 - For a new parser or file format, read its default engines, tags, caches and what it loads on its own. A spec's claim
   that a file kind is "just text" is a claim to verify against the parser, not to assume. Workflow YAML is read with

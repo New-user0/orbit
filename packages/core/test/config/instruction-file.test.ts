@@ -433,13 +433,14 @@ describe("ConfigInstructionFile.prepare", () => {
   })
 
   test("resolves a drive-letter pattern on Windows and a slash-rooted one elsewhere", async () => {
-    const windows = recording({ "C:/repo": "D:/real/repo" })
+    const windows = recording({ "C:/repo": "D:/real/repo", "/repo": "E:/other/repo" })
     expect(await run(ConfigInstructionFile.prepare(["C:/repo/**", "/repo/**"], windows.resolve, "win32"))).toEqual([
       "C:/repo/**",
       "/repo/**",
       "D:/real/repo/**",
+      "E:/other/repo/**",
     ])
-    expect(windows.asked).toEqual(["C:/repo"])
+    expect(windows.asked).toEqual(["C:/repo", "/repo"])
 
     const linux = recording({ "/repo": "/real/repo" })
     expect(await run(ConfigInstructionFile.prepare(["C:/repo/**", "/repo/**"], linux.resolve, "linux"))).toEqual([
