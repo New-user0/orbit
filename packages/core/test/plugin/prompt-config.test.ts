@@ -551,7 +551,7 @@ describe("system prompt keys", () => {
       const defaultText = `${base}\n\n${SessionSystemPrompt.renderGit(defaults)}`
       const onShare = new Document({
         type: "document",
-        path: "\\\\host\\share\\orbit.json" as AbsolutePath,
+        path: (process.platform === "win32" ? "\\\\host\\share\\orbit.json" : "//host/share/orbit.json") as AbsolutePath,
         info: decode({ system_prompt_file: "p.md" }),
       })
       const cases = [...shares.map(([, target]) => [document({ system_prompt_file: target })]), [onShare]]
