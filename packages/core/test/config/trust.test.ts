@@ -115,6 +115,7 @@ describe("ConfigTrust.sanitize", () => {
       compatibility: { enabled: true },
       warming: false,
       git_status: false,
+      attribution: { commit: "", pr: "Made with care" },
       websearch: false,
       permissions: [{ action: "shell", resource: "rm *", effect: "deny" }],
       instructions: ["./docs/ARCHITECTURE.md"],

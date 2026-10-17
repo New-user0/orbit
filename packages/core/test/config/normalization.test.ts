@@ -120,6 +120,16 @@ describe("ConfigNormalize", () => {
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
   })
 
+  test("accepts attribution strings, and a bad field costs only itself", () => {
+    expect(decoded({ attribution: { commit: "", pr: "Made with care" } }).attribution).toEqual({
+      commit: "",
+      pr: "Made with care",
+    })
+    const invalid = normalized({ attribution: { commit: "Co-authored-by: A", pr: 7 } })
+    expect(invalid.encoded.attribution).toEqual({ commit: "Co-authored-by: A" })
+    expect(invalid.diagnostics.map((item) => [item.kind, item.path])).toContainEqual(["invalid", ["attribution", "pr"]])
+  })
+
   test("keeps webfetch verbatim hosts and reports a malformed value without touching its siblings", () => {
     expect(decoded({ webfetch: { verbatim_hosts: ["a.example", "*.b.example"] } }).webfetch?.verbatim_hosts).toEqual([
       "a.example",

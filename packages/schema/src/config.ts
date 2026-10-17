@@ -18,6 +18,7 @@ import { ConfigModel } from "./config/model.js"
 import { ConfigPlugin } from "./config/plugin.js"
 import { ConfigProvider } from "./config/provider.js"
 import { ConfigReference } from "./config/reference.js"
+import { ConfigAttribution } from "./config/attribution.js"
 import { ConfigSandbox } from "./config/sandbox.js"
 import { ConfigWebFetch } from "./config/webfetch.js"
 import { ConfigWebSearch } from "./config/websearch.js"
@@ -104,6 +105,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   media: ConfigMedia.Info.pipe(optional).annotate({
     description: "Media processing configuration",
+  }),
+  attribution: ConfigAttribution.Info.pipe(optional).annotate({
+    description:
+      "What the agent adds to the commits and pull requests it writes. Each field is decided by the highest-priority config that sets it",
   }),
   sandbox: ConfigSandbox.Info.pipe(optional).annotate({
     description: "Run shell commands in an operating system sandbox",

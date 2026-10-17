@@ -3129,6 +3129,29 @@ asked is unchanged.
 
 **What to do:** Nothing.
 
+### Commits and pull requests the agent writes carry an Orbit attribution by default
+
+Every request that offers the shell tool now ends its system prompt with a "Git and pull requests" section, for every
+agent, whichever model prompt or output style applies. It says that commits, pushes and pull requests wait for your
+request, that published history, git configuration, hooks and signing are left alone, that a commit holds only the
+task's changes staged by path, and that a pull request description covers every commit on the branch and says how the
+change was verified. Your own instructions about commits take precedence. It also asks the agent to end each commit
+message with `Assisted-by: Orbit` and each pull request description with `Created with Orbit`. The first request of a
+session after the upgrade misses the prompt cache once, because the system prompt changed.
+
+The new `attribution` key sets either text. Each field is decided by the highest-priority config that sets it, so your
+own `commit: ""` and a project's `pr` combine. An empty string turns that one off and tells the agent to add none. The
+value may hold several lines, such as several trailers. A project's config can set it too.
+
+```json
+{ "attribution": { "commit": "Co-authored-by: Name <name@example.com>", "pr": "" } }
+```
+
+**Affects:** everyone who asks Orbit to commit or open pull requests, and anyone whose repository checks commit
+trailers.
+
+**What to do:** Set `attribution.commit` or `attribution.pr` to `""` to turn the line off, or to your own text.
+
 ## No saved grant for `ipconfig`, `hostname` and `route`
 
 - PowerShell and shell no longer offer a saved grant for `ipconfig`, `hostname` and `route`, whose arguments change what they do.

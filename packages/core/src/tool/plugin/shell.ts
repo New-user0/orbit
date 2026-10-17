@@ -22,6 +22,7 @@ import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
 import { STYLE_HEADING } from "../../plugin/output-style.js"
+import { SessionSystemPrompt } from "../../session/system-prompt.js"
 import { ShellAnalysis } from "../../shell/analysis.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { ProjectTrust } from "../../project-trust.js"
@@ -547,8 +548,11 @@ export const AdvertisePlugin = {
           Effect.catch(() => Effect.succeed(true)),
         )
         if (custom) return
-        // An output style is appended to this text before this runs and is the person's own words, so it stays as written.
-        const at = system.text.indexOf(STYLE_HEADING)
+        // The git section and an output style are appended to this text before this runs. The section names no shell tool
+        // and carries the person's attribution text, and the style is the person's own words, so both stay as written.
+        const gitAt = system.text.indexOf(`\n\n${SessionSystemPrompt.GIT_HEADING}\n`)
+        const styleAt = system.text.indexOf(STYLE_HEADING)
+        const at = Math.min(...[gitAt, styleAt].filter((index) => index >= 0), system.text.length)
         const base = at < 0 ? system.text : system.text.slice(0, at)
         const style = at < 0 ? "" : system.text.slice(at)
         event.system[0] = { ...system, text: base.replace(/\bBash\b/g, ToolNames.powershell) + style }

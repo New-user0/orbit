@@ -1,6 +1,7 @@
 export * as SessionSystemPrompt from "./system-prompt.js"
 
 import PROMPT from "./runner/prompt/system.txt"
+import GIT from "./runner/prompt/git.txt"
 
 /**
  * What a request's system prompt is made of, in order.
@@ -48,6 +49,42 @@ export const CODING_SECTIONS = [
 
 /** The template's opening paragraph, before the first heading. An output style replaces it with a line of its own. */
 export const INTRO = PROMPT.slice(0, PROMPT.indexOf("\n\n"))
+
+/** The heading of the git section, which `PromptConfigPlugin` appends after the base or overlay prompt and before any output style. */
+export const GIT_HEADING = "# Git and pull requests"
+
+/**
+ * The git and pull request section with both attribution slots filled. Only the exact empty string means no attribution,
+ * so a value of spaces renders as given. A value is shown indented as a literal block that the model copies: it may hold
+ * several lines (several trailers), none of its lines can open a top-level section, and it does not read as Orbit's own
+ * instruction, which matters because a repository's config can set it. Slots are filled by function, so `$&` and the like
+ * in a value come out as written.
+ */
+export function renderGit(attribution: { commit: string; pr: string }) {
+  return GIT.trimEnd()
+    .replace("${ORBIT_COMMIT_ATTRIBUTION}", () =>
+      slot(
+        attribution.commit,
+        "End every commit message, after a blank line, with exactly this text:",
+        "Add no attribution trailer to commit messages, and do not add one of your own accord.",
+      ),
+    )
+    .replace("${ORBIT_PR_ATTRIBUTION}", () =>
+      slot(
+        attribution.pr,
+        "End every pull request description, after a blank line, with exactly this text:",
+        "Add no attribution footer to pull request descriptions, and do not add one of your own accord.",
+      ),
+    )
+}
+
+function slot(value: string, ask: string, none: string) {
+  if (value === "") return none
+  return `${ask}\n\n${value
+    .split(/\r?\n/)
+    .map((line) => `    ${line}`)
+    .join("\n")}`
+}
 
 export function make(tools: string[]) {
   return render(PROMPT, tools)

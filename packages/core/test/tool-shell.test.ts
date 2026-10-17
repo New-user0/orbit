@@ -2011,7 +2011,9 @@ describe("ShellTool", () => {
                       expect(offered).toHaveLength(1)
                       expect(["Bash", "PowerShell"]).toContain(offered[0])
                       // The prompt names the tool the model is offered.
-                      expect(control.system[0]?.text).toBe(`Fall back to ${offered[0]} when a tool cannot do it.`)
+                      expect(control.system[0]?.text).toStartWith(
+                        `Fall back to ${offered[0]} when a tool cannot do it.\n\n# Git and pull requests\n`,
+                      )
 
                       hideShell = true
                       expect(Object.keys((yield* request()).tools)).toEqual([])
@@ -2061,8 +2063,8 @@ describe("ShellTool", () => {
                 tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
               } as never)
               // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
-              expect(event.system[0]?.text).toBe(
-                `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
+              expect(event.system[0]?.text).toStartWith(
+                `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.\n\n# Git and pull requests\n`,
               )
             }),
           ),
