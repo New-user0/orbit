@@ -103,19 +103,32 @@ const layer = Layer.effect(
           const found = source ?? (trusted ? undefined : yield* GitLayout.locate(fs, location.project.directory))
           if (!found) return yield* new Error({ operation: "capture", message: "Project is not a Git repository" })
           const worktree = AbsolutePath.make(yield* fs.realPath(found.worktree).pipe(Effect.orDie))
+          // Untrusted snapshots are keyed by the work tree alone, not by the project ID, which can change when trust is
+          // granted, so a snapshot taken before trust is found after it.
+          const untrustedDirectory = path.join(global.data, "snapshot", "untrusted", Hash.fast(worktree))
           const gitDirectory = AbsolutePath.make(
-            path.join(
-              global.data,
-              "snapshot",
-              location.project.id,
-              Hash.fast(trusted ? worktree : worktree + "\u0000untrusted"),
-            ),
+            trusted ? path.join(global.data, "snapshot", location.project.id, Hash.fast(worktree)) : untrustedDirectory,
           )
           const snapshotRepository = (yield* fs.existsSafe(path.join(gitDirectory, "HEAD")))
             ? new Git.Repository({ worktree, gitDirectory, commonDirectory: gitDirectory })
             : yield* git.repo
                 .create({ worktree, gitDirectory, seed: source })
                 .pipe(Effect.mapError((cause) => failure("capture", cause)))
+          // Trees captured before trust live in the untrusted repository, which is Orbit's own. Listing its objects as an
+          // alternate of the trusted one lets those snapshots be compared and restored once the folder is trusted; it
+          // opens nothing that the folder chose.
+          if (trusted && (yield* fs.existsSafe(path.join(untrustedDirectory, "HEAD")))) {
+            const alternates = path.join(gitDirectory, "objects", "info", "alternates")
+            const line = path.join(untrustedDirectory, "objects")
+            const current = yield* fs.readFileString(alternates).pipe(Effect.orElseSucceed(() => ""))
+            if (!current.split("\n").includes(line))
+              yield* fs.ensureDir(path.dirname(alternates)).pipe(
+                Effect.andThen(
+                  fs.writeFileString(alternates, current + (current && !current.endsWith("\n") ? "\n" : "") + line + "\n"),
+                ),
+                Effect.orDie,
+              )
+          }
           return { source: source ?? snapshotRepository, worktree, snapshotRepository }
         }).pipe(Effect.forkIn(lifetime)),
       )

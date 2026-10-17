@@ -6,6 +6,10 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
 import { Project } from "@orbit/core/project"
+import { SessionProjector } from "@orbit/core/session/projector"
+import { SessionTable } from "@orbit/core/session/sql"
+import { SessionID } from "@orbit/schema/session-id"
+import { eq } from "drizzle-orm"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Hash } from "@orbit/util/hash"
@@ -21,7 +25,7 @@ import { testEffect } from "./lib/effect"
 // database that already holds the project does not read it as a new one while the folder is untrusted.
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node, WorkspaceTrust.node]), [
+  AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node, WorkspaceTrust.node, SessionProjector.node]), [
     WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
     Global.node.replace(tempGlobalLayer),
   ]),
@@ -69,6 +73,57 @@ describe("the project ID of a folder with no remote across the trust decision", 
 
         expect(known.id).not.toBe(pathID(yield* real(root)))
         expect(again.id).toBe(known.id)
+      }),
+    SLOW,
+  )
+
+  it.live(
+    "keeps the trusted ID when trust is granted, revoked and the folder is resolved again",
+    () =>
+      Effect.gen(function* () {
+        const root = path.join((yield* tmpdirScoped()).path, "clone")
+        yield* repository(root)
+        const project = yield* Project.Service
+        const trust = yield* WorkspaceTrust.Service
+
+        const untrusted = yield* project.resolve(abs(root))
+        yield* trust.grant(root, { persist: false, via: "test" })
+        const trusted = yield* project.resolve(abs(root))
+        yield* trust.revoke(root)
+        const revoked = yield* project.resolve(abs(root))
+        yield* trust.grant(root, { persist: false, via: "test" })
+        const again = yield* project.resolve(abs(root))
+
+        expect(untrusted.id).toBe(pathID(yield* real(root)))
+        expect(trusted.id).not.toBe(untrusted.id)
+        expect(revoked.id).toBe(trusted.id)
+        expect(again.id).toBe(trusted.id)
+      }),
+    SLOW,
+  )
+
+  it.live(
+    "lists a session made before trust in the trusted project",
+    () =>
+      Effect.gen(function* () {
+        const root = path.join((yield* tmpdirScoped()).path, "clone")
+        yield* repository(root)
+        const project = yield* Project.Service
+        const trust = yield* WorkspaceTrust.Service
+        const database = yield* Database.Service
+
+        const before = yield* project.resolve(abs(root))
+        const id = SessionID.make("ses_before_trust")
+        yield* database.db
+          .insert(SessionTable)
+          .values({ id, project_id: before.id, directory: abs(yield* real(root)), slug: "before", version: "test" })
+          .run()
+        yield* trust.grant(root, { persist: false, via: "test" })
+        const after = yield* project.resolve(abs(root))
+        const row = yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, id)).get()
+
+        expect(after.id).not.toBe(before.id)
+        expect(row?.project_id).toBe(after.id)
       }),
     SLOW,
   )

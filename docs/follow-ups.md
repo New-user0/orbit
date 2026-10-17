@@ -836,4 +836,4 @@ placement, a requirement that was written against code that no longer exists). T
 - For the owner: 86.
 - Fixed: 113.
 - Duplicates: 83.
-- Check: 426 open + 86 owner + 112 fixed + 83 duplicates = 708, the 708 inputs.
+- Check: 426 open + 86 owner + 113 fixed + 83 duplicates = 708, the 708 inputs.

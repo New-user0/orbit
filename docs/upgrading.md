@@ -98,8 +98,8 @@ above, which also stops it loading that product's skills, output styles and inst
 
 A repository's own config can name programs for git to run and files or network shares for it to open, so Orbit starts
 git in a repository only once its folder is trusted. Until then session snapshots work from a separate git directory of
-Orbit's own that is not seeded from the repository (undo still works, and `.gitignore` files still apply, but snapshots
-taken before the folder was trusted are not reached from afterwards, and the other way round), the list of worktrees
+Orbit's own that is not seeded from the repository (undo still works, and `.gitignore` files still apply, and snapshots
+taken before the folder was trusted stay usable once it is trusted, but not the other way round), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
 folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`; the other `orb
 flow` commands find the repository root from its files. A repository with no remote keeps one project ID when it becomes

@@ -325,7 +325,7 @@ const layer = Layer.effect(
 
     // One ID per repository across the trust decision: a folder that is not trusted and names no remote reuses the git
     // project that Orbit already holds for its main checkout, so what it did before and after trust stays together.
-    const stored = Effect.fnUntraced(function* (canonical: AbsolutePath) {
+    const stored = Effect.fnUntraced(function* (canonical: AbsolutePath, own: ID) {
       const rows = yield* db
         .select({ id: ProjectTable.id, vcs: ProjectTable.vcs })
         .from(ProjectTable)
@@ -333,8 +333,13 @@ const layer = Layer.effect(
         .orderBy(asc(ProjectTable.time_created), asc(ProjectTable.id))
         .all()
         .pipe(Effect.orDie)
-      return rows.find((row) => row.vcs === "git" && row.id !== ID.global)?.id
+      // A row that is not the folder's own path hash is the git project that trust made; it wins over the older path-hash
+      // row, so revoking trust again does not move the folder back to the empty project it had before.
+      const git = rows.filter((row) => row.vcs === "git" && row.id !== ID.global)
+      return (git.find((row) => row.id !== own) ?? git[0])?.id
     })
+
+    const own = (layout: GitLayout.Layout) => ID.make(Hash.fast(`directory:${layout.worktree}`))
 
     const known = Effect.fnUntraced(function* (id: ID) {
       const row = yield* db.select({ id: ProjectTable.id }).from(ProjectTable).where(eq(ProjectTable.id, id)).get().pipe(Effect.orDie)
@@ -424,7 +429,7 @@ const layer = Layer.effect(
         return yield* persist({
           id:
             remoteID(yield* GitLayout.remote(fs, layout)) ??
-            (yield* stored(layout.canonical)) ??
+            (yield* stored(layout.canonical, own(layout))) ??
             ID.make(Hash.fast(`directory:${layout.worktree}`)),
           directory: layout.worktree,
           canonical: layout.canonical,
@@ -437,7 +442,7 @@ const layer = Layer.effect(
         // The ID this folder had while it was untrusted (above), so its sessions follow it into the trusted project.
         const earlier = layout
           ? (remoteID(yield* GitLayout.remote(fs, layout)) ??
-            (yield* stored(layout.canonical)) ??
+            (yield* stored(layout.canonical, own(layout))) ??
             ID.make(Hash.fast(`directory:${layout.worktree}`)))
           : undefined
         const previous = cachedID ?? (earlier && earlier !== id && (yield* known(earlier)) ? earlier : undefined)

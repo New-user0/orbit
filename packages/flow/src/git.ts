@@ -1,6 +1,6 @@
 export * as Git from "./git.js"
 
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { appendFile, readdir, readFile, rm } from "node:fs/promises"
 import path from "node:path"
 
@@ -46,12 +46,14 @@ export async function root(directory: string) {
 export function holder(directory: string) {
   const start = path.resolve(directory)
   for (let folder = start; ; folder = path.dirname(folder)) {
-    if (existsSync(path.join(folder, ".git"))) return folder
+    const marker = path.join(folder, ".git")
+    // Git passes over a `.git` directory with no HEAD and looks in the folder above, as `Git.root` does.
+    if (existsSync(marker) && (!statSync(marker).isDirectory() || existsSync(path.join(marker, "HEAD")))) return folder
     if (path.dirname(folder) === folder) return undefined
   }
 }
 
-export const head =(directory: string) => ok(directory, ["rev-parse", "HEAD"])
+export const head = (directory: string) => ok(directory, ["rev-parse", "HEAD"])
 
 export function branch(run: string, node: string) {
   return `orbit/${run}/${node.replace(/[^a-zA-Z0-9._-]+/g, "-")}`
