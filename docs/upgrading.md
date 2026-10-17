@@ -2456,7 +2456,7 @@ optional `knowledge` field (`YYYY-MM`), so the generated client changed too.
 Each session has a scratchpad: the folder `sessions/<ID of the session its lineage goes back to>` in Orbit's temporary
 folder, which a subagent and a fork share with the session they came from. The baseline names it and tells the model to
 keep its temporary files there instead of in the system temp folder. Orbit makes it when a run starts. Every agent that
-may edit files may edit in the folder of the session that asks without a question, and only where the real place of the
+may edit files (not Plan, whose mode denies `Edit *`, so its writes there still ask until permissions-7) may edit in the folder of the session that asks without a question, and only where the real place of the
 file is in that folder (a link inside it that leads elsewhere is decided by where it leads), and your own rules for the
 folder still win. The folder is removed when its session is deleted, unless a fork of that session is left. A session
 whose ID is anything but `ses_` followed by letters, digits and underscores gets none of this.

@@ -141,13 +141,12 @@ const layer = Layer.effect(
 
 export const node = makeLocationNode({ service: Service, layer, deps: [Bus.node, Database.node, Global.node] })
 
-// Written for the model: where temporary files go, what the folder is for and whose it is. The claim about approval is
-// one that `permission-scratchpad.test.ts` pins, for the file tools only. Nothing is said of shell commands.
+// Written for the model: where temporary files go, what the folder is for and whose it is. It makes no claim about approval, because Plan mode refuses edits.
 function section(directory: string) {
   return [
     "# Scratchpad",
     "",
-    "**Keep every temporary file in this session's scratchpad, not in the system temp folder.**",
+    "**ALL temporary files go in this session's scratchpad. Never use the system temp folder unless the user tells you to.**",
     "",
     `\`${directory}\``,
     "",
@@ -155,8 +154,8 @@ function section(directory: string) {
     "- intermediate results of multi-step work",
     "- throwaway scripts and config files",
     "- notes and working files for analysis",
-    "- anything else you would otherwise put in the system temp folder",
+    "- any other file that only matters while the task runs",
     "",
-    "Use the system temp folder only when the user asks you to. The scratchpad belongs to this session and its subagents and sits apart from the user's project. Writing files there with the file tools needs no approval.",
+    "Subagents of this session share the folder, and none of it lands in the user's project.",
   ].join("\n")
 }

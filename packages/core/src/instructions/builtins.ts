@@ -40,13 +40,13 @@ export function environment(input: EnvironmentInput) {
     ...(input.worktree === undefined
       ? []
       : [
-          `  Worktree: this directory is a git worktree, a separate checkout of the project whose main checkout is at ${input.worktree}. Run every command from this directory and NEVER change into the main checkout.`,
+          `  Main checkout (off limits): ${input.worktree}. This directory is a linked git worktree, so STAY IN IT: NEVER cd out to the main checkout.`,
         ]),
     `  Workspace root folder: ${input.root}`,
     `  Is directory a git repo: ${input.git ? "yes" : "no"}`,
     `  Platform: ${platform === input.platform ? platform : `${platform} (${input.platform})`}`,
     windows && POSIX_SHELLS.has(input.shell)
-      ? `  Shell: ${input.shell} (a Unix shell even on Windows, so write Unix syntax: /dev/null rather than NUL, and / rather than \\ in paths)`
+      ? `  Shell: ${input.shell} (Windows host, but its syntax is Unix: forward slashes in paths, and /dev/null is the null device, not NUL)`
       : `  Shell: ${input.shell}`,
     // On Windows `os.type()` says only `Windows_NT`, and on Linux `os.version()` is the kernel's build banner.
     `  OS version: ${windows ? input.os.version || input.os.type : input.os.type} ${input.os.release}`,
@@ -95,8 +95,8 @@ const layer = Layer.effect(
               ),
               render: {
                 initial: (block) =>
-                  ["Here is some useful information about the environment you are running in:", block].join("\n"),
-                changed: (_previous, block) => ["The environment you are running in is now:", block].join("\n"),
+                  ["Facts about the machine and folder this session runs in:", block].join("\n"),
+                changed: (_previous, block) => ["Those machine and folder facts have changed. They now read:", block].join("\n"),
               },
             }),
           ]),

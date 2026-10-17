@@ -88,7 +88,7 @@ describe("InstructionBuiltIns.environment", () => {
   } satisfies InstructionBuiltIns.EnvironmentInput
   // The note that a Unix shell on Windows gets, in the one place the tests pin it.
   const note =
-    " (a Unix shell even on Windows, so write Unix syntax: /dev/null rather than NUL, and / rather than \\ in paths)"
+    " (Windows host, but its syntax is Unix: forward slashes in paths, and /dev/null is the null device, not NUL)"
 
   test("names a Linux machine with its kernel, and carries no note, notice or temporary folder", () => {
     expect(InstructionBuiltIns.environment(linux)).toBe(
@@ -190,7 +190,7 @@ describe("InstructionBuiltIns.environment", () => {
     const at = lines.indexOf("  Working directory: /worktrees/feature")
     expect(at).toBe(1)
     expect(lines[at + 1]).toBe(
-      "  Worktree: this directory is a git worktree, a separate checkout of the project whose main checkout is at /repo. Run every command from this directory and NEVER change into the main checkout.",
+      "  Main checkout (off limits): /repo. This directory is a linked git worktree, so STAY IN IT: NEVER cd out to the main checkout.",
     )
     expect(lines[at + 2]).toBe("  Workspace root folder: /worktrees/feature")
   })
@@ -230,7 +230,7 @@ describe("InstructionBuiltIns", () => {
         [
           `Today's date: ${localDate(timestamp)}`,
           "",
-          "Here is some useful information about the environment you are running in:",
+          "Facts about the machine and folder this session runs in:",
           // What the machine says, written the way the pure render writes it; the rows above pin that text.
           InstructionBuiltIns.environment({
             directory,
@@ -270,7 +270,7 @@ describe("InstructionBuiltIns", () => {
       expect(Object.keys(refreshed.values).filter((key) => refreshed.values[key] !== initialized.values[key])).toEqual([
         "core/environment",
       ])
-      expect(refreshed.text.startsWith("The environment you are running in is now:\n<env>")).toBe(true)
+      expect(refreshed.text.startsWith("Those machine and folder facts have changed. They now read:\n<env>")).toBe(true)
       expect(refreshed.text).toContain("  Shell: dash")
       expect(refreshed.text).not.toContain("  Shell: zsh")
       // The date did not change, so only the environment is said again.
@@ -327,7 +327,7 @@ describe("InstructionBuiltIns", () => {
           shell: ShellSelect.name(shell),
         }),
       )
-      expect(initialized.text).toContain(`whose main checkout is at ${projectDirectory}.`)
+      expect(initialized.text).toContain(`Main checkout (off limits): ${projectDirectory}.`)
     }),
   )
 })

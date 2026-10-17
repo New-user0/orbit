@@ -204,12 +204,12 @@ describe("the baseline section", () => {
           const initial = yield* readInitial(source)
           const folder = l.folder("ses_root")
           expect(initial.values).toEqual({ "core/scratchpad": folder })
-          // What the model reads, and the one claim about approval that `permission-scratchpad.test.ts` pins.
+          // What the model reads.
           expect(initial.text).toBe(
             [
               "# Scratchpad",
               "",
-              "**Keep every temporary file in this session's scratchpad, not in the system temp folder.**",
+              "**ALL temporary files go in this session's scratchpad. Never use the system temp folder unless the user tells you to.**",
               "",
               `\`${folder}\``,
               "",
@@ -217,9 +217,9 @@ describe("the baseline section", () => {
               "- intermediate results of multi-step work",
               "- throwaway scripts and config files",
               "- notes and working files for analysis",
-              "- anything else you would otherwise put in the system temp folder",
+              "- any other file that only matters while the task runs",
               "",
-              "Use the system temp folder only when the user asks you to. The scratchpad belongs to this session and its subagents and sits apart from the user's project. Writing files there with the file tools needs no approval.",
+              "Subagents of this session share the folder, and none of it lands in the user's project.",
             ].join("\n"),
           )
           // A second read, as a preview or a generation makes, and the path itself: still nothing on the disk.
