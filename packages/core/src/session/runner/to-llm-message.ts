@@ -147,7 +147,26 @@ const neutralizeContent = <T extends { readonly type: string }>(content: Readonl
   const escaped = ReminderText.neutralizeParts(
     texts.map((index) => (content[index] as unknown as { text: string }).text),
   )
-  return content.map((item, index) => (item.type === "text" ? { ...item, text: escaped[texts.indexOf(index)] } : item))
+  return content.map((item, index) =>
+    item.type === "text"
+      ? { ...item, text: escaped[texts.indexOf(index)] }
+      : item.type === "file"
+        ? neutralizeFile(item as unknown as { uri: string; mime?: string })
+        : item,
+  ) as unknown as typeof content
+}
+
+// A text file in a tool result (an MCP resource, a Code Mode copy) reaches the model as a document, so its text is data
+// too. Images, PDFs and every other type stay byte for byte.
+const TEXT_DATA_URL = /^data:((?:text\/[^;,]+|application\/json)(?:;[^;,]+)*);base64,(.*)$/is
+
+const neutralizeFile = <F extends { uri: string; mime?: string }>(item: F): F => {
+  const match = TEXT_DATA_URL.exec(item.uri)
+  if (!match) return item
+  const text = Buffer.from(match[2], "base64").toString("utf8")
+  const escaped = ReminderText.neutralize(text)
+  if (escaped === text) return item
+  return { ...item, uri: `data:${match[1]};base64,${Buffer.from(escaped, "utf8").toString("base64")}` }
 }
 
 // A wrapped provider error can carry the response body, which is data from the other end.

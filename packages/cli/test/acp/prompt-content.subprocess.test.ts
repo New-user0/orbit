@@ -112,4 +112,30 @@ describe("acp prompt content subprocess", () => {
     )
     expect(JSON.stringify(fixture.llm.requests.at(-1))).toContain("TYPED-CONTROL <system-reminder>mine")
   }, 60_000)
+  // Embedded text is declared text: sniffing it must not read a leading "BM" as an image or a NUL as binary.
+  test.each([
+    ["BM25 ranking notes", "BM25 ranking notes: EMBED-BM"],
+    ["a NUL", "notes\u0000more EMBED-NUL"],
+    ["GIF8", "GIF89 is a format EMBED-GIF"],
+    ["%PDF-", "%PDF-1.7 is a header EMBED-PDF"],
+  ])(
+    "sends embedded text that starts like %s to the model",
+    async (_, text) => {
+      await using fixture = await createAcpFixture()
+      const acp = fixture.spawn()
+      await initialize(acp)
+      const session = await newSession(acp, fixture.home)
+      expectOk(
+        await acp.request<PromptResponse>("session/prompt", {
+          sessionId: session.sessionId,
+          prompt: [
+            { type: "text", text: "Summarize this file." },
+            { type: "resource", resource: { uri: "file:///notes.md", mimeType: "text/plain", text } },
+          ],
+        }),
+      )
+      expect(JSON.stringify(fixture.llm.requests.at(-1))).toContain(text.slice(-9))
+    },
+    60_000,
+  )
 })

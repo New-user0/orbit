@@ -124,6 +124,13 @@ export function partsToContentChunks(parts: readonly ReplayPart[]): ContentChunk
         },
       ]
     }
+    // A label that is a URL (mcp://server/context) stays as it is; a file name gets a file URL without a :line suffix.
+    const uri = (fallback: string) => {
+      const label = part.filename ?? fallback
+      return /^[a-z][a-z0-9+.-]+:\/\//i.test(label) && URL.canParse(label)
+        ? label
+        : pathToFileURL(label.replace(/:\d+(?:-\d+)?$/, "")).href
+    }
     return [
       {
         content: {
@@ -131,12 +138,12 @@ export function partsToContentChunks(parts: readonly ReplayPart[]): ContentChunk
           resource:
             mime.startsWith("text/") || mime === "application/json"
               ? {
-                  uri: pathToFileURL(part.filename ?? "file").href,
+                  uri: uri("file"),
                   mimeType: mime,
                   text: Buffer.from(data, "base64").toString("utf8"),
                 }
               : {
-                  uri: pathToFileURL(part.filename ?? "file").href,
+                  uri: uri("file"),
                   mimeType: mime,
                   blob: data,
                 },

@@ -231,4 +231,15 @@ describe("acp replay conversion", () => {
       },
     ])
   })
+  test("replays an embedded resource under its label when that is a URL and without a line suffix when a file", () => {
+    const uris = partsToContentChunks(
+      ["mcp://server/context", "context.txt:12", "src/a.ts:3-9"].map((filename) => ({
+        type: "file" as const,
+        url: "data:text/plain;base64,aGVsbG8=",
+        filename,
+        mime: "text/plain",
+      })),
+    ).map((chunk) => (chunk.content.type === "resource" ? chunk.content.resource.uri : undefined))
+    expect(uris).toEqual(["mcp://server/context", pathToFileURL("context.txt").href, pathToFileURL("src/a.ts").href])
+  })
 })
