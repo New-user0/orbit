@@ -116,9 +116,19 @@ export const Plugin = define({
         if (!system) return
         const style = yield* load(name)
         if (!style) return
+        // Sections are cut from Orbit's own text only: each piece the person wrote is swapped for a token that holds no
+        // heading while the cut runs, so it keeps every section it has.
+        const pieces = SessionSystemPrompt.personal.get(event) ?? []
+        const tokens = pieces.map((_, index) => `\u0000personal${index}\u0000`)
         const sections = style.keepCodingInstructions
           ? system.text
-          : withoutSections(system.text, SessionSystemPrompt.CODING_SECTIONS)
+          : tokens.reduce(
+              (text, token, index) => text.replace(token, () => pieces[index]!),
+              withoutSections(
+                pieces.reduce((text, piece, index) => text.replace(piece, () => tokens[index]!), system.text),
+                SessionSystemPrompt.CODING_SECTIONS,
+              ),
+            )
         const base =
           style.trusted && sections.startsWith(SessionSystemPrompt.INTRO)
             ? `${STYLED_INTRO}${sections.slice(SessionSystemPrompt.INTRO.length)}`

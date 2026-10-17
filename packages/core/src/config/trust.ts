@@ -228,6 +228,11 @@ export const classification = {
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,
+    // Text in the system prompt, like `agents.*.system`, which a repository can already set; the core rules stay after it.
+    system_prompt: inert,
+    append_system_prompt: inert,
+    // It reads a file of this machine into every request, which a repository must not be able to ask for.
+    system_prompt_file: withhold("settings"),
     update: withhold("network"),
     share: withhold("network"),
     enterprise: withhold("network"),

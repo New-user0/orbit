@@ -65,6 +65,18 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description:
       'How the agent communicates: "default", a built-in style ("explanatory", "learning"), or the name of a Markdown file in an output-styles directory',
   }),
+  system_prompt: Schema.String.pipe(optional).annotate({
+    description:
+      "Text that replaces Orbit's base system prompt for the main thread of a session: sessions without a parent, and forks of them. Orbit's base sections and the model-specific prompt are dropped and its core rules are kept; the git section, an output style and tool descriptions still apply. ${ORBIT_TOOL_GUIDANCE} in the text is replaced by the guidance lines of the tools on offer. Agents with a prompt of their own and subagents keep their own prompt. The highest-priority config that sets this or system_prompt_file decides; an empty string counts as unset",
+  }),
+  system_prompt_file: Schema.String.pipe(optional).annotate({
+    description:
+      "Like system_prompt, with the text read from a UTF-8 file at each request. The path is absolute, starts with ~/, or is relative to the folder of the config that names it (to the project folder when the config has no file). A file that cannot be read, or that is on a network share, is skipped with a warning and the default prompt is kept. Ignored in a config that sets system_prompt, and withheld from a folder that is not trusted",
+  }),
+  append_system_prompt: Schema.String.pipe(optional).annotate({
+    description:
+      "Text added to the system prompt of the main thread of a session, after the base prompt and the git section and before the output style. It applies on top of an agent's own prompt too, but not to subagents. The highest-priority config that sets it decides; an empty string counts as unset",
+  }),
   update: Schema.Literals(["disable", "notify", "auto"]).pipe(optional).annotate({
     description: "Disable updates, notify when one is available, or install updates automatically",
   }),

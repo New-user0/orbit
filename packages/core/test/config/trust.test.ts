@@ -64,6 +64,8 @@ describe("ConfigTrust.sanitize", () => {
     ["instructions_exclude", ["**/AGENTS.md"], "settings"],
     ["references", { docs: "https://example.com/docs.git" }, "settings"],
     ["worktree", { directory: "../worktrees" }, "settings"],
+    // It would read any file of this machine into every request.
+    ["system_prompt_file", "/etc/hostname", "settings"],
     ["experimental", { subagent_depth: 4 }, "settings"],
     // A repository must not be able to open Code Mode fetch to the user's machine and network.
     ["experimental", { allow_local_fetch: true }, "settings"],
@@ -115,6 +117,8 @@ describe("ConfigTrust.sanitize", () => {
       compatibility: { enabled: true },
       warming: false,
       git_status: false,
+      system_prompt: "Base text.",
+      append_system_prompt: "Extra text.",
       attribution: { commit: "", pr: "Made with care" },
       websearch: false,
       permissions: [{ action: "shell", resource: "rm *", effect: "deny" }],

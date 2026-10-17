@@ -220,6 +220,9 @@ export function normalize(input: unknown): Result {
     git_status: Info.fields.git_status,
     default_agent: Info.fields.default_agent,
     output_style: Info.fields.output_style,
+    system_prompt: Info.fields.system_prompt,
+    system_prompt_file: Info.fields.system_prompt_file,
+    append_system_prompt: Info.fields.append_system_prompt,
     attribution: Info.fields.attribution,
     sandbox: Info.fields.sandbox,
     share: Info.fields.share,
@@ -247,6 +250,22 @@ export function normalize(input: unknown): Result {
     if (value === undefined) return
     overlay(encoded, key, value, [key], diagnostics)
   })
+
+  // One document gives one replacement: the text wins over the file, as the schema descriptions say. An empty string is
+  // unset, so it conflicts with nothing.
+  if (
+    typeof encoded.system_prompt === "string" &&
+    encoded.system_prompt !== "" &&
+    typeof encoded.system_prompt_file === "string" &&
+    encoded.system_prompt_file !== ""
+  ) {
+    diagnostics.push({
+      kind: "conflict",
+      path: ["system_prompt_file"],
+      message: "retained system_prompt over system_prompt_file",
+    })
+    delete encoded.system_prompt_file
+  }
 
   const instructionLists = ["instructions", "instructions_exclude"] as const
   instructionLists.forEach((key) => {

@@ -93,6 +93,42 @@ describe("ConfigNormalize", () => {
     }
   })
 
+  describe("system prompt keys", () => {
+    test("accepts the three keys", () => {
+      const result = decoded({ system_prompt: "A", system_prompt_file: "p.md", append_system_prompt: "B" }) as Record<
+        string,
+        unknown
+      >
+      expect(result.system_prompt).toBe("A")
+      expect(result.system_prompt_file).toBeUndefined()
+      expect(result.append_system_prompt).toBe("B")
+      expect(decoded({ system_prompt_file: "p.md" }).system_prompt_file).toBe("p.md")
+    })
+
+    test("keeps system_prompt and reports a conflict when one document sets both replacement keys", () => {
+      const result = normalized({ system_prompt: "A", system_prompt_file: "p.md" })
+      expect(result.encoded.system_prompt).toBe("A")
+      expect(result.encoded).not.toHaveProperty("system_prompt_file")
+      expect(result.diagnostics).toEqual([
+        { kind: "conflict", path: ["system_prompt_file"], message: "retained system_prompt over system_prompt_file" },
+      ])
+    })
+
+    test("treats an empty string as unset, so the pair does not conflict", () => {
+      const result = normalized({ system_prompt: "", system_prompt_file: "p.md" })
+      expect(result.diagnostics).toEqual([])
+      expect(result.encoded.system_prompt_file).toBe("p.md")
+    })
+
+    test("rejects a non-string value for that key alone", () => {
+      const result = normalized({ system_prompt: 5, append_system_prompt: "B", system_prompt_file: ["x"] })
+      expect(result.encoded).not.toHaveProperty("system_prompt")
+      expect(result.encoded).not.toHaveProperty("system_prompt_file")
+      expect(result.encoded.append_system_prompt).toBe("B")
+      expect(result.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(["invalid", "invalid"])
+    })
+  })
+
   test("keeps unrelated native fields when a legacy field is present", () => {
     const result = decoded({ snapshot: false, agents: { reviewer: { system: "Use V2" } } })
     expect(result.snapshots).toBe(false)
@@ -185,10 +221,13 @@ describe("ConfigNormalize", () => {
         const source = JSON.parse(JSON.stringify(Schema.encodeSync(Info)(info)))
         const result = normalized(source)
         // Normalizing hooks drops the entries their event or hook type cannot honor, and reports each one.
-        const expected =
+        const hooked =
           source.hooks === undefined
             ? source
             : { ...source, hooks: withoutReportedHooks(source.hooks, result.diagnostics) }
+        // A document that sets both replacement keys keeps the text and loses the file.
+        const { system_prompt_file: dropped, ...withoutFile } = hooked
+        const expected = hooked.system_prompt && dropped ? withoutFile : hooked
         expect(Schema.decodeUnknownSync(Info)(result.encoded)).toEqual(
           Schema.decodeUnknownSync(Info)(withoutEmptyCompatibilityContainers(expected)),
         )
