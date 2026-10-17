@@ -1028,11 +1028,11 @@ for (const { persist, it } of modes) {
       const calls = { reads: 0 }
       const proxy = new Proxy(db, {
         get(target, key) {
-          const value = Reflect.get(target, key)
+          const value: unknown = target[key as keyof typeof target]
           if (typeof value !== "function") return value
           return (...args: unknown[]) => {
             calls.reads += 1
-            return value.apply(target, args)
+            return (value as (...inner: unknown[]) => unknown).apply(target, args)
           }
         },
       })
