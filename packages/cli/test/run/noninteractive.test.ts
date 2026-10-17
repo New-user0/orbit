@@ -2163,6 +2163,49 @@ describe("runNonInteractivePrompt limits and results", () => {
   const oneStepHistory = (cost: number) =>
     history(assistant("msg_one", "tool-calls", undefined, undefined, { cost, tokens: 10 }))
 
+  // FU-M2-078: the step count follows the server's rule, so a reply that its escalation or a resume continued is one
+  // step with what follows it, and a cut-off that called a tool is a step of its own.
+  const notice = (id: string, kind: string): SessionMessageInfo => ({
+    id,
+    type: "synthetic",
+    text: "A notice.",
+    metadata: { notice: kind },
+    time: { created: 2 },
+  })
+  test.each([
+    [
+      "an escalated cut-off",
+      history(
+        assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 }),
+        notice("msg_note", "output-escalation"),
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.2, tokens: 5 }),
+      ),
+      1,
+    ],
+    [
+      "a text-only cut-off and its resume",
+      history(
+        assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 }),
+        notice("msg_note", "output-limit"),
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.2, tokens: 5 }),
+      ),
+      1,
+    ],
+    [
+      "a cut-off at the cap",
+      history(assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 })),
+      1,
+    ],
+  ])("reports %s as the server counts it", async (_name, messages, steps) => {
+    const output = await capture({
+      format: "result",
+      options: { maxSteps: 5 },
+      turn: limitFailure("limit.steps"),
+      messages,
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ usage: { steps } })
+  })
+
   test.each([
     ["limit.steps", "error_max_steps"],
     ["limit.tokens", "error_max_tokens"],
@@ -2208,6 +2251,7 @@ describe("runNonInteractivePrompt limits and results", () => {
     ["limit.steps", "error_max_steps"],
     ["limit.cost", "error_max_cost"],
     ["limit.cost-unknown", "error"],
+    ["limit.tokens-unknown", "error"],
   ])("a %s failure carries the subtype %s on its error line in json and stream-json", async (type, subtype) => {
     for (const format of ["json", "stream-json"] as const) {
       const lines = await capture({ format, turn: limitFailure(type, "Reached it.") })
@@ -2262,6 +2306,7 @@ describe("runNonInteractivePrompt limits and results", () => {
             ["limit.tokens", "error_max_tokens"],
             ["limit.cost", "error_max_cost"],
             ["limit.cost-unknown", "error"],
+            ["limit.tokens-unknown", "error"],
           ] as const
         ).map(([type, subtype]) => ({
           name: type,

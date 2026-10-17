@@ -250,6 +250,8 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    // Runs inside every echo call, while the response that made it has not ended its step yet.
+    echoProbe: Effect.void as Effect.Effect<void>,
     // The sessions that a drain made the scratchpad of, and how many model requests had been made by then.
     scratchpads: new Array<{ readonly sessionID: Session.ID; readonly requests: number }>(),
     // Busy periods the coordinator started and settled; one continuation must stay inside one of them.
@@ -380,6 +382,7 @@ const makeLayer = (persist: boolean, real = false) =>
                 Effect.gen(function* () {
                   state.authorizations.push(context)
                   state.executions.push(text)
+                  yield* state.echoProbe
                   yield* state.awaitToolBarrier
                   return { output: { text }, content: text }
                 }),
@@ -5785,6 +5788,120 @@ describe("SessionRunnerLLM", () => {
         expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.expected)
       })
 
+    const turnSpend = (s: Scenario) =>
+      Effect.gen(function* () {
+        const options = (yield* SessionTurn.current(s.db, sessionID)).options!
+        return yield* SessionTurn.usage(s.db, sessionID, options)
+      })
+    // A price a prompt-sized estimate stays well under a limit of a few dollars at.
+    const cheap = {
+      input: Money.USDPerMillionTokens.make(1),
+      output: Money.USDPerMillionTokens.make(1),
+      cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.zero },
+    }
+
+    // FU-M2-057: a reply cut off mid-stream is counted by estimate, so the recovery that follows it can run under a cost
+    // limit instead of ending the turn as unknown spend.
+    scenario("continues a reply cut off mid-stream under a cost limit and counts the cut-off by estimate", function* (s) {
+      s.modelCost = [cheap]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
+      yield* s.llm.push(
+        TestLLM.failAfter(
+          incompleteStream(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "cut-off" }),
+          LLMEvent.textDelta({ id: "cut-off", text: "A partial answer ".repeat(40) }),
+        ),
+        TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("continued")),
+      )
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[0]!)
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
+      const spent = yield* turnSpend(s)
+      expect(spent.unknown).toBe(0)
+      // The cut-off reply's estimate comes on top of the continuation's one token in and one out.
+      expect(spent.tokens).toBeGreaterThan(2)
+      expect(spent.cost).toBeGreaterThan(0.000002)
+    })
+
+    scenario("still refuses a cost limit up front when the model has no price", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
+      yield* s.llm.push(TestLLM.text("Never sent", "no-price"))
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown" })
+      expect(s.requests).toHaveLength(0)
+    })
+
+    // FU-M2-014: an attempt that reported usage before it failed and was repeated billed that usage.
+    scenario("counts the usage of an attempt that failed before output and was retried", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(100) }, resume: false })
+      yield* s.llm.push(
+        TestLLM.failAfter(
+          providerUnavailable(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" }, usage: spend }),
+        ),
+        TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("retried")),
+      )
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[0]!)
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
+      // Both attempts: $1 each, and the retry is no second step.
+      expect(yield* turnSpend(s)).toMatchObject({ cost: 2, tokens: 4, steps: 1, unknown: 0 })
+    })
+
+    scenario("counts nothing for an attempt the provider refused before streaming", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(100) }, resume: false })
+      yield* s.llm.push(
+        Stream.fail(providerUnavailable()),
+        TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("retried")),
+      )
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[0]!)
+      yield* Fiber.join(run)
+
+      expect(yield* turnSpend(s)).toMatchObject({ cost: 1, tokens: 2, steps: 1, unknown: 0 })
+    })
+
+    // FU-M2-113: a subagent a response starts is limited by that response's own spend, before its step has ended.
+    scenario("counts the parent's response in a subagent's limit check while its tools run", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(1) }, resume: false })
+      yield* insertSession(otherSessionID)
+      yield* s.db
+        .update(SessionTable)
+        .set({ parent_id: sessionID, time_created: 1 })
+        .where(eq(SessionTable.id, otherSessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const probed: Array<{ readonly type: string } | undefined> = []
+      s.echoProbe = SessionTurn.ancestorLimit(s.db, otherSessionID, true).pipe(
+        Effect.tap((limit) => Effect.sync(() => probed.push(limit))),
+        Effect.orDie,
+        Effect.asVoid,
+      )
+      yield* s.llm.push(toolStep(spend), TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("done")))
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost" })
+
+      expect(probed.map((limit) => limit?.type)).toEqual(["limit.cost"])
+      // Once the step has ended the response is counted from its row alone, not twice.
+      expect(yield* turnSpend(s)).toMatchObject({ cost: 1, tokens: 2 })
+      expect(yield* SessionTurn.ancestorLimit(s.db, otherSessionID, true)).toMatchObject({ type: "limit.cost" })
+    })
+
     // A background subagent outlives the turn that started it: the parent's terminal writes the idle marker that closes
     // the turn, and the limit it set must still bind the child (`orb run --max-cost` exits at that terminal).
     for (const [mode, scenario] of limitScenarios)
@@ -6002,17 +6119,25 @@ describe("SessionRunnerLLM", () => {
     })
 
     scenario("leaves no resume note behind when the turn limit is spent at an output-limit stop", function* (s) {
-      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
-      yield* s.llm.push(lengthStop("limit-note", "Part"), TestLLM.stop())
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxTokens: 2 }, resume: false })
+      yield* s.llm.push(
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" }, usage: { nonCachedInputTokens: 1, outputTokens: 1 } },
+          LLMEvent.textStart({ id: "limit-note" }),
+          LLMEvent.textDelta({ id: "limit-note", text: "Part" }),
+          LLMEvent.textEnd({ id: "limit-note" }),
+        ),
+        TestLLM.stop(),
+      )
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
 
       expect(s.requests).toHaveLength(1)
       expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
     })
 
     scenario("fails with the limit when it is spent at the output-limit cap", function* (s) {
-      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 4 }, resume: false })
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
       yield* s.llm.push(
         lengthStop("cap-1", "A"),
         lengthStop("cap-2", "B"),
@@ -9671,13 +9796,34 @@ describe("SessionRunnerLLM", () => {
   scenario("does not escalate at a spent turn limit", function* (s) {
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
     s.currentModel = fittedOutputModel
-    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
-    yield* s.llm.push(lengthStop("esc-limit", "Part"), TestLLM.stop())
+    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxTokens: 2 }, resume: false })
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" }, usage: { nonCachedInputTokens: 1, outputTokens: 1 } },
+        LLMEvent.textStart({ id: "esc-limit" }),
+        LLMEvent.textDelta({ id: "esc-limit", text: "Part" }),
+        LLMEvent.textEnd({ id: "esc-limit" }),
+      ),
+      TestLLM.stop(),
+    )
 
     yield* s.resume.pipe(Effect.ignore)
 
     expect(s.requests).toHaveLength(1)
     expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+  })
+
+  // FU-M2-078: the cut-off reply is part of the logical step that its escalation continues, not a step of its own.
+  scenario("escalates a capped reply under a step limit of one", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+    yield* s.llm.push(lengthStop("esc-step-1", "Part"), TestLLM.text(" rest", "esc-step-2"))
+
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(1)
   })
 
   scenario("delivers a waiting steer instead of escalating", function* (s) {

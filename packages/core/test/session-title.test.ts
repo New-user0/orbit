@@ -20,7 +20,7 @@ import { SessionEvent } from "@orbit/core/session/event"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
-import { SessionTable } from "@orbit/core/session/sql"
+import { SessionTable, SessionUsageTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { SessionTitle } from "@orbit/core/session/title"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
@@ -34,6 +34,7 @@ import { Model } from "@orbit/core/model"
 import { Provider } from "@orbit/core/provider"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Money } from "@orbit/schema/money"
+import { eq } from "drizzle-orm"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
@@ -585,6 +586,59 @@ it.effect("does not rename after a failed title stream", () =>
     expect((yield* store.get(sessionID))?.title).toBeUndefined()
   }),
 )
+
+// FU-M2-015: a title call that began and was cut off was probably billed, so an estimate keeps it from reading as free;
+// one the provider refused outright cost nothing.
+for (const [name, stream, records] of [
+  [
+    "after the response began",
+    () =>
+      Stream.make(LLMEvent.stepStart({ index: 0 }), LLMEvent.textDelta({ id: "title", text: "A half-written title" })).pipe(
+        Stream.concat(
+          Stream.fail(
+            new AIError({
+              reason: new TransportError({ message: "Disconnected", transport: "http", operation: "read" }),
+            }),
+          ),
+        ),
+      ),
+    1,
+  ],
+  [
+    "before any response",
+    () =>
+      Stream.fail(
+        new AIError({
+          reason: new TransportError({ message: "Disconnected", transport: "http", operation: "request" }),
+        }),
+      ),
+    0,
+  ],
+] as const)
+  it.effect(`records an estimated title spend for a stream that failed ${name}: ${records} record`, () =>
+    Effect.gen(function* () {
+      yield* enableTitleAgent
+      const sessionID = Session.ID.make(`ses_title_spend_${records}`)
+      yield* insertSession(sessionID)
+      yield* prompt(sessionID, "Fail this title stream")
+      titleStream = stream
+
+      yield* (yield* SessionTitle.Service).generate(sessionID)
+
+      const { db } = yield* Database.Service
+      const rows = yield* db
+        .select()
+        .from(SessionUsageTable)
+        .where(eq(SessionUsageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows.map((row) => row.source)).toEqual(Array(records).fill("title"))
+      if (records === 0) return
+      expect(rows[0]!.tokens_input).toBeGreaterThan(0)
+      expect(rows[0]!.tokens_output).toBeGreaterThan(0)
+      expect(rows[0]!.cost).toBeGreaterThan(0)
+    }),
+  )
 
 // A title is background work: nobody waits on it, so an overloaded provider is asked once and the title waits for the
 // next attempt, where foreground work would back off and send the request again.

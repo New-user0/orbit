@@ -492,11 +492,19 @@ export const layer = Layer.effect(
       const sessionID = context.session.id
       const metadataKey = context.model.model.route.providerMetadataKey ?? context.model.model.provider
       const unusable = (error: SessionError.Error) => Effect.fail<Failure>({ error })
+      // A call that failed or was interrupted after the response began was probably billed, though its usage never
+      // arrived: an estimate keeps it from reading as free. A request the provider refused outright billed nothing.
+      let observed = false
+      let reported = false
+      let streamedLength = 0
 
       return llm.stream(request, options).pipe(
         Stream.runFoldEffect(
           (): Streamed => ({ text: "" }),
           (streamed, event): Effect.Effect<Streamed, AIError | Failure> => {
+            if (!LLMEvent.is.providerError(event)) observed = true
+            if (LLMEvent.is.textDelta(event) || LLMEvent.is.reasoningDelta(event)) streamedLength += event.text.length
+            if (LLMEvent.is.stepFinish(event)) reported = true
             if (LLMEvent.is.providerError(event)) {
               if (event.classification === undefined)
                 return unusable({ type: "provider.error", message: event.message })
@@ -549,6 +557,19 @@ export const layer = Layer.effect(
             }
           },
         ),
+        Effect.onError(() =>
+          Effect.suspend(() =>
+            observed && !reported
+              ? spend(
+                  sessionID,
+                  SessionUsage.estimate(context.model.cost, {
+                    input: estimateRequest(request),
+                    output: Token.estimateLength(streamedLength),
+                  }),
+                )
+              : Effect.void,
+          ),
+        ),
       )
     }
 
@@ -581,10 +602,13 @@ export const layer = Layer.effect(
 
     /** A request hook supplied the summary itself, so no model call happens. */
     const fromHook = (context: SessionContext.Loaded, supplied: SessionCompactionResult, recent: string) => {
-      const usage = supplied.tokens && {
+      const reported = supplied.tokens && {
         tokens: supplied.tokens,
         cost: SessionUsage.calculateCost(context.model.cost, supplied.tokens),
       }
+      // A hook that reports no tokens ran no model, so there is nothing to record: a record of zero tokens would read
+      // as spend the provider failed to report.
+      const usage = reported && SessionUsage.hasTokens(reported) ? reported : undefined
       return spend(context.session.id, usage).pipe(
         Effect.as<Result>({
           text: supplied.summary,
@@ -911,7 +935,7 @@ const hasMeasuredPrompt = (message: SessionMessage.Info, model: SessionContext.L
   message.tokens !== undefined &&
   message.tokens.input + message.tokens.cache.read + message.tokens.cache.write > 0
 
-const estimateRequest = (request: Pick<LLMRequest, "system" | "tools" | "messages">) =>
+export const estimateRequest = (request: Pick<LLMRequest, "system" | "tools" | "messages">) =>
   request.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
   request.tools.reduce((sum, tool) => sum + estimateTool(tool), 0) +
   request.messages.reduce((sum, message) => sum + estimateMessage(message), 0)

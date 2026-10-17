@@ -85,6 +85,25 @@ export const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schem
 // The finishes the server counts as a step when it checks a step limit.
 export const countedFinishes = new Set<string>(["stop", "length", "tool-calls", "content-filter"])
 
+const continuingNotices = new Set<string>(["output-limit", "output-escalation"])
+
+// The ids of the responses that are steps, by the server's rule: a response with a counted finish, except a text-only
+// reply that was cut off and then continued in the same logical step (the escalation or resume notice that follows it
+// before the next response). `messages` runs oldest first.
+export function stepIDs(messages: ReadonlyArray<SessionMessageInfo>) {
+  return new Set(
+    messages.flatMap((message, index) => {
+      if (message.type !== "assistant" || !message.finish || !countedFinishes.has(message.finish)) return []
+      if (message.finish !== "length" || message.content.some((item) => item.type === "tool")) return [message.id]
+      const next = messages.findIndex((later, at) => at > index && later.type === "assistant")
+      const continued = messages
+        .slice(index + 1, next === -1 ? undefined : next)
+        .some((later) => later.type === "synthetic" && continuingNotices.has(String(later.metadata?.notice)))
+      return continued ? [] : [message.id]
+    }),
+  )
+}
+
 // The limit that ended the run names its result subtype. `limit.cost-unknown` is the server refusing a cost limit it
 // cannot count, which is a plain error, not a limit that was reached.
 export function subtype(input: { failed: boolean; interrupted: boolean; limit: SessionStructuredError | undefined }) {
