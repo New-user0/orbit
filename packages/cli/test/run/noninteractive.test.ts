@@ -2198,7 +2198,7 @@ describe("runNonInteractivePrompt limits and results", () => {
           ...assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 }),
           content: [
             { type: "text", text: "Part" },
-            { type: "tool", id: "call_1", name: "echo", state: { status: "error", error: { type: "tool.input-truncated" } } },
+            { type: "tool", id: "call_1", name: "echo", state: { status: "error", error: { type: "tool.input-truncated", message: "cut off" } }, time: { created: 2, completed: 3 } },
           ],
         } as SessionMessageInfo,
         notice("msg_note", "output-limit"),
