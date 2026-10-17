@@ -2611,3 +2611,42 @@ test("orb -p with a word after a flag that widens what runs starts nothing", asy
   expect(await Bun.file(marker).exists()).toBe(false)
   expect(runs).toBe(before)
 }, 300_000)
+
+// Class 1 and class 12 (review of #118): `orb flow clean` removes branches, which runs the hooks that the folder's own config
+// names, and the commands that only read the run store looked for the repository root with a git process in the folder.
+// A hook that leaves a marker is the oracle; a trusted run is the control that the hook is live.
+test("orb flow clean runs no hook of an untrusted repository, and the commands that read the run store start no git", async () => {
+  const repository = await hooked("flow-clean")
+  const vcs = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: repository }).exitCode
+  expect(vcs("init", "--quiet", "-b", "main")).toBe(0)
+  expect(vcs("config", "user.email", "t@orbit.test")).toBe(0)
+  expect(vcs("config", "user.name", "T")).toBe(0)
+  expect(vcs("config", "commit.gpgsign", "false")).toBe(0)
+  expect(vcs("commit", "--allow-empty", "-q", "-m", "root")).toBe(0)
+  // A run that finished, made while the folder is trusted.
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", workflow]))
+  const id: string = JSON.parse((await orb(repository, ["flow", "ls", "--format", "json"])).stdout)[0].id
+  expect(vcs("branch", `orbit/${id}/n`)).toBe(0)
+  // The clone's own config names a hook for every update of a ref.
+  const marker = path.join(root, "flow-clean-hook.marker")
+  const hook = path.join(repository, "hooks", "reference-transaction")
+  await Bun.write(hook, `#!/bin/sh\necho ran >> "${marker.replaceAll("\\", "/")}"\n`)
+  await fs.chmod(hook, 0o755)
+  expect(vcs("config", "core.hooksPath", "hooks")).toBe(0)
+
+  const trace = path.join(root, "flow-clean-trace.txt")
+  for (const args of [["ls", "--format", "json"], ["show", id], ["cost", id], ["trace", id]]) {
+    await fs.rm(trace, { force: true })
+    await orb(repository, ["flow", ...args], { GIT_TRACE2: trace })
+    expect(await Bun.file(trace).exists()).toBe(false)
+  }
+
+  const refused = await orb(repository, ["flow", "clean", "--standalone"])
+  expect(refused.code).toBe(1)
+  expect(refused.stderr).toContain("is not trusted")
+  expect(await Bun.file(marker).exists()).toBe(false)
+
+  // The control: trusted for this command, the same branch removal runs the hook.
+  succeeded(await orb(repository, ["flow", "clean", "--trust", "--standalone"]))
+  expect(await Bun.file(marker).exists()).toBe(true)
+}, 300_000)

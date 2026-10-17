@@ -1,15 +1,19 @@
 export * as VcsGitPlugin from "./git.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { FileDiff } from "@orbit/schema/file-diff"
+import { Trust } from "@orbit/schema/trust"
 import { Base, BranchList, FileStatus, Info, Mode } from "@orbit/schema/vcs"
 import { AppProcess } from "@orbit/util/process"
+import { Bus } from "../../bus.js"
 import { Location } from "../../location.js"
+import { ProjectTrust } from "../../project-trust.js"
 import type { Adapter, BranchOptions, DiffOptions } from "../../vcs.js"
 import { DiffError } from "../../vcs.js"
 import { gitExecutable } from "../../util/git-executable.js"
+import { guard } from "../../vcs/guard.js"
 import {
   chunksByFile,
   emptyPatch,
@@ -26,10 +30,24 @@ export const Plugin = define({
     if (location.vcs?.type !== "git") return
 
     const processes = yield* AppProcess.Service
-    const adapter = make(processes, {
-      directory: location.directory,
-      worktree: location.project.directory,
-    })
+    const bus = yield* Bus.Service
+    const trust = yield* ProjectTrust.Service
+    // Git applies the config of the folder it runs in, and a clone chooses that file. The terminal UI asks for the branch of
+    // the folder it opens before anyone has been asked about it, and `status` and `diff` run the filter and text conversion
+    // drivers that the config names, and `base` runs the `gpg.program` that it names for a commit with a signature
+    // (class 1). Until the folder is trusted no git is started: the branch is unknown, nothing has changed, and there is no
+    // diff. The answer is asked at each call, so a grant or revoke takes effect on the next one.
+    const adapter = guard(
+      make(processes, {
+        directory: location.directory,
+        worktree: location.project.directory,
+      }),
+      trust.trusted,
+    )
+    yield* bus.subscribe(Trust.Event.Updated).pipe(
+      Stream.runForEach(() => ctx.vcs.reload()),
+      Effect.forkScoped({ startImmediately: true }),
+    )
 
     yield* ctx.vcs.transform((editor) => {
       editor.add({

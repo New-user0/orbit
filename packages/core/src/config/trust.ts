@@ -37,6 +37,12 @@ import { FSUtil } from "@orbit/util/fs-util"
 // - `escapes`: the path that a file tool is given (`FileAccess`), which asks about the folder a link leads to, as for any
 //   path outside the project.
 //
+// One reader cannot ask, because a Location, and `ProjectTrust` with it, exists only once the project is known: the one
+// that finds the project. `GitLayout` (`Project.resolve`, `LocationWatcher`) reads a folder's `.git`, the `commondir` and
+// `gitdir` files of its worktree entry, and the shared `config` for one URL. It opens only what git itself wrote for the
+// folder, never reads through a `.git` that is a link or opens a share, bounds every read, and starts git for a folder only
+// once `WorkspaceTrust` trusts it.
+//
 // A folder that was trusted is held to its config as the grant saw it. `Config` digests the executable parts of every
 // project and local source (`Fingerprint`), `WorkspaceTrust.compare` says which kinds differ from the grant's record, and
 // `partial` cuts those kinds from that source alone: a document loses the fields, a directory lists `withheld`, which the

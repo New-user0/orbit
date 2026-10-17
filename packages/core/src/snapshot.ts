@@ -6,6 +6,8 @@ import { Context, Effect, Fiber, Layer, Schema, Scope } from "effect"
 import { FileDiff } from "@orbit/schema/file-diff"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Git } from "./git.js"
+import { GitLayout } from "./git/layout.js"
+import { ProjectTrust } from "./project-trust.js"
 import { Global } from "@orbit/util/global"
 import { Location } from "./location.js"
 import { AbsolutePath, RelativePath } from "./schema.js"
@@ -74,6 +76,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
+    const trust = yield* ProjectTrust.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
     const lifetime = yield* Scope.Scope
@@ -86,24 +89,56 @@ const layer = Layer.effect(
         },
       }),
     })
+    // Git applies the config of the repository it runs in, and a clone chooses that file: `include.path`, `core.worktree`
+    // and `core.excludesFile` open files and shares that it names, and its objects can chain to more through
+    // `objects/info/alternates` (class 1, class 6). So while the project is not trusted no git starts in the project's own
+    // repository: its place is read from the files, the snapshot repository is not seeded from it (no alternates, no index),
+    // and the ignore rules come from the snapshot repository, whose work tree is the folder and so reads its `.gitignore`
+    // files. That repository is a separate one, so that what a trusted run seeded from the project's objects is not reached.
     // Cache a scope-owned fiber so caller cancellation stops waiting without poisoning shared initialization.
-    const repositoryFiber = yield* Effect.cached(
-      Effect.gen(function* () {
-        const source = yield* git.repo.discover(location.project.directory)
-        if (!source) return yield* new Error({ operation: "capture", message: "Project is not a Git repository" })
-        const worktree = AbsolutePath.make(yield* fs.realPath(source.worktree).pipe(Effect.orDie))
-        const gitDirectory = AbsolutePath.make(
-          path.join(global.data, "snapshot", location.project.id, Hash.fast(worktree)),
-        )
-        const snapshotRepository = (yield* fs.existsSafe(path.join(gitDirectory, "HEAD")))
-          ? new Git.Repository({ worktree, gitDirectory, commonDirectory: gitDirectory })
-          : yield* git.repo
-              .create({ worktree, gitDirectory, seed: source })
-              .pipe(Effect.mapError((cause) => failure("capture", cause)))
-        return { source, worktree, snapshotRepository }
-      }).pipe(Effect.forkIn(lifetime)),
+    const open = (trusted: boolean) =>
+      Effect.cached(
+        Effect.gen(function* () {
+          const source = trusted ? yield* git.repo.discover(location.project.directory) : undefined
+          const found = source ?? (trusted ? undefined : yield* GitLayout.locate(fs, location.project.directory))
+          if (!found) return yield* new Error({ operation: "capture", message: "Project is not a Git repository" })
+          const worktree = AbsolutePath.make(yield* fs.realPath(found.worktree).pipe(Effect.orDie))
+          // Untrusted snapshots are keyed by the work tree alone, not by the project ID, which can change when trust is
+          // granted, so a snapshot taken before trust is found after it.
+          const untrustedDirectory = path.join(global.data, "snapshot", "untrusted", Hash.fast(worktree))
+          const gitDirectory = AbsolutePath.make(
+            trusted ? path.join(global.data, "snapshot", location.project.id, Hash.fast(worktree)) : untrustedDirectory,
+          )
+          const snapshotRepository = (yield* fs.existsSafe(path.join(gitDirectory, "HEAD")))
+            ? new Git.Repository({ worktree, gitDirectory, commonDirectory: gitDirectory })
+            : yield* git.repo
+                .create({ worktree, gitDirectory, seed: source })
+                .pipe(Effect.mapError((cause) => failure("capture", cause)))
+          // Trees captured before trust live in the untrusted repository, which is Orbit's own. Listing its objects as an
+          // alternate of the trusted one lets those snapshots be compared and restored once the folder is trusted; it
+          // opens nothing that the folder chose.
+          if (trusted && (yield* fs.existsSafe(path.join(untrustedDirectory, "HEAD")))) {
+            const alternates = path.join(gitDirectory, "objects", "info", "alternates")
+            const line = path.join(untrustedDirectory, "objects")
+            const current = yield* fs.readFileString(alternates).pipe(Effect.orElseSucceed(() => ""))
+            if (!current.split("\n").includes(line))
+              yield* fs.ensureDir(path.dirname(alternates)).pipe(
+                Effect.andThen(
+                  fs.writeFileString(alternates, current + (current && !current.endsWith("\n") ? "\n" : "") + line + "\n"),
+                ),
+                Effect.orDie,
+              )
+          }
+          return { source: source ?? snapshotRepository, worktree, snapshotRepository }
+        }).pipe(Effect.forkIn(lifetime)),
+      )
+    const trustedFiber = yield* open(true)
+    const untrustedFiber = yield* open(false)
+    const repository = trust.trusted().pipe(
+      Effect.flatMap((yes) => (yes ? trustedFiber : untrustedFiber)),
+      Effect.uninterruptible,
+      Effect.flatMap(Fiber.join),
     )
-    const repository = repositoryFiber.pipe(Effect.uninterruptible, Effect.flatMap(Fiber.join))
 
     const scope = Effect.fnUntraced(function* (worktree: AbsolutePath) {
       const relative = path.relative(worktree, location.directory)
@@ -208,7 +243,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Git.node, Global.node, Location.node],
+  deps: [FSUtil.node, Git.node, Global.node, Location.node, ProjectTrust.node],
 })
 
 export const noopLayer = Layer.succeed(

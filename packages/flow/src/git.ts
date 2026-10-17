@@ -1,6 +1,6 @@
 export * as Git from "./git.js"
 
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { appendFile, readdir, readFile, rm } from "node:fs/promises"
 import path from "node:path"
 
@@ -36,6 +36,21 @@ async function ok(directory: string, args: ReadonlyArray<string>) {
 export async function root(directory: string) {
   const result = await git(directory, ["rev-parse", "--show-toplevel"])
   return result.code === 0 ? path.resolve(result.stdout) : undefined
+}
+
+/**
+ * The folder that holds the `.git` nearest to `directory`, found with `stat` and no process, or undefined outside a
+ * repository. The commands that only read the run store use it: starting git in a folder applies the config that the
+ * folder ships, which can name programs to run or shares to open, and these commands run before anyone is asked about it.
+ */
+export function holder(directory: string) {
+  const start = path.resolve(directory)
+  for (let folder = start; ; folder = path.dirname(folder)) {
+    const marker = path.join(folder, ".git")
+    // Git passes over a `.git` directory with no HEAD and looks in the folder above, as `Git.root` does.
+    if (existsSync(marker) && (!statSync(marker).isDirectory() || existsSync(path.join(marker, "HEAD")))) return folder
+    if (path.dirname(folder) === folder) return undefined
+  }
 }
 
 export const head = (directory: string) => ok(directory, ["rev-parse", "HEAD"])

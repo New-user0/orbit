@@ -570,6 +570,9 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("clean", {
           description: "Remove the worktrees and branches of finished runs",
           params: {
+            // A server is used only to ask whether the folder is trusted: removing a worktree runs the folder's VCS.
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(
               Argument.withDescription("Run ID; every run that is not running or waiting when omitted"),
               Argument.optional,

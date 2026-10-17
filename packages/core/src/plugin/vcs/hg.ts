@@ -14,6 +14,7 @@ import { Location } from "../../location.js"
 import { ProjectTrust } from "../../project-trust.js"
 import type { Adapter, DiffOptions } from "../../vcs.js"
 import { DiffError } from "../../vcs.js"
+import { guard } from "../../vcs/guard.js"
 import {
   addPatch,
   chunksByFile,
@@ -63,16 +64,6 @@ export const Plugin = define({
     })
   }),
 })
-
-function guard(adapter: Adapter, trusted: () => Effect.Effect<boolean>): Adapter {
-  return {
-    info: () => trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.info() : Effect.succeed({ branch: {} })))),
-    branches: (input) => trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.branches(input) : Effect.succeed([])))),
-    status: () => trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.status() : Effect.succeed([])))),
-    diff: (mode, options) =>
-      trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.diff(mode, options) : Effect.succeed([])))),
-  }
-}
 
 /**
  * Mercurial adapter for the Vcs service. `hg diff --git` emits git-format

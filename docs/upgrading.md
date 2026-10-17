@@ -95,6 +95,17 @@ names, and to stop Orbit reading that product's settings files and `.mcp.json`, 
 above, which also stops it loading that product's skills, output styles and instruction files. If a repository's
 `.mcp.json` should not start servers for you, turn compatibility off, or move the servers you want into `orbit.json`.
 
+### Snapshots, worktree lists and `orb flow` start no git in a folder that is not trusted
+
+A repository's own config can name programs for git to run and files or network shares for it to open, so Orbit starts
+git in a repository only once its folder is trusted. Until then session snapshots work from a separate git directory of
+Orbit's own that is not seeded from the repository (undo still works, and `.gitignore` files still apply, and snapshots
+taken before the folder was trusted stay usable once it is trusted, but not the other way round), the list of worktrees
+shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
+folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`; the other `orb
+flow` commands find the repository root from its files. A repository with no remote keeps one project ID when it becomes
+trusted, so its earlier sessions stay in the project.
+
 ### A project's config waits for its folder to be trusted
 
 The settings in a project's `orbit.json` and `orbit.local.json`, and in the hook settings and `.mcp.json` that other
@@ -2852,6 +2863,34 @@ folders; a trusted folder with no `hg` or no changeset is `global`, as before.
 **Affects:** Mercurial users who open a clone before trusting it.
 
 **What to do:** Nothing; trust the folder.
+
+### Git is not run in a folder that is not trusted
+
+When a client opened a folder that holds `.git`, Orbit ran `git rev-parse`, `git remote get-url`, `git rev-list` and
+`git worktree list` there to name the project, and `git status`, `git diff` and `git reflog show` for the branch and the
+changes, and the location watcher asked git where `HEAD` is. Git applies the folder's own `.git/config`, which can name
+programs for it to run: `core.fsmonitor`, hooks, the filter and text-conversion drivers that `.gitattributes` selects, and
+`gpg.program` for a commit that carries a signature. None of them is run now until you trust the folder. The project is
+named from the files of `.git` (the remote URL in its config, or the path of the folder when it names none), the branch is
+unknown and there are no changes, diffs or review base, and they appear once you trust the folder, with no restart. A
+repository with a remote keeps the project ID that it had. One with no remote is named by its path until you trust it (never
+`global`, whose saved "always allow" answers every such folder would share), and by its first commit afterwards, as before.
+The URL is read as written, so a remote that an include or a `url.<base>.insteadOf` rule supplies or rewrites gives the
+folder another project ID until you trust it. A linked worktree follows the decision for its main checkout. A `.git` that is a link, a submodule or a separate git
+directory, or that names another repository's directories, is read for its remote only after you trust the folder, and
+counts as a project of its own until then. The check that asks git whether a path is ignored runs without
+`core.fsmonitor`.
+
+On Windows, when git is on no PATH, Orbit no longer starts the bare name `git`. The library that starts programs looks in
+the working folder for a bare name, with and without an extension, and started the interpreter named by the first line of a
+file called `git` that a repository could ship. A git that is not found now fails as a git that is not installed fails.
+
+**Affects:** anyone who opens a clone before trusting it, in the terminal UI or with `orb`, and on Windows anyone whose git
+is not on PATH.
+
+**What to do:** Run `orb trust` in the folder, or choose "Trust this folder" when the terminal UI asks, which it does only
+for a folder that holds config of its own back, so for a repository with none no dialog or indicator says that the
+branch and the changes wait (`/trust` does not show either); or put git on PATH.
 
 ### Declarations that print the environment ask like any command
 

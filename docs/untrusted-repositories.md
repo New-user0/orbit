@@ -86,6 +86,39 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   diff and reloads on `Trust.Event.Updated`; `Project.resolve` names an untrusted folder by its path, not `global`,
   whose saved approvals every such folder would share. Proof: `test/project-hg-trust.test.ts`,
   `test/vcs-hg-trust.test.ts`.
+- `git` in `Project.resolve` (`rev-parse`, `remote get-url`, `rev-list`, `worktree list`), in the Git VCS provider (`status`,
+  `diff`, `reflog show`, which the terminal UI asks for on connect) and in the location watcher (`rev-parse`): git applies
+  the folder's own `.git/config` (its includes, `.gitattributes` and hooks), and a clone chooses all of them. They name
+  programs for git to run (`git help config`, `gitattributes`, `githooks`): `core.fsmonitor`, `core.hooksPath` and
+  `.git/hooks` when git reads the index or updates a ref, the `filter.<driver>.clean` and `diff.<driver>.textconv` that
+  `.gitattributes` selects when `status` or `diff` reads a file, `diff.external`, `gpg.program` when `reflog show`
+  verifies a commit that carries a signature, `core.sshCommand` and `credential.helper` for a remote, `core.pager` for a
+  terminal, and what an include names.
+  - `Project.resolve` and the provider start no git for a folder until `WorkspaceTrust` trusts it, and the watcher starts
+    none for any folder. The decision is the main checkout's for a linked worktree, as `ProjectTrust` takes it. A trusted
+    folder keeps its git as before.
+  - `Project.resolve` reads `.git` and the shared `config` itself (`GitLayout`, `packages/core/src/git/layout.ts`). It
+    opens only what git wrote for the folder: its own `.git` directory, or the entry that its repository keeps for a linked
+    worktree, which names the folder back. A `.git` that is a link, a submodule or separate git directory, and a layout
+    that names another repository's directories, are named and left alone. It passes over a `.git` directory that has no
+    `HEAD` and uses the repository above it, and stops at a `.git` file that is no good, as git does. A read that fails,
+    is blocked (a share), is over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there",
+    never an error, and each folder is judged alone (class 7). The project is named by the remote URL in that config as
+    written, which `git remote get-url` gives a trusted folder too unless an include or `url.<base>.insteadOf` rewrites it,
+    and by the folder's path when there is none (a trusted folder uses its first commit). The provider answers an empty
+    branch, status, diff and review base, and reloads on `Trust.Event.Updated`. The watcher finds `HEAD` from the same
+    files.
+  - Snapshot (git in Orbit's own git directory, plus one ignore check in the project's repository) and the read-only
+    calls of the `Git` service (`discover`, `remote`, `history`, `worktree.list`) still run in an untrusted folder with its
+    config in effect, and reach no key of the table (`test/snapshot-trust.test.ts`, `test/git.test.ts`). The ignore check
+    passes `-c core.fsmonitor=false` as well. `Worktree.create` and `Worktree.remove` run `git worktree add` and `remove`
+    when a person or the model asks, which runs hooks and filters of the folder (task `agents-extensibility-28`).
+  - Proof: `test/project-git-trust.test.ts` (one row for each of eleven keys, a linked worktree, and every layout of
+    `test/fixture/git-forged.ts`), `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts` ("finds the git
+    directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts` and `test/git.test.ts`. Each row
+    plants a program that the config names, which records its runs, and carries the plain git command that runs it as the
+    control (all but `core.pager`, which git runs only for a terminal that no test has); git's own trace (`GIT_TRACE2`)
+    says whether any git started.
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
   `ConfigTrust.sanitize`, as `ConfigTrust.classification` says. Proof: `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
@@ -298,7 +331,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   is `unknown` (no emulation) outside macOS. The emulator itself reads no file; the caller that wires it (shell-safety-15b) adds
   its own rows. Proof: `test/shell-analysis/sed.test.ts` (`SedScript.flavor`: one process per shell and `PATH`, the arguments,
   working folder and environment, the exit, failure and hang rows).
-- Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, `node` or `uvx` as the command of an
+- Programs that Orbit starts by a bare name (`hg`, `node` or `uvx` as the command of an
   MCP server, the pager's `cmd /c more`): on Windows Bun's spawn, Node's, cross-spawn and `cmd.exe` look in the working
   folder before `PATH` for a bare name, unless the process that starts it has `NoDefaultCurrentDirectoryInExePath`.
   Every Orbit process sets it in its own environment first (`ProgramLookup.install()` in
@@ -316,8 +349,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   shell as a path outside a working folder that holds decoys of it. Its mutation: with `ProgramLookup` no longer setting
   the variable, the formatter row and the `cmd` rows fail; the PowerShell and Git Bash rows pass either way, since
   neither shell searches the working folder. `pwsh` is skipped where it is not installed, and a built-in formatter is not
-  covered. The bare `git` fallback has no
-  test of its own (see Known gaps).
+  covered. `git` is not started by a bare name on Windows: when `which` finds none, `gitExecutable` is a path in `System32`
+  that is not there (`resolveGitExecutable` in `packages/core/src/util/git-executable.ts`), because the library under the
+  spawner also resolves a name itself, with and without an extension, and starts the interpreter that the `#!` line of a
+  file called `git` in the working folder names, which the variable does not stop. `test/util/git-executable.test.ts` starts
+  the Git service in a process of its own, under Bun and under Node bundled for it, with git on no PATH, and plants a
+  `git.exe`, a `git.bat`, a `git.cmd` and a file called `git` with a `#!` line, each alone in a folder, with a control that
+  each one runs when started the way that finds it, and one that the `git` of PATH runs and the folder's does not. Its
+  mutation: with the bare name back, the two rows for the file with no extension fail. Linux has a decoy row of its own.
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
 - Code Mode `fetch`: `PermissionWeb.request` for every hop, then `AddressGuard.check`. Proof: `test/codemode.test.ts`,
@@ -722,8 +761,14 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
   answer for the Location's project, so do not key trust by a path you did not resolve.
 - Config above the project follows the decision for its holder (`ConfigTrust.holder`, `ConfigTrust.covered`).
   `Trust.Withheld.directory` is the folder whose trust lifts an entry, and the refusal advice must name it.
-- `Project.resolve` counts the main checkout only when `git worktree list` also lists this folder, so a `.git` file
-  cannot borrow another repository's identity.
+- `Project.resolve` counts the main checkout only when its repository also lists this folder, so a `.git` file cannot
+  borrow another repository's identity or trust. For a folder that is not trusted, `GitLayout.locate` decides from
+  files: the `.git` file has to name an entry directly under the `worktrees` of the `commondir` that the entry names, and
+  the entry's `gitdir` file has to name this very `.git` (the back-link's folder is resolved and `.git` joined to it, so a
+  `.git` that is a link cannot stand for another's). For a trusted one it is `git worktree list`. The trust decision for a
+  linked worktree is its main checkout's, and any other layout leaves the folder its own canonical folder, so a clone
+  that names a trusted repository gets none of its trust (`test/git-layout.test.ts`, `test/project-git-trust.test.ts`:
+  every layout of `test/fixture/git-forged.ts` with the victim trusted, and a worktree that git added as the control).
 - In a command, `trustRefusal` looks up an existing `--session` and checks that session's folder, and asks about the
   folder that holds the workflow file as well (`holderRefusal` words that refusal). A server's trust mode comes from
   `ServerProcess.trustOptions(mode, env)` in `packages/cli/src/server-process.ts` (the background service never follows
@@ -1382,6 +1427,16 @@ first, and the spawner installs it again and gives it to every child. It is half
 starts `cmd.exe` by its full path and passes `ProgramLookup.environment(undefined)`, and a test plants a decoy for it,
 with a control run. The earlier holes took four fix commits in three rounds, and the executables three more.
 
+**In M4:** the decoy test that the bare `git` fallback lacked (register FU-M1-012) found a member that no `.exe`, `.bat` or
+`.cmd` decoy reaches. cross-spawn on Windows resolves a bare name with its own lookup, which starts in the working folder
+of the child whatever the variable says, first with the extensions of `PATHEXT` and, when that finds nothing, with none.
+For a file it finds that starts with `#!`, it starts the interpreter the line names, with the file as its argument. A folder
+that held nothing but a file called `git` with `#!/usr/bin/env node` on its first line therefore ran that file, under Bun and
+under Node, wherever the Git service asked git something while git was on no `PATH` (`Project.resolve`, Snapshot, the
+worktree listing). A `git.exe` beside it hides the file, because the first lookup finds the `.exe` and the spawn of the
+bare name then fails, which is why the decoys of the other kinds never showed it. The fallback is no longer a bare name.
+The same lookup serves every other bare name that is on no `PATH` (Known gaps).
+
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
 first started the server inside the repository, audit what the process resolves from its start folder before any trust
 check: modules, packages, native libraries, executables, and what each lookup that finds a program does (a library's,
@@ -1449,9 +1504,12 @@ kind in turn.
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
 - One member of the class stays partly open: a child that is handed a `PATH` with a relative entry still searches it (see
-  Known gaps). Two more rest on `ProgramLookup.install()` alone,
-  with no test of their own: the bare `git` fallback and the terminal UI's external editor.
-  Known gaps lists each with its task. A change must not widen one.
+  Known gaps). Another rests on `ProgramLookup.install()` alone, with no test of its own: the terminal UI's external editor.
+  A third is open for a bare name that is on no `PATH`: cross-spawn resolves it in the working folder, with and without an
+  extension, and starts the interpreter that the `#!` line of the file it finds names (Known gaps). Known gaps lists each
+  with its task. A change must not widen one.
+- Do not hand the spawner a bare name that `which` could not find. `gitExecutable` does not: on Windows a git that is on
+  no `PATH` becomes a path that is not there, and the call fails as it fails for a git that is not installed.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
@@ -1885,10 +1943,14 @@ The program-wide register of every follow-up, these gaps included, with each one
 - **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
   `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
   cannot tell a trust refusal from any other failure of a command.
-- **The bare `git` fallback.** When `which` finds no git on Windows, `gitExecutable` falls back to the bare name `git`. That goes through the
-  spawner, which sets the variable before it launches. The spawner's tests run under Bun, and the core also runs under
-  Node, where only the launcher's test shows that Node's own spawn honors the variable, so a test that plants a
-  `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).
+- **A bare name that is on no `PATH`.** On Windows cross-spawn resolves a bare name itself, in the working folder of the
+  child first, with the extensions of `PATHEXT` and then with none, and starts the interpreter that the `#!` line of a file
+  it finds names. `NoDefaultCurrentDirectoryInExePath` does not reach that lookup. `gitExecutable` no longer hands it a
+  bare name (class 10; the control row of `test/util/git-executable.test.ts` shows cross-spawn running such a file),
+  but `hg` does (only for a trusted folder, since `Project.resolve` and the Mercurial provider start none otherwise) and
+  so does `az` (the token command of the Azure provider, started in the folder that the server runs in). The fix is in the
+  spawner: find the program with `which` and fail for a name that is not found. It changes what a relative `PATH` entry
+  of a child does, which is the owner's question above. Register row FU-M4-001, task `sweep`.
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
   `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
   a program in the working folder that way (`util.which` in `packages/util/test/which.test.ts`). A child that is handed a
@@ -1949,14 +2011,25 @@ The program-wide register of every follow-up, these gaps included, with each one
   bundled client reads `metadata.queued`.
 - **Shared approvals.** A project's ID comes from its remote URL, so a folder that names the same remote shares the
   saved "always allow" approvals.
-- **Git in the folder.** Orbit runs git in a folder to resolve its project, and git applies that folder's own
-  `.git/config`, which can name programs for git to run. `shell-safety-18` carries the read-only `.git/hooks` and
-  `.git/config` of the shell sandbox. The git calls of `Project.resolve` before the folder is trusted have no task yet:
-  give them one (a project's identity can be read from files, without running git). Fingerprints do not cover `.git`.
-  Mercurial is not part of this gap: neither `Project.resolve` nor the Mercurial VCS provider starts an `hg` in a
-  folder that `WorkspaceTrust` does not trust (`packages/core/test/project-hg-trust.test.ts` and
-  `test/vcs-hg-trust.test.ts`, each with a trusted control that does start it), because `hg` loads the `[extensions]`
-  and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
+- **Git in the folder.** Git applies the config of the folder it runs in (`.git/config`, its includes, `.gitattributes`
+  and the hooks), which can name programs for git to run. `Project.resolve`, the Git VCS provider and the location
+  watcher start no git in a folder that `WorkspaceTrust` does not trust, and read its files instead (`GitLayout`;
+  `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
+  control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read-only calls
+  of the `Git` service still run git in an untrusted folder, with its config in effect, and reach none of those keys
+  (`test/snapshot-trust.test.ts`, `test/git.test.ts`); that is a fact about the commands and the git versions the tests ran
+  with (2.52 on Windows, the container's on Linux), not a gate. What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
+  and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the
+  folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
+  git in the shell tool (`shell-safety-12`); the `orb flow` commands that open the run store (`ls`, `show`, `cost`, `trace`,
+  `approve`, `watch` and `clean`), which ask git for the repository root with no trust check, and `clean` removes
+  worktrees with it (register row FU-M4-002, fixed: `clean` asks `requireTrust` first and the readers find the root from the files); a repository with no config of its own, which shows no
+  branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
+  for hooks and stdio MCP servers below); and fingerprints, which do not cover `.git`. A project is still named by the remote URL in the folder's config, which a
+  clone can write (Shared approvals, above). Mercurial was never part of this gap: neither `Project.resolve` nor the
+  Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
+  (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does
+  start it), because `hg` loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
 - **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.

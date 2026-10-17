@@ -4,27 +4,46 @@ import { Effect } from "effect"
 import { Worktree } from "@orbit/schema/worktree"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Git } from "../git.js"
+import { GitLayout } from "../git/layout.js"
+import { AbsolutePath } from "../schema.js"
+import { WorkspaceTrust } from "../workspace-trust.js"
 import { canonical, DirectoryUnavailableError } from "./directory.js"
 import type { Strategy } from "./strategies.js"
 
 export const make = Effect.gen(function* () {
   const fs = yield* FSUtil.Service
   const git = yield* Git.Service
+  const trust = yield* WorkspaceTrust.Service
+
+  // Git applies the config of the repository it runs in, and a clone chooses that file: its hooks, `include.path` and
+  // `core.worktree` run programs and open shares (class 1, class 6). So a folder that is not trusted starts no git,
+  // whether it is listed, added to or removed from; its main checkout is told from the files. The decision is the main
+  // checkout's for a linked worktree, as `Project.resolve` takes it.
+  const placed = Effect.fnUntraced(function* (directory: AbsolutePath) {
+    const layout = yield* GitLayout.locate(fs, directory)
+    if (!layout) return yield* new DirectoryUnavailableError({ directory })
+    return { layout, trusted: (yield* trust.status(layout.canonical)).trusted }
+  })
 
   return {
     id: Worktree.StrategyID.make("git"),
     create: Effect.fn("Worktree.Git.create")(function* (input) {
+      if (!(yield* placed(input.sourceDirectory)).trusted)
+        return yield* new DirectoryUnavailableError({ directory: input.sourceDirectory })
       const repository = yield* git.repo.discover(input.sourceDirectory)
       if (!repository) return yield* new DirectoryUnavailableError({ directory: input.sourceDirectory })
       yield* git.worktree.create({ repository, directory: input.directory, ref: input.branch })
       return { directory: yield* canonical(fs, input.directory) }
     }),
     remove: Effect.fn("Worktree.Git.remove")(function* (input) {
+      if (!(yield* placed(input.directory)).trusted) return yield* new DirectoryUnavailableError({ directory: input.directory })
       const repository = yield* git.repo.discover(input.directory)
       if (!repository) return yield* new DirectoryUnavailableError({ directory: input.directory })
       yield* git.worktree.remove({ repository, directory: input.directory, force: input.force })
     }),
     list: Effect.fn("Worktree.Git.list")(function* (directory) {
+      const found = yield* placed(directory)
+      if (!found.trusted) return [{ directory: found.layout.canonical, type: "root" }] satisfies Worktree.ListEntry[]
       const repository = yield* git.repo.discover(directory)
       if (!repository) return yield* new DirectoryUnavailableError({ directory })
       const entries = yield* git.worktree.list(repository)

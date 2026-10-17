@@ -752,9 +752,12 @@ export async function run(options: RunOptions): Promise<RunResult> {
   }
 }
 
-/** The run store for `directory`: the one at its repository root, or in the directory itself outside git. */
+/**
+ * The run store for `directory`: the one at its repository root, or in the directory itself outside a repository. The
+ * root is found from the files, so that reading a store starts no git in a folder that is not trusted.
+ */
 export async function openStore(directory: string) {
-  return Store.at((await Git.root(directory)) ?? path.resolve(directory))
+  return Store.at(Git.holder(directory) ?? path.resolve(directory))
 }
 
 // A reviewer gets the task and the diff in its prompt, so it needs no tools and cannot change the work it judges.

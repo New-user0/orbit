@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import { describe, expect } from "bun:test"
+import { realpathSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
 import { Deferred, Duration, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect"
@@ -19,8 +20,11 @@ import { Location } from "@orbit/core/location"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { AbsolutePath } from "@orbit/core/schema"
+import { git, repository } from "../fixture/git"
+import { keys, planted } from "../fixture/git-keys"
+import { traced } from "../fixture/git-trace"
 import { location } from "../fixture/location"
-import { tmpdir } from "../fixture/tmpdir"
+import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
 
@@ -499,6 +503,104 @@ describe("LocationWatcher subscriptions", () => {
       { vcs: "git", watcher, plugins: PluginSupervisor.node.replace(plugins) },
     )
   })
+})
+
+// Class 1 (register FU-M1-022): the watcher found the git directory by asking git, when the Location started and before
+// anyone was asked about the folder, and git applies the config of the folder it runs in. It reads the files now, so no
+// git starts, whatever the config names (`project-git-trust.test.ts` is the table of keys). The oracle is git's trace of
+// every process it starts. The files are the ones git itself wrote, or the Location's store when they cannot be matched
+// to a registered worktree.
+describe("LocationWatcher finds the git directory without git", () => {
+  const SLOW = 60_000
+  /** The folders that the watcher subscribed to for a Location, once it has subscribed or has had time to. */
+  const subscribed = (directory: string, vcs: Location.Interface["vcs"], expected: number) => {
+    const subscriptions: Watcher.WatchInput[] = []
+    const watcher = Layer.succeed(
+      Watcher.Service,
+      Watcher.Service.of({
+        subscribe: (input) => Effect.sync(() => subscriptions.push(input)).pipe(Effect.as(Stream.empty)),
+      }),
+    )
+    return traced(
+      Effect.gen(function* () {
+        yield* LocationWatcher.Service
+        if (expected > 0)
+          yield* Effect.sync(() => subscriptions.length).pipe(
+            Effect.filterOrFail((count) => count >= expected),
+            Effect.retry(Schedule.spaced("10 millis")),
+          )
+        yield* Effect.sleep("100 millis")
+        return subscriptions.map((input) => input.path)
+      }).pipe(provide(directory, vcs, watcher)),
+    )
+  }
+  const real = (file: string) => Effect.sync(() => realpathSync.native(file))
+
+  for (const key of keys)
+    it.live(
+      `starts no git for an ordinary repository that sets ${key.name}`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* planted(key)
+          const root = yield* real(found.root)
+
+          const { value, git } = yield* subscribed(root, { type: "git", store: AbsolutePath.make(path.join(root, ".git")) }, 1)
+
+          expect(git).toEqual([])
+          expect(yield* found.ran()).toEqual([])
+          expect(value).toEqual([path.join(root, ".git", "HEAD")])
+        }),
+      SLOW,
+    )
+
+  it.live(
+    "watches the HEAD of a linked worktree's own entry, not the main checkout's",
+    () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        yield* repository(path.join(root, "main"))
+        yield* Effect.promise(() => git(path.join(root, "main"), "worktree", "add", "--detach", path.join(root, "linked")))
+        const main = yield* real(path.join(root, "main"))
+        const linked = yield* real(path.join(root, "linked"))
+
+        const { value, git: started } = yield* subscribed(
+          linked,
+          { type: "git", store: AbsolutePath.make(path.join(main, ".git")) },
+          1,
+        )
+
+        expect(started).toEqual([])
+        expect(value).toEqual([path.join(main, ".git", "worktrees", "linked", "HEAD")])
+      }),
+    SLOW,
+  )
+
+  it.live(
+    "watches the Location's own git directory for a layout that no registered worktree matches, and only when it is a folder",
+    () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        yield* repository(path.join(root, "source"))
+        yield* Effect.promise(async () => {
+          // A separate git directory: the `.git` file names a place that nothing registered.
+          await git(root, "clone", "-q", "--separate-git-dir", path.join(root, "elsewhere"), path.join(root, "source"), path.join(root, "separate"))
+          // A `.git` that a clone forged: nothing opens it, so the store the Location names is a file.
+          await fs.mkdir(path.join(root, "forged"))
+          await fs.writeFile(path.join(root, "forged", ".git"), "gitdir: ./nowhere\n")
+        })
+        const separate = yield* real(path.join(root, "separate"))
+        const forged = yield* real(path.join(root, "forged"))
+        const elsewhere = yield* real(path.join(root, "elsewhere"))
+
+        const here = yield* subscribed(separate, { type: "git", store: AbsolutePath.make(elsewhere) }, 1)
+        const there = yield* subscribed(forged, { type: "git", store: AbsolutePath.make(path.join(forged, ".git")) }, 0)
+
+        expect(here.value).toEqual([path.join(elsewhere, "HEAD")])
+        expect(there.value).toEqual([])
+        expect([...here.git, ...there.git]).toEqual([])
+      }),
+    SLOW,
+  )
 })
 
 function wait(check: (event: WatcherEvent) => boolean) {
