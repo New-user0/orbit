@@ -22,6 +22,7 @@ import { SessionModelTransport } from "../model-transport.js"
 import { SessionOutput } from "../output.js"
 import { SessionMessage } from "../message.js"
 import { SessionSchema } from "../schema.js"
+import { SessionScratchpad } from "../scratchpad.js"
 import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
@@ -106,6 +107,7 @@ const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
+    const scratchpad = yield* SessionScratchpad.Service
     const title = yield* SessionTitle.Service
     const turnEnd = yield* SessionTurnEnd.Service
     const steps = yield* SessionStep.make
@@ -128,6 +130,9 @@ const layer = Layer.effect(
       yield* plugins.awaitActivation
       yield* settleStaleCompactions(sessionID)
       yield* settleStaleToolCalls(sessionID)
+      // Once, before the first step, so the folder that the baseline names is there when the model first writes to it.
+      const session = yield* store.get(sessionID)
+      if (session) yield* scratchpad.ensure(session)
 
       const advanceToStep = Effect.fn("SessionRunner.advanceToStep")(() =>
         Effect.uninterruptibleMask((restore) =>
@@ -624,6 +629,7 @@ export const node = makeLocationNode({
     SessionStore.node,
     SessionCompaction.node,
     Plugin.node,
+    SessionScratchpad.node,
     SessionTitle.node,
     SessionTurnEnd.node,
     Snapshot.node,

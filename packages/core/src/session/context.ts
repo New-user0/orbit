@@ -25,6 +25,7 @@ import { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
+import { SessionScratchpad } from "./scratchpad.js"
 import { SessionStore } from "./store.js"
 
 export interface Selection {
@@ -104,6 +105,7 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const request = yield* SessionModelRequest.Service
     const referenceInstructions = yield* ReferenceInstructions.Service
+    const scratchpad = yield* SessionScratchpad.Service
     const skillInstructions = yield* SkillInstructions.Service
     const store = yield* SessionStore.Service
     const registry = yield* Tool.Service
@@ -192,7 +194,8 @@ const layer = Layer.effect(
         agent: { ...agent, info: agent.info },
         // Ordered from most to least shared across sessions so the baseline stays a reusable
         // prompt-cache prefix: user-level catalog and guidance, then project instructions, then
-        // the date and environment, which vary by day and directory.
+        // the date and environment, which vary by day and directory, then the scratchpad, which
+        // varies by the session the lineage goes back to.
         instructions: Instructions.combine([
           CodeModeInstructions.make(loaded.tools.codeModeCatalog),
           loaded.mcp,
@@ -200,6 +203,7 @@ const layer = Layer.effect(
           loaded.skills,
           loaded.discovery,
           loaded.builtins,
+          scratchpad.source(session),
           loaded.entries,
         ]),
         tools: loaded.tools,
@@ -249,6 +253,7 @@ export const node = makeLocationNode({
     ReferenceInstructions.node,
     SessionRunnerModel.node,
     SessionModelRequest.node,
+    SessionScratchpad.node,
     SessionStore.node,
     SkillInstructions.node,
     Tool.node,

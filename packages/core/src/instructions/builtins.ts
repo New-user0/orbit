@@ -2,8 +2,9 @@ export * as InstructionBuiltIns from "./builtins.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
-import { Global } from "@orbit/util/global"
+import os from "os"
 import { Location } from "../location.js"
+import { ShellSelect } from "../shell/select.js"
 import { Instructions } from "./index.js"
 
 export interface Interface {
@@ -12,11 +13,52 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/InstructionBuiltIns") {}
 
+export interface EnvironmentInput {
+  readonly directory: string
+  /** The project's folder, which is not always the working directory. */
+  readonly root: string
+  readonly git: boolean
+  /** The main checkout, when `directory` is a linked git worktree of the project. */
+  readonly worktree?: string
+  readonly platform: NodeJS.Platform
+  /** What `os.type()`, `os.release()` and `os.version()` say. Taken as input so each platform's text is testable anywhere. */
+  readonly os: { readonly type: string; readonly release: string; readonly version: string }
+  /** The shell the shell tool runs, by name (`ShellSelect.name`): that function cannot read a Windows path on Linux. */
+  readonly shell: string
+}
+
+// Shells whose syntax is not Windows syntax. PowerShell and cmd belong to Windows and need no note.
+const POSIX_SHELLS = new Set(["bash", "sh", "dash", "ksh", "zsh"])
+
+/** The `<env>` block of the baseline. Every platform dependent value is an input, so the Windows text runs on Linux. */
+export function environment(input: EnvironmentInput) {
+  const windows = input.platform === "win32"
+  const platform = ShellSelect.platformName(input.platform)
+  return [
+    "<env>",
+    `  Working directory: ${input.directory}`,
+    ...(input.worktree === undefined
+      ? []
+      : [
+          `  Main checkout (off limits): ${input.worktree}. This directory is a linked git worktree, so STAY IN IT: NEVER cd out to the main checkout.`,
+        ]),
+    `  Workspace root folder: ${input.root}`,
+    `  Is directory a git repo: ${input.git ? "yes" : "no"}`,
+    `  Platform: ${platform === input.platform ? platform : `${platform} (${input.platform})`}`,
+    windows && POSIX_SHELLS.has(input.shell)
+      ? `  Shell: ${input.shell} (Windows host, but its syntax is Unix: forward slashes in paths, and /dev/null is the null device, not NUL)`
+      : `  Shell: ${input.shell}`,
+    // On Windows `os.type()` says only `Windows_NT`, and on Linux `os.version()` is the kernel's build banner.
+    `  OS version: ${windows ? input.os.version || input.os.type : input.os.type} ${input.os.release}`,
+    "</env>",
+  ].join("\n")
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const global = yield* Global.Service
     const location = yield* Location.Service
+    const shells = yield* ShellSelect.Service
     return Service.of({
       load: () =>
         Effect.succeed(
@@ -33,22 +75,28 @@ const layer = Layer.effect(
             Instructions.make({
               key: Instructions.Key.make("core/environment"),
               codec: Schema.toCodecJson(Schema.String),
-              read: Effect.sync(() =>
-                [
-                  "<env>",
-                  `  Working directory: ${location.directory}`,
-                  `  Workspace root folder: ${location.project.directory}`,
-                  `  Is directory a git repo: ${location.vcs?.type === "git" ? "yes" : "no"}`,
-                  `  Platform: ${process.platform}`,
-                  `  Prefer ${global.tmp} over generic system temporary directories such as /tmp; it is pre-created and approved for external access.`,
-                  "</env>",
-                ].join("\n"),
+              // The shell the shell tool will run, which is not always the login shell: the tool skips shells it cannot drive.
+              read: shells.resolve({ priority: "compat" }).pipe(
+                Effect.map((shell) =>
+                  environment({
+                    directory: location.directory,
+                    root: location.project.directory,
+                    git: location.vcs?.type === "git",
+                    // A linked worktree is its own project directory, and the main checkout is the canonical one.
+                    worktree:
+                      location.project.directory === location.project.canonical
+                        ? undefined
+                        : location.project.canonical,
+                    platform: process.platform,
+                    os: { type: os.type(), release: os.release(), version: os.version() },
+                    shell: ShellSelect.name(shell),
+                  }),
+                ),
               ),
               render: {
-                initial: (environment) =>
-                  ["Here is some useful information about the environment you are running in:", environment].join("\n"),
-                changed: (_previous, environment) =>
-                  ["The environment you are running in is now:", environment].join("\n"),
+                initial: (block) =>
+                  ["Facts about the machine and folder this session runs in:", block].join("\n"),
+                changed: (_previous, block) => ["Those machine and folder facts have changed. They now read:", block].join("\n"),
               },
             }),
           ]),
@@ -57,4 +105,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Global.node, Location.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [Location.node, ShellSelect.node] })

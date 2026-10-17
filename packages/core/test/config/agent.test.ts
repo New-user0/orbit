@@ -39,6 +39,8 @@ const defaultPermissions = (global: Global.Interface): Permission.Ruleset => [
   { action: "external_directory", resource: path.join(global.data, "tool-output", "*"), effect: "allow" },
   { action: "external_directory", resource: path.join(global.tmp, "*"), effect: "allow" },
   { action: "external_directory", resource: path.join(global.config, "*"), effect: "allow" },
+  // The allow for editing in the scratchpad of the session that asks, written for every session until `Permission` cuts it.
+  { action: "Edit", resource: path.join(global.tmp, "sessions", "*"), effect: "allow" },
 ]
 
 test("rejects named agent color tokens", () => {

@@ -319,6 +319,33 @@ describe("ModelsDev Service", () => {
     }),
   )
 
+  it.live("get() takes a model's cutoff from the mirror's catalog, as a month, with no request beyond the catalog", () =>
+    Effect.gen(function* () {
+      const cache = makeCache()
+      const mirrored = {
+        beta: {
+          ...fixture2.beta,
+          models: {
+            "beta-1": { ...fixture2.beta.models["beta-1"], knowledge: "2025-08-31" },
+            "beta-2": { ...fixture2.beta.models["beta-1"], id: "beta-2", name: "Beta Two", knowledge: "recently" },
+          },
+        },
+      }
+      const state = yield* Ref.make({ ...initialState, body: JSON.stringify(mirrored) })
+      const context = yield* Layer.build(buildLayer(state, cache, { url: source, fetch: true, snapshot: false }))
+      const result = yield* ModelsDev.Service.use((s) => s.get()).pipe(Effect.provide(context))
+      const cutoffs: Array<[string, string | undefined]> = result.flatMap((item) =>
+        item.models.map((model): [string, string | undefined] => [model.id, model.knowledge]),
+      )
+      expect(cutoffs).toEqual([
+        ["beta-1", "2025-08"],
+        ["beta-2", undefined],
+      ])
+      // The catalog is the only thing asked for: a cutoff is never looked up on its own.
+      expect((yield* Ref.get(state)).calls.map((call) => call.url)).toEqual([`${source}/api.json`])
+    }),
+  )
+
   it.live("get() still populates the catalog when the KV cache write fails", () =>
     Effect.gen(function* () {
       const cache = makeCache()

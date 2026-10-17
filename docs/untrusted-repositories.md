@@ -361,6 +361,22 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
 - Code Mode `fetch`: `PermissionWeb.request` for every hop, then `AddressGuard.check`. Proof: `test/codemode.test.ts`,
   `packages/util/src/address-guard.test.ts`.
+- The session scratchpad (`SessionScratchpad`, `packages/core/src/session/scratchpad.ts`): the folder `sessions/<key>` in
+  Orbit's temporary folder, which the baseline names as the place for the model's temporary files, which a drain makes
+  before its first step and which goes with its session. It reads nothing that a folder supplies. The key is the ID of the
+  session that the lineage goes back to, and a client chooses that ID (`POST /api/session` takes `id` and `parentID`, and a
+  fork names its source), so it names a folder only when it is `ses_` and letters, digits and underscores (class 5): any
+  other ID gives no folder, no section of the baseline, no allow and no removal, and making the folder says so once, with
+  the characters of the ID that act on a terminal written out (class 9). A link where the folder should be is logged and
+  left alone, and a deletion removes a link as a link. The allow that lets an agent edit there without a question
+  (`Agent.scratchpad`) is Orbit's own (class 4: it never decides a place that a link of an untrusted project leads out
+  to), is cut to the folder of the session that asks (`Agent.narrowScratchpad`), sits before the person's rules so that
+  their deny wins, and decides a call only where the real place of the call is in that folder too (`decide` in
+  `Permission`), so a link inside the folder that points out is decided by the rules for the place it points to. Proof:
+  `test/session-scratchpad.test.ts` (the hostile IDs as the ID, the parent and the fork source, each with a marker where the
+  ID would name a folder, and a control), `test/permission-scratchpad.test.ts` (the sessions of a lineage, the hostile IDs,
+  the links and the Windows spellings, with the plain file in the folder as the control),
+  `test/session-scratchpad-baseline.test.ts` and the `scratchpad` rows of `test/session-runner.test.ts`.
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 

@@ -2,7 +2,9 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { Money } from "@orbit/schema/money"
 import { Context, Effect, Exit, Layer, Scope } from "effect"
+import { HttpClient } from "effect/unstable/http"
 import { TestClock } from "effect/testing"
+import { LayerNodePlatform } from "@orbit/util/effect/app-node-platform"
 import { Integration } from "@orbit/core/integration"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -1286,5 +1288,84 @@ describe("ModelsDevPlugin", () => {
         },
       ])
     }).pipe(Effect.provide(models(path.join(import.meta.dir, "fixtures", "models-dev-reasoning.json")))),
+  )
+})
+
+// The cutoff comes from the catalog, never from the network: it is read when the catalog is normalized, and a value of
+// any other shape gives only that model no cutoff.
+describe("ModelsDev knowledge", () => {
+  const knowledge = (id: string) =>
+    Effect.gen(function* () {
+      const models = (yield* ModelsDev.Service.use((service) => service.get())).flatMap((item) => item.models)
+      const model = models.find((item) => item.id === Model.ID.make(id))
+      if (!model) return yield* Effect.die(new Error(`Expected the fixture to hold ${id}`))
+      // As the plain string the catalog gives, so that the rows below can name it without making a brand.
+      const month: string | undefined = model.knowledge
+      return month
+    })
+  const fixtures = Effect.provide(models(path.join(import.meta.dir, "fixtures", "models-dev.json")))
+
+  for (const [id, expected] of [
+    ["acme-month", "2024-04"],
+    // The day is never shown, so it is not kept.
+    ["acme-day", "2025-08"],
+    ["acme-year", undefined],
+    ["acme-thirteenth", undefined],
+    ["acme-ninety-ninth", undefined],
+    ["acme-empty", undefined],
+    ["acme-word", undefined],
+    ["acme-number", undefined],
+    ["acme-none", undefined],
+  ] as const)
+    isolated.effect(`maps the catalog's ${id} to ${expected ?? "no cutoff"}`, () =>
+      Effect.gen(function* () {
+        expect(yield* knowledge(id)).toBe(expected)
+      }).pipe(fixtures),
+    )
+
+  isolated.effect("gives a model's experimental mode the cutoff of the model", () =>
+    Effect.gen(function* () {
+      expect(yield* knowledge("acme-fast")).toBe("2024-06")
+      expect(yield* knowledge("acme-fast-priority")).toBe("2024-06")
+    }).pipe(fixtures),
+  )
+
+  // A malformed value costs only its own model: the catalog still loads, and the others keep their cutoff.
+  isolated.effect("keeps the other models of a catalog that holds a malformed cutoff", () =>
+    Effect.gen(function* () {
+      expect(yield* knowledge("acme-number")).toBeUndefined()
+      expect(yield* knowledge("acme-month")).toBe("2024-04")
+    }).pipe(fixtures),
+  )
+
+  // The bundled catalog is the default source and nothing is fetched to learn a cutoff: every request fails here, none
+  // is made, and the models still carry theirs.
+  isolated.effect("reads the cutoffs of the bundled catalog with no mirror configured and no request made", () =>
+    Effect.gen(function* () {
+      const requests: string[] = []
+      const failing = HttpClient.make((request) =>
+        Effect.suspend(() => {
+          requests.push(request.url)
+          return Effect.die(new Error(`Unexpected request to ${request.url}`))
+        }),
+      )
+      const catalog = yield* Effect.gen(function* () {
+        return (yield* ModelsDev.Service.use((service) => service.get())).flatMap((item) => item.models)
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(
+            AppNodeBuilder.build(ModelsDev.node, [
+              ModelsDev.node.replace(ModelsDev.configured()),
+              LayerNodePlatform.httpClient.replace(Layer.succeed(HttpClient.HttpClient, failing)),
+            ]),
+          ),
+        ),
+      )
+      const known = catalog.flatMap((item) => (item.knowledge === undefined ? [] : [item.knowledge]))
+      // The snapshot gives a cutoff to most of its models, and each one is a month.
+      expect(known.length).toBeGreaterThan(1000)
+      expect(known.every((value) => /^\d{4}-(0[1-9]|1[0-2])$/.test(value))).toBe(true)
+      expect(requests).toEqual([])
+    }),
   )
 })

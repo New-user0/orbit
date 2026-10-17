@@ -2074,6 +2074,7 @@ export type ModelInfo = {
   canonical?: string
   family?: string
   name: string
+  knowledge?: string
   compatibility?: ModelCompatibility
   package?: string
   settings?: ModelSettings

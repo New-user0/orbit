@@ -59,14 +59,6 @@ export function budget(
 
 const BACKGROUND_INSTRUCTION =
   "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
-const OS =
-  process.platform === "darwin"
-    ? "macOS"
-    : process.platform === "win32"
-      ? "Windows"
-      : process.platform === "linux"
-        ? "Linux"
-        : process.platform
 const duration = (ms: number) => {
   const minutes = Number((ms / 60_000).toFixed(2))
   return minutes < 1 ? `${ms} ms` : `${ms} ms (${minutes} ${minutes === 1 ? "minute" : "minutes"})`
@@ -74,7 +66,7 @@ const duration = (ms: number) => {
 const description = (shell: string | undefined, limit: ReturnType<typeof limits>) =>
   [
     "Execute a shell command and return its output.",
-    ...(shell ? [`Commands run on ${OS} using ${shell}.`] : []),
+    ...(shell ? [`Commands run on ${ShellSelect.platformName(process.platform)} using ${shell}.`] : []),
     "Quote file paths containing spaces or special characters.",
     "Prefer dedicated tools over shell commands when possible.",
     "When output is large, the full result is saved to a file and a truncated preview is returned.",

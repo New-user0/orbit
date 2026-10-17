@@ -32,6 +32,8 @@ type SourceModel = {
   readonly id: string
   readonly name: string
   readonly family?: string
+  /** The month (`YYYY-MM`) or the day (`YYYY-MM-DD`) the model's training data ends. */
+  readonly knowledge?: string
   readonly release_date: string
   readonly attachment: boolean
   readonly reasoning: boolean
@@ -126,6 +128,15 @@ function released(date: string) {
   return Number.isFinite(time) ? time : 0
 }
 
+// The catalog is not validated when it is read, so a value of any other shape (a bare year, a month of 13, a number)
+// gives that model no cutoff and costs only that model. Only the month is kept: the day is never shown.
+const KNOWLEDGE = /^(\d{4}-(?:0[1-9]|1[0-2]))(?:-(?:0[1-9]|[12]\d|3[01]))?$/
+
+function knowledge(value: SourceModel["knowledge"]) {
+  const month = typeof value === "string" ? KNOWLEDGE.exec(value)?.[1] : undefined
+  return month === undefined ? {} : { knowledge: Model.Knowledge.make(month) }
+}
+
 function cost(input: SourceModel["cost"]): Model.Info["cost"] {
   const base = {
     input: input?.input ?? Money.USDPerMillionTokens.zero,
@@ -214,6 +225,7 @@ function modelInfo(
     modelID: Model.ID.make(model.id),
     providerID,
     name: input.name ?? model.name,
+    ...knowledge(model.knowledge),
     compatibility: Model.compatibility(model.interleaved),
     family: model.family ? Model.Family.make(model.family) : undefined,
     package: pkg,
