@@ -2576,7 +2576,7 @@ updates the instructions of a running session. Files that the model's reads load
 A file in a project imports only files that really lie inside the folder you started in or inside the project, whether or
 not the project is trusted: a path that leaves it, or a link that leads out, is skipped, and the skipped target is
 recorded as a warning that no client shows yet. The home folder and a filesystem root are never counted as the project, and
-count as the folder you started in only after you trust that folder (for the session or for good), so an untrusted
+count only once a person trusts them for the session, and then only as the folder the session started in, so an untrusted
 session started in `~` imports nothing from below it, and a session started below `~` is held to its own folder. Your own global file may
 import any path that is not a network path. A path that names a network share is never opened.
 

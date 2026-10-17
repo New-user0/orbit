@@ -299,8 +299,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   refused without any disk access, in every scope; `ProjectTrust.leads` gives the real path, which names a link to a
   share as the share without opening it, and that real path is what is checked and read. A project file's import must
   really lie (real paths, whatever the trust decision) inside a project folder that can be trusted for good, or inside the folder
-  the session started in when that folder can be or is trusted now; the home directory and a filesystem root can be
-  neither until a person trusts them, so a session or repository at `~` that nobody trusted does not open the home
+  the session started in when that folder can be or is trusted now; the home directory and a filesystem root can count only once a person trusts them for the session, and then only as the folder the session started in, so a session or repository at `~` that nobody trusted does not open the home
   folder to a downloaded folder's `@~/.ssh/id_rsa` (`ProjectTrust.importable`), and be accepted by
   `ProjectTrust.reachable`; one that does not is skipped with one `ImportWarning` per importer and target, and a
   user-level file's import is gated by the network refusal alone. Files the model's reads load later never import

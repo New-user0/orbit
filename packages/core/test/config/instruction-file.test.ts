@@ -640,6 +640,14 @@ describe("ConfigInstructionFile.imports", () => {
     ["a fence in a numbered item that unindented text does not end", "1. ```\n   code\nplain @./a.md"],
     ["a fence in a list item that a quoted line does not end", "- ```\n  code\n> @./a.md"],
     ["a fence in a list item that a line at the margin does not end", "- ```\n  code\n@./a.md"],
+    ["indented code after a heading ends a list item", "- Step\n# H\n    @./a.md"],
+    ["indented code after a comment ends a list item", "- a\n<!-- x -->\n    @./a.md"],
+    ["indented code after a break ends a list item", "- Step\n---\n    @./a.md"],
+    ["indented code after a fence ends a list item", "1. Step\n```\nx\n```\n\n    @./a.md"],
+    ["indented code after an HTML block ends a list item", "- Step\n<div>\n\n    @./a.md"],
+    ["a fence that a quoted closer does not close", "```\ncode\n> ```\n@./a.md\n```"],
+    ["a fence that a quoted fence example does not close", "```markdown\n> ```\n> quoted code\n> ```\n@./a.md\n```"],
+    ["a tilde fence that a quoted closer does not close", "~~~\n> ~~~\n@./a.md\n~~~"],
   ]
   for (const [name, text] of notText)
     test(`finds nothing in ${name}`, () => {
@@ -679,6 +687,7 @@ describe("ConfigInstructionFile.imports", () => {
     ["after a list item whose fence a break ends", "- ```\n  code\n---\n@./a.md"],
     ["after the residue of a comment block that leaves a backtick open", "<!--\nnote\n--> use `foo\n@./a.md and bar`"],
     ["after the residue of a comment line that leaves a backtick open", "<!-- x --> use `foo\n@./a.md and bar`"],
+    ["in indented text that continues a list item across a blank line", "- Step\n\n    @./a.md"],
     ["after an escaped asterisk", "\\*@./a.md"],
     ["after an escaped bracket", "\\[@./a.md"],
   ]

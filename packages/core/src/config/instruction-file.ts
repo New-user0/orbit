@@ -535,15 +535,17 @@ export function imports(content: string): string[] {
     const unquoted = withoutQuote(line)
     quoted = unquoted !== line
     if (fence) {
-      const trimmed = unquoted.replace(/^[ \t]*/, "")
-      const margin = unquoted.length - trimmed.length
+      // Quote markers belong to the line only when the fence was opened inside a quote.
+      const inner = fence.quoted ? unquoted : line
+      const trimmed = inner.replace(/^[ \t]*/, "")
+      const margin = inner.length - trimmed.length
       // A line outside the quote ends the fence that one holds. One not indented enough for the item ends it only after
       // a blank line or the opener, or when it starts a block of its own; any other text is a lazy line of the code.
       if (
         (fence.quoted && !quoted) ||
         (fence.item !== undefined &&
           trimmed !== "" &&
-          width(unquoted.slice(0, margin), 0) < fence.item &&
+          width(inner.slice(0, margin), 0) < fence.item &&
           (loose || startsBlock(trimmed, margin)))
       )
         fence = undefined
@@ -575,7 +577,7 @@ export function imports(content: string): string[] {
     const text = unquoted.slice(lead.length)
     const indent = width(lead, 0)
     // A line that is not indented enough ends the list, unless it goes on with the paragraph in the item.
-    if (offset !== undefined && indent < offset && !paragraph && !(listItem(text, indent) && !isBreak(text))) offset = undefined
+    if (offset !== undefined && indent < offset && (!paragraph || interrupts(text)) && !(listItem(text, indent) && !isBreak(text))) offset = undefined
     block(text, indent, 0)
   }
   flush()
