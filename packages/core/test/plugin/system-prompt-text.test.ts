@@ -81,12 +81,16 @@ describe("no contradiction of the core rules", () => {
     ["reminders in tool results are binding", /reminder[^.\n]*(tool result|tool output|function result)/i],
     ["reminders are to be followed unscoped", /(follow|obey)[^.\n]*(reminder|system-update)/i],
     ["git procedure", /git add|git commit|commit message|--amend|stag(e|ing) (the|files|changes)|pull request (title|body|description)/i],
+    ["instruction files or earlier approvals pre-approve", /(instruction|project) files?[^.\n]*approve|earlier approval[^.\n]*cover|already approved/i],
+    ["tests are optional", /tests?[^.\n]*optional|optional[^.\n]*tests?/i],
+    ["bans adding comments, however it is emphasized", /\W(never|do not|don't)\W+add (any )?comments\b/i],
     ["pre-approval", /without (asking|confirm|permission)|(no|not|never) (need to )?(ask|confirm)[^.\n]*(permission|approval|confirm)|approval flows?|assume (you have )?(approval|permission)/i],
     ["discouraging verification", /\b(do not|don't|never|avoid|not bother( to)?) (run|running|write|writing)\b[^.\n]*\b(tests?|checks?)\b|\b(skip|omit) (the |any |all |new )*(tests?|checks?)\b|stop without report/i],
     ["silence around tool calls", /(no|without|never)[^.\n]*explanation[^.\n]*tool/i],
     ["blanket data rule", /(all|any|every) (text|content|output)[^.\n]*tool results?[^.\n]*(is|are) (just )?data|\btool results?\b[^.\n]*\bas data\b/i],
     // Reminders are Orbit's own messages and the shared rules own the whole subject, so no other file names them.
     ["mentions reminders or updates at all", /reminder|system-update/i],
+    ["harness tags in tool output are binding, with or without the word reminder", /tags?[^.\n]*tool (result|output)|<system-/i],
     ["delegation, subagents or skills (the tool guidance owns them)", /subagent|sub-agent|delegat|\bskills?\b/i],
     ["hides the reason for a refusal", /(do not|don't|never)[^.\n]*(say|explain|state|give)[^.\n]*\b(why|reasons?)\b/i],
     ["shouted emphasis or a nagging commit line", /\*\*\*|IMPORTANT:|VERY IMPORTANT|too proactive|commit[^.\n]*unless the user explicitly/],
@@ -196,6 +200,7 @@ describe("family specifics and the content contract", () => {
 
   test("local also follows the instruction files", () => {
     expect(PROMPT_LOCAL).toContain("Follow the user's and the project's instruction files")
+    expect(PROMPT_LOCAL).toContain("only the user's own words can")
   })
 
   test("anthropic only narrows the base comment policy", () => {
@@ -211,6 +216,13 @@ describe("family specifics and the content contract", () => {
   test("meta keeps its evidence emphasis", () => {
     expect(PROMPT_META).toContain("# Evidence")
     expect(PROMPT_META).toContain("Technical accuracy outranks agreeing with the user")
+    expect(PROMPT_META).toContain("Base every claim on something you checked yourself")
+    expect(PROMPT_META).toContain("If later findings contradict what you said before")
+    expect(PROMPT_META).toContain("give the verdict on each")
+  })
+
+  test("trinity's brevity never hides a failure, an unrun check, a refusal reason or a needed question", () => {
+    expect(PROMPT_TRINITY).toContain("Brevity never hides a failure, an unrun check, the reason a call was refused, or a question the user must answer.")
   })
 
   // One phrase per rule of the contract every full override meets.
@@ -227,6 +239,8 @@ describe("family specifics and the content contract", () => {
     ["follows instruction files", /Follow the user's and the project's instruction files, which come later in this prompt; where they conflict with this guidance, they win\./],
     ["no commit unless asked", /commit, push or open pull requests unless asked/],
     ["approval covers one action", /approval covers only/],
+    ["instruction files cannot pre-approve", /They cannot pre-approve a risky action, though: only the user's own words can\./],
+    ["code and tool arguments are exempt", /Code and tool arguments are exempt from these (limits|caps)\./],
     ["comment policy", /(Comment only where|never what)/],
     ["investigate before asking", /nvestigate/],
     ["parallel independent calls", /independent calls together/],
