@@ -20,13 +20,26 @@ test("every setting the extension contributes has a decision on who may set it",
     "orbit.executable": "machine: the program the extension runs and the terminal starts",
     "orbit.placement": "window: where the chat opens, which runs and chooses nothing",
     "orbit.notifications": "window: whether the extension shows its own in-editor notices, which runs and chooses nothing",
+    "orbit.context.includeOpenFile":
+      "application: user settings only, because it decides how much of the editor goes to the model",
   }
   const properties = manifest.contributes.configuration.properties
 
   expect(Object.keys(properties).sort()).toEqual(Object.keys(decisions).sort())
   // Only a setting that chooses nothing to run keeps the scope that a workspace may set.
   for (const [key, setting] of Object.entries<{ scope?: string; default: string }>(properties))
-    if (key !== "orbit.placement" && key !== "orbit.notifications") expect({ key, scope: setting.scope }).toEqual({ key, scope: "machine" })
+    if (key !== "orbit.placement" && key !== "orbit.notifications" && key !== "orbit.context.includeOpenFile")
+      expect({ key, scope: setting.scope }).toEqual({ key, scope: "machine" })
+})
+
+test("the open file goes with a message by default, and only the person's own settings decide that", () => {
+  const setting = manifest.contributes.configuration.properties["orbit.context.includeOpenFile"]
+
+  expect(setting.type).toBe("boolean")
+  expect(setting.default).toBe(true)
+  // Application scope: user settings, never a workspace or a folder.
+  expect(setting.scope).toBe("application")
+  expect(setting.markdownDescription).toContain("a workspace cannot set this")
 })
 
 test("the extension stays off in a workspace that VS Code does not trust", () => {

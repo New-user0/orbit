@@ -1429,6 +1429,27 @@ The status line command used to run as soon as the terminal UI opened, in the fo
 
 **What to do:** Nothing, unless your script printed several lines and relied on only the first showing.
 
+### The VS Code chat sends the file you have open, and any selected text, as hidden context
+
+Each message you type in the Orbit chat now carries the path of the file you last worked in (a file on disk, not an
+untitled buffer or a diff) and, when you have text selected there, the selected lines and up to 2000 characters of the
+text. It reaches the model as a hidden message right before yours, marked as editor context and not as an instruction; the
+chat shows only a muted line under your message when a selection went with it. A chip above the prompt names the file and
+the selected lines before you send; click it to leave them out of that message. A second chip appears when the file has
+errors or warnings; it starts off, and clicking it sends a short summary of them (at most 4000 characters) with that
+message. After you send, the file chip hides until you open another file or change the selection, and the problems chip
+goes off again. The selection is no longer pasted into the text of your message. The Ask, Explain and Fix commands and
+starters work as before.
+
+New setting `orbit.context.includeOpenFile` (default `true`) sets whether the file chip starts on. Only your user
+settings count; a workspace cannot set it. Nothing checks your read permission rules for the file before its path or
+selected text is sent (see FU-M4-35 in the follow-up register).
+
+**Affects:** VS Code users.
+
+**What to do:** Nothing, or set `orbit.context.includeOpenFile` to `false` in your user settings to start with the chip
+off.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
