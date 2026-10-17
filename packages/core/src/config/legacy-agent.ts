@@ -1,12 +1,19 @@
 export * as LegacyAgent from "./legacy-agent.js"
 
 import { ConfigAgent } from "@orbit/schema/config/agent"
-import { ConfigAgentV1 } from "../v1/config/agent.js"
 
-const nativeOnly = Object.keys(ConfigAgent.Info.fields).filter((key) => !ConfigAgentV1.KNOWN_KEYS.has(key))
 const tiers = new Set<string>(["inherit", "small", "large"])
+// Another product spells these keys in camelCase. The legacy decoder forwards a key it does not know to the provider as
+// a request option, so a deny list written this way would quietly turn into a request field. They are set aside.
+const foreign: Readonly<Record<string, string>> = {
+  disallowedTools: "disallowed_tools",
+  permissionMode: "permission_mode",
+  mcpServers: "mcp_servers",
+  maxTurns: "max_turns",
+  initialPrompt: "initial_prompt",
+}
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
@@ -21,14 +28,50 @@ export function isTier(value: unknown) {
 }
 
 /**
- * Splits an entry that is routed through the legacy decoder into what that decoder owns and what is native. A native
- * key must never reach the legacy decoder, which would forward it to the provider as a request option, so the deny list
- * or the rules written beside a tools map would quietly turn into request fields. Keys that neither schema knows stay
- * with the legacy side, as they always did.
+ * Sets aside the keys written for another product and settles a `variant` beside a model, so every door reads an entry
+ * the same way. Each key that is dropped or changed has a note, which the caller reports at that key.
+ */
+export function prepare(entry: Record<string, unknown>) {
+  const notes: { key: string; message: string }[] = []
+  const kept = Object.fromEntries(
+    Object.entries(entry).filter(([key]) => {
+      const native = foreign[key]
+      if (native === undefined) return true
+      notes.push({ key, message: `ignored "${key}"; use "${native}"` })
+      return false
+    }),
+  )
+  if (!("variant" in kept)) return { entry: kept, notes }
+  const { variant, ...unvaried } = kept
+  // A tier is no model, so a variant has nowhere to go; it becomes the effort when none is given.
+  if (isTier(kept.model)) {
+    const effort = kept.effort === undefined && typeof variant === "string"
+    notes.push({
+      key: "variant",
+      message: `a model tier takes no variant; ${effort ? "used it as the effort" : "ignored it"}`,
+    })
+    return { entry: { ...unvaried, ...(effort ? { effort: variant } : {}) }, notes }
+  }
+  // A model written as a string takes the variant in its name; an embedded or structured selection keeps its own.
+  if (
+    typeof kept.model === "string" &&
+    !kept.model.includes("#") &&
+    typeof variant === "string" &&
+    /^[^#]+$/.test(variant)
+  )
+    return { entry: { ...unvaried, model: `${kept.model}#${variant}` }, notes }
+  return { entry: kept, notes }
+}
+
+/**
+ * Splits an entry that is routed through the legacy decoder into what that decoder owns (a tools map, the keys only the
+ * legacy format has, and keys neither schema knows) and what is native. A native key, including the ones both formats
+ * share, never goes to the legacy decoder: it would fail the entry as one object and take the native half, its deny
+ * rules included, with it, and the decoder would forward every key it does not know to the provider as a request option.
  */
 export function split(entry: Record<string, unknown>) {
   const native = (key: string, value: unknown) =>
-    nativeOnly.includes(key) || (key === "tools" && !isToolMap(value)) || (key === "model" && isTier(value))
+    key in ConfigAgent.Info.fields && (key !== "tools" || !isToolMap(value))
   return {
     legacy: Object.fromEntries(Object.entries(entry).filter(([key, value]) => !native(key, value))),
     native: Object.fromEntries(Object.entries(entry).filter(([key, value]) => native(key, value))),

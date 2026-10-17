@@ -22,15 +22,6 @@ const decodeLegacyAgent = Schema.decodeUnknownOption(ConfigAgentV1.Info)
 const decodeConfig = Schema.decodeUnknownOption(Info)
 const agentKeys = new Set(["variant", ...Object.keys(ConfigAgent.Info.fields)])
 const decodeOptions = { errors: "all", propertyOrder: "original" } as const
-// Another product spells these keys in camelCase. The legacy path forwards a key it does not know to the provider as a
-// request option, so a deny list written this way would quietly turn into a request field. They are dropped instead.
-const foreignKeys: Readonly<Record<string, string>> = {
-  disallowedTools: "disallowed_tools",
-  permissionMode: "permission_mode",
-  mcpServers: "mcp_servers",
-  maxTurns: "max_turns",
-  initialPrompt: "initial_prompt",
-}
 
 /**
  * The agents that the Markdown files under `{agent,agents,mode,modes}` in a config directory define, as one document
@@ -88,42 +79,22 @@ function decode(file: { directory: string; filepath: string; primary: boolean },
   const read = Object.fromEntries(
     Object.entries(markdown.data).filter(([key, value]) => {
       // A file written for another product names its agent; here the path does, so the key is read and set aside.
-      if (key === "name") {
-        if (value !== name && value !== name.split("/").at(-1))
-          notes.push(`${file.filepath}: ignored "name"; the agent is named by its path, "${name}"`)
-        return false
-      }
-      const native = foreignKeys[key]
-      if (native === undefined) return true
-      notes.push(`${file.filepath}: ignored "${key}"; use "${native}"`)
+      if (key !== "name") return true
+      if (value !== name && value !== name.split("/").at(-1))
+        notes.push(`${file.filepath}: ignored "name"; the agent is named by its path, "${name}"`)
       return false
     }),
   )
-  // A tier is no model, so a variant has nowhere to go; it becomes the effort when none is given.
-  const { variant, ...unvaried } = read
-  const tiered = LegacyAgent.isTier(read.model) && "variant" in read
-  if (tiered)
-    notes.push(
-      `${file.filepath}: a model tier takes no variant; ${read.effort === undefined ? "used it as the effort" : "ignored it"}`,
-    )
-  const front = !tiered
-    ? read
-    : { ...unvaried, ...(read.effort === undefined && typeof variant === "string" ? { effort: variant } : {}) }
+  // The same preparation orbit.json entries get, so both doors read a variant and the foreign spellings alike.
+  const prepared = LegacyAgent.prepare(read)
+  prepared.notes.forEach((note) => notes.push(`${file.filepath}: ${note.message}`))
+  const front = prepared.entry
   const body = markdown.content.trim()
   // A plain object is the legacy map of tool names to booleans; a string or a list is the native allow list.
   const legacy = Object.keys(front).some((key) => !agentKeys.has(key)) || LegacyAgent.isToolMap(front.tools)
-  // Join legacy model + variant without sending native request/permissions through migration.
-  // Embedded and structured native selections, and a variant without a model, stay unchanged.
-  const data =
-    typeof front.model === "string" &&
-    !front.model.includes("#") &&
-    typeof front.variant === "string" &&
-    /^[^#]+$/.test(front.variant)
-      ? { ...front, model: `${front.model}#${front.variant}` }
-      : front
   const agent = legacy
     ? migrate(file.filepath, name, front, body, notes)
-    : native(file.filepath, { ...data, system: body }, notes)
+    : native(file.filepath, { ...front, system: body }, notes)
   if (!agent) return { document: undefined, notes }
   const info = Option.getOrUndefined(
     decodeConfig({
@@ -138,11 +109,16 @@ function decode(file: { directory: string; filepath: string; primary: boolean },
 // beside them are decoded on their own and put over the result, so none of them reaches the provider as a request option.
 function migrate(filepath: string, name: string, front: Record<string, unknown>, body: string, notes: string[]) {
   const parts = LegacyAgent.split(front)
-  const legacy = Option.getOrUndefined(decodeLegacyAgent({ name, ...parts.legacy, prompt: body }, decodeOptions))
-  if (!legacy) {
-    notes.push(`${filepath}: could not be read in the legacy format; the file defines no agent`)
-    return
-  }
+  // A field with a bad value costs only itself on this side too, and the native half is applied whatever becomes of it.
+  const base = { name, prompt: body }
+  const legacyFields = Object.fromEntries(
+    Object.entries(parts.legacy).filter(([key, value]) => {
+      if (Option.isSome(decodeLegacyAgent({ ...base, [key]: value }, decodeOptions))) return true
+      notes.push(`${filepath}: dropped the invalid "${key}"`)
+      return false
+    }),
+  )
+  const legacy = Option.getOrThrow(decodeLegacyAgent({ ...base, ...legacyFields }, decodeOptions))
   const kept = native(filepath, parts.native, notes)
   const encoded = kept && Option.getOrUndefined(encodeAgent(kept))
   return LegacyAgent.merge(

@@ -544,8 +544,15 @@ alias of `steps`), `skills`, `initial_prompt`, `memory` (`user`, `project` or `l
 (`worktree`) and `context` (`instructions` and `git_status`, which only remove context). `orbit.json` also accepts
 `model_aliases` with `small` and `large`. These keys are stored and shown by `agent.list` and `agent.get`; what they do
 when an agent runs lands with later changes. A field with a bad value is dropped with a log line or a diagnostic and
-the agent still loads. An agent whose `tools` is a map of tool names to booleans is still read as before, in the
-legacy v1 style, and the other keys beside the map still apply as written. A `name` key in a file is ignored (the path names the agent). The camelCase spellings of these keys are not read in Orbit's own folders.
+the agent still loads. An agent whose `tools` is a map of tool names to booleans is still read in the legacy v1
+style: the map and the keys only that style has (`temperature`, `top_p`, `prompt`, `options`, `maxSteps`, `permission`)
+are read as before, while every key Orbit's own schema has, `model`, `steps` and `permissions` included, is read
+natively beside it. A field with a bad value on either side is dropped with a diagnostic (or a log line, in a Markdown
+file) at its own path, and the rest of the agent, its deny rules included, still loads. A `variant` beside a model is
+joined to it, and beside a model tier it becomes the effort, in `orbit.json` and Markdown alike. A `name` key in a file is
+ignored (the path names the agent). The camelCase spellings of these keys (`disallowedTools`, `permissionMode`,
+`mcpServers`, `maxTurns`, `initialPrompt`) are not read in Orbit's own folders; each one is reported once, naming the
+snake_case key to use.
 
 An agent name must be plain: segments separated by `/`, each starting with a letter or digit and holding only letters,
 digits, `.`, `_` and `-`, not ending with `.`, and not a Windows device name such as `nul` or `con`. A file or an

@@ -167,12 +167,27 @@ export function normalize(input: unknown): Result {
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
   // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style and migrated as a whole;
   // a string or a list of tools is native.
-  const agentEntries = plainNames(input.agents, ["agents"], diagnostics)
+  const named = plainNames(input.agents, ["agents"], diagnostics)
+  // Keys written for another product are set aside with one diagnostic each, in every entry, so none of them reaches the
+  // provider as a request option; a variant beside a model is settled the way the Markdown door settles it.
+  const agentEntries = isRecord(named)
+    ? Object.fromEntries(
+        Object.entries(named).map(([id, entry]) => {
+          if (!isRecord(entry)) return [id, entry]
+          const prepared = LegacyAgent.prepare(entry)
+          prepared.notes.forEach((note) =>
+            diagnostics.push({ kind: "unsupported", path: ["agents", id, note.key], message: note.message }),
+          )
+          return [id, prepared.entry]
+        }),
+      )
+    : named
   const isLegacyEntry = (entry: unknown): entry is Record<string, unknown> =>
     isRecord(entry) && isPlainRecord(entry.tools)
   const entries = isRecord(agentEntries) ? Object.entries(agentEntries) : []
-  // Native keys written beside a tools map are decoded natively and put over the migrated agent; the legacy decoder
-  // would forward every key it does not know to the provider as a request option.
+  // Its legacy half (the map and the keys only that format has) is decoded field by field and migrated; its native half
+  // is decoded on its own and put over the result, so a bad field on either side costs only itself and the deny rules
+  // written beside the map stay.
   const splits = Object.fromEntries(
     entries.flatMap(([id, entry]) => (isLegacyEntry(entry) ? [[id, LegacyAgent.split(entry)] as const] : [])),
   )
@@ -188,11 +203,15 @@ export function normalize(input: unknown): Result {
     (schema, value, at, found) => decodeFields(schema, value, at, found, "permissions"),
   )
   const legacyDecoded = decodeMap(
-    Object.fromEntries(Object.entries(splits).map(([id, parts]) => [id, parts.legacy])),
+    Object.fromEntries(
+      Object.entries(splits)
+        .filter(([, parts]) => Object.keys(parts.legacy).length > 0)
+        .map(([id, parts]) => [id, parts.legacy]),
+    ),
     ConfigAgentV1.Info,
     ["agents"],
     diagnostics,
-    decodeValue,
+    (schema, value, at, found) => decodeFields(schema, value, at, found),
   )
   const nativeAgents = {
     ...decodeMap(
@@ -203,16 +222,21 @@ export function normalize(input: unknown): Result {
       (schema, value, at, found) => decodeFields(schema, value, at, found, "permissions"),
     ),
     ...Object.fromEntries(
-      Object.entries(legacyDecoded).map(([id, value]) => [
-        id,
-        canonical(
-          ConfigAgent.Info,
-          LegacyAgent.merge(
-            ConfigMigrateV1.migrateAgent(value) as Record<string, unknown>,
-            (legacyNative[id] ?? {}) as Record<string, unknown>,
+      Object.keys(splits).map((id) => {
+        const legacy = legacyDecoded[id]
+        return [
+          id,
+          canonical(
+            ConfigAgent.Info,
+            LegacyAgent.merge(
+              legacy === undefined
+                ? {}
+                : (ConfigMigrateV1.migrateAgent(legacy as ConfigAgentV1.Info) as Record<string, unknown>),
+              (legacyNative[id] ?? {}) as Record<string, unknown>,
+            ),
           ),
-        ),
-      ]),
+        ]
+      }),
     ),
   }
   diagnoseAgentUnsupported(input.agent, ["agent"], diagnostics)

@@ -630,6 +630,155 @@ describe("agent definition: native keys beside a tools map", () => {
   )
 })
 
+describe("agent definition: a bad field beside a tools map", () => {
+  const deny = [{ action: "Bash", resource: "*", effect: "deny" }]
+  const denyYaml = "permissions:\n  - action: Bash\n    resource: '*'\n    effect: deny"
+  // The shared keys and the legacy-only ones that fail, and the models that must survive; each sits beside a tools map
+  // and a Bash deny, which must stay in every cell, in both doors.
+  const rows: { name: string; key: string; yaml: string; json: unknown; model?: unknown }[] = [
+    { name: "steps of zero", key: "steps", yaml: "steps: 0", json: 0 },
+    { name: "a temperature that is no number", key: "temperature", yaml: "temperature: warm", json: "warm" },
+    {
+      name: "a tool value that is no boolean",
+      key: "tools",
+      yaml: "tools:\n  webfetch: maybe",
+      json: { webfetch: "maybe" },
+    },
+    {
+      name: "a valid structured model",
+      key: "model",
+      yaml: "model:\n  providerID: acme\n  model: big",
+      json: { providerID: "acme", model: "big" },
+      model: { providerID: "acme", id: "big" },
+    },
+    {
+      name: "a model with a variant in its name",
+      key: "model",
+      yaml: "model: acme/big#high",
+      json: "acme/big#high",
+      model: { providerID: "acme", id: "big", variant: "high" },
+    },
+  ]
+  const bad = (row: (typeof rows)[number]) => row.model === undefined
+
+  for (const row of rows) {
+    it.live(`keeps the Bash deny beside ${row.name} in a Markdown file`, () =>
+      Effect.gen(function* () {
+        const logs: string[] = []
+        const front = `${row.key === "tools" ? "" : "tools:\n  webfetch: false\n"}${row.yaml}\n${denyYaml}`
+        const agent = yield* loadOne(front).pipe(Effect.provide(logged(logs)))
+        expect(Permission.evaluate("Bash", "x", agent.permissions).effect).toBe("deny")
+        if (row.model) expect(agent.model).toMatchObject(row.model)
+        if (bad(row)) expect(logs.some((line) => line.includes(`"${row.key}"`))).toBe(true)
+      }),
+    )
+
+    it.live(`keeps the Bash deny beside ${row.name} in orbit.json`, () =>
+      Effect.gen(function* () {
+        const tools = row.key === "tools" ? row.json : { webfetch: false }
+        const input = {
+          agents: { a: { tools, permissions: deny, ...(row.key === "tools" ? {} : { [row.key]: row.json }) } },
+        }
+        const result = ConfigNormalize.normalize(input)
+        if (result.type !== "normalized") throw new Error("expected normalized config")
+        // The bad field is reported at its own path and nothing else is.
+        expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(bad(row) ? [`agents.a.${row.key}`] : [])
+        const agent = yield* get(yield* load({}, () => [jsonDocument(input)]), "a")
+        if (!agent) throw new Error("expected the agent a")
+        expect(Permission.evaluate("Bash", "x", agent.permissions).effect).toBe("deny")
+        if (row.model) expect(agent.model).toMatchObject(row.model)
+      }),
+    )
+  }
+
+  it.live("puts a native rule after the one migrated from a tools map", () =>
+    Effect.gen(function* () {
+      const markdown = yield* loadOne(
+        "tools:\n  webfetch: false\npermissions:\n  - action: webfetch\n    resource: '*'\n    effect: allow",
+      )
+      expect(Permission.evaluate("webfetch", "x", markdown.permissions).effect).toBe("allow")
+      const input = {
+        agents: {
+          a: { tools: { webfetch: false }, permissions: [{ action: "webfetch", resource: "*", effect: "allow" }] },
+        },
+      }
+      const agent = yield* get(yield* load({}, () => [jsonDocument(input)]), "a")
+      expect(agent && Permission.evaluate("webfetch", "x", agent.permissions).effect).toBe("allow")
+    }),
+  )
+
+  it.live("merges a legacy temperature with a native request body", () =>
+    Effect.gen(function* () {
+      const markdown = yield* loadOne("tools:\n  webfetch: false\ntemperature: 0.2\nrequest:\n  body:\n    seed: 1")
+      expect(markdown.request.body).toEqual({ temperature: 0.2, seed: 1 })
+      const input = { agents: { a: { tools: { webfetch: false }, temperature: 0.2, request: { body: { seed: 1 } } } } }
+      const agent = yield* get(yield* load({}, () => [jsonDocument(input)]), "a")
+      expect(agent?.request.body).toEqual({ temperature: 0.2, seed: 1 })
+    }),
+  )
+})
+
+describe("agent definition: keys written for another product in orbit.json", () => {
+  const foreign = {
+    disallowedTools: "shell",
+    maxTurns: 3,
+    permissionMode: "plan",
+    mcpServers: ["x"],
+    initialPrompt: "hi",
+  }
+  const entries = [
+    { name: "an entry with a tools map", entry: { tools: { webfetch: false }, ...foreign } },
+    { name: "an entry without one", entry: { description: "x", ...foreign } },
+  ]
+  for (const item of entries)
+    it.live(`reports each key once and keeps it out of the request in ${item.name}`, () =>
+      Effect.gen(function* () {
+        const input = { agents: { a: item.entry } }
+        const result = ConfigNormalize.normalize(input)
+        if (result.type !== "normalized") throw new Error("expected normalized config")
+        expect(result.diagnostics.map((diagnostic) => diagnostic.path.join(".")).toSorted()).toEqual(
+          Object.keys(foreign)
+            .map((key) => `agents.a.${key}`)
+            .toSorted(),
+        )
+        expect(result.diagnostics.some((diagnostic) => diagnostic.message.includes('"disallowed_tools"'))).toBe(true)
+        const agent = yield* get(yield* load({}, () => [jsonDocument(input)]), "a")
+        expect(agent?.request.body).toEqual({})
+        expect(agent?.tools).toBeUndefined()
+      }),
+    )
+})
+
+describe("agent definition: a variant beside a model tier", () => {
+  it.live("uses it as the effort in a Markdown file", () =>
+    Effect.gen(function* () {
+      expect<unknown>((yield* loadOne("model: small\nvariant: high")).effort).toBe("high")
+    }),
+  )
+
+  it.live("uses it as the effort in orbit.json, with a tools map or without", () =>
+    Effect.gen(function* () {
+      for (const entry of [
+        { model: "small", variant: "high" },
+        { tools: { webfetch: false }, model: "small", variant: "high" },
+      ]) {
+        const input = { agents: { a: entry } }
+        const agent = yield* get(yield* load({}, () => [jsonDocument(input)]), "a")
+        expect<unknown>(agent?.effort).toBe("high")
+      }
+    }),
+  )
+
+  it.live("says so when a variant that is no string is ignored", () =>
+    Effect.gen(function* () {
+      const logs: string[] = []
+      const agent = yield* loadOne("model: small\nvariant: 3").pipe(Effect.provide(logged(logs)))
+      expect<unknown>(agent.effort).toBeUndefined()
+      expect(logs.some((line) => line.includes("ignored it"))).toBe(true)
+    }),
+  )
+})
+
 const logged = (logs: string[]) =>
   Logger.layer([
     Logger.make(({ message }) => {
@@ -677,14 +826,14 @@ describe("agent definition: a file shaped for another product", () => {
     }),
   )
 
-  it.live("reports a legacy file that cannot be read", () =>
+  it.live("keeps a legacy file whose legacy fields are all invalid, and reports each", () =>
     Effect.gen(function* () {
       const logs: string[] = []
       const agents = yield* load({
         "agents/a.md": md("temperature: warm\ndescription: x\ntools:\n  edit: maybe"),
       }).pipe(Effect.provide(logged(logs)))
-      expect(yield* get(agents, "a")).toBeUndefined()
-      expect(logs.some((line) => line.includes("legacy format"))).toBe(true)
+      expect((yield* get(agents, "a"))?.description).toBe("x")
+      expect(logs.filter((line) => line.includes("dropped the invalid")).length).toBe(2)
     }),
   )
 
