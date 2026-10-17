@@ -2570,8 +2570,10 @@ anything it quotes from a file or a tool follows in a labelled fenced block outs
 
 The base prompt has always said that a `<system-reminder>` or `<system-update>` block comes only from Orbit. To make that
 true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lowers text that is data: tool results and
-tool errors (local and MCP), attached files and folder listings, the output of a shell command you ran, the summary and
-recent text of a compaction checkpoint, and instruction files with their updates. The stored row keeps the original
+tool errors (local and MCP), attached files and folder listings, the output of a shell command you ran or that ran in the
+background, the reply of a background subagent, the summary and recent text of a compaction checkpoint, instruction files
+with their updates (including the ones loaded when a file is read), MCP server instructions, and the git snapshot (branch,
+user, status and commit subjects). The stored row keeps the original
 bytes; only the request changes, and only for text that held such a tag. A prompt you type is not changed.
 
 A compaction no longer reads reminder rows, because the next step collects them again after the checkpoint.

@@ -78,12 +78,15 @@ const directoryAttachment = (file: FileAttachment): ContentPart => ({
 const neutralizedText = (part: ContentPart): ContentPart =>
   part.type === "text" ? { ...part, text: ReminderText.neutralize(part.text) } : part
 
-const attachmentContent =(file: FileAttachment): ContentPart[] => {
+const attachmentContent = (file: FileAttachment): ContentPart[] => {
   if (file.mime === "text/plain") return [neutralizedText(textAttachment(file))]
   if (file.mime === "application/x-directory") return [neutralizedText(directoryAttachment(file))]
   if (imageMimes.has(file.mime) || file.mime === "application/pdf") {
     const location = attachmentLocation(file)
-    return [...(location === undefined ? [] : [Message.text(`Attached file: ${location}`)]), media(file)]
+    return [
+      ...(location === undefined ? [] : [Message.text(ReminderText.neutralize(`Attached file: ${location}`))]),
+      media(file),
+    ]
   }
   return []
 }
@@ -140,8 +143,21 @@ const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: Provider
 // stored row keeps the original bytes.
 const neutralizeContent = <T extends { readonly type: string }>(content: ReadonlyArray<T>) =>
   content.map((item) =>
-    item.type === "text" ? { ...item, text: ReminderText.neutralize((item as unknown as { text: string }).text) } : item,
+    item.type === "text"
+      ? { ...item, text: ReminderText.neutralize((item as unknown as { text: string }).text) }
+      : item,
   )
+
+// A wrapped provider error can carry the response body, which is data from the other end.
+const neutralizeError = <E extends { readonly message: string; readonly response?: { readonly body?: string } }>(
+  error: E,
+): E => ({
+  ...error,
+  message: ReminderText.neutralize(error.message),
+  ...(error.response?.body === undefined
+    ? {}
+    : { response: { ...error.response, body: ReminderText.neutralize(error.response.body) } }),
+})
 
 const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined) => {
   if (tool.state.status === "completed") {
@@ -164,7 +180,7 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
       id: tool.id,
       name: toolName(tool),
       result: {
-        error: { ...tool.state.error, message: ReminderText.neutralize(tool.state.error.message) },
+        error: neutralizeError(tool.state.error),
         content: neutralizeContent(tool.state.content ?? []),
       },
       resultType: "error",
@@ -271,6 +287,15 @@ const modelSwitched = (message: SessionMessage.ModelSelected, model: Model.Ref):
   return [Message.effort({ effort: to.effort, previous: from.effort })]
 }
 
+// Most synthetics are Orbit's own envelopes and stay as stored. These carry data from outside: a shell's output, a
+// subagent's reply, and an instruction file's text, so a look-alike of a reminder tag in them is escaped.
+const syntheticText = (message: Extract<SessionMessage.Info, { type: "synthetic" }>) =>
+  message.metadata?.source === "shell" ||
+  message.metadata?.source === "subagent" ||
+  message.metadata?.instruction !== undefined
+    ? ReminderText.neutralize(message.text)
+    : message.text
+
 function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMetadataKey: string): Message[] {
   switch (message.type) {
     case "agent-switched":
@@ -306,7 +331,7 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
         }),
       ]
     case "synthetic":
-      return [Message.make({ id: message.id, role: "user", content: message.text })]
+      return [Message.make({ id: message.id, role: "user", content: syntheticText(message) })]
     case "skill":
       return [Message.make({ id: message.id, role: "user", content: message.text, metadata: message.metadata })]
     case "system":
@@ -363,7 +388,7 @@ export const withoutReplaced = (messages: readonly SessionMessage.Info[]) => {
 }
 
 /** A rendered derived reminder and the run it belongs to: the one after an assistant message, or the first. */
-export interface Insertion {
+export interface LoweredInsertion {
   readonly after: "start" | SessionMessage.ID
   readonly text: string
 }
@@ -380,7 +405,7 @@ export const toLLMMessages = (
   messages: readonly SessionMessage.Info[],
   model: Model.Ref,
   providerMetadataKey: string = model.providerID,
-  insertions: readonly Insertion[] = [],
+  insertions: readonly LoweredInsertion[] = [],
 ) => {
   const history = withoutReplaced(messages)
   if (insertions.length === 0 && !history.some(ReminderText.isReminder))
@@ -393,7 +418,7 @@ export const toLLMMessages = (
   let reminders: Message[] = []
   let others: Message[] = []
   const flush = () => {
-    const derived = key === undefined ? [] : (byRun.get(key as Insertion["after"]) ?? [])
+    const derived = key === undefined ? [] : (byRun.get(key as LoweredInsertion["after"]) ?? [])
     out.push(...reminders, ...derived.map((insertion) => Message.user(insertion.text)), ...others)
     reminders = []
     others = []

@@ -2173,12 +2173,19 @@ The program-wide register of every follow-up, these gaps included, with each one
 
 - **Envelope look-alikes are escaped at the sinks `reminder-text.ts` is called from, and at no others.** While a request
   is lowered, `ReminderText.neutralize` escapes the opening bracket of a `<system-reminder>` or `<system-update>` tag in
-  tool results and tool errors (local and MCP), text and directory attachments, user shell output, a checkpoint's
-  summary and recent text, and the instruction files `InstructionDiscovery` renders (baseline and updates). Pinned by the
-  sink table in `session-reminders.test.ts` and the case in `instruction-discovery.test.ts`. Not covered: MCP server
-  instructions, skill and reference listings, the text of a plugin-supplied system part, host-supplied instruction
-  entries, a hosted tool's provider-format result, and the opaque window of a native compaction. A new sink that puts
-  text from a file or a tool into a request needs the same call and a row in that table.
+  tool results and tool errors (local and MCP, including a wrapped error's response body), text and directory
+  attachments and an attached file's location, the notice that a background or user shell command leaves (its output and
+  command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
+  `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text. Synthetic messages are
+  recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`; an unmarked synthetic holds Orbit's own
+  envelope and stays as stored. Pinned by the sink table in `session-reminders.test.ts` (rows build each message through
+  its real producer), the end-to-end case in `session-shell.test.ts`, `mcp-instructions.test.ts` and
+  `instruction-discovery.test.ts`. Not covered (register row FU-M4-36): skill and reference listings, the text of a
+  plugin-supplied system part, host-supplied instruction entries, a hosted tool's provider-format result, and the opaque
+  window of a native compaction; Unicode spellings of the tag are FU-M4-38. A new sink that puts text from a file or a
+  tool into a request needs the same call and a row in that table.
+
 ## Review checklist
 
 Walk this list for any change that reads project files, runs commands, makes network requests, prints text or changes

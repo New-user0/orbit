@@ -10,10 +10,18 @@ import { SessionEvent } from "./event.js"
 import type { SessionMessage } from "./message.js"
 import { ReminderText, render } from "./reminder-text.js"
 import type { SessionRunnerModel } from "./runner/model.js"
-import { withoutReplaced, type Insertion as Lowered } from "./runner/to-llm-message.js"
+import { withoutReplaced, type LoweredInsertion } from "./runner/to-llm-message.js"
 import type { SessionSchema } from "./schema.js"
 
-export { render, neutralize, isReminder, epochStart, assistantStepsSince, humanTurnsSince, newestPrompt } from "./reminder-text.js"
+export {
+  render,
+  neutralize,
+  isReminder,
+  epochStart,
+  assistantStepsSince,
+  humanTurnsSince,
+  newestPrompt,
+} from "./reminder-text.js"
 export type Anchor = ReminderText.Anchor
 
 /**
@@ -104,7 +112,7 @@ export interface Interface {
    */
   readonly collect: (input: { readonly loaded: SessionContext.Loaded; readonly step: number }) => Effect.Effect<boolean>
   /** Runs the derived producers; the insertions merge in list order. */
-  readonly derive: (loaded: SessionContext.Loaded, step: number) => Effect.Effect<ReadonlyArray<Lowered>>
+  readonly derive: (loaded: SessionContext.Loaded, step: number) => Effect.Effect<ReadonlyArray<LoweredInsertion>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/SessionReminders") {}
@@ -197,10 +205,13 @@ const make = (bus: Bus.Interface, lists: Lists) => {
           ),
         ),
       )
-    return (yield* Effect.all(results)).flat().map((insertion) => ({
-      after: insertion.after === "tail" ? newest : insertion.after,
-      text: render(insertion),
-    }))
+    return (yield* Effect.all(results))
+      .flat()
+      .filter((insertion) => insertion.text.length > 0 || insertion.data !== undefined)
+      .map((insertion) => ({
+        after: insertion.after === "tail" ? newest : insertion.after,
+        text: render(insertion),
+      }))
   })
 
   return Service.of({ collect, derive })

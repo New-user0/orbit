@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { AIError, InvalidRequestError, LLMEvent, TransportError, type LLMRequest } from "@orbit/ai"
+import {
+  AIError,
+  CompactionCheckpointResponse,
+  InvalidProviderOutputError,
+  InvalidRequestError,
+  LLMEvent,
+  TransportError,
+  type LLMRequest,
+} from "@orbit/ai"
 import { TestLLM } from "@orbit/ai/testing"
 import { Project } from "@orbit/core/project"
 import { Session } from "@orbit/core/session"
@@ -7,6 +15,9 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { SessionReminders } from "@orbit/core/session/reminders"
 import { ReminderText } from "@orbit/core/session/reminder-text"
 import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
+import { ShellResult } from "@orbit/core/shell/result"
+import { SubagentCompletion } from "@orbit/core/session/subagent-completion"
+import { VcsInstructions } from "@orbit/core/vcs/instructions"
 import { SessionTable } from "@orbit/core/session/sql"
 import { Database } from "@orbit/core/database/database"
 import { Document, Info } from "@orbit/schema/config"
@@ -21,7 +32,17 @@ import type { SessionContext } from "@orbit/core/session/context"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
-import { fittedOutputModel, model, recoveryModel, replacementModel, scenario, sessionID, undersizedContextModel, type Scenario } from "./lib/runner"
+import {
+  fittedOutputModel,
+  model,
+  nativeWindowModel,
+  recoveryModel,
+  replacementModel,
+  scenario,
+  sessionID,
+  undersizedContextModel,
+  type Scenario,
+} from "./lib/runner"
 
 const ref = { providerID: Provider.ID.make("fake"), id: ID.make("fake-model") }
 
@@ -128,40 +149,41 @@ const unavailable = () =>
   })
 
 describe("collection", () => {
-  scenario("publishes one hidden row per step, which lowers ahead of the prompt as an envelope and a data block", function* (s) {
-    const { producer, runs } = marker()
-    s.reminders.durable = [producer]
-    yield* s.llm.push(TestLLM.text("Answer", "answer"))
-    yield* s.runPrompt("Question")
+  scenario(
+    "publishes one hidden row per step, which lowers ahead of the prompt as an envelope and a data block",
+    function* (s) {
+      const { producer, runs } = marker()
+      s.reminders.durable = [producer]
+      yield* s.llm.push(TestLLM.text("Answer", "answer"))
+      yield* s.runPrompt("Question")
 
-    const rows = reminderRows(yield* s.context)
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({
-      type: "synthetic",
-      text: rendered(1),
-      metadata: { reminder: { kind: "marker", label: "file src/marker.ts" } },
-    })
-    expect(rows[0]).not.toHaveProperty("description")
-    expect(runs.count).toBe(1)
-    // Stored after the prompt, lowered before it.
-    expect(messageTexts(s.requests[0])).toEqual([rendered(1), "Question"])
-    expect(rendered(1)).toBe(
-      "<system-reminder>\nMARK-1\n</system-reminder>\n\nfile src/marker.ts:\n```\npayload 1\n```",
-    )
-  })
+      const rows = reminderRows(yield* s.context)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        type: "synthetic",
+        text: rendered(1),
+        metadata: { reminder: { kind: "marker", label: "file src/marker.ts" } },
+      })
+      expect(rows[0]).not.toHaveProperty("description")
+      expect(runs.count).toBe(1)
+      // Stored after the prompt, lowered before it.
+      expect(messageTexts(s.requests[0])).toEqual([rendered(1), "Question"])
+      expect(rendered(1)).toBe(
+        "<system-reminder>\nMARK-1\n</system-reminder>\n\nfile src/marker.ts:\n```\npayload 1\n```",
+      )
+    },
+  )
 
   scenario("keeps list order when a later producer finishes first", function* (s) {
     const later = yield* Deferred.make<void>()
     s.reminders.durable = [
       {
         name: "slow",
-        run: () =>
-          Deferred.await(later).pipe(Effect.as([{ kind: "slow", text: "FIRST-IN-LIST" }])),
+        run: () => Deferred.await(later).pipe(Effect.as([{ kind: "slow", text: "FIRST-IN-LIST" }])),
       },
       {
         name: "fast",
-        run: () =>
-          Deferred.succeed(later, undefined).pipe(Effect.as([{ kind: "fast", text: "SECOND-IN-LIST" }])),
+        run: () => Deferred.succeed(later, undefined).pipe(Effect.as([{ kind: "fast", text: "SECOND-IN-LIST" }])),
       },
     ]
     yield* s.llm.push(TestLLM.text("Answer", "answer"))
@@ -234,7 +256,13 @@ describe("collection", () => {
     // One collection for the first step, one for the second step after the tool round: the retries and the switch
     // reused the first. The second step's reload keeps the turn on the fallback model.
     expect(runs.count).toBe(2)
-    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel, replacementModel])
+    expect(s.requests.map((request) => request.model)).toEqual([
+      model,
+      model,
+      model,
+      replacementModel,
+      replacementModel,
+    ])
   })
 
   scenario("collects again for a step that follows a tool round, and places it after the tool results", function* (s) {
@@ -251,6 +279,59 @@ describe("collection", () => {
     expect(messageTexts(s.requests[1]).at(-1)).toBe(rendered(2))
   })
 
+  scenario("does not collect again for the continuation of an incomplete stream", function* (s) {
+    const { producer, runs } = marker()
+    s.reminders.durable = [producer]
+    yield* s.admit("Question")
+    yield* s.llm.push(
+      TestLLM.failAfter(
+        new AIError({
+          reason: new InvalidProviderOutputError({
+            classification: "incomplete-stream",
+            message: "The provider response ended unexpectedly.",
+          }),
+        }),
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "partial" }),
+        LLMEvent.textDelta({ id: "partial", text: "Partial" }),
+      ),
+    )
+    yield* s.llm.push(TestLLM.text(" rest", "rest"))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Queue.take(scheduled)
+    yield* TestClock.adjust("1 minute")
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(runs.count).toBe(1)
+    expect(reminderRows(yield* s.context)).toHaveLength(1)
+  })
+
+  scenario("re-collects exactly once when a later iteration of a collected step compacts", function* (s) {
+    const { producer, runs } = marker()
+    s.reminders.durable = [producer]
+    // The first reply is cut off at the output limit, and the window shrinks while it streams, so the text-only resume
+    // that follows crosses the compaction threshold on a step that already collected.
+    yield* s.llm.push(
+      Stream.unwrap(
+        Effect.sync(() => {
+          s.currentModel = undersizedContextModel
+          return Stream.fromIterable(lengthStop("cut", "Part"))
+        }),
+      ),
+      TestLLM.text("## Objective\n- Carry on", "summary"),
+      TestLLM.text(" rest", "rest"),
+    )
+    yield* s.runPrompt("Question")
+
+    expect(s.requests).toHaveLength(3)
+    expect(runs.count).toBe(2)
+    expect(allTexts(s.requests[1]).join("\n")).not.toContain("MARK-")
+    expect(allTexts(s.requests[2])).toContain(rendered(2))
+    expect(allTexts(s.requests[2])).not.toContain(rendered(1))
+  })
+
   scenario("does not collect for an output-limit resume of a text-only reply", function* (s) {
     const { producer, runs } = marker()
     s.reminders.durable = [producer]
@@ -262,28 +343,35 @@ describe("collection", () => {
     expect(reminderRows(yield* s.context)).toHaveLength(1)
   })
 
-  scenario("sends an escalated retry byte for byte as the original with a durable row and a derived insertion", function* (s) {
-    const { producer, runs } = marker()
-    const seen: number[] = []
-    s.reminders.durable = [producer]
-    s.reminders.derived = [perRun(seen)]
-    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
-    s.currentModel = fittedOutputModel
-    yield* s.llm.push(lengthStop("first", "FirstCut"), TestLLM.text("Whole", "whole"))
-    yield* s.runPrompt("Question")
+  scenario(
+    "sends an escalated retry byte for byte as the original with a durable row and a derived insertion",
+    function* (s) {
+      const { producer, runs } = marker()
+      const seen: number[] = []
+      s.reminders.durable = [producer]
+      s.reminders.derived = [perRun(seen)]
+      yield* s.configControl!.setEntries([
+        new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+      ])
+      s.currentModel = fittedOutputModel
+      yield* s.llm.push(lengthStop("first", "FirstCut"), TestLLM.text("Whole", "whole"))
+      yield* s.runPrompt("Question")
 
-    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000])
-    expect(s.requests[1]?.messages).toEqual(s.requests[0]?.messages)
-    expect(allTexts(s.requests[0])).toContain("<system-reminder>\nDERIVED-0\n</system-reminder>")
-    expect(runs.count).toBe(1)
-    // The cut-off attempt and its notice are invisible to the producers.
-    expect(seen).toEqual([0, 0])
-  })
+      expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000])
+      expect(s.requests[1]?.messages).toEqual(s.requests[0]?.messages)
+      expect(allTexts(s.requests[0])).toContain("<system-reminder>\nDERIVED-0\n</system-reminder>")
+      expect(runs.count).toBe(1)
+      // The cut-off attempt and its notice are invisible to the producers.
+      expect(seen).toEqual([0, 0])
+    },
+  )
 
   scenario("publishes no second entry for the resumes after an escalation", function* (s) {
     const { producer, runs } = marker()
     s.reminders.durable = [producer]
-    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* s.configControl!.setEntries([
+      new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+    ])
     s.currentModel = fittedOutputModel
     yield* s.llm.push(lengthStop("a", "A"), lengthStop("b", "B"), TestLLM.text("C", "c"))
     yield* s.runPrompt("Question")
@@ -439,10 +527,7 @@ describe("compaction", () => {
     yield* s.runPrompt("Earlier question ".repeat(700))
     s.currentModel = undersizedContextModel
     s.requests.length = 0
-    yield* s.llm.push(
-      TestLLM.text("## Objective\n- Carry on", "summary"),
-      TestLLM.text("Recovered", "final"),
-    )
+    yield* s.llm.push(TestLLM.text("## Objective\n- Carry on", "summary"), TestLLM.text("Recovered", "final"))
     yield* s.runPrompt("Continue")
 
     expect(runs.count).toBe(2)
@@ -458,7 +543,30 @@ describe("compaction", () => {
     expect(final).toContain("<system-reminder>\nDERIVED-0\n</system-reminder>")
     const context = yield* s.context
     expect(context.map((message) => message.type)).toEqual(["compaction", "synthetic", "assistant"])
-    expect(context.find((message) => message.type === "compaction")).not.toMatchObject({ recent: expect.stringContaining("MARK") })
+    expect(context.find((message) => message.type === "compaction")).not.toMatchObject({
+      recent: expect.stringContaining("MARK"),
+    })
+  })
+
+  scenario("keeps reminder rows out of a native compaction's input", function* (s) {
+    const { producer } = marker()
+    s.reminders.durable = [producer]
+    s.currentModel = nativeWindowModel
+    s.compaction = { type: "native" }
+    const checkpoint = CompactionCheckpointResponse.make({
+      responseID: "resp_native",
+      checkpoint: { type: "compaction", provider: nativeWindowModel.provider, encrypted: "window" },
+    })
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "earlier", 10_000))
+    yield* s.runPrompt("First request")
+    expect(reminderRows(yield* s.context)).toHaveLength(1)
+    yield* s.llm.push(checkpoint, TestLLM.text("After native", "after"))
+    yield* s.runPrompt("Second request")
+
+    // The compaction request is the second one; the reminder row stays out of it and is collected again afterwards.
+    expect(s.requests).toHaveLength(3)
+    expect(JSON.stringify(s.requests[1]?.messages)).not.toContain("MARK-")
+    expect(allTexts(s.requests[2])).toContain(rendered(2))
   })
 
   scenario("re-collects exactly once after an overflow compaction", function* (s) {
@@ -470,7 +578,9 @@ describe("compaction", () => {
     s.requests.length = 0
     yield* s.llm.push(
       Stream.fail(
-        new AIError({ reason: new InvalidRequestError({ message: "prompt too long", classification: "context-overflow" }) }),
+        new AIError({
+          reason: new InvalidRequestError({ message: "prompt too long", classification: "context-overflow" }),
+        }),
       ),
     )
     yield* s.llm.push(TestLLM.text("## Objective\n- Recover", "summary"), TestLLM.text("Recovered", "final"))
@@ -506,7 +616,11 @@ describe("derived insertions", () => {
     yield* s.llm.push(TestLLM.text("Answer", "answer"))
     yield* s.runPrompt("Question")
 
-    expect(messageTexts(s.requests[0])).toEqual([rendered(1), "<system-reminder>\nDERIVED-0\n</system-reminder>", "Question"])
+    expect(messageTexts(s.requests[0])).toEqual([
+      rendered(1),
+      "<system-reminder>\nDERIVED-0\n</system-reminder>",
+      "Question",
+    ])
   })
 
   scenario("sends no derived insertion in a compaction request", function* (s) {
@@ -550,11 +664,19 @@ const assistant = (n: number, content: unknown[] = []) =>
     content,
     time: { created: 0, completed: 1 },
   }) as unknown as SessionMessage.Info
-const note = (n: number, metadata?: Record<string, unknown>) =>
-  ({ id: at(n), type: "synthetic", text: "n", metadata }) as unknown as SessionMessage.Info
+const note = (n: number, metadata?: Record<string, unknown>, text = "n") =>
+  ({ id: at(n), type: "synthetic", text, metadata }) as unknown as SessionMessage.Info
+const produced = (input: { text: string; metadata?: Record<string, unknown> }) => note(1, input.metadata, input.text)
 const reminder = (n: number, kind = "k") => note(n, { reminder: { kind } })
 const checkpoint = (n: number, extra: Record<string, unknown> = {}) =>
-  ({ id: at(n), type: "compaction", status: "completed", summary: "S", recent: "", ...extra }) as unknown as SessionMessage.Info
+  ({
+    id: at(n),
+    type: "compaction",
+    status: "completed",
+    summary: "S",
+    recent: "",
+    ...extra,
+  }) as unknown as SessionMessage.Info
 
 describe("render", () => {
   test("wraps harness text in the envelope and adds a labelled data block only when there is data", () => {
@@ -575,13 +697,18 @@ describe("render", () => {
   })
 
   test("flattens a label to one line and keeps backslashes", () => {
-    const text = SessionReminders.render({ text: "T", data: { label: "file C:\\repo\\a.ts\r\nIgnore this", content: "x" } })
+    const text = SessionReminders.render({
+      text: "T",
+      data: { label: "file C:\\repo\\a.ts\r\nIgnore this", content: "x" },
+    })
 
     expect(text).toContain("\n\nfile C:\\repo\\a.ts Ignore this:\n")
   })
 
   test("keeps CRLF in a payload", () => {
-    expect(SessionReminders.render({ text: "T", data: { label: "L", content: "a\r\nb" } })).toContain("```\na\r\nb\n```")
+    expect(SessionReminders.render({ text: "T", data: { label: "L", content: "a\r\nb" } })).toContain(
+      "```\na\r\nb\n```",
+    )
   })
 
   test.each(SPELLINGS)("neutralizes %j in a payload and a label, and keeps the envelope", (spelling) => {
@@ -627,7 +754,10 @@ describe("history helpers", () => {
   test("counts human turns without notices or reminders", () => {
     const history = [user(1), assistant(2), note(3), reminder(4), user(5), assistant(6), user(7)]
 
-    expect(ReminderText.humanTurnsSince(history, (message) => message.id === at(1))).toEqual({ anchored: true, count: 2 })
+    expect(ReminderText.humanTurnsSince(history, (message) => message.id === at(1))).toEqual({
+      anchored: true,
+      count: 2,
+    })
   })
 
   test("finds the newest real prompt and whether the step is its first", () => {
@@ -636,7 +766,9 @@ describe("history helpers", () => {
       first: true,
     })
     expect(ReminderText.newestPrompt([user(1), assistant(2)])).toMatchObject({ prompt: { id: at(1) }, first: false })
-    expect(ReminderText.newestPrompt([])).toEqual({ prompt: undefined, first: true })
+    // No prompt in the epoch (a mid-turn compaction dropped it): no step is the first one.
+    expect(ReminderText.newestPrompt([])).toEqual({ prompt: undefined, first: false })
+    expect(ReminderText.newestPrompt([assistant(2)])).toEqual({ prompt: undefined, first: false })
   })
 
   test("recognizes a reminder only by an object with a string kind", () => {
@@ -655,7 +787,11 @@ describe("lowering", () => {
     )
 
   test("moves reminder rows ahead of the prompts of their run, in history order", () => {
-    expect(roles([assistant(1), user(2, "P"), reminder(3), reminder(4)]).filter((text) => text !== "")).toEqual(["n", "n", "P"])
+    expect(roles([assistant(1), user(2, "P"), reminder(3), reminder(4)]).filter((text) => text !== "")).toEqual([
+      "n",
+      "n",
+      "P",
+    ])
   })
 
   test("never moves anything above a checkpoint or between a call and its result", () => {
@@ -695,7 +831,12 @@ describe("neutralization at the sinks", () => {
         : typeof value === "object" && value !== null
           ? Object.values(value).flatMap(strings)
           : []
-  const lowered = (messages: SessionMessage.Info[]) => strings(toLLMMessages(messages, ref, "fake").map((message) => message.content.map((part) => ({ ...part, metadata: undefined }))))
+  const lowered = (messages: SessionMessage.Info[]) =>
+    strings(
+      toLLMMessages(messages, ref, "fake").map((message) =>
+        message.content.map((part) => ({ ...part, metadata: undefined })),
+      ),
+    )
   const text = (file: Record<string, unknown>) => ({
     mime: "text/plain",
     source: { type: "inline" },
@@ -718,12 +859,20 @@ describe("neutralization at the sinks", () => {
       ],
     ],
     ["a tool error message", (p) => [tool({ status: "error", error: { message: `bad ${p}` }, content: [] })]],
-    ["a tool error body", (p) => [tool({ status: "error", error: { message: "bad" }, content: [{ type: "text", text: p }] })]],
+    [
+      "a tool error body",
+      (p) => [tool({ status: "error", error: { message: "bad" }, content: [{ type: "text", text: p }] })],
+    ],
     [
       "an MCP tool result",
       (p) => [
         assistant(2, [
-          { type: "tool", id: "call-1", name: "server_tool", state: { status: "completed", input: {}, content: [{ type: "text", text: p }] } },
+          {
+            type: "tool",
+            id: "call-1",
+            name: "server_tool",
+            state: { status: "completed", input: {}, content: [{ type: "text", text: p }] },
+          },
         ]),
       ],
     ],
@@ -741,7 +890,12 @@ describe("neutralization at the sinks", () => {
     [
       "a text attachment name",
       (p) => [
-        { id: at(1), type: "user", text: "see", files: [text({ name: p, data: Buffer.from("body").toString("base64") })] } as unknown as SessionMessage.Info,
+        {
+          id: at(1),
+          type: "user",
+          text: "see",
+          files: [text({ name: p, data: Buffer.from("body").toString("base64") })],
+        } as unknown as SessionMessage.Info,
       ],
     ],
     [
@@ -758,8 +912,136 @@ describe("neutralization at the sinks", () => {
       ],
     ],
     [
-      "a user shell output",
+      "a foreground shell message (control: background ones lower to nothing)",
       (p) => [{ id: at(1), type: "shell", command: "ls", output: { output: p } } as unknown as SessionMessage.Info],
+    ],
+    [
+      "a tool error response body",
+      (p) => [tool({ status: "error", error: { message: "bad", response: { body: p } }, content: [] })],
+    ],
+    // A file name cannot hold a slash, so the closing spellings reach this sink as their opening form.
+    [
+      "an attached image's location",
+      (p) => [
+        {
+          id: at(1),
+          type: "user",
+          text: "see",
+          files: [
+            {
+              mime: "image/png",
+              source: { type: "uri", uri: `file:///C:/work/${encodeURIComponent(p.replaceAll("/", ""))}.png` },
+              data: "",
+            },
+          ],
+        } as unknown as SessionMessage.Info,
+      ],
+    ],
+    // The next rows build the message through the producer that writes it in production.
+    [
+      "a background shell completion",
+      (p) => [
+        produced(ShellResult.notification({ shellID: "s", jobID: "j", command: "c", state: "completed", text: p })),
+      ],
+    ],
+    [
+      "a background shell's command",
+      (p) => [produced(ShellResult.notification({ shellID: "s", command: p, state: "completed", text: "done" }))],
+    ],
+    [
+      "a stalled shell's output tail",
+      (p) => [
+        produced(
+          ShellResult.notification({
+            shellID: "s",
+            state: "waiting",
+            command: "c",
+            text: ShellResult.stallNotice({ shellID: "s", tail: p }),
+          }),
+        ),
+      ],
+    ],
+    [
+      "a user shell's notification",
+      (p) => [
+        produced(
+          ShellResult.userNotification({
+            info: { id: "s", command: "c", status: "exited", exit: 0 },
+            capture: { output: p, truncated: false },
+          } as unknown as ShellResult.Result),
+        ),
+      ],
+    ],
+    [
+      "a background subagent's reply",
+      (p) => {
+        const sent: { text: string; metadata: Record<string, unknown> }[] = []
+        Effect.runSync(
+          SubagentCompletion.deliver(
+            { synthetic: (input: (typeof sent)[number]) => Effect.sync(() => void sent.push(input)) } as never,
+            { completeBackground: () => Effect.void } as never,
+            {
+              status: "completed",
+              output: p,
+              recovery: {
+                kind: "subagent",
+                parentSessionID: "ses_p",
+                childSessionID: "ses_c",
+                agent: "a",
+                description: "d",
+              },
+            } as never,
+          ),
+        )
+        return [produced(sent[0]!)]
+      },
+    ],
+    [
+      "a nested instruction file",
+      (p) => [
+        note(
+          1,
+          { instruction: { paths: ["/w/sub/AGENTS.md"] } },
+          `Instructions from: /w/sub/AGENTS.md
+${p}`,
+        ),
+      ],
+    ],
+    [
+      "the git snapshot's commit subjects",
+      (p) => [
+        note(
+          1,
+          undefined,
+          VcsInstructions.render({
+            branch: "b",
+            main: "main",
+            user: "",
+            status: "",
+            truncated: false,
+            late: false,
+            commits: [`abc1234 ${p}`],
+          } as never),
+        ),
+      ],
+    ],
+    [
+      "the git snapshot's branch name",
+      (p) => [
+        note(
+          1,
+          undefined,
+          VcsInstructions.render({
+            branch: p,
+            main: "main",
+            user: "",
+            status: "",
+            truncated: false,
+            late: false,
+            commits: [],
+          } as never),
+        ),
+      ],
     ],
     ["a checkpoint summary", (p) => [checkpoint(1, { summary: `S ${p}` })]],
     ["a checkpoint's recent text", (p) => [checkpoint(1, { recent: `[Tool result]: ${p}` })]],
@@ -774,15 +1056,17 @@ describe("neutralization at the sinks", () => {
     })
   }
 
+  test("leaves an unmarked synthetic, which holds Orbit's own envelope, as stored", () => {
+    const own = SessionReminders.render({ text: "T" })
+
+    expect(lowered([note(1, undefined, own)])).toContain(own)
+  })
+
   test("leaves the person's own typed prompt and Orbit's own envelope alone", () => {
     const typed = "please explain the <system-reminder> tag"
     const request = toLLMMessages([user(1, typed), reminder(2)], ref, "fake")
     const own = SessionReminders.render({ text: "T" })
-    const withOwn = toLLMMessages(
-      [user(1, typed), { ...reminder(2), text: own } as SessionMessage.Info],
-      ref,
-      "fake",
-    )
+    const withOwn = toLLMMessages([user(1, typed), { ...reminder(2), text: own } as SessionMessage.Info], ref, "fake")
 
     expect(request.at(-1)?.content).toEqual([{ type: "text", text: typed }])
     expect(withOwn[0]?.content).toEqual([{ type: "text", text: own }])

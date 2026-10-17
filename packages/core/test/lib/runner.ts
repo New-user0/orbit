@@ -134,6 +134,11 @@ const testModel = (id: string, limit: ModelLimit = defaultModelLimit) => {
   return LanguageModel.make({ id, provider: "fake", route: OpenAIChat.route })
 }
 const model = testModel("fake-model")
+// A window whose compaction is native, sized so that one measured reply fills it.
+const nativeWindowModel = (() => {
+  modelLimits.set("native-window", { context: 11_000, output: 1_000 })
+  return LanguageModel.make({ id: "native-window", provider: "openai", route: OpenAIResponses.route })
+})()
 // Every request of these tests offers the Code Mode tool, which `testLLM` takes out of the request it records, and the
 // base prompt carries that tool's guidance line.
 const defaultSystem = SessionSystemPrompt.make(["Execute"])
@@ -186,7 +191,10 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     },
     configControl: undefined as Config.TestInterface | undefined,
     // The producer lists of the reminder node. A test sets them before it resumes; the node reads them on every step.
-    reminders: { durable: [], derived: [] } as { durable: SessionReminders.Durable[]; derived: SessionReminders.Derived[] },
+    reminders: { durable: [], derived: [] } as {
+      durable: SessionReminders.Durable[]
+      derived: SessionReminders.Derived[]
+    },
     traitGate: Deferred.makeUnsafe<void>(),
     asking: Deferred.makeUnsafe<void>(),
     answer: Deferred.makeUnsafe<void>(),
@@ -235,343 +243,342 @@ const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string,
 // no folder, so that no request holds a path of this machine, and it records each drain that made one.
 const makeLayer = (persist: boolean) =>
   Layer.unwrap(
-  Effect.map(RunnerState, (state) => {
-    const scratchpad: LayerNode.Replacements = [
-          SessionScratchpad.node.replace(
-            Layer.effect(
-              SessionScratchpad.Service,
-              Effect.gen(function* () {
-                const llm = yield* TestLLM.Service
-                return SessionScratchpad.Service.of({
-                  path: () => undefined,
-                  source: () => Instructions.empty,
-                  ensure: (session) =>
-                    Effect.sync(() => void state.scratchpads.push({ sessionID: session.id, requests: llm.requests.length })),
-                })
-              }),
-            ).pipe(Layer.provide(testLLM)),
+    Effect.map(RunnerState, (state) => {
+      const scratchpad: LayerNode.Replacements = [
+        SessionScratchpad.node.replace(
+          Layer.effect(
+            SessionScratchpad.Service,
+            Effect.gen(function* () {
+              const llm = yield* TestLLM.Service
+              return SessionScratchpad.Service.of({
+                path: () => undefined,
+                source: () => Instructions.empty,
+                ensure: (session) =>
+                  Effect.sync(
+                    () => void state.scratchpads.push({ sessionID: session.id, requests: llm.requests.length }),
+                  ),
+              })
+            }),
+          ).pipe(Layer.provide(testLLM)),
+        ),
+      ]
+      const modelTransport = Layer.succeed(
+        SessionModelTransport.Service,
+        SessionModelTransport.Service.of({
+          bind: () => ({ execute: () => Effect.die("Unexpected WebSocket execution") }),
+          close: (sessionID) => Effect.sync(() => state.closedTransports.push(sessionID)),
+          closeAll: Effect.void,
+        }),
+      )
+      const echo = Layer.effectDiscard(
+        Tool.Service.use((registry) =>
+          transformTools(
+            registry,
+            {
+              echo: {
+                name: "echo",
+                description: "Echo text",
+                input: Schema.Struct({ text: Schema.String }),
+                output: Schema.Struct({ text: Schema.String }),
+                traits: { concurrencySafe: true },
+                execute: ({ text }, context) =>
+                  Effect.gen(function* () {
+                    state.authorizations.push(context)
+                    state.executions.push(text)
+                    yield* state.awaitToolBarrier
+                    return { output: { text }, content: text }
+                  }),
+              },
+              // A read-only call that a new user message may cancel.
+              cancelable: {
+                name: "cancelable",
+                description: "Echo text, as a call a new user message cancels",
+                input: Schema.Struct({ text: Schema.String }),
+                output: Schema.Struct({ text: Schema.String }),
+                traits: { concurrencySafe: true, interruptBehavior: "cancel" },
+                execute: ({ text }) =>
+                  Effect.gen(function* () {
+                    state.executions.push(text)
+                    yield* state.awaitToolBarrier
+                    return { output: { text }, content: text }
+                  }),
+              },
+              // Runs alone: the scheduler starts it only when nothing else runs.
+              mutate: {
+                name: "mutate",
+                description: "Echo text, as a call that changes things",
+                input: Schema.Struct({ text: Schema.String }),
+                output: Schema.Struct({ text: Schema.String }),
+                traits: { concurrencySafe: false },
+                execute: ({ text }) =>
+                  Effect.gen(function* () {
+                    state.executions.push(text)
+                    yield* state.awaitToolBarrier
+                    return { output: { text }, content: text }
+                  }),
+              },
+              // Finishes when the test lets it, so calls can finish in another order than they started.
+              held: {
+                name: "held",
+                description: "Echo text once the test releases it",
+                input: Schema.Struct({ text: Schema.String }),
+                output: Schema.Struct({ text: Schema.String }),
+                traits: { concurrencySafe: true },
+                execute: ({ text }) =>
+                  Effect.gen(function* () {
+                    const hold = state.hold(text)
+                    state.executions.push(text)
+                    yield* Deferred.succeed(hold.started, undefined)
+                    yield* Deferred.await(hold.release)
+                    return { output: { text }, content: text }
+                  }),
+              },
+              // Its concurrencySafe answer waits for the test, to show that a pending answer holds back later calls only.
+              gated: {
+                name: "gated",
+                description: "Echo text, after its traits are known",
+                input: Schema.Struct({ text: Schema.String }),
+                output: Schema.Struct({ text: Schema.String }),
+                traits: { concurrencySafe: () => Deferred.await(state.traitGate).pipe(Effect.as(true)) },
+                execute: ({ text }) =>
+                  Effect.gen(function* () {
+                    state.executions.push(text)
+                    yield* state.awaitToolBarrier
+                    return { output: { text }, content: text }
+                  }),
+              },
+              // Waits for an answer that is a decline: the calls queued behind it must not start.
+              ask: {
+                name: "ask",
+                description: "Echo text after a permission",
+                input: Schema.Struct({ text: Schema.String }),
+                output: Schema.Struct({ text: Schema.String }),
+                traits: { concurrencySafe: false },
+                execute: ({ text }) =>
+                  Effect.gen(function* () {
+                    state.executions.push(text)
+                    yield* Deferred.succeed(state.asking, undefined)
+                    yield* Deferred.await(state.answer)
+                    // The way `Permission.assert` surfaces a decline: as a defect that the model request recovers.
+                    return yield* Effect.die(new Permission.DeclinedError())
+                  }),
+              },
+              defect: {
+                name: "defect",
+                description: "Fail unexpectedly",
+                input: Schema.Struct({}),
+                output: Schema.Struct({}),
+                traits: { concurrencySafe: true },
+                execute: () => state.awaitToolBarrier.pipe(Effect.andThen(Effect.die("unexpected tool defect"))),
+              },
+              storefail: {
+                name: "storefail",
+                description: "Produce output that cannot be persisted",
+                input: Schema.Struct({}),
+                output: Schema.Struct({}),
+                traits: { concurrencySafe: true },
+                execute: () => Effect.succeed({ output: {} }),
+              },
+            },
+            { codemode: false },
           ),
-        ]
-    const modelTransport = Layer.succeed(
-      SessionModelTransport.Service,
-      SessionModelTransport.Service.of({
-        bind: () => ({ execute: () => Effect.die("Unexpected WebSocket execution") }),
-        close: (sessionID) => Effect.sync(() => state.closedTransports.push(sessionID)),
-        closeAll: Effect.void,
-      }),
-    )
-    const echo = Layer.effectDiscard(
-      Tool.Service.use((registry) =>
-        transformTools(
-          registry,
-          {
-            echo: {
-              name: "echo",
-              description: "Echo text",
-              input: Schema.Struct({ text: Schema.String }),
-              output: Schema.Struct({ text: Schema.String }),
-              traits: { concurrencySafe: true },
-              execute: ({ text }, context) =>
-                Effect.gen(function* () {
-                  state.authorizations.push(context)
-                  state.executions.push(text)
-                  yield* state.awaitToolBarrier
-                  return { output: { text }, content: text }
-                }),
-            },
-            // A read-only call that a new user message may cancel.
-            cancelable: {
-              name: "cancelable",
-              description: "Echo text, as a call a new user message cancels",
-              input: Schema.Struct({ text: Schema.String }),
-              output: Schema.Struct({ text: Schema.String }),
-              traits: { concurrencySafe: true, interruptBehavior: "cancel" },
-              execute: ({ text }) =>
-                Effect.gen(function* () {
-                  state.executions.push(text)
-                  yield* state.awaitToolBarrier
-                  return { output: { text }, content: text }
-                }),
-            },
-            // Runs alone: the scheduler starts it only when nothing else runs.
-            mutate: {
-              name: "mutate",
-              description: "Echo text, as a call that changes things",
-              input: Schema.Struct({ text: Schema.String }),
-              output: Schema.Struct({ text: Schema.String }),
-              traits: { concurrencySafe: false },
-              execute: ({ text }) =>
-                Effect.gen(function* () {
-                  state.executions.push(text)
-                  yield* state.awaitToolBarrier
-                  return { output: { text }, content: text }
-                }),
-            },
-            // Finishes when the test lets it, so calls can finish in another order than they started.
-            held: {
-              name: "held",
-              description: "Echo text once the test releases it",
-              input: Schema.Struct({ text: Schema.String }),
-              output: Schema.Struct({ text: Schema.String }),
-              traits: { concurrencySafe: true },
-              execute: ({ text }) =>
-                Effect.gen(function* () {
-                  const hold = state.hold(text)
-                  state.executions.push(text)
-                  yield* Deferred.succeed(hold.started, undefined)
-                  yield* Deferred.await(hold.release)
-                  return { output: { text }, content: text }
-                }),
-            },
-            // Its concurrencySafe answer waits for the test, to show that a pending answer holds back later calls only.
-            gated: {
-              name: "gated",
-              description: "Echo text, after its traits are known",
-              input: Schema.Struct({ text: Schema.String }),
-              output: Schema.Struct({ text: Schema.String }),
-              traits: { concurrencySafe: () => Deferred.await(state.traitGate).pipe(Effect.as(true)) },
-              execute: ({ text }) =>
-                Effect.gen(function* () {
-                  state.executions.push(text)
-                  yield* state.awaitToolBarrier
-                  return { output: { text }, content: text }
-                }),
-            },
-            // Waits for an answer that is a decline: the calls queued behind it must not start.
-            ask: {
-              name: "ask",
-              description: "Echo text after a permission",
-              input: Schema.Struct({ text: Schema.String }),
-              output: Schema.Struct({ text: Schema.String }),
-              traits: { concurrencySafe: false },
-              execute: ({ text }) =>
-                Effect.gen(function* () {
-                  state.executions.push(text)
-                  yield* Deferred.succeed(state.asking, undefined)
-                  yield* Deferred.await(state.answer)
-                  // The way `Permission.assert` surfaces a decline: as a defect that the model request recovers.
-                  return yield* Effect.die(new Permission.DeclinedError())
-                }),
-            },
-            defect: {
-              name: "defect",
-              description: "Fail unexpectedly",
-              input: Schema.Struct({}),
-              output: Schema.Struct({}),
-              traits: { concurrencySafe: true },
-              execute: () => state.awaitToolBarrier.pipe(Effect.andThen(Effect.die("unexpected tool defect"))),
-            },
-            storefail: {
-              name: "storefail",
-              description: "Produce output that cannot be persisted",
-              input: Schema.Struct({}),
-              output: Schema.Struct({}),
-              traits: { concurrencySafe: true },
-              execute: () => Effect.succeed({ output: {} }),
-            },
-          },
-          { codemode: false },
         ),
-      ),
-    )
-    const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [Tool.node] })
-    const models = Layer.mock(SessionRunnerModel.Service)({
-      resolve: (session) =>
-        state.modelResolveHook.pipe(
-          Effect.map(() => {
-            const selected = session.model?.id === "replacement" ? replacementModel : state.currentModel
-            return SessionRunnerModel.resolved(selected, {
-              capabilities: { tools: state.toolsEnabled, input: ["text", "image"], output: ["text"] },
-              cost: state.modelCost,
-              limit: modelLimits.get(String(selected.id)) ?? defaultModelLimit,
-              variant: session.model?.variant,
-              compaction: state.compaction,
-            })
-          }),
-        ),
-    })
-    const systemContextKey = Instructions.Key.make("test/context")
-    const systemContext = Layer.mock(InstructionBuiltIns.Service, {
-      load: () =>
-        Effect.sync(() =>
-          Instructions.make({
-            key: systemContextKey,
-            codec: Schema.toCodecJson(Schema.String),
-            read: state.systemLoadHook.pipe(
-              Effect.andThen(
-                Effect.sync(() =>
-                  state.systemUnavailable
-                    ? Instructions.unavailable
-                    : state.systemRemoved
-                      ? Instructions.removed
-                      : state.systemBaseline,
+      )
+      const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [Tool.node] })
+      const models = Layer.mock(SessionRunnerModel.Service)({
+        resolve: (session) =>
+          state.modelResolveHook.pipe(
+            Effect.map(() => {
+              const selected = session.model?.id === "replacement" ? replacementModel : state.currentModel
+              return SessionRunnerModel.resolved(selected, {
+                capabilities: { tools: state.toolsEnabled, input: ["text", "image"], output: ["text"] },
+                cost: state.modelCost,
+                limit: modelLimits.get(String(selected.id)) ?? defaultModelLimit,
+                variant: session.model?.variant,
+                compaction: state.compaction,
+              })
+            }),
+          ),
+      })
+      const systemContextKey = Instructions.Key.make("test/context")
+      const systemContext = Layer.mock(InstructionBuiltIns.Service, {
+        load: () =>
+          Effect.sync(() =>
+            Instructions.make({
+              key: systemContextKey,
+              codec: Schema.toCodecJson(Schema.String),
+              read: state.systemLoadHook.pipe(
+                Effect.andThen(
+                  Effect.sync(() =>
+                    state.systemUnavailable
+                      ? Instructions.unavailable
+                      : state.systemRemoved
+                        ? Instructions.removed
+                        : state.systemBaseline,
+                  ),
                 ),
               ),
-            ),
-            render: {
-              initial: String,
-              changed: (_previous, current) => current,
-              removed: () => "System context source removed: test/context",
-            },
+              render: {
+                initial: String,
+                changed: (_previous, current) => current,
+                removed: () => "System context source removed: test/context",
+              },
+            }),
+          ),
+      })
+      const instructionContext = Layer.mock(InstructionDiscovery.Service, {
+        project: true,
+        global: true,
+        load: () => Effect.succeed(Instructions.empty),
+      })
+      const skillInstructions = Layer.mock(SkillInstructions.Service, {
+        load: (permissions) => {
+          // `setup` tags each agent's ruleset with a `skill` rule naming that agent.
+          const baseline = permissions
+            .filter((rule) => rule.action === "skill")
+            .map((rule) => state.skillBaselines.get(Agent.ID.make(rule.resource)))
+            .findLast((text) => text !== undefined)
+          return Effect.succeed(
+            baseline === undefined
+              ? Instructions.empty
+              : Instructions.make({
+                  key: Instructions.Key.make("test/skill-guidance"),
+                  codec: Schema.toCodecJson(Schema.String),
+                  read: Effect.succeed(baseline),
+                  render: {
+                    initial: String,
+                    changed: (_previous, current) => current,
+                    removed: () => "Skill guidance removed",
+                  },
+                }),
+          )
+        },
+      })
+      const referenceInstructions = Layer.mock(ReferenceInstructions.Service, {
+        load: () => Effect.succeed(Instructions.empty),
+      })
+      const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
+      const config = Config.testLayer([
+        new Document({
+          type: "document",
+          info: new Info({
+            compaction: new ConfigCompaction.Info({
+              buffer: 3_000,
+              keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
+            }),
+          }),
+        }),
+      ]).pipe(
+        Layer.tap((context) =>
+          Effect.sync(() => {
+            state.configControl = Context.get(context, Config.Test)
           }),
         ),
-    })
-    const instructionContext = Layer.mock(InstructionDiscovery.Service, {
-      project: true,
-      global: true,
-      load: () => Effect.succeed(Instructions.empty),
-    })
-    const skillInstructions = Layer.mock(SkillInstructions.Service, {
-      load: (permissions) => {
-        // `setup` tags each agent's ruleset with a `skill` rule naming that agent.
-        const baseline = permissions
-          .filter((rule) => rule.action === "skill")
-          .map((rule) => state.skillBaselines.get(Agent.ID.make(rule.resource)))
-          .findLast((text) => text !== undefined)
-        return Effect.succeed(
-          baseline === undefined
-            ? Instructions.empty
-            : Instructions.make({
-                key: Instructions.Key.make("test/skill-guidance"),
-                codec: Schema.toCodecJson(Schema.String),
-                read: Effect.succeed(baseline),
-                render: {
-                  initial: String,
-                  changed: (_previous, current) => current,
-                  removed: () => "Skill guidance removed",
-                },
-              }),
-        )
-      },
-    })
-    const referenceInstructions = Layer.mock(ReferenceInstructions.Service, {
-      load: () => Effect.succeed(Instructions.empty),
-    })
-    const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
-    const config = Config.testLayer([
-      new Document({
-        type: "document",
-        info: new Info({
-          compaction: new ConfigCompaction.Info({
-            buffer: 3_000,
-            keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
-          }),
-        }),
-      }),
-    ]).pipe(
-      Layer.tap((context) =>
-        Effect.sync(() => {
-          state.configControl = Context.get(context, Config.Test)
-        }),
-      ),
-    )
-    const promptModels = Layer.mock(Model.Service, {
-      get: () => Effect.undefined,
-      all: () => Effect.succeed([]),
-      available: () => Effect.succeed([]),
-      default: () => Effect.undefined,
-      small: () => Effect.undefined,
-    })
-    const replacements: LayerNode.Replacements = [
-      Snapshot.node.replace(Snapshot.noopLayer),
-      LayerNodePlatform.llmClient.replace(TestLLM.clientLayer.pipe(Layer.provide(testLLM))),
-      SessionRunnerModel.node.replace(models),
-      InstructionBuiltIns.node.replace(systemContext),
-      InstructionDiscovery.node.replace(instructionContext),
-      ...scratchpad,
-      noVcsSnapshot,
-      Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
-      SkillInstructions.node.replace(skillInstructions),
-      ReferenceInstructions.node.replace(referenceInstructions),
-      Permission.node.replace(permission),
-      Config.node.replace(config),
-      PluginSupervisor.node.replace(Layer.empty),
-      Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
-      SessionModelTransport.node.replace(modelTransport),
-      SessionTurnEnd.node.replace(SessionTurnEnd.layerWith([{ name: "test", run: (input) => state.turnEnd(input) }])),
-      SessionReminders.node.replace(SessionReminders.configured(state.reminders)),
-    ]
-    const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
-      ...replacements,
-      McpInstructions.node.replace(mcpInstructions),
-    ])
-    const execution = Layer.effect(
-      SessionExecution.Service,
-      Effect.gen(function* () {
-        const sessionRunner = yield* SessionRunner.Service
-        function drain(
-          sessionID: Session.ID,
-          force: boolean,
-          continuation?: SessionRunner.Continuation,
-        ): Effect.Effect<void, SessionRunner.RunError> {
-          return sessionRunner
-            .drain({ sessionID, force, continuation })
-            .pipe(
-              Effect.flatMap((result) =>
-                result._tag === "Complete" ? Effect.void : drain(sessionID, false, result.continuation),
-              ),
-            )
-        }
-        const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
-          drain: (sessionID, force) =>
-            Effect.sync(() => void state.drains.started++).pipe(
-              Effect.andThen(drain(sessionID, force)),
-              Effect.ensuring(Effect.sync(() => void state.drains.settled++)),
-            ),
-        })
-        return SessionExecution.Service.of({
-          active: coordinator.active,
-          isActive: coordinator.isActive,
-          resume: coordinator.run,
-          wake: coordinator.wake,
-          interrupt: (sessionID) => coordinator.interrupt(sessionID),
-          awaitIdle: coordinator.awaitIdle,
-        })
-      }),
-    ).pipe(Layer.provide(runnerLayer), Layer.orDie)
-    return AppNodeBuilder.build(
-      LayerNode.group([
-        Database.node,
-        Bus.node,
-        Form.node,
-        SessionProjector.node,
-        SessionStore.node,
-        SessionInbox.node,
-        Agent.node,
-        Model.node,
-        Tool.node,
-        PluginHooks.node,
-        echoNode,
-        SessionRunnerModel.node,
-        InstructionBuiltIns.node,
-        InstructionDiscovery.node,
-        InstructionEntry.node,
-        SkillInstructions.node,
-        ReferenceInstructions.node,
-        Config.node,
-        Snapshot.node,
-        SessionCompaction.node,
-        LayerNodePlatform.llmClient,
-        SessionContext.node,
-        SessionScratchpad.node,
-        SessionTitle.node,
-        SessionRunnerLLM.node,
-        SessionExecution.node,
-        Session.node,
-      ]),
-      [
+      )
+      const promptModels = Layer.mock(Model.Service, {
+        get: () => Effect.undefined,
+        all: () => Effect.succeed([]),
+        available: () => Effect.succeed([]),
+        default: () => Effect.undefined,
+        small: () => Effect.undefined,
+      })
+      const replacements: LayerNode.Replacements = [
+        Snapshot.node.replace(Snapshot.noopLayer),
+        LayerNodePlatform.llmClient.replace(TestLLM.clientLayer.pipe(Layer.provide(testLLM))),
+        SessionRunnerModel.node.replace(models),
+        InstructionBuiltIns.node.replace(systemContext),
+        InstructionDiscovery.node.replace(instructionContext),
+        ...scratchpad,
+        noVcsSnapshot,
+        Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
+        SkillInstructions.node.replace(skillInstructions),
+        ReferenceInstructions.node.replace(referenceInstructions),
+        Permission.node.replace(permission),
+        Config.node.replace(config),
+        PluginSupervisor.node.replace(Layer.empty),
+        Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
+        SessionModelTransport.node.replace(modelTransport),
+        SessionTurnEnd.node.replace(SessionTurnEnd.layerWith([{ name: "test", run: (input) => state.turnEnd(input) }])),
+        SessionReminders.node.replace(SessionReminders.configured(state.reminders)),
+      ]
+      const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
         ...replacements,
-        Bus.node.replace(persist ? Bus.configured({ persist }) : Bus.configured()),
-        LocationServiceMap.node.replace(promptLocationNode),
-        Model.node.replace(promptModels),
-        SessionExecution.node.replace(execution),
-      ],
-    )
-  }),
-).pipe(
-  Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
-  Layer.provideMerge(testLLM),
-)
+        McpInstructions.node.replace(mcpInstructions),
+      ])
+      const execution = Layer.effect(
+        SessionExecution.Service,
+        Effect.gen(function* () {
+          const sessionRunner = yield* SessionRunner.Service
+          function drain(
+            sessionID: Session.ID,
+            force: boolean,
+            continuation?: SessionRunner.Continuation,
+          ): Effect.Effect<void, SessionRunner.RunError> {
+            return sessionRunner
+              .drain({ sessionID, force, continuation })
+              .pipe(
+                Effect.flatMap((result) =>
+                  result._tag === "Complete" ? Effect.void : drain(sessionID, false, result.continuation),
+                ),
+              )
+          }
+          const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
+            drain: (sessionID, force) =>
+              Effect.sync(() => void state.drains.started++).pipe(
+                Effect.andThen(drain(sessionID, force)),
+                Effect.ensuring(Effect.sync(() => void state.drains.settled++)),
+              ),
+          })
+          return SessionExecution.Service.of({
+            active: coordinator.active,
+            isActive: coordinator.isActive,
+            resume: coordinator.run,
+            wake: coordinator.wake,
+            interrupt: (sessionID) => coordinator.interrupt(sessionID),
+            awaitIdle: coordinator.awaitIdle,
+          })
+        }),
+      ).pipe(Layer.provide(runnerLayer), Layer.orDie)
+      return AppNodeBuilder.build(
+        LayerNode.group([
+          Database.node,
+          Bus.node,
+          Form.node,
+          SessionProjector.node,
+          SessionStore.node,
+          SessionInbox.node,
+          Agent.node,
+          Model.node,
+          Tool.node,
+          PluginHooks.node,
+          echoNode,
+          SessionRunnerModel.node,
+          InstructionBuiltIns.node,
+          InstructionDiscovery.node,
+          InstructionEntry.node,
+          SkillInstructions.node,
+          ReferenceInstructions.node,
+          Config.node,
+          Snapshot.node,
+          SessionCompaction.node,
+          LayerNodePlatform.llmClient,
+          SessionContext.node,
+          SessionScratchpad.node,
+          SessionTitle.node,
+          SessionRunnerLLM.node,
+          SessionExecution.node,
+          Session.node,
+        ]),
+        [
+          ...replacements,
+          Bus.node.replace(persist ? Bus.configured({ persist }) : Bus.configured()),
+          LocationServiceMap.node.replace(promptLocationNode),
+          Model.node.replace(promptModels),
+          SessionExecution.node.replace(execution),
+        ],
+      )
+    }),
+  ).pipe(Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)), Layer.provideMerge(testLLM))
 // Most scenarios read the event log, so they run on a persisting Bus. A CLI server builds its Bus without one, so the
 // turn limits (whose inputs must not live in the log) also run on `productionLayer`.
 const layer = makeLayer(true)
@@ -667,10 +674,7 @@ const setup = Effect.gen(function* () {
 type Scenario = Effect.Success<typeof setup>
 const scenarioOn =
   (on: typeof it) =>
-  (
-    name: string,
-    body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>,
-  ) =>
+  (name: string, body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>) =>
     on.effect(
       name,
       Effect.gen(function* () {
@@ -689,6 +693,7 @@ export {
   undersizedContextModel,
   layer,
   model,
+  nativeWindowModel,
   replacementModel,
   scenario,
   sessionID,

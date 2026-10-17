@@ -92,6 +92,7 @@ export const newestPrompt = (messages: ReadonlyArray<SessionMessage.Info>) => {
   const prompt = messages[index]
   return {
     prompt: prompt?.type === "user" ? prompt : undefined,
-    first: !messages.slice(index + 1).some((message) => message.type === "assistant"),
+    // With no prompt in the epoch (a mid-turn compaction dropped it), no step is the first one.
+    first: prompt !== undefined && !messages.slice(index + 1).some((message) => message.type === "assistant"),
   }
 }
