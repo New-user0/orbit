@@ -212,10 +212,7 @@ const layer = Layer.effect(
       const shared = yield* Effect.filter(PluginSourceDirectory.names, (name) =>
         LinkShare.of(fs, path.join(directory, name)).pipe(Effect.map((found) => found !== undefined)),
       )
-      const plugins =
-        shared.length > 0
-          ? [directory]
-          : yield* PluginSourceDirectory.discover(fs, directory)
+      const plugins = shared.length > 0 ? [directory] : yield* PluginSourceDirectory.discover(fs, directory)
       const supplied = (file: string) => supplies({ path: directory, scope: "project", trusted: false }, file)
       const commands = yield* CommandFile.load(fs, directory, supplied)
       const agents = yield* AgentFile.load(fs, directory, supplied)
@@ -226,7 +223,13 @@ const layer = Layer.effect(
           Object.fromEntries(commands.map((command) => [command.name, command.info])),
           place,
         ).withheld,
-        ...agents.flatMap((agent) => ConfigTrust.sanitize(agent.info, place).withheld),
+        ...agents.flatMap((agent) => [
+          ...ConfigTrust.sanitize(agent.info, place).withheld,
+          // A file under agent/ or agents/ that names an agent which exists is held back whole (`ConfigAgentPlugin`).
+          // Which agents exist depends on the entries before it (the person's own agents included), which are not known
+          // here, so every such file is listed: the stricter answer wins.
+          ...(agent.path !== undefined && AgentFile.defines(directory, agent.path) ? ["permissions" as const] : []),
+        ]),
       ]
       const kinds = Trust.Kinds.filter((kind) => held.includes(kind))
       byDirectory.set(directory, kinds)
@@ -320,7 +323,9 @@ const layer = Layer.effect(
       return {
         ...state,
         withheld: listed.flat(),
-        changed: [...changed].flatMap(([file, kinds]) => (kinds.length === 0 ? [] : [{ path: AbsolutePath.make(file), kinds }])),
+        changed: [...changed].flatMap(([file, kinds]) =>
+          kinds.length === 0 ? [] : [{ path: AbsolutePath.make(file), kinds }],
+        ),
       } satisfies Trust.Status
     })
 
@@ -368,7 +373,12 @@ const layer = Layer.effect(
             : []
           verdicts.set(entry, { trusted: decided.trusted, withheld: found.flatMap((item) => item.kinds) })
         }
-        return ConfigTrust.allows(entries, file, { roots: folders, trusted: state.trusted, compat: compat.roots, verdicts }, kind)
+        return ConfigTrust.allows(
+          entries,
+          file,
+          { roots: folders, trusted: state.trusted, compat: compat.roots, verdicts },
+          kind,
+        )
       }),
       reachable: Effect.fn("ProjectTrust.reachable")(function* (file) {
         if ((yield* trust.status(root)).trusted) return true

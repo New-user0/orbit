@@ -42,7 +42,10 @@ export const folders = (
 ): Info["permissions"] => {
   const allow = (resource: string) => ({ action: "external_directory", resource, effect: "allow" as const })
   const rules = [
-    ...places(global.data, real.data).flatMap((data) => [allow(SHELL_OUTPUT_GLOB(data)), allow(TOOL_OUTPUT_GLOB(data))]),
+    ...places(global.data, real.data).flatMap((data) => [
+      allow(SHELL_OUTPUT_GLOB(data)),
+      allow(TOOL_OUTPUT_GLOB(data)),
+    ]),
     ...places(global.tmp, real.tmp).map((tmp) => allow(path.join(tmp, "*"))),
     ...places(global.config, real.config).map((config) => allow(path.join(config, "*"))),
   ]
@@ -175,9 +178,7 @@ const layer = Layer.effect(
     const lead = (folder: string) =>
       fs.resolve(folder).pipe(
         // A folder that is not a link keeps its own spelling, so no second rule is written for it.
-        Effect.map((resolved) =>
-          resolved.toLowerCase() === path.resolve(folder).toLowerCase() ? folder : resolved,
-        ),
+        Effect.map((resolved) => (resolved.toLowerCase() === path.resolve(folder).toLowerCase() ? folder : resolved)),
         // Any failure keeps the spelled path: `resolve` dies, not fails, on a link loop at the folder.
         Effect.catchCause(() => Effect.succeed(folder)),
       )

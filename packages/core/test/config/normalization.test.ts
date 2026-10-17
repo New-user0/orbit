@@ -3,6 +3,7 @@ import { Duration, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { ConfigNormalize } from "@orbit/core/config/normalize"
 import { Info } from "@orbit/schema/config"
+import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigHooks } from "@orbit/schema/config/hooks"
 
 const options = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
@@ -218,7 +219,17 @@ describe("ConfigNormalize", () => {
   test("preserves arbitrary JSON-round-tripped native configuration", () => {
     FastCheck.assert(
       FastCheck.property(Schema.toArbitrary(Info)(FastCheck), (info) => {
-        const source = JSON.parse(JSON.stringify(Schema.encodeSync(Info)(info)))
+        const generated = JSON.parse(JSON.stringify(Schema.encodeSync(Info)(info)))
+        // An agent whose name is not a plain one defines nothing, so it is not expected to come through.
+        const source =
+          generated.agents === undefined
+            ? generated
+            : {
+                ...generated,
+                agents: Object.fromEntries(
+                  Object.entries(generated.agents).filter(([name]) => ConfigAgent.isName(name)),
+                ),
+              }
         const result = normalized(source)
         // Normalizing hooks drops the entries their event or hook type cannot honor, and reports each one.
         const hooked =
@@ -998,5 +1009,95 @@ describe("ConfigNormalize", () => {
         { numRuns: 100 },
       )
     })
+  })
+})
+
+describe("ConfigNormalize agent definitions", () => {
+  test("migrates an orbit.json agent whose tools is a map of booleans, and keeps the entry", () => {
+    const result = normalized({ agents: { reviewer: { description: "Reviews", tools: { edit: false } } } })
+    expect(result.encoded.agents).toEqual({
+      reviewer: { description: "Reviews", permissions: [{ action: "edit", resource: "*", effect: "deny" }] },
+    })
+  })
+
+  test("reads a string or a list of tools as the native allow list", () => {
+    const input = { agents: { a: { tools: "read, grep" }, b: { tools: ["read"] } } }
+    expect(decoded(input).agents?.a?.tools).toEqual(["read", "grep"])
+    expect(normalized(input).diagnostics).toEqual([])
+  })
+
+  test.each(["fast", "default", "sonnet", "not a model", 3])(
+    "drops the model %p with a diagnostic and keeps the agent",
+    (model) => {
+      const result = normalized({ agents: { a: { description: "Kept", model } } })
+      expect(result.encoded.agents).toEqual({ a: { description: "Kept" } })
+      expect(result.diagnostics.map((item) => [item.kind, item.path.join(".")])).toEqual([
+        ["invalid", "agents.a.model"],
+      ])
+    },
+  )
+
+  test.each([
+    [" Inherit ", "inherit"],
+    ["SMALL", "small"],
+    ["large", "large"],
+  ])("reads the model alias %p", (model, tier) => {
+    expect<unknown>(decoded({ agents: { a: { model } } }).agents?.a?.model).toBe(tier)
+  })
+
+  test("keeps the fields of an agent that decode and drops each bad one on its own", () => {
+    const result = normalized({
+      agents: {
+        a: {
+          description: "Kept",
+          max_turns: 0,
+          memory: "global",
+          isolation: "remote",
+          background: "yes",
+          effort: "a#b",
+        },
+      },
+    })
+    expect(result.encoded.agents).toEqual({ a: { description: "Kept" } })
+    expect(result.diagnostics.map((item) => item.path.join(".")).toSorted()).toEqual([
+      "agents.a.background",
+      "agents.a.effort",
+      "agents.a.isolation",
+      "agents.a.max_turns",
+      "agents.a.memory",
+    ])
+  })
+
+  test("keeps the good items of mcp_servers and drops the others", () => {
+    const local = { type: "local", command: ["x"] }
+    const parsed = decoded({ agents: { a: { mcp_servers: ["docs", 42, { one: local }, { one: local, two: local }] } } })
+    expect<unknown>(parsed.agents?.a?.mcp_servers).toEqual(["docs", { one: local }])
+  })
+
+  test.each(["../x", "a\\b", "a:b", "a b", "", ".hidden", "nul", "con.txt", "a/../b", "a//b", "x".repeat(65)])(
+    "defines no agent for the name %p, in agents, agent and mode, and the sibling loads",
+    (name) => {
+      const result = normalized({
+        agents: { [name]: { description: "bad" }, ok: { description: "ok" } },
+        agent: { [name]: { description: "bad" }, legacy: { description: "ok" } },
+        mode: { [name]: { description: "bad" }, modal: { description: "ok" } },
+      })
+      expect(Object.keys(result.encoded.agents as object).toSorted()).toEqual(["legacy", "modal", "ok"])
+      expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(
+        ["agent", "mode", "agents"].map((key) => [key, name].join(".")),
+      )
+    },
+  )
+
+  test("keeps a nested agent name", () => {
+    expect(
+      Object.keys(normalized({ agents: { "team/helper": { description: "ok" } } }).encoded.agents as object),
+    ).toEqual(["team/helper"])
+  })
+
+  test("normalizes model_aliases field by field", () => {
+    const result = normalized({ model_aliases: { small: "acme/cheap", large: "no-provider" } })
+    expect(result.encoded.model_aliases).toEqual({ small: { providerID: "acme", model: "cheap" } })
+    expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(["model_aliases.large"])
   })
 })

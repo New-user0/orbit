@@ -13299,6 +13299,19 @@
       "Agent.Color": {
         "type": "string"
       },
+      "Agent.Context": {
+        "type": "object",
+        "properties": {
+          "instructions": {
+            "type": "boolean"
+          },
+          "git_status": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "What the agent leaves out of its context"
+      },
       "Agent.Info": {
         "type": "object",
         "properties": {
@@ -13336,10 +13349,298 @@
           },
           "permissions": {
             "$ref": "#/components/schemas/Permission.Ruleset"
+          },
+          "modelTier": {
+            "$ref": "#/components/schemas/Agent.ModelTier"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "object",
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "deny": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "permissionMode": {
+            "$ref": "#/components/schemas/Permission.Mode"
+          },
+          "mcpServers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent.McpServer"
+            }
+          },
+          "hooks": {
+            "type": "object",
+            "properties": {
+              "SessionStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SessionEnd": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Setup": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "UserPromptSubmit": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUseFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionRequest": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionDenied": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Stop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "StopFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCreated": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCompleted": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TeammateIdle": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Notification": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Elicitation": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ElicitationResult": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ConfigChange": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "InstructionsLoaded": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "CwdChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "FileChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeCreate": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeRemove": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "disabled": {
+                "type": "boolean"
+              },
+              "managed_only": {
+                "type": "boolean"
+              },
+              "http": {
+                "$ref": "#/components/schemas/Config.Hooks.HttpPolicy"
+              }
+            },
+            "additionalProperties": false
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "initialPrompt": {
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/Agent.Memory"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "isolation": {
+            "$ref": "#/components/schemas/Agent.Isolation"
+          },
+          "context": {
+            "$ref": "#/components/schemas/Agent.Context"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "$ref": "#/components/schemas/Config.Scope"
+              },
+              "path": {
+                "type": "string"
+              },
+              "plugin": {
+                "type": "string"
+              }
+            },
+            "required": ["scope"],
+            "additionalProperties": false
           }
         },
         "required": ["id", "name", "request", "mode", "hidden", "permissions"],
         "additionalProperties": false
+      },
+      "Agent.Isolation": {
+        "type": "string",
+        "enum": ["worktree"],
+        "description": "Run the agent in a separate git worktree"
+      },
+      "Agent.McpServer": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Mcp.LocalConfigEncoded"
+                },
+                {
+                  "$ref": "#/components/schemas/Mcp.RemoteConfigEncoded"
+                }
+              ]
+            },
+            "minProperties": 1,
+            "maxProperties": 1
+          }
+        ],
+        "description": "The name of a configured MCP server, or a record with one key that names an inline server and holds its config"
+      },
+      "Agent.Memory": {
+        "type": "string",
+        "enum": ["user", "project", "local"],
+        "description": "Which memory scope the agent keeps its notes in"
+      },
+      "Agent.ModelTier": {
+        "type": "string",
+        "enum": ["inherit", "small", "large"],
+        "description": "A provider-neutral model choice: inherit uses the caller's model, small the configured small model and large the configured large model"
+      },
+      "Agent.ModelTierEncoded": {
+        "type": "string"
       },
       "AgentNotFoundErrorEncoded": {
         "type": "object",
@@ -13411,29 +13712,16 @@
           "model": {
             "anyOf": [
               {
-                "type": "string",
-                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+                "$ref": "#/components/schemas/Config.ModelSelectionEncoded"
               },
               {
-                "type": "object",
-                "properties": {
-                  "providerID": {
-                    "type": "string",
-                    "pattern": "^[^/#]+$"
-                  },
-                  "model": {
-                    "type": "string",
-                    "pattern": "^[^#]+$"
-                  },
-                  "variant": {
-                    "type": "string",
-                    "pattern": "^[^#]+$"
-                  }
-                },
-                "required": ["providerID", "model"],
-                "additionalProperties": false
+                "$ref": "#/components/schemas/Agent.ModelTierEncoded"
               }
             ]
+          },
+          "effort": {
+            "type": "string",
+            "pattern": "^[^#]+$"
           },
           "request": {
             "type": "object",
@@ -13471,11 +13759,267 @@
             "type": "integer",
             "exclusiveMinimum": 0
           },
+          "max_turns": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
           "disabled": {
             "type": "boolean"
           },
           "permissions": {
             "$ref": "#/components/schemas/Permission.Ruleset"
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disallowed_tools": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permission_mode": {
+            "$ref": "#/components/schemas/Permission.Mode"
+          },
+          "mcp_servers": {
+            "type": "array"
+          },
+          "hooks": {
+            "type": "object",
+            "properties": {
+              "SessionStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SessionEnd": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Setup": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "UserPromptSubmit": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUseFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionRequest": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionDenied": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Stop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "StopFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCreated": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCompleted": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TeammateIdle": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Notification": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Elicitation": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ElicitationResult": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ConfigChange": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "InstructionsLoaded": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "CwdChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "FileChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeCreate": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeRemove": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "disabled": {
+                "type": "boolean"
+              },
+              "managed_only": {
+                "type": "boolean"
+              },
+              "http": {
+                "$ref": "#/components/schemas/Config.Hooks.HttpPolicy"
+              }
+            },
+            "additionalProperties": false
+          },
+          "skills": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initial_prompt": {
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/Agent.Memory"
+          },
+          "background": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "enum": ["true", "false"]
+              }
+            ]
+          },
+          "isolation": {
+            "$ref": "#/components/schemas/Agent.Isolation"
+          },
+          "context": {
+            "$ref": "#/components/schemas/Agent.Context"
           }
         },
         "additionalProperties": false
@@ -14010,6 +14554,9 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "model_aliases": {
+            "$ref": "#/components/schemas/Config.ModelAliasesEncoded"
           },
           "output_token_cap": {
             "type": "integer",
@@ -14706,6 +15253,66 @@
           }
         ]
       },
+      "Config.ModelAliasesEncoded": {
+        "type": "object",
+        "properties": {
+          "small": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "providerID": {
+                    "type": "string",
+                    "pattern": "^[^/#]+$"
+                  },
+                  "model": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  },
+                  "variant": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  }
+                },
+                "required": ["providerID", "model"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "large": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "providerID": {
+                    "type": "string",
+                    "pattern": "^[^/#]+$"
+                  },
+                  "model": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  },
+                  "variant": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  }
+                },
+                "required": ["providerID", "model"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "Config.ModelEncoded": {
         "type": "object",
         "properties": {
@@ -14797,6 +15404,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "Config.ModelSelectionEncoded": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string",
+                "pattern": "^[^/#]+$"
+              },
+              "model": {
+                "type": "string",
+                "pattern": "^[^#]+$"
+              },
+              "variant": {
+                "type": "string",
+                "pattern": "^[^#]+$"
+              }
+            },
+            "required": ["providerID", "model"],
+            "additionalProperties": false
+          }
+        ]
       },
       "Config.Patch": {
         "type": "object",
@@ -17326,6 +17960,11 @@
       "Permission.Effect": {
         "type": "string",
         "enum": ["allow", "deny", "ask"]
+      },
+      "Permission.Mode": {
+        "type": "string",
+        "enum": ["default", "accept-edits", "plan", "bypass", "dont-ask", "auto"],
+        "description": "How permission requests are decided: default asks, accept-edits allows file edits, plan is read-only, bypass allows everything, dont-ask refuses what would be asked, auto lets a classifier decide"
       },
       "Permission.Reply": {
         "type": "string",

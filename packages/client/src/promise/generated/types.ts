@@ -40,6 +40,65 @@ export type AgentColor = string
 
 export type PermissionEffect = "allow" | "deny" | "ask"
 
+export type AgentModelTier = "inherit" | "small" | "large"
+
+export type PermissionMode = "default" | "accept-edits" | "plan" | "bypass" | "dont-ask" | "auto"
+
+export type McpProtocol = "legacy" | "auto" | "2026-07-28"
+
+export type ConfigHooksCommand = {
+  type: "command"
+  command: string
+  shell?: "bash" | "powershell"
+  async?: boolean
+  async_rewake?: boolean
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksPrompt = {
+  type: "prompt"
+  prompt: string
+  model?: string | { providerID: string; model: string; variant?: string }
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksAgent = {
+  type: "agent"
+  prompt: string
+  model?: string | { providerID: string; model: string; variant?: string }
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksHttp = {
+  type: "http"
+  url: string
+  headers?: { [x: string]: string }
+  allowed_env_vars?: Array<string>
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksHttpPolicy = { allowed_urls?: Array<string>; allowed_env_vars?: Array<string> }
+
+export type AgentMemory = "user" | "project" | "local"
+
+export type AgentIsolation = "worktree"
+
+export type AgentContext = { instructions?: boolean; git_status?: boolean }
+
+export type ConfigScope = "remote" | "user" | "project" | "local" | "flag" | "managed"
+
 export type PluginSource =
   | { type: "builtin" }
   | { type: "package"; target: string; version?: string; outdated?: true; updating?: true }
@@ -446,55 +505,6 @@ export type WebSearchProvider = { id: string; name: string }
 
 export type WebSearchResult = { url: string; title?: string; content?: string; time: { published?: number } }
 
-export type ConfigScope = "remote" | "user" | "project" | "local" | "flag" | "managed"
-
-export type ConfigHooksCommand = {
-  type: "command"
-  command: string
-  shell?: "bash" | "powershell"
-  async?: boolean
-  async_rewake?: boolean
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksPrompt = {
-  type: "prompt"
-  prompt: string
-  model?: string | { providerID: string; model: string; variant?: string }
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksAgent = {
-  type: "agent"
-  prompt: string
-  model?: string | { providerID: string; model: string; variant?: string }
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksHttp = {
-  type: "http"
-  url: string
-  headers?: { [x: string]: string }
-  allowed_env_vars?: Array<string>
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksHttpPolicy = { allowed_urls?: Array<string>; allowed_env_vars?: Array<string> }
-
-export type McpProtocol = "legacy" | "auto" | "2026-07-28"
-
 export type ConfigWorktree = { directory: string }
 
 export type ConfigModelCapabilities = { tools?: boolean; input?: Array<string>; output?: Array<string> }
@@ -564,6 +574,44 @@ export type ConfigProviderSettings = {
 } & { [x: string]: JsonValue | null }
 
 export type PermissionRule = { action: string; resource: string; effect: PermissionEffect }
+
+export type AgentMcpServer =
+  | string
+  | {
+      [x: string]:
+        | {
+            type: "local"
+            command: Array<string>
+            cwd?: string
+            environment?: { [x: string]: string }
+            disabled?: boolean
+            codemode?: boolean
+            timeout?: { startup?: number; catalog?: number; execution?: number }
+            protocol?: McpProtocol
+          }
+        | {
+            type: "remote"
+            url: string
+            transport?: "streamable-http" | "sse"
+            headers?: { [x: string]: string }
+            oauth?:
+              | {
+                  client_id?: string
+                  client_secret?: string
+                  scope?: string
+                  callback_port?: number
+                  redirect_uri?: string
+                  auth_server_metadata_url?: string
+                }
+              | false
+            disabled?: boolean
+            codemode?: boolean
+            timeout?: { startup?: number; catalog?: number; execution?: number }
+            protocol?: McpProtocol
+          }
+    }
+
+export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHooksAgent | ConfigHooksHttp
 
 export type PluginInfo = { id?: string; source: PluginSource; features: PluginFeatures; state: PluginState }
 
@@ -1796,8 +1844,6 @@ export type WorktreeList = Array<WorktreeDirectory>
 
 export type VcsInfo = { provider?: string; branch: VcsBranch }
 
-export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHooksAgent | ConfigHooksHttp
-
 export type TrustStatus = {
   directory: string
   trusted: boolean
@@ -1842,6 +1888,8 @@ export type ProviderInfo = {
 }
 
 export type PermissionRuleset = Array<PermissionRule>
+
+export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksHook> }
 
 export type SessionRevertStaged = {
   id: string
@@ -2065,8 +2113,6 @@ export type ReferenceInfo = {
   source: ReferenceSource
 }
 
-export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksHook> }
-
 export type ModelInfo = {
   id: string
   modelID: string
@@ -2087,20 +2133,6 @@ export type ModelInfo = {
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   limit: { context: number; input?: number; output: number }
-}
-
-export type AgentInfo = {
-  id: string
-  name: string
-  model?: ModelRef
-  request: ProviderRequest
-  system?: string
-  description?: string
-  mode: "subagent" | "primary" | "all"
-  hidden: boolean
-  color?: AgentColor
-  steps?: number
-  permissions: PermissionRuleset
 }
 
 export type SessionPermissions = {
@@ -2155,63 +2187,63 @@ export type SessionCreated = {
   }
 }
 
-export type SessionInboxUser = {
-  id: string
-  sessionID: string
-  time: { created: number }
-  type: "user"
-  payload: SessionInboxUserPayload
-  delivery: SessionInboxDelivery
-}
-
-export type SessionInboxItem =
-  | { type: "user"; payload: SessionInboxUserPayload1; delivery: SessionInboxDelivery }
-  | { type: "synthetic"; payload: SessionInboxSyntheticPayload1; delivery: SessionInboxDelivery }
-  | { type: "compaction"; payload: SessionInboxCompactionPayload; delivery: SessionInboxDelivery }
-  | { type: "move"; payload: SessionInboxMovePayload1; delivery: SessionInboxDelivery }
-
-export type SessionMessageAssistantTool = {
-  type: "tool"
+export type AgentInfo = {
   id: string
   name: string
-  displayName?: string
-  executed?: boolean
-  providerState?: SessionMessageProviderState
-  providerResultState?: SessionMessageProviderState
-  state:
-    | SessionMessageToolStateStreaming
-    | SessionMessageToolStateRunning
-    | SessionMessageToolStateCompleted
-    | SessionMessageToolStateError
-  time: { created: number; ran?: number; completed?: number }
+  model?: ModelRef
+  request: ProviderRequest
+  system?: string
+  description?: string
+  mode: "subagent" | "primary" | "all"
+  hidden: boolean
+  color?: AgentColor
+  steps?: number
+  permissions: PermissionRuleset
+  modelTier?: AgentModelTier
+  effort?: string
+  tools?: { allow?: Array<string>; deny?: Array<string> }
+  permissionMode?: PermissionMode
+  mcpServers?: Array<AgentMcpServer>
+  hooks?: {
+    SessionStart?: Array<ConfigHooksMatcher>
+    SessionEnd?: Array<ConfigHooksMatcher>
+    Setup?: Array<ConfigHooksMatcher>
+    UserPromptSubmit?: Array<ConfigHooksMatcher>
+    PreToolUse?: Array<ConfigHooksMatcher>
+    PostToolUse?: Array<ConfigHooksMatcher>
+    PostToolUseFailure?: Array<ConfigHooksMatcher>
+    PermissionRequest?: Array<ConfigHooksMatcher>
+    PermissionDenied?: Array<ConfigHooksMatcher>
+    Stop?: Array<ConfigHooksMatcher>
+    StopFailure?: Array<ConfigHooksMatcher>
+    SubagentStart?: Array<ConfigHooksMatcher>
+    SubagentStop?: Array<ConfigHooksMatcher>
+    TaskCreated?: Array<ConfigHooksMatcher>
+    TaskCompleted?: Array<ConfigHooksMatcher>
+    TeammateIdle?: Array<ConfigHooksMatcher>
+    Notification?: Array<ConfigHooksMatcher>
+    PreCompact?: Array<ConfigHooksMatcher>
+    PostCompact?: Array<ConfigHooksMatcher>
+    Elicitation?: Array<ConfigHooksMatcher>
+    ElicitationResult?: Array<ConfigHooksMatcher>
+    ConfigChange?: Array<ConfigHooksMatcher>
+    InstructionsLoaded?: Array<ConfigHooksMatcher>
+    CwdChanged?: Array<ConfigHooksMatcher>
+    FileChanged?: Array<ConfigHooksMatcher>
+    WorktreeCreate?: Array<ConfigHooksMatcher>
+    WorktreeRemove?: Array<ConfigHooksMatcher>
+    disabled?: boolean
+    managed_only?: boolean
+    http?: ConfigHooksHttpPolicy
+  }
+  skills?: Array<string>
+  initialPrompt?: string
+  memory?: AgentMemory
+  background?: boolean
+  isolation?: AgentIsolation
+  context?: AgentContext
+  source?: { scope: ConfigScope; path?: string; plugin?: string }
 }
-
-export type SessionMessageCompaction =
-  | SessionMessageCompactionRunning
-  | SessionMessageCompactionCompleted
-  | SessionMessageCompactionFailed
-
-export type SessionMessageAssistantTool1 = {
-  type: "tool"
-  id: string
-  name: string
-  displayName?: string
-  executed?: boolean
-  providerState?: SessionMessageProviderState1
-  providerResultState?: SessionMessageProviderState1
-  state:
-    | SessionMessageToolStateStreaming
-    | SessionMessageToolStateRunning1
-    | SessionMessageToolStateCompleted1
-    | SessionMessageToolStateError1
-  time: { created: number; ran?: number; completed?: number }
-}
-
-export type FormFields = [FormField, ...Array<FormField>]
-
-export type CredentialValue = CredentialOAuth | CredentialKey
-
-export type FormFields2 = [FormField1, ...Array<FormField1>]
 
 export type ConfigEntry =
   | {
@@ -2226,6 +2258,10 @@ export type ConfigEntry =
         env?: { [x: string]: string }
         model?: string | { providerID: string; model: string; variant?: string }
         fallback_model?: string | { providerID: string; model: string; variant?: string }
+        model_aliases?: {
+          small?: string | { providerID: string; model: string; variant?: string }
+          large?: string | { providerID: string; model: string; variant?: string }
+        }
         output_token_cap?: number
         git_status?: boolean
         default_agent?: string
@@ -2240,7 +2276,8 @@ export type ConfigEntry =
         permissions?: PermissionRuleset
         agents?: {
           [x: string]: {
-            model?: string | { providerID: string; model: string; variant?: string }
+            model?: string | { providerID: string; model: string; variant?: string } | string
+            effort?: string
             request?: { headers?: { [x: string]: string }; body?: { [x: string]: JsonValue } }
             system?: string
             description?: string
@@ -2248,8 +2285,51 @@ export type ConfigEntry =
             hidden?: boolean
             color?: string
             steps?: number
+            max_turns?: number | string
             disabled?: boolean
             permissions?: PermissionRuleset
+            tools?: string | Array<JsonValue> | null
+            disallowed_tools?: string | Array<JsonValue> | null
+            permission_mode?: PermissionMode
+            mcp_servers?: Array<JsonValue>
+            hooks?: {
+              SessionStart?: Array<ConfigHooksMatcher>
+              SessionEnd?: Array<ConfigHooksMatcher>
+              Setup?: Array<ConfigHooksMatcher>
+              UserPromptSubmit?: Array<ConfigHooksMatcher>
+              PreToolUse?: Array<ConfigHooksMatcher>
+              PostToolUse?: Array<ConfigHooksMatcher>
+              PostToolUseFailure?: Array<ConfigHooksMatcher>
+              PermissionRequest?: Array<ConfigHooksMatcher>
+              PermissionDenied?: Array<ConfigHooksMatcher>
+              Stop?: Array<ConfigHooksMatcher>
+              StopFailure?: Array<ConfigHooksMatcher>
+              SubagentStart?: Array<ConfigHooksMatcher>
+              SubagentStop?: Array<ConfigHooksMatcher>
+              TaskCreated?: Array<ConfigHooksMatcher>
+              TaskCompleted?: Array<ConfigHooksMatcher>
+              TeammateIdle?: Array<ConfigHooksMatcher>
+              Notification?: Array<ConfigHooksMatcher>
+              PreCompact?: Array<ConfigHooksMatcher>
+              PostCompact?: Array<ConfigHooksMatcher>
+              Elicitation?: Array<ConfigHooksMatcher>
+              ElicitationResult?: Array<ConfigHooksMatcher>
+              ConfigChange?: Array<ConfigHooksMatcher>
+              InstructionsLoaded?: Array<ConfigHooksMatcher>
+              CwdChanged?: Array<ConfigHooksMatcher>
+              FileChanged?: Array<ConfigHooksMatcher>
+              WorktreeCreate?: Array<ConfigHooksMatcher>
+              WorktreeRemove?: Array<ConfigHooksMatcher>
+              disabled?: boolean
+              managed_only?: boolean
+              http?: ConfigHooksHttpPolicy
+            }
+            skills?: string | Array<JsonValue> | null
+            initial_prompt?: string
+            memory?: AgentMemory
+            background?: boolean | "true" | "false"
+            isolation?: AgentIsolation
+            context?: AgentContext
           }
         }
         snapshots?: boolean
@@ -2433,6 +2513,64 @@ export type ConfigEntry =
       }
     }
   | { type: "directory"; path: string; scope?: ConfigScope; trusted?: boolean; withheld?: Array<TrustKind> }
+
+export type SessionInboxUser = {
+  id: string
+  sessionID: string
+  time: { created: number }
+  type: "user"
+  payload: SessionInboxUserPayload
+  delivery: SessionInboxDelivery
+}
+
+export type SessionInboxItem =
+  | { type: "user"; payload: SessionInboxUserPayload1; delivery: SessionInboxDelivery }
+  | { type: "synthetic"; payload: SessionInboxSyntheticPayload1; delivery: SessionInboxDelivery }
+  | { type: "compaction"; payload: SessionInboxCompactionPayload; delivery: SessionInboxDelivery }
+  | { type: "move"; payload: SessionInboxMovePayload1; delivery: SessionInboxDelivery }
+
+export type SessionMessageAssistantTool = {
+  type: "tool"
+  id: string
+  name: string
+  displayName?: string
+  executed?: boolean
+  providerState?: SessionMessageProviderState
+  providerResultState?: SessionMessageProviderState
+  state:
+    | SessionMessageToolStateStreaming
+    | SessionMessageToolStateRunning
+    | SessionMessageToolStateCompleted
+    | SessionMessageToolStateError
+  time: { created: number; ran?: number; completed?: number }
+}
+
+export type SessionMessageCompaction =
+  | SessionMessageCompactionRunning
+  | SessionMessageCompactionCompleted
+  | SessionMessageCompactionFailed
+
+export type SessionMessageAssistantTool1 = {
+  type: "tool"
+  id: string
+  name: string
+  displayName?: string
+  executed?: boolean
+  providerState?: SessionMessageProviderState1
+  providerResultState?: SessionMessageProviderState1
+  state:
+    | SessionMessageToolStateStreaming
+    | SessionMessageToolStateRunning1
+    | SessionMessageToolStateCompleted1
+    | SessionMessageToolStateError1
+  time: { created: number; ran?: number; completed?: number }
+}
+
+export type FormFields = [FormField, ...Array<FormField>]
+
+export type CredentialValue = CredentialOAuth | CredentialKey
+
+export type FormFields2 = [FormField1, ...Array<FormField1>]
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
 

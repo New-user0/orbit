@@ -40,7 +40,7 @@ const AgentSchema = Schema.StructWithRest(
   [Schema.Record(Schema.String, Schema.Any)],
 )
 
-const KNOWN_KEYS = new Set(["name", ...Object.keys(AgentSchema.schema.fields)])
+export const KNOWN_KEYS = new Set(["name", ...Object.keys(AgentSchema.schema.fields)])
 
 const normalize = (agent: Schema.Schema.Type<typeof AgentSchema>): Schema.Schema.Type<typeof AgentSchema> => {
   const options: Record<string, unknown> = { ...agent.options }

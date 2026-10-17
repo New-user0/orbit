@@ -163,6 +163,11 @@ function toolExecution(value: ConfigToolExecution.Info): Outcome<ConfigToolExecu
   return { value: undefined, withheld: ["settings"] }
 }
 
+// A slash command in the text would run a command that nobody typed.
+function initialPrompt(value: string): Outcome<string> {
+  return value.trimStart().startsWith("/") ? { value: undefined, withheld: ["commands"] } : { value, withheld: [] }
+}
+
 function agents(
   value: Readonly<Record<string, ConfigAgent.Info>>,
   place: Place,
@@ -222,6 +227,8 @@ export const classification = {
     // A model, a provider or a budget is paid for by the user, and the owner decided that an untrusted folder cannot pick one.
     model: withhold("providers"),
     fallback_model: withhold("providers"),
+    // The names small and large pick the models that agents run on, which the user pays for. The owner chose to withhold it.
+    model_aliases: withhold("providers"),
     output_token_cap: withhold("providers"),
     // It can only drop the git snapshot, and the snapshot runs only in a trusted folder anyway.
     git_status: inert,
@@ -289,6 +296,29 @@ export const classification = {
     color: inert,
     // A step allowance is a budget on the user's spend, so it is held back like the model.
     steps: withhold("providers"),
+    max_turns: withhold("providers"),
+    // A thinking budget is paid for by the user, like the model.
+    effort: withhold("providers"),
+    // The allow list chooses the tools and, through the one that starts agents, other agents.
+    tools: withhold("permissions"),
+    // It only removes tools, as a deny rule does.
+    disallowed_tools: inert,
+    permission_mode: withhold("permissions"),
+    // An MCP server is a program to start or a server of the person to reach.
+    mcp_servers: withhold("mcp"),
+    hooks: withhold("hooks"),
+    // A skill carries shell snippets and grants of its own.
+    skills: withhold("skills"),
+    // A slash command at the start would run a command nobody typed. Plain text is only a prompt.
+    initial_prompt: filter(initialPrompt),
+    // The user scope would write into the person's own memory.
+    memory: withhold("permissions"),
+    // It only changes how the run is attached.
+    background: inert,
+    // It starts a worktree in the folder, as the worktree setting does.
+    isolation: withhold("settings"),
+    // It only removes context.
+    context: inert,
     // Removing an agent also removes the rules the user attached to it, and an agent defined afterwards starts from
     // allowing everything.
     disabled: withhold("permissions"),
