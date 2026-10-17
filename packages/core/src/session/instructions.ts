@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Global } from "@orbit/util/global"
 import { Config } from "../config.js"
 import { ConfigInstructionFile } from "../config/instruction-file.js"
 import { Location } from "../location.js"
@@ -37,10 +38,12 @@ const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
     const trust = yield* ProjectTrust.Service
+    const global = yield* Global.Service
     // Resolved once for the Location layer; the synthetic text and dedup ledger keep
     // absolute paths, but the human-facing description shows paths relative to the project
     // root so opening a subdirectory still describes paths from the project root.
     const root = yield* fs.resolve(location.project.directory)
+    const home = yield* fs.resolve(global.home)
     // Same-step parallel reads settle concurrently, so an in-memory claim guards each
     // Session/path pair while a load is in flight. The claim is released once the load
     // settles: the synthetic message metadata scanned below is the only lasting ledger,
@@ -73,6 +76,8 @@ const layer = Layer.effect(
         return [newlyClaimed, next]
       })
       if (claimed.length === 0) return
+      // The imports that this call has claimed, which are released with the paths it was asked about.
+      const imported: string[] = []
       yield* Effect.gen(function* () {
         const alreadyInjected = yield* previouslyInjected(store, input.sessionID)
         // What the settings of every scope exclude as of now, which is asked before anything is read: an excluded file is
@@ -89,25 +94,54 @@ const layer = Layer.effect(
               : reachable(path),
         )
         if (toInject.length === 0) return
-        // The model reads each file as the session start does (`ConfigInstructionFile`). Injecting it is not a read as the
-        // edit tools count it: the ledger is not told, so changing the file still needs a real read of it. A file that is
-        // excluded, or has nothing left once processed, is not recorded either, and the next read looks at it again. Only
-        // the files loaded at the start are flagged for their size, so no warning is made here.
-        const files = yield* Effect.forEach(
-          toInject,
-          (path) =>
-            fs.readFileStringSafe(path).pipe(
-              Effect.map((text) =>
-                text === undefined
-                  ? undefined
-                  : { path, content: ConfigInstructionFile.parse(text, { frontmatter: true }).content },
-              ),
-            ),
-          { concurrency: "unbounded" },
-        )
-        const readable = files.filter(
-          (file): file is { path: string; content: string } => file !== undefined && file.content.trim() !== "",
-        )
+        // The model reads each file as the session start does (`ConfigInstructionFile`), and the files it imports after it,
+        // inside the project only: a file the model's reads load never imports from outside, trusted or not. Injecting it
+        // is not a read as the edit tools count it: the ledger is not told, so changing the file still needs a real read of
+        // it. A file that is excluded, or has nothing left once processed, is not recorded either, and the next read looks
+        // at it again. Only the files loaded at the start are flagged for their size, so no warning is made here. A fresh
+        // set of handled files for each call, and the files one after the other, so that an import two of them share is
+        // loaded once.
+        const visited = new Set<string>()
+        const readable: Array<{ path: string; content: string }> = []
+        for (const path of toInject) {
+          const loaded = yield* ConfigInstructionFile.load({
+            path,
+            scope: "project",
+            visited,
+            patterns,
+            home,
+            fs,
+            leads: trust.leads,
+            allow: (real, spelling) => trust.importable(spelling, real),
+            // An import that is already in the conversation, or that a read in flight is loading, is not loaded again.
+            claim: Effect.fnUntraced(function* (real: string) {
+              const taken = yield* Ref.modify(inFlight, (map) => {
+                const existing = map.get(input.sessionID) ?? new Set<string>()
+                if (existing.has(real)) return [false, map]
+                const next = new Map(map)
+                next.set(input.sessionID, new Set([...existing, real]))
+                return [true, next]
+              })
+              if (!taken) return false
+              imported.push(real)
+              // The conversation is asked after the claim is made: a read that finished in between has released its claim
+              // only after its message was committed, so one of the two answers is always no.
+              // A history that cannot be read leaves the import out, which only costs the import.
+              return yield* previouslyInjected(store, input.sessionID).pipe(
+                Effect.map((injected) => !injected.has(real)),
+                Effect.orElseSucceed(() => false),
+              )
+            }),
+          })
+          if (loaded === undefined) continue
+          for (const item of loaded.skipped)
+            yield* Effect.logDebug("instruction import skipped", {
+              path: item.importer,
+              target: item.target,
+              reason: "outside the project",
+            })
+          readable.push(...loaded.files)
+        }
         if (readable.length === 0) return
         // Publish directly rather than through Session.synthetic: a Location-scoped layer
         // cannot depend on Session (it routes through LocationServiceMap, forming a type
@@ -124,7 +158,7 @@ const layer = Layer.effect(
           Ref.update(inFlight, (map) => {
             const existing = map.get(input.sessionID)
             if (!existing) return map
-            const remaining = new Set([...existing].filter((path) => !claimed.includes(path)))
+            const remaining = new Set([...existing].filter((path) => !claimed.includes(path) && !imported.includes(path)))
             const next = new Map(map)
             if (remaining.size === 0) next.delete(input.sessionID)
             else next.set(input.sessionID, remaining)
@@ -163,5 +197,5 @@ function describePath(root: string, path: string) {
 export const node = makeLocationNode({
   name: "session-instructions",
   layer,
-  deps: [Bus.node, Config.node, FSUtil.node, Location.node, ProjectTrust.node, SessionStore.node],
+  deps: [Bus.node, Config.node, FSUtil.node, Global.node, Location.node, ProjectTrust.node, SessionStore.node],
 })

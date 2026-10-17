@@ -27,6 +27,26 @@ export class Warning extends Schema.Class<Warning>("InstructionDiscovery.Warning
   limit: PositiveInt,
 }) {}
 
+/**
+ * An import that an instruction file in the project made and that was left out, because the file it names is outside the
+ * project. `path` is the file that made it and `target` the real path it leads to, never the text of the token. Like
+ * every warning it never reaches the model.
+ */
+export class ImportWarning extends Schema.Class<ImportWarning>("InstructionDiscovery.ImportWarning")({
+  path: AbsolutePath,
+  kind: Schema.Literal("import"),
+  target: AbsolutePath,
+}) {}
+
+/**
+ * Which loaded files an instruction file imported. It is kept beside the files and not in them, so that a file that
+ * becomes an import, or stops being one, with the same text changes no hash and starts no instruction update.
+ */
+export class Import extends Schema.Class<Import>("InstructionDiscovery.Import")({
+  path: AbsolutePath,
+  importedBy: AbsolutePath,
+}) {}
+
 const Files = Schema.Array(File)
 const key = Instructions.Key.make("core/instructions")
 
@@ -36,7 +56,8 @@ export const Event = {
 
 export type Data = {
   files: Map<AbsolutePath, Types.DeepMutable<File>>
-  warnings: Types.DeepMutable<Warning>[]
+  warnings: (Types.DeepMutable<Warning> | Types.DeepMutable<ImportWarning>)[]
+  imports: Types.DeepMutable<Import>[]
   available: boolean
 }
 
@@ -45,7 +66,9 @@ export type Editor = {
   // Map insertion order is render order: config adds global then nearest-to-farthest project files;
   // sibling contributors interleave by transform registration order.
   add: (file: File) => void
-  warn: (warning: Warning) => void
+  warn: (warning: Warning | ImportWarning) => void
+  /** Records that `path`, which is also added as a file, was imported by `importedBy`. */
+  imported: (path: string, importedBy: string) => void
   update: (path: string, update: (file: Types.DeepMutable<File>) => void) => void
   remove: (path: string) => void
   unavailable: () => void
@@ -58,7 +81,9 @@ export interface Interface extends State.Transformable<Editor> {
   readonly global: boolean
   readonly list: () => Effect.Effect<File[] | Instructions.Unavailable>
   /** What is worth telling a person about the files that `list` returns. Nothing here reaches the model. */
-  readonly warnings: () => Effect.Effect<readonly Warning[]>
+  readonly warnings: () => Effect.Effect<readonly (Warning | ImportWarning)[]>
+  /** Which of the files that `list` returns an instruction file imported, and which file imported it. Nothing here reaches the model. */
+  readonly imports: () => Effect.Effect<readonly Import[]>
   readonly load: () => Effect.Effect<Instructions.List>
 }
 
@@ -77,11 +102,18 @@ export const layer = (options?: Options) =>
       const bus = yield* Bus.Service
       const state = State.create<Data, Editor>({
         name: "instruction-discovery",
-        initial: () => ({ files: new Map(), warnings: [], available: true }),
+        initial: () => ({ files: new Map(), warnings: [], imports: [], available: true }),
         editor: (editor) => ({
           list: () => Array.from(editor.files.values()),
           add: (file) => editor.files.set(file.path, new File(file) as Types.DeepMutable<File>),
-          warn: (warning) => editor.warnings.push(new Warning(warning) as Types.DeepMutable<Warning>),
+          warn: (warning) =>
+            editor.warnings.push(
+              (warning.kind === "size" ? new Warning(warning) : new ImportWarning(warning)) as
+                | Types.DeepMutable<Warning>
+                | Types.DeepMutable<ImportWarning>,
+            ),
+          imported: (path, importedBy) =>
+            editor.imports.push(new Import({ path: AbsolutePath.make(path), importedBy: AbsolutePath.make(importedBy) })),
           update: (path, update) => {
             const current = editor.files.get(AbsolutePath.make(path))
             if (!current) return
@@ -91,6 +123,7 @@ export const layer = (options?: Options) =>
           remove: (path) => {
             editor.files.delete(AbsolutePath.make(path))
             editor.warnings = editor.warnings.filter((warning) => warning.path !== path)
+            editor.imports = editor.imports.filter((item) => item.path !== path)
           },
           unavailable: () => {
             editor.available = false
@@ -125,6 +158,9 @@ export const layer = (options?: Options) =>
         list,
         warnings: Effect.fn("InstructionDiscovery.warnings")(function* () {
           return Array.from(state.get().warnings)
+        }),
+        imports: Effect.fn("InstructionDiscovery.imports")(function* () {
+          return Array.from(state.get().imports)
         }),
         load: Effect.fn("InstructionDiscovery.load")(function* () {
           const files = yield* list()

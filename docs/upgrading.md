@@ -2608,6 +2608,31 @@ session is unaffected until its next step), and SDK callers that read `Config.In
 
 **What to do:** Nothing, or set `git_status` to `false` to keep git state out of the prompt.
 
+### `@path` in an instruction file loads that file
+
+An instruction file (`ORBIT.md`, `AGENTS.md`, another product's file when compatibility is on) can now pull in other
+files by writing `@path` in its text: `@./docs/style.md`, `@docs/style.md`, `@~/notes/mine.md` or an absolute path. The
+file is added to the instructions as a block of its own right after the file that named it, and its own `@path` lines are
+followed to a depth of five files, each file once. The `@path` text stays where it was written. Nothing is imported from
+inside a code span, a code block, an HTML block or comment, the target of a link or after a backslash, and a name with a
+`#` is cut there (`@./guide.md#setup` imports `./guide.md`). A target that is not there, is a folder, is not a text file
+(by its extension; a name with none counts) or holds a NUL character is skipped without a word, so prose such as `@team`
+costs nothing. `instructions_exclude` applies to imports as to any file, and an imported file is watched, so editing it
+updates the instructions of a running session. Files that the model's reads load later import the same way.
+
+A file in a project imports only files that really lie inside the folder you started in or inside the project, whether or
+not the project is trusted: a path that leaves it, or a link that leads out, is skipped, and the skipped target is
+recorded as a warning that no client shows yet. The home folder and a filesystem root are never counted as the project, and
+count only once a person trusts them for the session, and then only as the folder the session started in, so an untrusted
+session started in `~` imports nothing from below it, and a session started below `~` is held to its own folder. Your own global file may
+import any path that is not a network path. A path that names a network share is never opened.
+
+**Affects:** anyone whose instruction files already contain text like `@something` that names a file, which is now sent
+to the model, and anyone who puts secrets in files next to their instructions.
+
+**What to do:** Nothing for most setups. Write `\@name` or put the text in a code span to keep a name from being read as
+an import, or list the file in `instructions_exclude`.
+
 ### The model-family prompts are rewritten
 
 The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general prompt, which `optimize.ts` picks by a substring of the model ID and which the Astra IDs replace with their own, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their `Doing tasks`, `Code style` and `Verification` sections as it does the base's. The five full prompts and the local-model prompt tell the model to follow the user's and the project's instruction files, which come later in the prompt and win over the family guidance; on one point a project's file ranks lower, because it cannot approve a risky action ahead of time, while the user can in their own instructions or in the conversation (the base prompt is stricter and takes a standing yes only from the user's instructions). Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, sets a limit on reply length in lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.

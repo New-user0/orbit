@@ -3,7 +3,10 @@ export * as ConfigInstructionFile from "./instruction-file.js"
 import { CompatInstructions } from "@orbit/compat/instructions"
 import type { Entry } from "@orbit/schema/config"
 import { Glob } from "@orbit/util/glob"
+import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import { Effect } from "effect"
+import { dirname, extname, posix, win32 } from "path"
 import { ConfigMarkdown } from "./markdown.js"
 
 /** The most characters an instruction file may hold before it is flagged. A flagged file is still sent whole. */
@@ -417,4 +420,443 @@ function startsBlock(rest: string, indent: number) {
     listItem(rest, indent) !== undefined ||
     (indent === 0 && (rest.startsWith("<!--") || htmlBlock(rest, 0, true) !== undefined))
   )
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Imports
+//
+// A line of prose can write `@path` to pull another file into the prompt. `imports` finds the tokens and `load` follows
+// them. Both treat the file as hostile input: the scan reads the document once, line by line, with no Markdown library
+// (see the comment on linear time above), and `load` asks the caller's gate about every path before it reads one.
+
+/** The most files in one chain of imports: the file itself and four levels below it. A deeper file is left out, silently. */
+export const DEPTH = 5
+
+/**
+ * The import tokens that a processed instruction file holds, cleaned up and in the order they are written, each once.
+ *
+ * A token is an at sign that starts a run of plain text or follows whitespace, and the characters after it up to the next
+ * whitespace (a backslash followed by a space is part of the name). Fenced and indented code, code spans, HTML blocks,
+ * inline tags, comments and the target of a link are not text, and a backslash before the at sign keeps it literal.
+ * Everything from a `#` on is dropped, a backslash and space is a space, and a token is kept only if it is a path: it
+ * starts with `./`, `~/`, `/` and something more, or a letter, digit, dot, underscore or hyphen. A token with a control
+ * character in it is dropped, and only that token.
+ */
+export function imports(content: string): string[] {
+  const found = new Set<string>()
+  const lines = content.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n")
+  let segment: string[] = []
+  // A fence ends with the quote or the list item that holds it, so it remembers which it was opened in.
+  let fence: (Fence & { readonly indent: number; readonly quoted: boolean; readonly item: number | undefined }) | undefined
+  let quoted = false
+  let html: End | undefined
+  // The column that a line must reach to belong to the list item above it.
+  let offset: number | undefined
+  let paragraph = false
+  // Whether the line before in a fence was blank or opened it, which lets a line that is not indented enough end a fence
+  // in a list item. Any other line of text goes on being code, as a lazy continuation of the item does.
+  let loose = false
+
+  const flush = () => {
+    if (segment.length === 0) return
+    for (const token of tokens(segment.join("\n"))) found.add(token)
+    segment = []
+  }
+
+  // One piece of a line once its quote markers are off, and its list marker too when `depth` allows another.
+  const block = (text: string, indent: number, depth: number) => {
+    const relative = offset !== undefined && indent >= offset ? indent - offset : indent
+    if (relative >= 4) {
+      // Code, unless the paragraph above is still going, which takes the line as more of itself.
+      if (paragraph) segment.push(text)
+      else flush()
+      return
+    }
+    const opening = fenceOpening(text)
+    if (opening) {
+      flush()
+      fence = { ...opening, indent, quoted, item: offset !== undefined && indent >= offset ? offset : undefined }
+      loose = true
+      paragraph = false
+      return
+    }
+    if (text.startsWith("<!--") && !(paragraph && relative > 0)) {
+      flush()
+      paragraph = false
+      // A comment that its first line closes leaves whatever follows it on the line as text.
+      if (!text.includes("-->")) {
+        html = COMMENT_END
+        return
+      }
+      const left = withoutSpans(text)
+      if (left.trim() !== "") {
+        segment.push(left)
+        // What is left of the line is a run of its own, so a backtick or tag in it opens nothing on the next line.
+        flush()
+      }
+      return
+    }
+    const end = htmlBlock(text, relative, paragraph)
+    if (end !== undefined) {
+      flush()
+      if (end === "blank" || !end.test(text)) html = end
+      paragraph = false
+      return
+    }
+    if (/^#{1,6}(?:[ \t]|$)/.test(text)) {
+      flush()
+      segment.push(text.replace(/^#+/, ""))
+      flush()
+      paragraph = false
+      return
+    }
+    if (isBreak(text) || (paragraph && /^(?:=+|-+)[ \t]*$/.test(text))) {
+      flush()
+      paragraph = false
+      return
+    }
+    const item = listItem(text, indent)
+    if (item && (!paragraph || (!item.empty && item.first))) {
+      flush()
+      offset = item.offset
+      paragraph = false
+      // The text of an item can be a list, a fence or more.
+      if (depth < 8 && item.content !== "") {
+        const lead = /^[ \t]*/.exec(item.content)![0]
+        block(item.content.slice(lead.length), item.offset + width(lead, 0), depth + 1)
+      }
+      return
+    }
+    segment.push(text)
+    paragraph = true
+  }
+
+  for (const line of lines) {
+    const unquoted = withoutQuote(line)
+    quoted = unquoted !== line
+    if (fence) {
+      // Quote markers belong to the line only when the fence was opened inside a quote.
+      const inner = fence.quoted ? unquoted : line
+      const trimmed = inner.replace(/^[ \t]*/, "")
+      const margin = inner.length - trimmed.length
+      // A line outside the quote ends the fence that one holds. One not indented enough for the item ends it only after
+      // a blank line or the opener, or when it starts a block of its own; any other text is a lazy line of the code.
+      if (
+        (fence.quoted && !quoted) ||
+        (fence.item !== undefined &&
+          trimmed !== "" &&
+          width(inner.slice(0, margin), 0) < fence.item &&
+          (loose || startsBlock(trimmed, margin)))
+      )
+        fence = undefined
+      else {
+        if (margin < fence.indent + 4 && closes(fence, trimmed)) fence = undefined
+        loose = trimmed === ""
+        continue
+      }
+    }
+    if (html) {
+      if (html === "blank" ? !isBlank(line) : !html.test(line)) continue
+      // The line that ends a comment block goes on as text after the marker that closes it.
+      if (html === COMMENT_END && line.includes("-->")) {
+        const left = line.slice(line.indexOf("-->") + 3)
+        if (left.trim() !== "") {
+          segment.push(left.trimStart())
+          flush()
+        }
+      }
+      html = undefined
+      continue
+    }
+    if (isBlank(line)) {
+      flush()
+      paragraph = false
+      continue
+    }
+    const lead = /^[ \t]*/.exec(unquoted)![0]
+    const text = unquoted.slice(lead.length)
+    const indent = width(lead, 0)
+    // A line that is not indented enough ends the list, unless it goes on with the paragraph in the item.
+    if (offset !== undefined && indent < offset && (!paragraph || interrupts(text)) && !(listItem(text, indent) && !isBreak(text))) offset = undefined
+    block(text, indent, 0)
+  }
+  flush()
+  return [...found]
+}
+
+// The line without its quote markers: up to three columns of space, then any number of `>` each with the space after it.
+function withoutQuote(line: string) {
+  let at = 0
+  let columns = 0
+  while (at < line.length && (line[at] === " " || line[at] === "\t") && columns < 4)
+    columns += line[at++] === "\t" ? 4 - (columns % 4) : 1
+  if (columns >= 4 || line[at] !== ">") return line
+  while (line[at] === ">") at += line[at + 1] === " " ? 2 : 1
+  return line.slice(at)
+}
+
+const TAG = /<\/?[A-Za-z][^<>]*>/y
+
+// What ends a comment block, as against any other HTML block: the rest of its closing line is text.
+const COMMENT_END = /-->/
+
+// The tokens of a run of text lines, from one pass over the characters. Code spans are paired from the list of backtick
+// runs, one list for each width, so that a text full of unclosed runs costs no more than a text with none.
+function tokens(text: string): string[] {
+  const runs = new Map<number, number[]>()
+  for (const match of text.matchAll(/`+/g)) {
+    const list = runs.get(match[0].length)
+    if (list) list.push(match.index!)
+    else runs.set(match[0].length, [match.index!])
+  }
+  const cursor = new Map<number, number>()
+  const found: string[] = []
+  let noBracket = false
+  let noParen = false
+  let start = true
+  let at = 0
+  while (at < text.length) {
+    const char = text[at]!
+    if (char === "\\") {
+      const next = text[at + 1]
+      // A backslash before a line break is a hard break, which starts a new run of text.
+      if (next === "\n") {
+        at += 2
+        start = true
+        continue
+      }
+      // Only ASCII punctuation is escaped, and an escaped character never starts anything, an at sign included. A
+      // backslash before anything else is a character of its own.
+      const punctuation = next !== undefined && /[!-/:-@[-`{-~]/.test(next)
+      at += punctuation ? 2 : 1
+      // The escaped character is text on its own, so what follows it starts a new run unless it was the at sign.
+      start = punctuation && next !== "@"
+      continue
+    }
+    if (char === "`") {
+      let end = at
+      while (text[end] === "`") end++
+      const size = end - at
+      const list = runs.get(size) ?? []
+      let index = cursor.get(size) ?? 0
+      while (index < list.length && list[index]! < end) index++
+      cursor.set(size, index)
+      // A run closes only on a run of the same width, and an unclosed one is text.
+      at = index < list.length ? list[index]! + size : end
+      start = index < list.length
+      continue
+    }
+    if (char === "<") {
+      if (text.startsWith("<!--", at)) {
+        const close = text.indexOf("-->", at + 4)
+        at = close === -1 ? text.length : close + 3
+        start = true
+        continue
+      }
+      TAG.lastIndex = at
+      const tag = TAG.exec(text)
+      if (tag) {
+        at += tag[0].length
+        start = true
+        continue
+      }
+    }
+    if (char === "!" && text[at + 1] === "[" && !noBracket) {
+      // The alt text of an image is not read.
+      const close = text.indexOf("]", at + 2)
+      if (close === -1) noBracket = true
+      else {
+        at = close
+        continue
+      }
+    }
+    if (char === "]") {
+      at++
+      if (text[at] === "(" && !noParen) {
+        const close = text.indexOf(")", at)
+        if (close === -1) noParen = true
+        else at = close + 1
+      }
+      start = false
+      continue
+    }
+    if (char === "@" && start) {
+      let end = at + 1
+      while (end < text.length) {
+        const next = text[end]!
+        if (next === "\\" && text[end + 1] === " ") end += 2
+        else if (/[\s\\*`<\]]/.test(next)) break
+        else end++
+      }
+      if (end > at + 1) {
+        // Underscores that close an emphasis that opened just before the at sign are not part of the name.
+        const raw = text.slice(at + 1, end)
+        const token = clean(text[at - 1] === "_" ? raw.replace(/_+$/, "") : raw)
+        if (token !== undefined) found.push(token)
+      }
+      at = end
+      start = false
+      continue
+    }
+    // Whitespace, the opening bracket of a link and emphasis markers start a new run of text.
+    start = /\s/.test(char) || char === "[" || ((char === "*" || char === "_") && (start || /\s/.test(text[at - 1] ?? " ")))
+    at++
+  }
+  return found
+}
+
+// A token as a path, or `undefined` when it is not one.
+function clean(raw: string) {
+  const hash = raw.indexOf("#")
+  const token = (hash === -1 ? raw : raw.slice(0, hash)).replaceAll("\\ ", " ")
+  if (token === "" || /[\u0000-\u001f\u007f]/.test(token)) return undefined
+  return /^(?:\.\/|~\/|\/.|[A-Za-z0-9._-])/.test(token) ? token : undefined
+}
+
+// Extensions that stand for text. The decision is made on the name as it is written and never on the contents, and a name
+// with no extension counts: `LICENSE`, `Makefile`, and a dotfile such as `.env`, whose extension Node reports as empty.
+const TEXT = new Set(
+  (
+    ".md .mdx .markdown .txt .text .rst .adoc .asciidoc .org .tex .rtf .log .diff .patch .json .jsonc .json5 .jsonl .ndjson " +
+    ".yaml .yml .toml .ini .cfg .conf .config .properties .env .xml .csv .tsv .html .htm .xhtml .css .scss .sass .less .svg " +
+    ".js .mjs .cjs .jsx .ts .mts .cts .tsx .vue .svelte .astro .py .pyi .rb .php .java .kt .kts .scala .groovy .gradle .go " +
+    ".rs .c .h .cc .cpp .cxx .hpp .hh .m .mm .cs .fs .vb .swift .dart .lua .pl .pm .r .jl .ex .exs .erl .hs .clj .cljs " +
+    ".elm .ml .mli .nim .zig .sh .bash .zsh .fish .ps1 .psm1 .bat .cmd .sql .graphql .gql .proto .thrift .tf .tfvars .hcl " +
+    ".nix .cmake .mk .make .dockerfile .ejs .hbs .pug .njk .liquid .j2 .jinja .tmpl .lock .sum .mod"
+  ).split(" "),
+)
+
+/** A file that an instruction file imported, or the file itself when `importedBy` is not set. `path` is the real path. */
+export type Loaded = { readonly path: string; readonly content: string; readonly importedBy?: string }
+
+/** An import that a project file made and that was left out because it leads outside the project. */
+export type Skipped = { readonly importer: string; readonly target: string }
+
+type LoadInput = {
+  /** The file itself, as a real path. */
+  readonly path: string
+  /** Where the file comes from: a user-level file may import anything that is not a network path, a project file only what `allow` accepts. */
+  readonly scope: "user" | "project"
+  /** The files this pass has handled. Share one set across every file of a pass, and pass a new one to start another. */
+  readonly visited: Set<string>
+  readonly patterns: readonly string[]
+  readonly home: string
+  readonly fs: Pick<FSUtil.Interface, "isFile" | "readFileStringSafe">
+  /** Where a path really leads, a link to a network share named as the share without being opened (`ProjectTrust.leads`). */
+  readonly leads: (spelling: string) => Effect.Effect<string>
+  /** Whether a project file may import this file (project scope only): its real path and the way it was spelled. */
+  readonly allow: (real: string, spelling: string) => Effect.Effect<boolean>
+  /** Asked before an import is read, to leave out one that something else already has. */
+  readonly claim?: (real: string) => Effect.Effect<boolean>
+  readonly platform?: NodeJS.Platform
+}
+
+/**
+ * The file and what it imports, depth first: the file, its first import, that import's imports, its second import. A
+ * file is handled once in a pass, whatever way it was reached, and a chain is `DEPTH` files long. A target that is not
+ * there, is a folder, is not text, is excluded or cannot be read is skipped with a line in the log, and costs only
+ * itself. A file with nothing left once it is processed adds nothing, and its imports are not followed.
+ *
+ * Before an import is statted, resolved or read, a network path is refused, then the path is followed to where it really
+ * leads and that real path is what `allow` is asked about and what is read. The result is `undefined` when the file
+ * itself cannot be read; `read` lists every import that was read, for the caller to watch.
+ */
+export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: LoadInput) {
+  const platform = input.platform ?? process.platform
+  const files: Loaded[] = []
+  const skipped: Skipped[] = []
+  const read: string[] = []
+  const key = (value: string) =>
+    platform === "win32" ? win32.normalize(value).replaceAll("/", "\\").toLowerCase() : posix.normalize(value)
+
+  // False only when the file at depth 0 cannot be read.
+  const handle = (spelling: string, importer: string | undefined, depth: number): Effect.Effect<boolean, FSUtil.Error> =>
+    Effect.gen(function* () {
+      if (depth >= DEPTH) return true
+      if (importer === undefined && input.visited.has(key(input.path))) return true
+      if (importer !== undefined) {
+        if (/^[\\/]{2}/.test(spelling) || input.visited.has(key(spelling))) return true
+        if (excluded(input.patterns, [spelling])) {
+          yield* Effect.logDebug("instruction import excluded", { path: spelling })
+          return true
+        }
+      }
+      // Windows does not tell drive letters apart, and the file system may hand either back.
+      const led = importer === undefined ? input.path : yield* input.leads(spelling)
+      const real = platform === "win32" ? led.replace(/^[a-z]:/, (drive) => drive.toUpperCase()) : led
+      if (importer !== undefined) {
+        if (/^[\\/]{2}/.test(real) || LinkShare.isUnresolved(real)) {
+          yield* Effect.logDebug("instruction import refused", { path: spelling, reason: "a network path, or links with no end" })
+          return true
+        }
+        if (input.visited.has(key(real))) return true
+        if (excluded(input.patterns, [real])) {
+          yield* Effect.logDebug("instruction import excluded", { path: spelling })
+          return true
+        }
+        // Not there, or not a file (a folder, a pipe, a device): skipped without a word, as prose such as `@team` is common.
+        if (!(yield* input.fs.isFile(real))) return true
+        if (input.scope === "project" && !(yield* input.allow(real, spelling))) {
+          // One warning for each importer and target, however many ways the importer spells it.
+          if (!skipped.some((item) => item.importer === importer && item.target === real)) skipped.push({ importer, target: real })
+          return true
+        }
+        if (!isText(spelling)) {
+          yield* Effect.logDebug("instruction import skipped", { path: spelling, reason: "not a text file" })
+          return true
+        }
+        if (input.claim && !(yield* input.claim(real))) return true
+        input.visited.add(key(spelling))
+      }
+      input.visited.add(key(real))
+      const text =
+        importer === undefined
+          ? yield* input.fs.readFileStringSafe(real)
+          : yield* input.fs.readFileStringSafe(real).pipe(Effect.orElseSucceed(() => undefined))
+      if (text === undefined) {
+        if (importer === undefined) return false
+        yield* Effect.logDebug("instruction import skipped", { path: spelling, reason: "unreadable" })
+        return true
+      }
+      if (importer !== undefined) {
+        if (text.includes("\u0000")) {
+          yield* Effect.logDebug("instruction import skipped", { path: spelling, reason: "holds a NUL character" })
+          return true
+        }
+        read.push(real)
+      }
+      const processed = parse(text, { frontmatter: true })
+      if (processed.content.trim() === "") {
+        yield* Effect.logDebug("instruction file left out", { path: real, reason: "nothing left once processed" })
+        return true
+      }
+      files.push(
+        importer === undefined
+          ? { path: real, content: processed.content }
+          : { path: real, content: processed.content, importedBy: importer },
+      )
+      for (const token of imports(processed.content)) {
+        const target = resolveToken(token, dirname(real), input.home, platform)
+        if (target !== undefined) yield* handle(target, real, depth + 1)
+      }
+      return true
+    })
+
+  if (!(yield* handle(input.path, undefined, 0))) return undefined
+  return { files, skipped, read }
+})
+
+// Whether a name stands for a text file: an extension from the list, or none at all.
+function isText(name: string) {
+  const extension = extname(name).toLowerCase()
+  return extension === "" || TEXT.has(extension)
+}
+
+// The place a token names: `~/` is the home folder, a Git Bash drive spelling is the drive on Windows, an absolute path is
+// itself and anything else is next to the file that wrote it. `undefined` for a network path, which is never resolved.
+function resolveToken(token: string, folder: string, home: string, platform: NodeJS.Platform) {
+  const spelled = FSUtil.windowsPath(token, platform)
+  if (/^[\\/]{2}/.test(spelled)) return undefined
+  const flavor = platform === "win32" ? win32 : posix
+  return (spelled.startsWith("~/") ? flavor.join(home, spelled.slice(2)) : flavor.resolve(folder, spelled)).normalize("NFC")
 }
