@@ -847,13 +847,23 @@ const layerFor = (
   } = {},
 ) => instructionLayer({ config: where.global, home: where.home, locationServiceLayer: here(where), ...input })
 
+const network = (target: string) => /^[\\/]{2}/.test(target)
+
 // The real file system, and a list of the files it was asked to read.
 const recordingFS = (reads: string[]) =>
   Layer.effect(
     FSUtil.Service,
     FSUtil.Service.pipe(
       Effect.map((fs) =>
-        FSUtil.Service.of({ ...fs, readFileStringSafe: (target) => (reads.push(target), fs.readFileStringSafe(target)) }),
+        FSUtil.Service.of({
+          ...fs,
+          // A network spelling is answered here and never passed on, so a regression fails at once and contacts no host.
+          isFile: (target) => (network(target) ? Effect.succeed(false) : fs.isFile(target)),
+          readFileStringSafe: (target) => (
+            reads.push(target),
+            network(target) ? Effect.succeed(undefined) : fs.readFileStringSafe(target)
+          ),
+        }),
       ),
     ),
   ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
@@ -1614,10 +1624,17 @@ describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the pr
     Effect.gen(function* () {
       if (process.platform !== "win32") return
       const { where, inside } = yield* layout
-      yield* write(where.rootFile, `@${slashed(inside).replace(/^[A-Za-z]/, (drive) => drive.toLowerCase())}`)
+      // The drive in lower case, and a folder of the project in upper case, which Windows reads as the same folder.
+      const spelled = slashed(inside)
+        .replace(/^[A-Za-z]/, (drive) => drive.toLowerCase())
+        .replace("/docs/", "/DOCS/")
+      expect(spelled).not.toBe(slashed(inside))
+      yield* write(where.rootFile, `@${spelled}`)
       yield* Effect.gen(function* () {
         const discovery = yield* start()
-        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside])
+        expect((placesOf(yield* discovery.list()) as string[]).map((item) => item.toLowerCase())).toEqual(
+          [where.rootFile, inside].map((item) => item.toLowerCase()),
+        )
       }).pipe(scoped(where, false))
     }),
   )
@@ -1669,4 +1686,60 @@ describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the pr
       )
     }),
   )
+})
+
+// A repository at the home folder is the project of every folder below it, and the home folder is never trusted for good.
+// An import then reaches the folder the session started in and nothing above it.
+describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from opening it to an import", () => {
+  const layout = Effect.gen(function* () {
+    const base = yield* folders
+    const directory = path.join(base.home, "Downloads", "x")
+    const where = {
+      ...base,
+      repo: base.home,
+      directory,
+      rootFile: path.join(base.home, "AGENTS.md"),
+      packageFile: path.join(directory, "AGENTS.md"),
+    }
+    const key = path.join(base.home, ".ssh", "id_rsa")
+    const notes = path.join(directory, "notes.md")
+    yield* write(key, "PRIVATE KEY MARKER")
+    yield* write(notes, "NOTES MARKER")
+    return { where, key, notes }
+  })
+
+  for (const trusted of [true, false]) {
+    it.live(`sends no home file named by ~, by .. or by an absolute path, and sends the one beside it, in a project that is ${trusted ? "implicitly trusted" : "not trusted"}`, () =>
+      Effect.gen(function* () {
+        const { where, key, notes } = yield* layout
+        yield* write(
+          where.packageFile,
+          ["@~/.ssh/id_rsa", "@../../.ssh/id_rsa", `@${slashed(key)}`, "@./notes.md"].join("\n"),
+        )
+        yield* Effect.gen(function* () {
+          const discovery = yield* start()
+          expect(placesOf(yield* discovery.list())).toEqual([where.packageFile, notes])
+          const text = (yield* readInitial(yield* discovery.load())).text
+          expect(text).toContain("NOTES MARKER")
+          expect(text).not.toContain("PRIVATE KEY MARKER")
+          const watcher = yield* Watcher.Test
+          expect((yield* watcher.subscriptions()).map((item) => slashed(item.path))).not.toContain(slashed(key))
+        }).pipe(scoped(where, trusted))
+      }),
+    )
+
+    ;(canLinkFile ? it.live : it.live.skip)(`sends no home file that a link names, in a project that is ${trusted ? "implicitly trusted" : "not trusted"}`, () =>
+      Effect.gen(function* () {
+        const { where, key, notes } = yield* layout
+        yield* Effect.promise(() => fs.symlink(key, path.join(where.directory, "link")))
+        yield* write(where.packageFile, "@./link\n@./notes.md")
+        yield* Effect.gen(function* () {
+          const discovery = yield* start()
+          expect(placesOf(yield* discovery.list())).toEqual([where.packageFile, notes])
+          const text = (yield* readInitial(yield* discovery.load())).text
+          expect(text).not.toContain("PRIVATE KEY MARKER")
+        }).pipe(scoped(where, trusted))
+      }),
+    )
+  }
 })

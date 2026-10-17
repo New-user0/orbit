@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { DateTime, Effect, Layer, Logger } from "effect"
+import { DateTime, Deferred, Effect, Layer, Logger } from "effect"
 import { CompatNames } from "@orbit/compat/names"
 import { Agent } from "@orbit/core/agent"
 import { FileLedger } from "@orbit/core/file-ledger"
@@ -38,9 +38,9 @@ import { ConfigTrust } from "@orbit/core/config/trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Document, Info } from "@orbit/schema/config"
 import { scriptedMarkdown } from "./fixture/front-matter"
-import { tempLocationLayer } from "./fixture/location"
+import { location, tempLocationLayer } from "./fixture/location"
 import { canLinkFile } from "./fixture/symlink"
-import { tmpdirScoped } from "./fixture/tmpdir"
+import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -73,6 +73,8 @@ const sessionLayer = (
   config: ReturnType<typeof Config.testLayer>,
   trusted = true,
   filesystem?: Layer.Layer<FSUtil.Service>,
+  // The home folder is the project: a Location in a folder below it, as a downloaded folder is.
+  place?: { readonly home: string; readonly directory: string },
 ) => {
   const imageLayer = AppNodeBuilder.build(Image.node, [Config.node.replace(config)])
   return AppNodeBuilder.build(
@@ -98,7 +100,17 @@ const sessionLayer = (
     [
       Project.node.replace(globalProjectNode),
       SessionExecution.node.replace(SessionExecution.noopLayer),
-      Location.node.replace(tempLocationLayer),
+      Location.node.replace(
+        place
+          ? Layer.succeed(
+              Location.Service,
+              Location.Service.of(
+                location({ directory: AbsolutePath.make(place.directory) }, { projectDirectory: AbsolutePath.make(place.home) }),
+              ),
+            )
+          : tempLocationLayer,
+      ),
+      ...(place ? [Global.node.replace(Global.layerWith({ home: place.home }))] : []),
       Permission.node.replace(permission),
       Config.node.replace(config),
       Image.node.replace(imageLayer),
@@ -870,13 +882,52 @@ describe("SessionInstructions follows @imports in the files it injects", () => {
     }),
   )
 
-  it.live("injects an import once when two loads that share it run together", () =>
+  // A file system that holds the first load's read of its importer until the second load has read its own, and the first
+  // load's read of the shared file until both loads have asked where it leads. Both loads are then at the shared file
+  // before either has committed anything, so only the claim made before it is read keeps it from being injected twice.
+  const gate: { first?: string; second?: string; shared?: string } = {}
+  const gated = testEffect(
+    sessionLayer(
+      Config.testLayer(),
+      true,
+      Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const base = yield* FSUtil.Service
+          const secondRead = yield* Deferred.make<void>()
+          const bothAsked = yield* Deferred.make<void>()
+          let asked = 0
+          const is = (target: string, wanted?: string) => wanted !== undefined && path.resolve(target) === path.resolve(wanted)
+          return FSUtil.Service.of({
+            ...base,
+            stat: (target) =>
+              Effect.suspend(() => {
+                if (!is(target, gate.shared)) return base.stat(target)
+                asked += 1
+                return (asked === 2 ? Deferred.succeed(bothAsked, undefined) : Effect.void).pipe(Effect.andThen(base.stat(target)))
+              }),
+            readFileStringSafe: (target) =>
+              Effect.gen(function* () {
+                if (is(target, gate.first)) yield* Deferred.await(secondRead)
+                if (is(target, gate.shared)) yield* Deferred.await(bothAsked)
+                const text = yield* base.readFileStringSafe(target)
+                if (is(target, gate.second)) yield* Deferred.succeed(secondRead, undefined)
+                return text
+              }),
+          })
+        }),
+      ).pipe(Layer.provide(LayerNode.compile(FSUtil.node))),
+    ),
+  )
+
+  gated.live("injects an import once when two loads that share it run together", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory
       const first = yield* nested(dir, "AGENTS.md", "first @../shared.md", "first")
       const second = yield* nested(dir, "AGENTS.md", "second @../shared.md", "second")
       const sharedPath = path.resolve(dir, "shared.md")
       yield* writeAgents(sharedPath, "shared rules")
+      Object.assign(gate, { first, second, shared: sharedPath })
       const instructions = yield* SessionInstructions.Service
       const sessionID = yield* sessionIn(dir)
 
@@ -964,4 +1015,86 @@ describe("SessionInstructions follows @imports in the files it injects", () => {
       expect(reads).not.toContain(skipPath)
     }),
   )
+})
+
+// A repository at the home folder is the project of every folder below it that has no repository of its own, and the home
+// folder is never trusted. What an import may reach is then the folder the session started in, and no more.
+describe("SessionInstructions keeps a project at the home folder from opening the home folder to an import", () => {
+  const harness = (trusted: boolean) =>
+    testEffect(
+      Layer.unwrap(
+        Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ).pipe(
+          Effect.map((tmp) =>
+            sessionLayer(Config.testLayer(), trusted, undefined, {
+              home: tmp.path,
+              directory: path.join(tmp.path, "Downloads", "x"),
+            }),
+          ),
+        ),
+      ),
+    )
+
+  for (const [name, trusted] of [
+    ["implicitly trusted", true],
+    ["not trusted", false],
+  ] as const) {
+    const home = harness(trusted)
+    const slashed = (value: string) => value.replaceAll("\\", "/")
+
+    home.live(`sends no home file named by ~, by .. or by an absolute path, and sends the one beside it, in a project that is ${name}`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const folder = (yield* Global.Service).home
+        const key = path.join(folder, ".ssh", "id_rsa")
+        yield* mkdir(path.dirname(key))
+        yield* writeAgents(key, "PRIVATE KEY MARKER")
+        const subPath = yield* nested(
+          dir,
+          "AGENTS.md",
+          [
+            "@~/.ssh/id_rsa",
+            `@${slashed(path.relative(path.join(dir, "sub"), key))}`,
+            `@${slashed(key)}`,
+            "@./notes.md",
+          ].join("\n"),
+        )
+        const notes = path.resolve(dir, "sub", "notes.md")
+        yield* writeAgents(notes, "NOTES MARKER")
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+        const injected = yield* synthetics(sessionID)
+        expect(injected).toHaveLength(1)
+        expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath, notes] } })
+        expect(injected[0]!.text).toContain("NOTES MARKER")
+        expect(injected[0]!.text).not.toContain("PRIVATE KEY MARKER")
+      }),
+    )
+
+    ;(canLinkFile ? home.live : home.live.skip)(`sends no home file that a link names, in a project that is ${name}`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const folder = (yield* Global.Service).home
+        const key = path.join(folder, ".ssh", "id_rsa")
+        yield* mkdir(path.dirname(key))
+        yield* writeAgents(key, "PRIVATE KEY MARKER")
+        yield* nested(dir, "AGENTS.md", "@./link @./notes.md")
+        yield* Effect.promise(() => fs.symlink(key, path.resolve(dir, "sub", "link")))
+        yield* writeAgents(path.resolve(dir, "sub", "notes.md"), "NOTES MARKER")
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+        const text = (yield* synthetics(sessionID)).map((message) => message.text).join("\n")
+        expect(text).toContain("NOTES MARKER")
+        expect(text).not.toContain("PRIVATE KEY MARKER")
+      }),
+    )
+  }
 })

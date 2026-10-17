@@ -2573,8 +2573,10 @@ inside a code span, a code block, an HTML block or comment, the target of a link
 costs nothing. `instructions_exclude` applies to imports as to any file, and an imported file is watched, so editing it
 updates the instructions of a running session. Files that the model's reads load later import the same way.
 
-A file in a project imports only files that really lie inside the project, whether or not the project is trusted: a path
-that leaves it, or a link that leads out, is skipped, and the skipped target is reported once. Your own global file may
+A file in a project imports only files that really lie inside the folder you started in or inside the project, whether or
+not the project is trusted: a path that leaves it, or a link that leads out, is skipped, and the skipped target is
+recorded as a warning that no client shows yet. When the project is your home folder (a repository at `~`), the home
+folder is not counted as the project, so only the folder you started in is open to imports. Your own global file may
 import any path that is not a network path. A path that names a network share is never opened.
 
 **Affects:** anyone whose instruction files already contain text like `@something` that names a file, which is now sent

@@ -632,6 +632,10 @@ describe("ConfigInstructionFile.imports", () => {
     ["the target of a link", "[text](@./a.md)"],
     ["the alt text of an image", "![@./a.md](u)"],
     ["an escaped at sign", "\\@./a.md"],
+    ["a fence in a quote that goes on", "> ```\n> @./a.md\n> more"],
+    ["a fence in a list item that goes on, across a blank line", "- ```\n  code\n\n  @./a.md"],
+    ["a comment block that spans lines and leaves nothing", "<!--\n@./a.md\n-->\n"],
+    ["an escaped at sign after a hard break", "text\\\n\\@./a.md"],
   ]
   for (const [name, text] of notText)
     test(`finds nothing in ${name}`, () => {
@@ -657,6 +661,14 @@ describe("ConfigInstructionFile.imports", () => {
     ["after a closed fence", "```\ncode\n```\n@./a.md"],
     ["after an inline tag", "<b>@./a.md</b>"],
     ["in a paragraph after a blank line", "para\n\n@./a.md"],
+    ["after the end of a comment block that spans lines", "<!--\nnote\n--> @./a.md"],
+    ["after a comment block that spans lines and a second comment", "<!--\nnote\n--> <!-- x --> @./a.md"],
+    ["after a hard line break", "text\\\n@./a.md"],
+    ["after a backslash that escapes nothing", "path\\ @./a.md"],
+    ["after a backslash before a letter", "C:\\x @./a.md"],
+    ["after a quote that ends and closed the fence it held", "> ```\n> code\n\n@./a.md"],
+    ["after a quote that ends without a blank line and closed the fence it held", "> ```\n> code\n@./a.md"],
+    ["after a list item that ends and closed the fence it held", "- ```\n  code\n@./a.md"],
   ]
   for (const [name, source] of text)
     test(`finds a token ${name}`, () => {
@@ -671,6 +683,9 @@ describe("ConfigInstructionFile.imports", () => {
 describe("ConfigInstructionFile.load", () => {
   const pass = () => Effect.succeed(true)
   const refuse = () => Effect.succeed(false)
+  // A fake that records what it is asked about answers for a network spelling by itself and never passes it on, so that a
+  // regression fails at once and does not contact a host.
+  const network = (file: string) => /^[\\/]{2}/.test(file)
 
   // A tree of files under a fresh folder.
   const tree = Effect.fnUntraced(function* (files: Readonly<Record<string, string>>) {
@@ -903,18 +918,23 @@ describe("ConfigInstructionFile.load", () => {
     }),
   )
 
-  it.live("treats an address as a name that is not there, and makes no network call", () =>
+  it.live("treats an address as a name that is not there, asked about only as a local spelling", () =>
     Effect.gen(function* () {
       const root = yield* tree({ "a.md": "@https://example.invalid/x.md" })
-      const fetched: unknown[] = []
-      const original = globalThis.fetch
-      globalThis.fetch = ((...args: unknown[]) => (fetched.push(args), Promise.reject(new Error("no network")))) as typeof fetch
-      try {
-        expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md"])
-      } finally {
-        globalThis.fetch = original
-      }
-      expect(fetched).toEqual([])
+      const fs_ = yield* FSUtil.Service
+      const asked: string[] = []
+      const loaded = yield* ConfigInstructionFile.load({
+        path: path.join(root, "a.md"),
+        scope: "user",
+        visited: new Set(),
+        patterns: [],
+        home: path.join(root, "home"),
+        fs: fs_,
+        leads: (spelling) => (asked.push(spelling), fs_.resolve(spelling)),
+        allow: pass,
+      })
+      expect(names(root, loaded)).toEqual(["a.md"])
+      expect(asked.map((spelling) => path.relative(root, spelling).replaceAll("\\", "/"))).toEqual(["https:/example.invalid/x.md"])
     }),
   )
 
@@ -953,8 +973,8 @@ describe("ConfigInstructionFile.load", () => {
           home: root,
           fs: {
             ...fs_,
-            isFile: (file) => (touched.push(file), fs_.isFile(file)),
-            readFileStringSafe: (file) => (touched.push(file), fs_.readFileStringSafe(file)),
+            isFile: (file) => (touched.push(file), network(file) ? Effect.succeed(false) : fs_.isFile(file)),
+            readFileStringSafe: (file) => (touched.push(file), network(file) ? Effect.succeed(undefined) : fs_.readFileStringSafe(file)),
           },
           leads: (spelling) => (asked.push(spelling), Effect.succeed(spelling)),
           allow: pass,
@@ -980,8 +1000,8 @@ describe("ConfigInstructionFile.load", () => {
         // The trust decision names a link to a share as the share, and does not open it.
         fs: {
           ...fs_,
-          isFile: (file) => (touched.push(file), fs_.isFile(file)),
-          readFileStringSafe: (file) => (touched.push(file), fs_.readFileStringSafe(file)),
+          isFile: (file) => (touched.push(file), network(file) ? Effect.succeed(false) : fs_.isFile(file)),
+          readFileStringSafe: (file) => (touched.push(file), network(file) ? Effect.succeed(undefined) : fs_.readFileStringSafe(file)),
         },
         leads: () => Effect.succeed("\\\\server\\share\\x.md"),
         allow: pass,

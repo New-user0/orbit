@@ -67,10 +67,6 @@ export const Plugin = define({
       const watches = yield* FiberMap.make<string>()
       const watched = new Set<string>()
       const watchedImports = new Set<string>()
-      const realFolders = yield* Effect.forEach(
-        [...new Set([location.directory, location.project.directory, location.project.canonical])],
-        fs.resolve,
-      )
 
       const publish = (update: Watcher.Update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)
       const subscribe = Effect.fnUntraced(function* (path: string) {
@@ -142,10 +138,7 @@ export const Plugin = define({
           leads: trust.leads,
           // A project file imports only what is inside the project, whatever the trust decision, and only what the trust
           // decision lets the project supply: both are asked of the real path, which is the file that is read.
-          allow: (real, spelling) =>
-            realFolders.some((folder) => FSUtil.contains(folder, real))
-              ? trust.reachable(spelling)
-              : Effect.succeed(false),
+          allow: (real, spelling) => trust.importable(spelling, real),
         })
         if (loaded === undefined) {
           yield* Effect.logDebug("instruction file skipped", { path, reason: "unavailable" })

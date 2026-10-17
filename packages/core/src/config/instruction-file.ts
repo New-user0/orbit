@@ -446,7 +446,9 @@ export function imports(content: string): string[] {
   const found = new Set<string>()
   const lines = content.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n")
   let segment: string[] = []
-  let fence: (Fence & { readonly indent: number }) | undefined
+  // A fence ends with the quote or the list item that holds it, so it remembers which it was opened in.
+  let fence: (Fence & { readonly indent: number; readonly quoted: boolean; readonly item: number | undefined }) | undefined
+  let quoted = false
   let html: End | undefined
   // The column that a line must reach to belong to the list item above it.
   let offset: number | undefined
@@ -470,7 +472,7 @@ export function imports(content: string): string[] {
     const opening = fenceOpening(text)
     if (opening) {
       flush()
-      fence = { ...opening, indent }
+      fence = { ...opening, indent, quoted, item: offset !== undefined && indent >= offset ? offset : undefined }
       paragraph = false
       return
     }
@@ -479,7 +481,7 @@ export function imports(content: string): string[] {
       paragraph = false
       // A comment that its first line closes leaves whatever follows it on the line as text.
       if (!text.includes("-->")) {
-        html = /-->/
+        html = COMMENT_END
         return
       }
       const left = withoutSpans(text)
@@ -522,14 +524,30 @@ export function imports(content: string): string[] {
   }
 
   for (const line of lines) {
+    const unquoted = withoutQuote(line)
+    quoted = unquoted !== line
     if (fence) {
-      const unquoted = withoutQuote(line)
       const trimmed = unquoted.replace(/^[ \t]*/, "")
-      if (unquoted.length - trimmed.length < fence.indent + 4 && closes(fence, trimmed)) fence = undefined
-      continue
+      const margin = unquoted.length - trimmed.length
+      // A line outside the quote, or not indented enough for the item, ends the fence that one holds, and is read as usual.
+      if (
+        (fence.quoted && !quoted) ||
+        (fence.item !== undefined && trimmed !== "" && width(unquoted.slice(0, margin), 0) < fence.item)
+      )
+        fence = undefined
+      else {
+        if (margin < fence.indent + 4 && closes(fence, trimmed)) fence = undefined
+        continue
+      }
     }
     if (html) {
-      if (html === "blank" ? isBlank(line) : html.test(line)) html = undefined
+      if (html === "blank" ? !isBlank(line) : !html.test(line)) continue
+      // The line that ends a comment block goes on as text after the marker that closes it.
+      if (html === COMMENT_END && line.includes("-->")) {
+        const left = line.slice(line.indexOf("-->") + 3)
+        if (left.trim() !== "") segment.push(left.trimStart())
+      }
+      html = undefined
       continue
     }
     if (isBlank(line)) {
@@ -537,7 +555,6 @@ export function imports(content: string): string[] {
       paragraph = false
       continue
     }
-    const unquoted = withoutQuote(line)
     const lead = /^[ \t]*/.exec(unquoted)![0]
     const text = unquoted.slice(lead.length)
     const indent = width(lead, 0)
@@ -562,6 +579,9 @@ function withoutQuote(line: string) {
 
 const TAG = /<\/?[A-Za-z][^<>]*>/y
 
+// What ends a comment block, as against any other HTML block: the rest of its closing line is text.
+const COMMENT_END = /-->/
+
 // The tokens of a run of text lines, from one pass over the characters. Code spans are paired from the list of backtick
 // runs, one list for each width, so that a text full of unclosed runs costs no more than a text with none.
 function tokens(text: string): string[] {
@@ -580,8 +600,16 @@ function tokens(text: string): string[] {
   while (at < text.length) {
     const char = text[at]!
     if (char === "\\") {
-      // An escaped character is plain text and never starts anything, an at sign included.
-      at += 2
+      const next = text[at + 1]
+      // A backslash before a line break is a hard break, which starts a new run of text.
+      if (next === "\n") {
+        at += 2
+        start = true
+        continue
+      }
+      // Only ASCII punctuation is escaped, and an escaped character never starts anything, an at sign included. A
+      // backslash before anything else is a character of its own.
+      at += next !== undefined && /[!-/:-@[-`{-~]/.test(next) ? 2 : 1
       start = false
       continue
     }

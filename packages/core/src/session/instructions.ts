@@ -43,11 +43,6 @@ const layer = Layer.effect(
     // absolute paths, but the human-facing description shows paths relative to the project
     // root so opening a subdirectory still describes paths from the project root.
     const root = yield* fs.resolve(location.project.directory)
-    // The folders a file must really be in to be imported by one the model's reads load: the project's, however reached.
-    const realFolders = yield* Effect.forEach(
-      [...new Set([location.directory, location.project.directory, location.project.canonical])],
-      fs.resolve,
-    )
     const home = yield* fs.resolve(global.home)
     // Same-step parallel reads settle concurrently, so an in-memory claim guards each
     // Session/path pair while a load is in flight. The claim is released once the load
@@ -117,10 +112,7 @@ const layer = Layer.effect(
             home,
             fs,
             leads: trust.leads,
-            allow: (real, spelling) =>
-              realFolders.some((folder) => FSUtil.contains(folder, real))
-                ? trust.reachable(spelling)
-                : Effect.succeed(false),
+            allow: (real, spelling) => trust.importable(spelling, real),
             // An import that is already in the conversation, or that a read in flight is loading, is not loaded again.
             claim: Effect.fnUntraced(function* (real: string) {
               const taken = yield* Ref.modify(inFlight, (map) => {
