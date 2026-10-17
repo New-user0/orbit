@@ -2192,6 +2192,21 @@ describe("runNonInteractivePrompt limits and results", () => {
       1,
     ],
     [
+      "a cut-off that holds a tool part, then a notice",
+      history(
+        {
+          ...assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 }),
+          content: [
+            { type: "text", text: "Part" },
+            { type: "tool", id: "call_1", name: "echo", state: { status: "error", error: { type: "tool.input-truncated" } } },
+          ],
+        } as SessionMessageInfo,
+        notice("msg_note", "output-limit"),
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.2, tokens: 5 }),
+      ),
+      2,
+    ],
+    [
       "a cut-off at the cap",
       history(assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 })),
       1,

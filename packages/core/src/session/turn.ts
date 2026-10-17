@@ -329,8 +329,9 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
     OR (json_extract(m.data, '$.finish') = 'error' AND json_extract(m.data, '$.tokens') IS NULL)`
   // A text-only reply that was cut off is continued, in the same logical step, by the escalation or resume notice
   // recorded after it and before the Session's next response. A cut-off that called a tool is a step of its own.
+  const textOnly = sql`NOT EXISTS (SELECT 1 FROM json_each(m.data, '$.content') WHERE json_extract(value, '$.type') = 'tool')`
   const continued = sql`json_extract(m.data, '$.finish') = 'length'
-    AND NOT EXISTS (SELECT 1 FROM json_each(m.data, '$.content') WHERE json_extract(value, '$.type') = 'tool')
+    AND ${textOnly}
     AND EXISTS (
       SELECT 1 FROM session_message AS n
       WHERE n.session_id = m.session_id AND n.type = 'synthetic'
@@ -349,7 +350,7 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
     }>(
       sql`${descendants}
         SELECT
-          sum(CASE WHEN m.session_id = ${sessionID} AND ${ended} AND NOT (${continued}) AND m.id IS NOT ${continuing ?? null} THEN 1 ELSE 0 END) AS steps,
+          sum(CASE WHEN m.session_id = ${sessionID} AND ${ended} AND NOT (${continued}) AND NOT (m.id IS ${continuing ?? null} AND ${textOnly}) THEN 1 ELSE 0 END) AS steps,
           sum(coalesce(json_extract(m.data, '$.cost'), 0)) AS cost,
           sum(${tokens}) AS tokens,
           sum(CASE WHEN ${unpriced} THEN 1 ELSE 0 END) AS unknown,

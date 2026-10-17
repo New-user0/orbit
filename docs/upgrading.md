@@ -3269,6 +3269,8 @@ trailers.
 - A reply that was cut off at the output limit and then escalated or resumed is one step with what continues it, so
   `--max-steps 1` no longer stops a capped reply from being repeated at the larger cap. `orb run` reports the same step
   count. A cut-off that called a tool is a step of its own.
+- The session's shown cost and `orb stats` totals now include estimates for failed responses, retried attempts and
+  generations, which were not counted before.
 - A wake-up (a background job's or subagent's completion notice) continues the limits of the turn before it whether it
   was queued or steered, and finds that turn in a fixed number of reads however many wake-ups came between.
 

@@ -6152,6 +6152,55 @@ describe("SessionRunnerLLM", () => {
       expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
     })
 
+    // The step rule counts a cut-off that holds a tool part, so the check at the cut-off must count it too; otherwise a
+    // resume or escalation note is left behind and the next check fails with the limit.
+    const cutOffTool = [
+      {
+        name: "a cut-off tool input on the resume path",
+        escalate: false,
+        cut: () =>
+          TestLLM.complete(
+            { reason: { normalized: "length", raw: "max_tokens" } },
+            LLMEvent.toolInputStart({ id: "cut-call", name: "echo" }),
+            LLMEvent.toolInputDelta({ id: "cut-call", name: "echo", text: '{"text":"par' }),
+            LLMEvent.toolCall({ id: "cut-call", name: "echo", input: { text: "par" }, partialInput: true }),
+          ),
+      },
+      {
+        name: "a cut-off tool input on the escalation path",
+        escalate: true,
+        cut: () =>
+          TestLLM.complete(
+            { reason: { normalized: "length", raw: "max_tokens" } },
+            LLMEvent.toolInputStart({ id: "cut-input", name: "echo" }),
+            LLMEvent.toolInputDelta({ id: "cut-input", name: "echo", text: '{"text":' }),
+          ),
+      },
+      {
+        name: "a cut-off hosted tool call",
+        escalate: false,
+        cut: () =>
+          TestLLM.complete({ reason: { normalized: "length", raw: "max_tokens" } }, hostedCall("cut-hosted", "query")),
+      },
+    ]
+    cutOffTool.forEach((row) =>
+      scenario(`leaves no note behind when the step limit is spent at ${row.name}`, function* (s) {
+        if (row.escalate) {
+          yield* s.configControl!.setEntries([
+            new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+          ])
+          s.currentModel = fittedOutputModel
+        }
+        yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+        yield* s.llm.push(row.cut(), TestLLM.stop())
+
+        expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+
+        expect(s.requests).toHaveLength(1)
+        expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+      }),
+    )
+
     scenario("runs a queued prompt without options unlimited in the same busy period", function* (s) {
       yield* s.session.prompt({ sessionID, text: "A", turn: { maxSteps: 1 }, resume: false })
       yield* s.session.prompt({ sessionID, text: "B", delivery: "queue", resume: false })

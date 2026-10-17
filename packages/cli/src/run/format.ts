@@ -104,8 +104,8 @@ export function stepIDs(messages: ReadonlyArray<SessionMessageInfo>) {
   )
 }
 
-// The limit that ended the run names its result subtype. `limit.cost-unknown` is the server refusing a cost limit it
-// cannot count, which is a plain error, not a limit that was reached.
+// The limit that ended the run names its result subtype. `limit.cost-unknown` and `limit.tokens-unknown` are the server refusing a limit
+// it cannot count, which is a plain error, not a limit that was reached.
 export function subtype(input: { failed: boolean; interrupted: boolean; limit: SessionStructuredError | undefined }) {
   if (input.interrupted) return "interrupted"
   const type = input.limit?.type

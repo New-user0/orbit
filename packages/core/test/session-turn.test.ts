@@ -954,6 +954,7 @@ for (const { persist, it } of modes) {
           cost: Money.USD.make(7),
           tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
         })
+        yield* Effect.gen(function* () {
         expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toMatchObject({ cost: 7, tokens: 24, unknown: 0 })
 
         yield* bus.publish(SessionEvent.Step.Ended, {
@@ -965,7 +966,7 @@ for (const { persist, it } of modes) {
         })
         // The step has ended but the table has not been cleared yet: the row now carries it.
         expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toMatchObject({ cost: 7, tokens: 24 })
-        SessionTurn.settleStep(sessionID, assistantMessageID)
+        }).pipe(Effect.ensuring(Effect.sync(() => SessionTurn.settleStep(sessionID, assistantMessageID))))
         expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toMatchObject({ cost: 7, tokens: 24 })
       }),
     )
@@ -991,8 +992,9 @@ for (const { persist, it } of modes) {
           cost: Money.USD.make(7),
           tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
         })
-        const limit = yield* SessionTurn.ancestorLimit(s.db, childID, true)
-        SessionTurn.settleStep(sessionID, assistantMessageID)
+        const limit = yield* SessionTurn.ancestorLimit(s.db, childID, true).pipe(
+          Effect.ensuring(Effect.sync(() => SessionTurn.settleStep(sessionID, assistantMessageID))),
+        )
 
         expect(limit?.type).toBe("limit.cost")
         expect(yield* SessionTurn.ancestorLimit(s.db, childID, true)).toBeUndefined()
