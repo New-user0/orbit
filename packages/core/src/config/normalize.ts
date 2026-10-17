@@ -165,8 +165,8 @@ export function normalize(input: unknown): Result {
     (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
   )
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
-  // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style and migrated as a whole;
-  // a string or a list of tools is native.
+  // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style: its legacy fields migrate
+  // and its native fields decode on their own, then the two halves join; a string or a list of tools is native.
   const named = plainNames(input.agents, ["agents"], diagnostics)
   // Keys written for another product are set aside with one diagnostic each, in every entry, so none of them reaches the
   // provider as a request option; a variant beside a model is settled the way the Markdown door settles it.

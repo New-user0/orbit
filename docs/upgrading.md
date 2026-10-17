@@ -545,7 +545,7 @@ alias of `steps`), `skills`, `initial_prompt`, `memory` (`user`, `project` or `l
 `model_aliases` with `small` and `large`. These keys are stored and shown by `agent.list` and `agent.get`; what they do
 when an agent runs lands with later changes. A field with a bad value is dropped with a log line or a diagnostic and
 the agent still loads. An agent whose `tools` is a map of tool names to booleans is still read in the legacy v1
-style: the map and the keys only that style has (`temperature`, `top_p`, `prompt`, `options`, `maxSteps`, `permission`)
+style: the map and the keys only that style has (`temperature`, `top_p`, `prompt` (in a Markdown file the body stays the prompt and a front matter `prompt` is ignored), `options`, `maxSteps`, `permission`)
 are read as before, while every key Orbit's own schema has, `model`, `steps` and `permissions` included, is read
 natively beside it. A field with a bad value on either side is dropped with a diagnostic (or a log line, in a Markdown
 file) at its own path, and the rest of the agent, its deny rules included, still loads. A `variant` beside a model is

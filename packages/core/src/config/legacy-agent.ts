@@ -35,7 +35,7 @@ export function prepare(entry: Record<string, unknown>) {
   const notes: { key: string; message: string }[] = []
   const kept = Object.fromEntries(
     Object.entries(entry).filter(([key]) => {
-      const native = foreign[key]
+      const native = Object.hasOwn(foreign, key) ? foreign[key] : undefined
       if (native === undefined) return true
       notes.push({ key, message: `ignored "${key}"; use "${native}"` })
       return false

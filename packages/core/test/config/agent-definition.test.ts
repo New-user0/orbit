@@ -3,6 +3,7 @@ import fsp from "fs/promises"
 import path from "path"
 import { Effect, Layer, Logger } from "effect"
 import { Agent } from "@orbit/core/agent"
+import { LegacyAgent } from "@orbit/core/config/legacy-agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
 import { ConfigNormalize } from "@orbit/core/config/normalize"
@@ -621,6 +622,18 @@ describe("agent definition: native keys beside a tools map", () => {
       }),
     )
   }
+
+  it.live("keeps the body as the prompt when the front matter also has a prompt", () =>
+    Effect.gen(function* () {
+      const agents = yield* load({ "agents/a.md": md(`${webfetch}\nprompt: Front`) })
+      const agent = yield* get(agents, "a")
+      expect(agent?.system).toBe("Body.")
+    }),
+  )
+
+  it.effect("does not take a name inherited from Object.prototype for a foreign key", () =>
+    Effect.sync(() => expect(LegacyAgent.prepare({ constructor: 1, toString: 2 }).notes).toEqual([])),
+  )
 
   it.live("still sends a key that neither schema knows to the request body", () =>
     Effect.gen(function* () {

@@ -110,15 +110,15 @@ function decode(file: { directory: string; filepath: string; primary: boolean },
 function migrate(filepath: string, name: string, front: Record<string, unknown>, body: string, notes: string[]) {
   const parts = LegacyAgent.split(front)
   // A field with a bad value costs only itself on this side too, and the native half is applied whatever becomes of it.
-  const base = { name, prompt: body }
+  // The body is the prompt and goes last, so a front matter `prompt` never replaces it.
   const legacyFields = Object.fromEntries(
     Object.entries(parts.legacy).filter(([key, value]) => {
-      if (Option.isSome(decodeLegacyAgent({ ...base, [key]: value }, decodeOptions))) return true
+      if (Option.isSome(decodeLegacyAgent({ name, [key]: value, prompt: body }, decodeOptions))) return true
       notes.push(`${filepath}: dropped the invalid "${key}"`)
       return false
     }),
   )
-  const legacy = Option.getOrThrow(decodeLegacyAgent({ ...base, ...legacyFields }, decodeOptions))
+  const legacy = Option.getOrThrow(decodeLegacyAgent({ name, ...legacyFields, prompt: body }, decodeOptions))
   const kept = native(filepath, parts.native, notes)
   const encoded = kept && Option.getOrUndefined(encodeAgent(kept))
   return LegacyAgent.merge(
