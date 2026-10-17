@@ -667,14 +667,14 @@ test("orb flow clean in a clone whose run store names runs like paths leaves eve
   }
   store.close()
 
-  const cleaned = await orb(repository, ["flow", "clean"])
+  const cleaned = await orb(repository, ["flow", "clean", "--standalone", "--trust"])
 
   expect({ code: cleaned.code, stderr: cleaned.code === 0 ? "" : cleaned.stderr }).toEqual({ code: 0, stderr: "" })
   // Only the run with an ID the runner could have made is a run.
   expect(cleaned.stdout).toContain("from 1 run(s)")
   // Naming such a run does not make it one, for any command that takes a run, and resuming one makes no worktree.
   for (const command of ["clean", "show", "resume"]) {
-    const named = await orb(repository, ["flow", command, "../../../victim"])
+    const named = await orb(repository, ["flow", command, ...(command === "clean" ? ["--standalone", "--trust"] : []), "../../../victim"])
     expect({ command, code: named.code }).toEqual({ command, code: 1 })
     expect(named.stderr).toContain("No run ../../../victim in this repository")
   }

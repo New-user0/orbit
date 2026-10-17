@@ -220,7 +220,7 @@ test("orb eval compares models on a suite, and orb flow clean removes what the r
   expect(table.stdout).toContain("ollama/learner:1b  0/1")
   expect(await branches(repository)).not.toEqual([])
 
-  const cleaned = await orb(repository, ["flow", "clean"])
+  const cleaned = await orb(repository, ["flow", "clean", "--standalone", "--trust"])
 
   expect(cleaned.code).toBe(0)
   expect(cleaned.stdout).toContain("Removed 3 worktree(s) and 3 branch(es) from 2 run(s)")
