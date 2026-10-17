@@ -2064,7 +2064,7 @@ The program-wide register of every follow-up, these gaps included, with each one
   watcher start no git in a folder that `WorkspaceTrust` does not trust, and read its files instead (`GitLayout`;
   `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
   control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read-only calls
-  of the `Git` service still run git in an untrusted folder, with its config in effect, and reach none of those keys
+  of the `Git` service still run git in an untrusted folder, with its config in effect, and reach none of those keys except two: `status.short` runs `core.fsmonitor` and clean filters, and `history.recent` runs `gpg.program` when `log.showSignature` is set. Those two are called only by `VcsInstructions`, behind `ProjectTrust.trusted()`
   (`test/snapshot-trust.test.ts`, `test/git.test.ts`); that is a fact about the commands and the git versions the tests ran
   with (2.52 on Windows, the container's on Linux), not a gate. What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
   and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the

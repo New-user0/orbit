@@ -102,14 +102,18 @@ export interface Interface {
      * `main`, else `master`, else the name `main`. It never contacts the remote.
      */
     readonly mainBranch: (directory: AbsolutePath) => Effect.Effect<string>
-    /** The newest `count` commits as `git log --oneline` prints them. Empty when there are none. */
+    /**
+     * The newest `count` commits as `git log --oneline` prints them. Empty when there are none. It reaches config keys
+     * (`gpg.program` when `log.showSignature` is set), so call it only behind `ProjectTrust.trusted()`.
+     */
     readonly recent: (directory: AbsolutePath, count: number) => Effect.Effect<readonly string[]>
     /** The `user.name` that git resolves in `directory`, undefined when none is set. */
     readonly userName: (directory: AbsolutePath) => Effect.Effect<string | undefined>
   }
   readonly status: {
     /**
-     * `git status --short` run in `directory`, so paths are relative to it. It takes no optional lock, and a result
+     * `git status --short` run in `directory`, so paths are relative to it. It reaches config keys (`core.fsmonitor`, clean
+     * filters), so call it only behind `ProjectTrust.trusted()`. It takes no optional lock, and a result
      * longer than `maxBytes` is cut to whole lines. A failure to start git or a non-zero exit is an error: a failed
      * status must not read as a clean tree.
      */

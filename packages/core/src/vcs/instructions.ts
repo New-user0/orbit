@@ -2,7 +2,7 @@ export * as VcsInstructions from "./instructions.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Trust } from "@orbit/schema/trust"
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
 import { Bus } from "../bus.js"
 import { Config } from "../config.js"
 import { Database } from "../database/database.js"
@@ -22,6 +22,8 @@ export const STATUS_LIMIT = 2_000
 const COMMITS = 5
 // Room for STATUS_LIMIT characters at up to four bytes each, with plenty over.
 const STATUS_BYTES = 64 * 1024
+// Bounds one capture, as the reference bounds each of its commands; a timeout is treated like a failed status.
+const CAPTURE_TIMEOUT = "10 minutes"
 
 export const Snapshot = Schema.Struct({
   branch: Schema.String,
@@ -64,7 +66,10 @@ const layer = Layer.effect(
 
     // What this process already captured for a session since trust last changed. A preview and the admission that follows
     // it share one snapshot, and a repository that fails does not run git again at every step.
-    const memo = new Map<string, Effect.Effect<Snapshot | Instructions.Removed>>()
+    // The capture runs in a fiber of the layer, not of the reader, so a reader that is interrupted (a stopped step, a
+    // dropped preview, a failing sibling source) does not leave an interrupt behind for every later step.
+    const scope = yield* Effect.scope
+    const memo = new Map<string, Fiber.Fiber<Snapshot | Instructions.Removed>>()
     yield* bus.subscribe(Trust.Event.Updated).pipe(
       Stream.runForEach(() => Effect.sync(() => memo.clear())),
       Effect.forkScoped({ startImmediately: true }),
@@ -109,15 +114,32 @@ const layer = Layer.effect(
       const parent = session.parentID === undefined ? undefined : yield* store.get(session.parentID)
       if (parent && parent.location.directory === location.directory) {
         const inherited = yield* InstructionState.value(db, parent.id, key)
-        if (inherited !== undefined) return yield* Schema.decodeUnknownEffect(Snapshot)(inherited).pipe(Effect.orDie)
+        if (inherited !== undefined) {
+          // A parent value that no longer matches the schema costs only itself: this session captures its own.
+          const decoded = Schema.decodeUnknownOption(Snapshot)(inherited)
+          if (Option.isSome(decoded)) return decoded.value
+          yield* Effect.logWarning("git snapshot of the parent session ignored: it does not match the schema", {
+            sessionID: parent.id,
+          })
+        }
       }
 
-      const cached =
+      const running =
         memo.get(session.id) ??
-        (yield* Effect.cached(capture(stored !== undefined).pipe(Effect.withSpan("VcsInstructions.capture"))).pipe(
-          Effect.tap((effect) => Effect.sync(() => memo.set(session.id, effect))),
+        (yield* capture(stored !== undefined).pipe(
+          Effect.timeoutOption(CAPTURE_TIMEOUT),
+          Effect.flatMap((result) =>
+            Option.isSome(result)
+              ? Effect.succeed(result.value)
+              : Effect.logWarning("git snapshot skipped: git took too long", { directory }).pipe(
+                  Effect.as(Instructions.removed),
+                ),
+          ),
+          Effect.withSpan("VcsInstructions.capture"),
+          Effect.forkIn(scope),
+          Effect.tap((fiber) => Effect.sync(() => memo.set(session.id, fiber))),
         ))
-      return yield* cached
+      return yield* Fiber.join(running)
     })
 
     return Service.of({

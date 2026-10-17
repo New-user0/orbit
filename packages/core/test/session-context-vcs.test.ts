@@ -27,6 +27,7 @@ import { InstructionState } from "@orbit/core/session/instruction-state"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionSchema } from "@orbit/core/session/schema"
+import { InstructionBlobTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Tool } from "@orbit/core/tool"
@@ -51,6 +52,7 @@ const ids = {
   main: SessionSchema.ID.make("ses_vcs_main"),
   child: SessionSchema.ID.make("ses_vcs_child"),
   fork: SessionSchema.ID.make("ses_vcs_fork"),
+  other: SessionSchema.ID.make("ses_vcs_other"),
 }
 
 const models = Layer.mock(SessionRunnerModel.Service)({
@@ -66,7 +68,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 const empty = Instructions.empty
 
 const state = {
-  found: undefined as { readonly root: string; readonly ran: () => Effect.Effect<readonly string[]> } | undefined,
+  found: undefined as { readonly root: string; readonly folder: string; readonly ran: () => Effect.Effect<readonly string[]> } | undefined,
   config: undefined as Config.TestInterface | undefined,
 }
 
@@ -83,6 +85,7 @@ const harness = (vcs: (root: string) => Project.Vcs | undefined) =>
         Agent.node,
         InstructionEntry.node,
         SessionContext.node,
+        VcsInstructions.node,
         ProjectTrust.node,
         Location.node,
         Global.node,
@@ -103,6 +106,7 @@ const harness = (vcs: (root: string) => Project.Vcs | undefined) =>
         SessionRunnerModel.node.replace(models),
         // A project whose instruction discovery is off, as `orb run --bare` has it: the snapshot does not follow it.
         InstructionDiscovery.node.replace(
+          // What ORBIT_DISABLE_INSTRUCTIONS=1 builds (`project` and `global` off), as `orb run --bare` starts its server.
           Layer.mock(InstructionDiscovery.Service, { project: false, global: false, load: () => Effect.succeed(empty) }),
         ),
         SkillInstructions.node.replace(Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(empty) })),
@@ -151,8 +155,11 @@ const setup = Effect.gen(function* () {
     }),
   )
   const options = { directory: here.directory, agent: "build" }
+  const elsewhere = path.join(path.dirname(here.directory), "elsewhere")
+  yield* Effect.promise(() => fs.mkdir(elsewhere, { recursive: true }))
   yield* insertSession({ id: ids.main, ...options })
   yield* insertSession({ id: ids.child, parentID: ids.main, ...options })
+  yield* insertSession({ id: ids.other, directory: elsewhere, agent: "build" })
   yield* insertSession({ id: ids.fork, fork: ids.main, ...options })
   const found = state.found!
   const control = state.config!
@@ -332,6 +339,89 @@ describe("the git snapshot in the baseline of a session", () => {
       const second = yield* stepped(ids.main)
       expect(second.git).toEqual([])
       expect(Object.keys(second.value.delta)).not.toContain(key)
+    }),
+  )
+
+  it.live("keeps the snapshot with project and global instruction discovery off, which is how orb run --bare starts", () =>
+    Effect.gen(function* () {
+      const { grant, stepped, stored } = yield* setup
+      yield* grant
+
+      const run = yield* stepped(ids.main)
+
+      expect(Object.keys(run.value.delta)).toContain(key)
+      expect(yield* stored(ids.main)).toMatchObject({ branch: "main" })
+    }),
+  )
+
+  it.live("keeps the same snapshot through compaction and starts no git", () =>
+    Effect.gen(function* () {
+      const { grant, stepped, stored, db, context } = yield* setup
+      yield* grant
+      yield* stepped(ids.main)
+      const before = yield* stored(ids.main)
+      yield* InstructionState.advanceEpoch(db, ids.main, 7)
+
+      const after = yield* stepped(ids.main)
+      const selected = yield* context.select(ids.main)
+
+      expect(after.git).toEqual([])
+      expect(after.value.delta).toEqual({})
+      expect(yield* stored(ids.main)).toEqual(before)
+      expect(yield* InstructionState.initial(db, ids.main, selected.instructions)).toContain("Current branch: main")
+    }),
+  )
+
+  it.live("captures its own snapshot for a child session in another location", () =>
+    Effect.gen(function* () {
+      const { grant, db } = yield* setup
+      const vcs = yield* VcsInstructions.Service
+      yield* grant
+      // The parent lives in another folder and holds a snapshot of that folder's repository.
+      const theirs = { branch: "theirs", main: "theirs", user: "", status: "", truncated: false, commits: [], late: false }
+      const hash = Instructions.hash(theirs)
+      yield* db.insert(InstructionBlobTable).values({ hash, value: theirs }).onConflictDoNothing().run()
+      yield* InstructionState.initialize(db, ids.other, 0, { [key]: hash })
+
+      const run = yield* traced(Instructions.read(vcs.source({ id: ids.child, parentID: ids.other })))
+
+      expect(mentions(run.git, " status")).not.toEqual([])
+      expect(run.value[0]?.value).toMatchObject({ branch: "main", user: "Test" })
+    }),
+  )
+
+  it.live("admits the snapshot at the next step when the first step was interrupted during a slow status", () =>
+    Effect.gen(function* () {
+      const { grant, step, stored, found } = yield* setup
+      yield* grant
+      // The key program takes a while, so the first step is stopped while git status runs.
+      yield* Effect.promise(() => Bun.write(path.join(found.folder, "program.sh"), "#!/bin/sh\nsleep 2\n"))
+      const first = yield* Effect.exit(step(ids.main).pipe(Effect.timeout("500 millis")))
+      expect(first._tag).toBe("Failure")
+      expect(yield* stored(ids.main)).toBeUndefined()
+
+      const second = yield* step(ids.main)
+      const third = yield* step(ids.main)
+
+      expect(Object.keys(second.delta)).toContain(key)
+      expect(third.delta).toEqual({})
+      expect(yield* stored(ids.main)).toMatchObject({ branch: "main" })
+    }),
+  )
+
+  it.live("captures its own snapshot when the value of the parent no longer matches the schema", () =>
+    Effect.gen(function* () {
+      const { grant, stepped, stored, db } = yield* setup
+      yield* grant
+      const old = { branch: "main" }
+      const hash = Instructions.hash(old)
+      yield* db.insert(InstructionBlobTable).values({ hash, value: old }).onConflictDoNothing().run()
+      yield* InstructionState.initialize(db, ids.main, 0, { [key]: hash })
+
+      const child = yield* stepped(ids.child)
+
+      expect(mentions(child.git, " status")).not.toEqual([])
+      expect(yield* stored(ids.child)).toMatchObject({ main: "main", user: "Test" })
     }),
   )
 
