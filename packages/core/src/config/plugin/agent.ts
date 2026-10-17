@@ -29,7 +29,7 @@ export const Plugin = define({
     const managed = yield* ManagedPolicy.Service
     // The documents that come from a file under agent/ or agents/, which define an agent instead of tuning it.
     const definitions = new WeakSet<Document>()
-    const loadEntry =Effect.fnUntraced(function* (entry: Entry) {
+    const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [entry]
       if (entry.type !== "directory") return []
       // Until the folder is trusted, a file that a link leads out of it is not the repository's to define an agent with.
@@ -111,7 +111,10 @@ export const Plugin = define({
           editor.update(agentID, (agent) => {
             if (!exists) agent.permissions.push(...permissions)
             if (!exists) {
-              agent.source = { scope: document.scope ?? "user", ...(document.path === undefined ? {} : { path: document.path }) }
+              agent.source = {
+                scope: document.scope ?? "user",
+                ...(document.path === undefined ? {} : { path: document.path }),
+              }
               // Any agent in a file can be started as a subagent and can also run as the main agent.
               if (defines && document.trusted !== false) agent.mode = "all"
             }

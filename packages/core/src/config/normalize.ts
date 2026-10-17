@@ -20,6 +20,7 @@ import { ConfigReference } from "@orbit/schema/config/reference"
 import { ConfigExperimental } from "@orbit/schema/config/experimental"
 import { Permission } from "@orbit/schema/permission"
 import { ConfigAgentV1 } from "../v1/config/agent.js"
+import { LegacyAgent } from "./legacy-agent.js"
 import { ConfigAttachmentV1 } from "../v1/config/attachment.js"
 import { ConfigCommandV1 } from "../v1/config/command.js"
 import { ConfigMCPV1 } from "../v1/config/mcp.js"
@@ -167,28 +168,51 @@ export function normalize(input: unknown): Result {
   // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style and migrated as a whole;
   // a string or a list of tools is native.
   const agentEntries = plainNames(input.agents, ["agents"], diagnostics)
-  const isLegacyEntry = (entry: unknown) => isRecord(entry) && isPlainRecord(entry.tools)
+  const isLegacyEntry = (entry: unknown): entry is Record<string, unknown> =>
+    isRecord(entry) && isPlainRecord(entry.tools)
+  const entries = isRecord(agentEntries) ? Object.entries(agentEntries) : []
+  // Native keys written beside a tools map are decoded natively and put over the migrated agent; the legacy decoder
+  // would forward every key it does not know to the provider as a request option.
+  const splits = Object.fromEntries(
+    entries.flatMap(([id, entry]) => (isLegacyEntry(entry) ? [[id, LegacyAgent.split(entry)] as const] : [])),
+  )
+  const legacyNative = decodeMap(
+    Object.fromEntries(
+      Object.entries(splits)
+        .filter(([, parts]) => Object.keys(parts.native).length > 0)
+        .map(([id, parts]) => [id, parts.native]),
+    ),
+    ConfigAgent.Info,
+    ["agents"],
+    diagnostics,
+    (schema, value, at, found) => decodeFields(schema, value, at, found, "permissions"),
+  )
+  const legacyDecoded = decodeMap(
+    Object.fromEntries(Object.entries(splits).map(([id, parts]) => [id, parts.legacy])),
+    ConfigAgentV1.Info,
+    ["agents"],
+    diagnostics,
+    decodeValue,
+  )
   const nativeAgents = {
     ...decodeMap(
-      isRecord(agentEntries)
-        ? Object.fromEntries(Object.entries(agentEntries).filter(([, entry]) => !isLegacyEntry(entry)))
-        : agentEntries,
+      isRecord(agentEntries) ? Object.fromEntries(entries.filter(([, entry]) => !isLegacyEntry(entry))) : agentEntries,
       ConfigAgent.Info,
       ["agents"],
       diagnostics,
       (schema, value, at, found) => decodeFields(schema, value, at, found, "permissions"),
     ),
-    ...mapValues(
-      decodeMap(
-        isRecord(agentEntries)
-          ? Object.fromEntries(Object.entries(agentEntries).filter(([, entry]) => isLegacyEntry(entry)))
-          : undefined,
-        ConfigAgentV1.Info,
-        ["agents"],
-        diagnostics,
-        decodeValue,
-      ),
-      (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value)),
+    ...Object.fromEntries(
+      Object.entries(legacyDecoded).map(([id, value]) => [
+        id,
+        canonical(
+          ConfigAgent.Info,
+          LegacyAgent.merge(
+            ConfigMigrateV1.migrateAgent(value) as Record<string, unknown>,
+            (legacyNative[id] ?? {}) as Record<string, unknown>,
+          ),
+        ),
+      ]),
     ),
   }
   diagnoseAgentUnsupported(input.agent, ["agent"], diagnostics)
@@ -834,7 +858,8 @@ function decodeFields<S extends Schema.Codec<unknown, unknown, never, never>>(
   const result = Object.keys(kept).length === 0 ? undefined : decodeQuiet(schema, kept)
   // An object that fails only because a required field is missing (an empty one, or one with only unknown keys) has no
   // field to drop, so report the object itself rather than losing it silently.
-  if (result === undefined && (Object.keys(kept).length > 0 || diagnostics.length === reported)) invalid(path, diagnostics)
+  if (result === undefined && (Object.keys(kept).length > 0 || diagnostics.length === reported))
+    invalid(path, diagnostics)
   return result
 }
 

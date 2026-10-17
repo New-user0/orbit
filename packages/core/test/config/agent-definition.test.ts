@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import fsp from "fs/promises"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Logger } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
@@ -235,7 +235,10 @@ describe("agent definition: native files", () => {
     { front: "hooks: nonsense", hooks: undefined },
     { front: "permission_mode: nonsense", permissionMode: undefined },
     { front: "mcp_servers: github", mcpServers: undefined },
-    { front: "mcp_servers: [github, 42, {a: {type: local, command: [x]}, b: {type: local, command: [y]}}]", mcpServers: ["github"] },
+    {
+      front: "mcp_servers: [github, 42, {a: {type: local, command: [x]}, b: {type: local, command: [y]}}]",
+      mcpServers: ["github"],
+    },
   ] as const) {
     it.live(`reads ${item.front.replaceAll("\n", " and ")} and keeps the agent`, () =>
       Effect.gen(function* () {
@@ -243,7 +246,8 @@ describe("agent definition: native files", () => {
         expect(agent.description).toBe("kept")
         const expected = { steps: undefined, effort: undefined, background: undefined, memory: undefined, ...item }
         const { front: _front, ...fields } = expected
-        for (const [key, value] of Object.entries(fields)) expect([key, agent[key as keyof typeof agent]]).toEqual([key, value])
+        for (const [key, value] of Object.entries(fields))
+          expect([key, agent[key as keyof typeof agent]]).toEqual([key, value])
       }),
     )
   }
@@ -265,7 +269,12 @@ describe("agent definition: native files", () => {
       })
       const one = yield* get(agents, "plain")
       const other = yield* get(agents, "crlf")
-      expect(other).toMatchObject({ description: "Same", steps: 3, tools: { allow: ["read", "grep"] }, system: "Prompt." })
+      expect(other).toMatchObject({
+        description: "Same",
+        steps: 3,
+        tools: { allow: ["read", "grep"] },
+        system: "Prompt.",
+      })
       expect(other?.description).toBe(one?.description)
     }),
   )
@@ -279,7 +288,9 @@ describe("agent definition: native files", () => {
 
   it.live("does not send another product's spellings to the provider", () =>
     Effect.gen(function* () {
-      const agent = yield* loadOne("disallowedTools: shell\nmaxTurns: 3\npermissionMode: plan\nmcpServers: [x]\ninitialPrompt: hi\ndescription: kept")
+      const agent = yield* loadOne(
+        "disallowedTools: shell\nmaxTurns: 3\npermissionMode: plan\nmcpServers: [x]\ninitialPrompt: hi\ndescription: kept",
+      )
       expect(agent.description).toBe("kept")
       expect(agent.request.body).toEqual({})
       expect(agent.tools).toBeUndefined()
@@ -406,15 +417,20 @@ describe("agent definition: an untrusted folder", () => {
         // Prompt, description and rules are all the shipped agent's own.
         expect(yield* get(agents, id)).toEqual(before.find((agent) => agent.id === id))
       }
-      expect(Permission.evaluate("Edit", "x.ts", (yield* get(agents, "explore"))?.permissions ?? []).effect).toBe("deny")
+      expect(Permission.evaluate("Edit", "x.ts", (yield* get(agents, "explore"))?.permissions ?? []).effect).toBe(
+        "deny",
+      )
     }),
   )
 
   it.live("replaces the same agents when the folder is trusted", () =>
     Effect.gen(function* () {
       const agents = yield* load(files)
-      for (const id of ["explore", "build"]) expect(yield* get(agents, id)).toMatchObject({ system: "FILE PROMPT", description: "Mine" })
-      expect(Permission.evaluate("Edit", "x.ts", (yield* get(agents, "explore"))?.permissions ?? []).effect).toBe("allow")
+      for (const id of ["explore", "build"])
+        expect(yield* get(agents, id)).toMatchObject({ system: "FILE PROMPT", description: "Mine" })
+      expect(Permission.evaluate("Edit", "x.ts", (yield* get(agents, "explore"))?.permissions ?? []).effect).toBe(
+        "allow",
+      )
     }),
   )
 
@@ -450,7 +466,18 @@ describe("agent definition: an untrusted folder", () => {
         initialPrompt: "check the tests",
         mode: "primary",
       })
-      for (const key of ["model", "modelTier", "effort", "steps", "permissionMode", "mcpServers", "skills", "memory", "isolation", "hooks"]) {
+      for (const key of [
+        "model",
+        "modelTier",
+        "effort",
+        "steps",
+        "permissionMode",
+        "mcpServers",
+        "skills",
+        "memory",
+        "isolation",
+        "hooks",
+      ]) {
         expect([key, (agent as Record<string, unknown>)[key]]).toEqual([key, undefined])
       }
       expect(agent.tools?.allow).toBeUndefined()
@@ -489,6 +516,190 @@ describe("agent definition: names", () => {
     Effect.gen(function* () {
       const agents = yield* load({ "agents/team/helper.md": md("description: nested") })
       expect(yield* get(agents, "team/helper")).toMatchObject({ description: "nested" })
+    }),
+  )
+})
+
+describe("agent definition: native keys beside a tools map", () => {
+  const webfetch = "tools:\n  webfetch: false"
+  // Every native key, in the Markdown spelling and the orbit.json one, with what the agent must hold afterwards.
+  const rows: {
+    key: string
+    yaml: string
+    json: unknown
+    check: (agent: Agent.Info) => void
+  }[] = [
+    {
+      key: "permissions",
+      yaml: "permissions:\n  - action: Bash\n    resource: '*'\n    effect: deny",
+      json: [{ action: "Bash", resource: "*", effect: "deny" }],
+      check: (agent) => expect(Permission.evaluate("Bash", "x", agent.permissions).effect).toBe("deny"),
+    },
+    {
+      key: "disallowed_tools",
+      yaml: "disallowed_tools: shell",
+      json: "shell",
+      check: (agent) => expect(agent.tools?.deny).toEqual(["shell"]),
+    },
+    {
+      key: "hooks",
+      yaml: "hooks:\n  SessionStart:\n    - hooks:\n        - type: command\n          command: echo hi",
+      json: { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] },
+      check: (agent) => expect(agent.hooks?.SessionStart?.[0]?.hooks[0]).toMatchObject({ command: "echo hi" }),
+    },
+    {
+      key: "mcp_servers",
+      yaml: "mcp_servers:\n  - github",
+      json: ["github"],
+      check: (agent) => expect(agent.mcpServers).toEqual(["github"]),
+    },
+    {
+      key: "skills",
+      yaml: "skills: review",
+      json: "review",
+      check: (agent) => expect(agent.skills).toEqual(["review"]),
+    },
+    { key: "memory", yaml: "memory: project", json: "project", check: (agent) => expect(agent.memory).toBe("project") },
+    { key: "effort", yaml: "effort: high", json: "high", check: (agent) => expect<unknown>(agent.effort).toBe("high") },
+    { key: "max_turns", yaml: "max_turns: 4", json: 4, check: (agent) => expect(agent.steps).toBe(4) },
+    {
+      key: "initial_prompt",
+      yaml: "initial_prompt: Start here",
+      json: "Start here",
+      check: (agent) => expect(agent.initialPrompt).toBe("Start here"),
+    },
+    {
+      key: "context",
+      yaml: "context:\n  git_status: false",
+      json: { git_status: false },
+      check: (agent) => expect(agent.context).toEqual({ git_status: false }),
+    },
+    {
+      key: "permission_mode",
+      yaml: "permission_mode: plan",
+      json: "plan",
+      check: (agent) => expect(agent.permissionMode).toBe("plan"),
+    },
+    { key: "background", yaml: "background: true", json: true, check: (agent) => expect(agent.background).toBe(true) },
+    {
+      key: "isolation",
+      yaml: "isolation: worktree",
+      json: "worktree",
+      check: (agent) => expect(agent.isolation).toBe("worktree"),
+    },
+    {
+      key: "request",
+      yaml: "request:\n  body:\n    seed: 1",
+      json: { body: { seed: 1 } },
+      check: (agent) => expect(agent.request.body).toEqual({ seed: 1 }),
+    },
+  ]
+
+  for (const row of rows) {
+    it.live(`keeps ${row.key} beside a tools map in a Markdown file`, () =>
+      Effect.gen(function* () {
+        const agent = yield* loadOne(`${webfetch}\n${row.yaml}`)
+        row.check(agent)
+        expect(Permission.evaluate("webfetch", "x", agent.permissions).effect).toBe("deny")
+        // Only `request` may put anything in the request body.
+        expect(agent.request.body).toEqual(row.key === "request" ? { seed: 1 } : {})
+      }),
+    )
+
+    it.live(`keeps ${row.key} beside a tools map in orbit.json`, () =>
+      Effect.gen(function* () {
+        const input = { agents: { a: { tools: { webfetch: false }, [row.key]: row.json } } }
+        const result = ConfigNormalize.normalize(input)
+        if (result.type !== "normalized") throw new Error("expected normalized config")
+        expect(result.diagnostics).toEqual([])
+        const agents = yield* load({}, () => [jsonDocument(input)])
+        const agent = yield* get(agents, "a")
+        if (!agent) throw new Error("expected the agent a")
+        row.check(agent)
+        expect(Permission.evaluate("webfetch", "x", agent.permissions).effect).toBe("deny")
+        expect(agent.request.body).toEqual(row.key === "request" ? { seed: 1 } : {})
+      }),
+    )
+  }
+
+  it.live("still sends a key that neither schema knows to the request body", () =>
+    Effect.gen(function* () {
+      const agent = yield* loadOne(`${webfetch}\ntemperature: 0.2`)
+      expect(agent.request.body).toEqual({ temperature: 0.2 })
+    }),
+  )
+})
+
+const logged = (logs: string[]) =>
+  Logger.layer([
+    Logger.make(({ message }) => {
+      logs.push(String(message))
+    }),
+  ])
+
+describe("agent definition: a file shaped for another product", () => {
+  it.live("loads a file with a name and a tools string", () =>
+    Effect.gen(function* () {
+      const agent = yield* loadOne('name: a\ndescription: Reads\ntools: "read, grep"')
+      expect(agent.tools?.allow).toEqual(["read", "grep"])
+      expect(agent.request.body).toEqual({})
+    }),
+  )
+
+  it.live("loads a file with a name and a tools list", () =>
+    Effect.gen(function* () {
+      const agent = yield* loadOne("name: a\ndescription: Reads\ntools: [read, grep]")
+      expect(agent.tools?.allow).toEqual(["read", "grep"])
+    }),
+  )
+
+  it.live("keeps disallowed_tools, skills and memory beside a name", () =>
+    Effect.gen(function* () {
+      const agent = yield* loadOne("name: a\ndisallowed_tools: shell\nskills: review\nmemory: user")
+      expect(agent).toMatchObject({ tools: { deny: ["shell"] }, skills: ["review"], memory: "user" })
+      expect(agent.request.body).toEqual({})
+    }),
+  )
+
+  it.live("keeps a tools list beside a key that only the legacy format knows", () =>
+    Effect.gen(function* () {
+      const agent = yield* loadOne("tools: [read]\ntemperature: 0.3")
+      expect(agent.tools?.allow).toEqual(["read"])
+      expect(agent.request.body).toEqual({ temperature: 0.3 })
+    }),
+  )
+
+  it.live("says so when a name differs from the path", () =>
+    Effect.gen(function* () {
+      const logs: string[] = []
+      yield* loadOne("name: other\ndescription: x").pipe(Effect.provide(logged(logs)))
+      expect(logs.some((line) => line.includes('ignored "name"'))).toBe(true)
+    }),
+  )
+
+  it.live("reports a legacy file that cannot be read", () =>
+    Effect.gen(function* () {
+      const logs: string[] = []
+      const agents = yield* load({
+        "agents/a.md": md("temperature: warm\ndescription: x\ntools:\n  edit: maybe"),
+      }).pipe(Effect.provide(logged(logs)))
+      expect(yield* get(agents, "a")).toBeUndefined()
+      expect(logs.some((line) => line.includes("legacy format"))).toBe(true)
+    }),
+  )
+
+  it.live("keeps a model tier beside a variant, as the tier and an effort", () =>
+    Effect.gen(function* () {
+      const agent = yield* loadOne("model: small\nvariant: high")
+      expect(agent.modelTier).toBe("small")
+      expect<unknown>(agent.effort).toBe("high")
+    }),
+  )
+
+  it.live("keeps a given effort over the variant of a tier", () =>
+    Effect.gen(function* () {
+      const agent = yield* loadOne("model: large\nvariant: high\neffort: low")
+      expect(agent).toMatchObject({ modelTier: "large", effort: "low" })
     }),
   )
 })

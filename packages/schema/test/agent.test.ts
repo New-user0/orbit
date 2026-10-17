@@ -74,7 +74,13 @@ test("ConfigAgent.Info reads the definition keys and rejects the bad ones", () =
     background: true,
     tools: ["read", "grep"],
   })
-  for (const bad of [{ model: "fast" }, { max_turns: 0 }, { memory: "global" }, { isolation: "remote" }, { effort: "a#b" }])
+  for (const bad of [
+    { model: "fast" },
+    { max_turns: 0 },
+    { memory: "global" },
+    { isolation: "remote" },
+    { effort: "a#b" },
+  ])
     expect(() => decode(bad)).toThrow()
 })
 

@@ -22,7 +22,9 @@ const device = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 export function isName(id: string) {
   return id
     .split("/")
-    .every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(segment) && !segment.endsWith(".") && !device.test(segment))
+    .every(
+      (segment) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(segment) && !segment.endsWith(".") && !device.test(segment),
+    )
 }
 
 /**
@@ -103,7 +105,9 @@ const decodeMcpServer = Schema.decodeUnknownOption(McpServer)
 // A bad item costs only itself.
 const McpServers = Schema.Array(Schema.Unknown).pipe(
   Schema.decodeTo(Schema.Array(McpServer), {
-    decode: SchemaGetter.transform((items) => items.filter((item): item is typeof McpServer.Encoded => Option.isSome(decodeMcpServer(item)))),
+    decode: SchemaGetter.transform((items) =>
+      items.filter((item): item is typeof McpServer.Encoded => Option.isSome(decodeMcpServer(item))),
+    ),
     encode: SchemaGetter.passthrough({ strict: false }),
   }),
 )

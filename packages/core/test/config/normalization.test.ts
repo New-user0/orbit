@@ -180,7 +180,9 @@ describe("ConfigNormalize", () => {
             ? generated
             : {
                 ...generated,
-                agents: Object.fromEntries(Object.entries(generated.agents).filter(([name]) => ConfigAgent.isName(name))),
+                agents: Object.fromEntries(
+                  Object.entries(generated.agents).filter(([name]) => ConfigAgent.isName(name)),
+                ),
               }
         const result = normalized(source)
         // Normalizing hooks drops the entries their event or hook type cannot honor, and reports each one.
@@ -975,11 +977,16 @@ describe("ConfigNormalize agent definitions", () => {
     expect(normalized(input).diagnostics).toEqual([])
   })
 
-  test.each(["fast", "default", "sonnet", "not a model", 3])("drops the model %p with a diagnostic and keeps the agent", (model) => {
-    const result = normalized({ agents: { a: { description: "Kept", model } } })
-    expect(result.encoded.agents).toEqual({ a: { description: "Kept" } })
-    expect(result.diagnostics.map((item) => [item.kind, item.path.join(".")])).toEqual([["invalid", "agents.a.model"]])
-  })
+  test.each(["fast", "default", "sonnet", "not a model", 3])(
+    "drops the model %p with a diagnostic and keeps the agent",
+    (model) => {
+      const result = normalized({ agents: { a: { description: "Kept", model } } })
+      expect(result.encoded.agents).toEqual({ a: { description: "Kept" } })
+      expect(result.diagnostics.map((item) => [item.kind, item.path.join(".")])).toEqual([
+        ["invalid", "agents.a.model"],
+      ])
+    },
+  )
 
   test.each([
     [" Inherit ", "inherit"],
@@ -992,7 +999,14 @@ describe("ConfigNormalize agent definitions", () => {
   test("keeps the fields of an agent that decode and drops each bad one on its own", () => {
     const result = normalized({
       agents: {
-        a: { description: "Kept", max_turns: 0, memory: "global", isolation: "remote", background: "yes", effort: "a#b" },
+        a: {
+          description: "Kept",
+          max_turns: 0,
+          memory: "global",
+          isolation: "remote",
+          background: "yes",
+          effort: "a#b",
+        },
       },
     })
     expect(result.encoded.agents).toEqual({ a: { description: "Kept" } })
@@ -1027,9 +1041,9 @@ describe("ConfigNormalize agent definitions", () => {
   )
 
   test("keeps a nested agent name", () => {
-    expect(Object.keys(normalized({ agents: { "team/helper": { description: "ok" } } }).encoded.agents as object)).toEqual([
-      "team/helper",
-    ])
+    expect(
+      Object.keys(normalized({ agents: { "team/helper": { description: "ok" } } }).encoded.agents as object),
+    ).toEqual(["team/helper"])
   })
 
   test("normalizes model_aliases field by field", () => {

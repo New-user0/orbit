@@ -40,7 +40,8 @@ export interface Request extends Schema.Schema.Type<typeof Request> {}
 
 export const Mode = Schema.Literals(["default", "accept-edits", "plan", "bypass", "dont-ask", "auto"]).annotate({
   identifier: "Permission.Mode",
-  description: "How permission requests are decided: default asks, accept-edits allows file edits, plan is read-only, bypass allows everything, dont-ask refuses what would be asked, auto lets a classifier decide",
+  description:
+    "How permission requests are decided: default asks, accept-edits allows file edits, plan is read-only, bypass allows everything, dont-ask refuses what would be asked, auto lets a classifier decide",
 })
 export type Mode = typeof Mode.Type
 

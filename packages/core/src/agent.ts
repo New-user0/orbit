@@ -20,10 +20,6 @@ export const defaultID = ID.make("build")
 
 export const Color = Agent.Color
 
-/** The agents that Orbit ships. A file of an untrusted folder may not replace or tune any of them. */
-export const shipped: ReadonlySet<string> = new Set(
-  ["build", "plan", "general", "explore", "compaction", "title", "side", "summary"].map((id) => ID.make(id)),
-)
 
 export const Info = Agent.Info
 export type Info = Agent.Info

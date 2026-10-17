@@ -1261,6 +1261,12 @@ runs" is a permission.
   they search goes through the Read rules first (`FileAccess.authorizeRead`), and a Read deny of `*.env` covers a Grep
   of `.env`. A rule matches the name a file has on disk: on Windows `FileAccess.resolve` turns every spelling of a file
   into that name before a rule sees it (class 4).
+- An agent file under `agent/` or `agents/` defines its agent: it replaces an earlier definition of the id and rebuilds
+  it from a default that allows everything. Therefore an untrusted file of that kind never replaces or tunes an agent
+  that exists (its prompt included), and `ProjectTrust.status` lists `permissions` for every such file, not only for
+  the ids Orbit ships, because which ids exist depends on entries the status cannot see. A file under `mode/` or
+  `modes/` is not covered by this rule. Proof: `core/test/config/agent-definition.test.ts` ("an untrusted folder") and
+  `core/test/project-trust.test.ts` ("lists every file under agents/ as held back").
 
 **How to test:**
 

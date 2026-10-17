@@ -545,14 +545,14 @@ alias of `steps`), `skills`, `initial_prompt`, `memory` (`user`, `project` or `l
 `model_aliases` with `small` and `large`. These keys are stored and shown by `agent.list` and `agent.get`; what they do
 when an agent runs lands with later changes. A field with a bad value is dropped with a log line or a diagnostic and
 the agent still loads. An agent whose `tools` is a map of tool names to booleans is still read as before, in the
-legacy v1 style. The camelCase spellings of these keys are not read in Orbit's own folders.
+legacy v1 style, and the other keys beside the map still apply as written. A `name` key in a file is ignored (the path names the agent). The camelCase spellings of these keys are not read in Orbit's own folders.
 
 An agent name must be plain: segments separated by `/`, each starting with a letter or digit and holding only letters,
 digits, `.`, `_` and `-`, not ending with `.`, and not a Windows device name such as `nul` or `con`. A file or an
 `agents`, `agent` or `mode` key with another name defines no agent and is reported.
 
 In a folder that is not trusted, a file under `agent/` or `agents/` no longer changes an agent that exists: it is
-held back whole, and the folder is listed as holding back permissions when the file names an agent that Orbit ships.
+held back whole, and the folder is listed as holding back permissions for every such file, because which names exist depends on the entries before it, the person's own agents included.
 Trusting the folder applies it. The file may still define a new agent, cut down to the keys that are safe: `context`,
 `background`, `disallowed_tools`, `system`, `description`, `color` and an `initial_prompt` that is plain text. The keys
 that choose a model, a budget, tools, a mode, a memory scope, servers, hooks, skills or isolation, and an
