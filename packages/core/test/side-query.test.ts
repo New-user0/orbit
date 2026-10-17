@@ -44,6 +44,7 @@ import { Context, Duration, Effect, Fiber, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
 import { noScratchpad } from "./lib/scratchpad"
+import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
 
 const sessionID = SessionSchema.ID.make("ses_side_query_test")
@@ -131,6 +132,7 @@ const it = testEffect(
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(builtins),
         noScratchpad,
+        noVcsSnapshot,
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),

@@ -114,6 +114,7 @@ describe("ConfigTrust.sanitize", () => {
       compaction: { auto: false, buffer: 100 },
       compatibility: { enabled: true },
       warming: false,
+      git_status: false,
       websearch: false,
       permissions: [{ action: "shell", resource: "rm *", effect: "deny" }],
       instructions: ["./docs/ARCHITECTURE.md"],
@@ -604,6 +605,7 @@ describe("ConfigTrust.stamp", () => {
       websearch: false,
       default_agent: "plan",
       warming: false,
+      git_status: false,
     })
     const project = document("project", {
       experimental: { portable_shell_scanner: false },

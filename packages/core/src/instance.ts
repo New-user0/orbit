@@ -55,6 +55,8 @@ import { ReadToolFileSystem } from "./tool/read-filesystem.js"
 import { Tool } from "./tool.js"
 import { ToolOutput } from "./tool-output.js"
 import { Vcs } from "./vcs.js"
+import { VcsInstructions } from "./vcs/instructions.js"
+import { Instructions } from "./instructions/index.js"
 
 export * as Instance from "./instance.js"
 export { Service, node, type Interface } from "./instance/service.js"
@@ -113,6 +115,7 @@ const nodes = [
   Snapshot.node,
   SessionRunnerLLM.node,
   Vcs.node,
+  VcsInstructions.node,
   // Start repository watches only after boot-critical filesystem and Git work.
   LocationWatcher.node,
 ] as const satisfies readonly Node.LocationGraph<never, unknown>[]
@@ -148,6 +151,8 @@ export interface Options {
 const vanillaReplacements: LayerNode.Replacements = [
   Config.node.replace(Config.configured({ project: false, global: false })),
   InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: false, global: false })),
+  // A vanilla instance reads nothing about the project it stands on, and the git snapshot is one such read.
+  VcsInstructions.node.replace(Layer.succeed(VcsInstructions.Service, { source: () => Instructions.empty })),
 ]
 
 // One instance is one compiled, fresh copy of the graph standing on a directory.

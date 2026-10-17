@@ -11,6 +11,8 @@ import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { LocationServiceMap } from "@orbit/core/location-services"
 import { Location } from "@orbit/core/location"
 import { Plugin } from "@orbit/core/plugin"
+import { SessionSchema } from "@orbit/core/session/schema"
+import { VcsInstructions } from "@orbit/core/vcs/instructions"
 import { AbsolutePath } from "@orbit/core/schema"
 import { tmpdir } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
@@ -93,18 +95,22 @@ describe("Instance vanilla", () => {
               const config = yield* Config.Service
               const discovery = yield* InstructionDiscovery.Service
               const entries = yield* config.entries()
+              const vcs = yield* VcsInstructions.Service
               return {
                 documents: entries.filter(
                   (entry) => "path" in entry && typeof entry.path === "string" && entry.path.startsWith(ref.directory),
                 ),
                 instructions: yield* discovery.list(),
                 shell: Config.latest(entries, "shell"),
+                snapshot: vcs.source({ id: SessionSchema.ID.make("ses_vanilla") }).map((source) => source.key),
               }
             }).pipe(Effect.scoped, Effect.provide(locations.get(ref)))
 
           const vanilla = yield* read(yield* plant("vanilla"))
           expect(vanilla.documents).toEqual([])
           expect(vanilla.instructions).toEqual([])
+          // A vanilla instance reads nothing of the project, and the git snapshot is one such read.
+          expect(vanilla.snapshot).toEqual([])
           // Host-injected content survives discovery: false.
           expect(vanilla.shell).toBe("vanilla-host")
 
@@ -112,9 +118,11 @@ describe("Instance vanilla", () => {
           const bare = yield* read(yield* plant("bare"))
           expect(bare.documents).toEqual([])
           expect(bare.instructions).toEqual([])
+          expect(bare.snapshot).toEqual([])
           expect(bare.shell).toBeUndefined()
 
           const discovery = yield* read(yield* plant("discovery"))
+          expect(discovery.snapshot).toEqual([VcsInstructions.key])
           expect(discovery.documents.length).toBeGreaterThan(0)
           expect(
             Array.isArray(discovery.instructions) &&

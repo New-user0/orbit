@@ -53,6 +53,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description:
       "Most tokens a model may write per model request. A reply cut off at the cap is resumed like any other cut-off. Lowers the model's own maximum and never raises it; compaction summaries and titles keep their own limits; unset leaves the maximum in place",
   }),
+  git_status: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Whether a session starts with a snapshot of the git repository: the branch, the main branch, the git user name, a short status and the last five commits. The snapshot is taken once, only in a trusted folder, and is not updated. On by default; false turns it off",
+  }),
   default_agent: Schema.String.pipe(optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
   }),

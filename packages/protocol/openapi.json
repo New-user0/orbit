@@ -14015,6 +14015,9 @@
             "type": "integer",
             "exclusiveMinimum": 0
           },
+          "git_status": {
+            "type": "boolean"
+          },
           "default_agent": {
             "type": "string"
           },

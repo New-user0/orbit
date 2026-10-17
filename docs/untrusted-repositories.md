@@ -119,6 +119,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     plants a program that the config names, which records its runs, and carries the plain git command that runs it as the
     control (all but `core.pager`, which git runs only for a terminal that no test has); git's own trace (`GIT_TRACE2`)
     says whether any git started.
+- The git snapshot of a session (`VcsInstructions`, `packages/core/src/vcs/instructions.ts`): `status --short`, `log
+  --oneline`, `config user.name` and the refs of `origin` run in the session's folder, and git applies that folder's
+  config to them (`core.fsmonitor`, `include.path`, `gpg.program` with `log.showSignature`), with no `-c` override. The
+  source asks `ProjectTrust.trusted()` first at every read, whatever else it knows, and starts no git for a folder that is
+  not trusted. A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
+  once when trust is granted, as a durable update. A repository is told by `Location.vcs`, which `Project.resolve` reads
+  from files, never by `Git.repo.discover`, which starts `git rev-parse`. `git_status` is inert in `ConfigTrust`: it can
+  only drop the snapshot. Proof: `test/session-context-vcs.test.ts` (an untrusted run with `core.fsmonitor` planted
+  leaves no marker and no git in the trace, a trusted control writes the marker, and a revoke starts no git),
+  `test/git-snapshot.test.ts`, `test/vcs-instructions.test.ts`.
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
   `ConfigTrust.sanitize`, as `ConfigTrust.classification` says. Proof: `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
