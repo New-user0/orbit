@@ -2003,15 +2003,15 @@ The program-wide register of every follow-up, these gaps included, with each one
   and the hooks), which can name programs for git to run. `Project.resolve`, the Git VCS provider and the location
   watcher start no git in a folder that `WorkspaceTrust` does not trust, and read its files instead (`GitLayout`;
   `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
-  control and with the plain git command of each key as the proof that the key is live). Snapshot and the read-only calls
+  control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read-only calls
   of the `Git` service still run git in an untrusted folder, with its config in effect, and reach none of those keys
   (`test/snapshot-trust.test.ts`, `test/git.test.ts`); that is a fact about the commands and the git versions the tests ran
-  with (2.52 on Windows, the container's on Linux), not a gate. What remains: `Worktree.create` and `Worktree.remove`,
-  which run `git worktree add` and `remove` when a person or the model asks and so run the hooks and filters of the
+  with (2.52 on Windows, the container's on Linux), not a gate. What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
+  and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the
   folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
   git in the shell tool (`shell-safety-12`); the `orb flow` commands that open the run store (`ls`, `show`, `cost`, `trace`,
   `approve`, `watch` and `clean`), which ask git for the repository root with no trust check, and `clean` removes
-  worktrees with it (register row FU-M4-002, task `sweep`); a repository with no config of its own, which shows no
+  worktrees with it (register row FU-M4-002, fixed: `clean` asks `requireTrust` first and the readers find the root from the files); a repository with no config of its own, which shows no
   branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
   for hooks and stdio MCP servers below); and fingerprints, which do not cover `.git`. A project is still named by the remote URL in the folder's config, which a
   clone can write (Shared approvals, above). Mercurial was never part of this gap: neither `Project.resolve` nor the
