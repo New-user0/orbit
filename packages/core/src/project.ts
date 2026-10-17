@@ -350,10 +350,10 @@ const layer = Layer.effect(
           ),
       )
       const made = git.filter((row, index) => !listed[index].some((directory) => Hash.fast(`directory:${directory}`) === row.id))
-      return (made[0] ?? git[0])?.id
+      // `pretrust` is the oldest row Orbit made before trust: the sessions from before trust sit under it, whichever row wins.
+      const pretrust = git.find((row) => !made.includes(row))
+      return { preferred: (made[0] ?? git[0])?.id, pretrust: pretrust?.id }
     })
-
-    const own = (layout: GitLayout.Layout) => ID.make(Hash.fast(`directory:${layout.worktree}`))
 
     const known = Effect.fnUntraced(function* (id: ID) {
       const row = yield* db.select({ id: ProjectTable.id }).from(ProjectTable).where(eq(ProjectTable.id, id)).get().pipe(Effect.orDie)
@@ -443,7 +443,7 @@ const layer = Layer.effect(
         return yield* persist({
           id:
             remoteID(yield* GitLayout.remote(fs, layout)) ??
-            (yield* stored(layout.canonical)) ??
+            (yield* stored(layout.canonical)).preferred ??
             ID.make(Hash.fast(`directory:${layout.worktree}`)),
           directory: layout.worktree,
           canonical: layout.canonical,
@@ -456,7 +456,7 @@ const layer = Layer.effect(
         // The ID this folder had while it was untrusted (above), so its sessions follow it into the trusted project.
         const earlier = layout
           ? (remoteID(yield* GitLayout.remote(fs, layout)) ??
-            (yield* stored(layout.canonical)) ??
+            (yield* stored(layout.canonical)).pretrust ??
             ID.make(Hash.fast(`directory:${layout.worktree}`)))
           : undefined
         const previous = cachedID ?? (earlier && earlier !== id && (yield* known(earlier)) ? earlier : undefined)

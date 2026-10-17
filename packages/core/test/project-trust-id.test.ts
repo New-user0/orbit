@@ -160,4 +160,62 @@ describe("the project ID of a folder with no remote across the trust decision", 
       SLOW,
     ),
   )
+
+  // Review of #118, round 4: the sessions each checkout made before trust follow the repository into the trusted project,
+  // for every order of untrusted and trusted resolves (taking the earlier ID from the preferred row loses them).
+  ;(
+    [
+      ["main", "main"],
+      ["main", "linked"],
+      ["linked", "main"],
+      ["linked", "linked"],
+    ] as const
+  ).forEach(([first, trustedFirst]) =>
+    it.live(
+      `moves each checkout's earlier sessions when untrusted ${first} and trusted ${trustedFirst} are resolved first`,
+      () =>
+        Effect.gen(function* () {
+          const base = (yield* tmpdirScoped()).path
+          const folders = { main: path.join(base, "clone"), linked: path.join(base, "linked") }
+          yield* repository(folders.main)
+          yield* Effect.promise(() => git(folders.main, "worktree", "add", "-b", "side", folders.linked))
+          const project = yield* Project.Service
+          const trust = yield* WorkspaceTrust.Service
+          const database = yield* Database.Service
+          const order = (head: "main" | "linked") =>
+            head === "main" ? (["main", "linked"] as const) : (["linked", "main"] as const)
+          const resolve = (head: "main" | "linked") =>
+            Effect.forEach(order(head), (name) =>
+              project.resolve(abs(folders[name])).pipe(Effect.map((found) => [name, found.id] as const)),
+            ).pipe(Effect.map((entries) => Object.fromEntries(entries) as Record<"main" | "linked", Project.ID>))
+
+          const untrusted = yield* resolve(first)
+          yield* Effect.forEach(["main", "linked"] as const, (name) =>
+            database.db
+              .insert(SessionTable)
+              .values({
+                id: SessionID.make(`ses_round4_${name}`),
+                project_id: untrusted[name],
+                directory: realpathSync.native(folders[name]),
+                slug: name,
+                version: "test",
+              })
+              .run(),
+          )
+          yield* trust.grant(folders.main, { persist: false, via: "test" })
+          const trusted = yield* resolve(trustedFirst)
+          const rows = yield* Effect.forEach(["main", "linked"] as const, (name) =>
+            database.db
+              .select()
+              .from(SessionTable)
+              .where(eq(SessionTable.id, SessionID.make(`ses_round4_${name}`)))
+              .get(),
+          )
+
+          expect(trusted.main).toBe(trusted.linked)
+          expect(rows.map((row) => row?.project_id)).toEqual([trusted.main, trusted.linked])
+        }),
+      SLOW,
+    ),
+  )
 })
