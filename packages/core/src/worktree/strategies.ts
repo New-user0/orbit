@@ -9,6 +9,7 @@ import { AbsolutePath } from "../schema.js"
 import { Git } from "../git.js"
 import { Location } from "../location.js"
 import { State } from "../state.js"
+import { WorkspaceTrust } from "../workspace-trust.js"
 import { WorktreeGit } from "./git.js"
 import { FSUtil } from "@orbit/util/fs-util"
 
@@ -70,5 +71,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Location.node, Global.node, Git.node, FSUtil.node],
+  deps: [Location.node, Global.node, Git.node, FSUtil.node, WorkspaceTrust.node],
 })

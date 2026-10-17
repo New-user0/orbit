@@ -323,6 +323,24 @@ const layer = Layer.effect(
       return main && linked.some((directory) => path.relative(directory, here) === "") ? main.directory : repo.worktree
     })
 
+    // One ID per repository across the trust decision: a folder that is not trusted and names no remote reuses the git
+    // project that Orbit already holds for its main checkout, so what it did before and after trust stays together.
+    const stored = Effect.fnUntraced(function* (canonical: AbsolutePath) {
+      const rows = yield* db
+        .select({ id: ProjectTable.id, vcs: ProjectTable.vcs })
+        .from(ProjectTable)
+        .where(eq(ProjectTable.worktree, canonical))
+        .orderBy(asc(ProjectTable.time_created), asc(ProjectTable.id))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.find((row) => row.vcs === "git" && row.id !== ID.global)?.id
+    })
+
+    const known = Effect.fnUntraced(function* (id: ID) {
+      const row = yield* db.select({ id: ProjectTable.id }).from(ProjectTable).where(eq(ProjectTable.id, id)).get().pipe(Effect.orDie)
+      return row !== undefined
+    })
+
     // Mercurial identity uses the cached ID or the first root changeset; remote-derived
     // identity (the git `remote()` path) is a follow-up.
     const hgRoot = Effect.fnUntraced(function* (worktree: AbsolutePath) {
@@ -404,15 +422,25 @@ const layer = Layer.effect(
       const repo = holder && trusted ? yield* git.repo.discover(holder) : undefined
       if (layout && !trusted) {
         return yield* persist({
-          id: remoteID(yield* GitLayout.remote(fs, layout)) ?? ID.make(Hash.fast(`directory:${layout.worktree}`)),
+          id:
+            remoteID(yield* GitLayout.remote(fs, layout)) ??
+            (yield* stored(layout.canonical)) ??
+            ID.make(Hash.fast(`directory:${layout.worktree}`)),
           directory: layout.worktree,
           canonical: layout.canonical,
           vcs: { type: "git" as const, store: layout.commonDirectory },
         })
       }
       if (repo) {
-        const previous = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
-        const id = (yield* remote(repo)) ?? previous ?? (yield* rootCommit(repo))
+        const cachedID = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
+        const id = (yield* remote(repo)) ?? cachedID ?? (yield* rootCommit(repo))
+        // The ID this folder had while it was untrusted (above), so its sessions follow it into the trusted project.
+        const earlier = layout
+          ? (remoteID(yield* GitLayout.remote(fs, layout)) ??
+            (yield* stored(layout.canonical)) ??
+            ID.make(Hash.fast(`directory:${layout.worktree}`)))
+          : undefined
+        const previous = cachedID ?? (earlier && earlier !== id && (yield* known(earlier)) ? earlier : undefined)
         const canonical = repo.gitDirectory === repo.commonDirectory ? repo.worktree : yield* mainCheckout(repo)
         return yield* persist({
           previous,

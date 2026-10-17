@@ -38,7 +38,20 @@ export async function root(directory: string) {
   return result.code === 0 ? path.resolve(result.stdout) : undefined
 }
 
-export const head = (directory: string) => ok(directory, ["rev-parse", "HEAD"])
+/**
+ * The folder that holds the `.git` nearest to `directory`, found with `stat` and no process, or undefined outside a
+ * repository. The commands that only read the run store use it: starting git in a folder applies the config that the
+ * folder ships, which can name programs to run or shares to open, and these commands run before anyone is asked about it.
+ */
+export function holder(directory: string) {
+  const start = path.resolve(directory)
+  for (let folder = start; ; folder = path.dirname(folder)) {
+    if (existsSync(path.join(folder, ".git"))) return folder
+    if (path.dirname(folder) === folder) return undefined
+  }
+}
+
+export const head =(directory: string) => ok(directory, ["rev-parse", "HEAD"])
 
 export function branch(run: string, node: string) {
   return `orbit/${run}/${node.replace(/[^a-zA-Z0-9._-]+/g, "-")}`
