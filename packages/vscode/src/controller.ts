@@ -181,7 +181,7 @@ export class Controller {
    * Sends a prompt. Every command, starter and button that starts work in the chat ends here, so the question about
    * trusting the folder is asked here, before a session exists and before the model is asked anything.
    */
-  async send(text: string) {
+  async send(text: string, context?: string, shown?: string) {
     await this.gate()
     // A server older than workspace trust applies the folder's hooks and servers without asking, and one that has not
     // answered may be such a server, so nothing is sent to either.
@@ -197,7 +197,15 @@ export class Controller {
         tone: "error",
       })
     const sessionID = this.session ?? (await this.create())
-    this.update({ type: "user", id: `user:${crypto.randomUUID()}`, text })
+    // The editor context goes first, with no description so no client draws it, and without resuming so the prompt
+    // below starts the work. One that cannot be admitted costs only itself.
+    if (context !== undefined)
+      await this.client.session
+        .synthetic({ sessionID, text: context, resume: false, delivery: "steer", metadata: { context: "editor" } })
+        .catch((error: unknown) =>
+          this.emit({ type: "log", text: `Editor context was not sent: ${message(error)}` }),
+        )
+    this.update({ type: "user", id: `user:${crypto.randomUUID()}`, text, context: shown })
     this.emit({ type: "busy", busy: true })
     await this.client.session.prompt({ sessionID, text, delivery: "steer" }).catch((error: unknown) => {
       this.emit({ type: "busy", busy: false })

@@ -28,7 +28,13 @@ export interface WorkflowAgent {
 }
 
 export type Item =
-  | { readonly type: "user"; readonly id: string; readonly text: string }
+  | {
+      readonly type: "user"
+      readonly id: string
+      readonly text: string
+      /** One muted line under the message naming the editor context that went with it; the host writes it. */
+      readonly context?: string
+    }
   | { readonly type: "text"; readonly id: string; readonly text: string }
   | { readonly type: "reasoning"; readonly id: string; readonly text: string; readonly seconds?: number }
   | {
@@ -75,6 +81,8 @@ export interface Workspace {
   readonly selection?: { readonly file: string; readonly startLine: number; readonly endLine: number }
   readonly problems?: { readonly file: string; readonly count: number }
   readonly file?: string
+  /** Whether the file chip starts on: the person's own orbit.context.includeOpenFile setting. */
+  readonly includeFile?: boolean
 }
 
 export interface Check {
@@ -140,7 +148,7 @@ export type ToView =
 /** From the webview to the extension host. */
 export type FromView =
   | { readonly type: "ready" }
-  | { readonly type: "send"; readonly text: string; readonly selection: boolean }
+  | { readonly type: "send"; readonly text: string; readonly file: boolean; readonly problems: boolean }
   | { readonly type: "starter"; readonly starter: "explain" | "fix" | "review" }
   | { readonly type: "stop" }
   | { readonly type: "permission"; readonly id: string; readonly decision: "once" | "always" | "reject" }

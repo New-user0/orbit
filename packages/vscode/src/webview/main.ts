@@ -12,7 +12,7 @@ import type {
   Workspace,
 } from "../protocol.js"
 import { approvalCard } from "./approval.js"
-import { agentsOf, describe, duration, phases, segments, tokens } from "./present.js"
+import { agentsOf, chips, describe, duration, phases, segments, tokens } from "./present.js"
 import { legacyToolName } from "../tool-name.js"
 
 // Runs inside the webview. Every string from the model or the server is set as text, never parsed as HTML.
@@ -34,7 +34,10 @@ const state = {
   models: [] as ReadonlyArray<Model>,
   model: "",
   workspace: { folder: "" } as Workspace,
-  chip: true,
+  // What the person clicked on the chips; undefined keeps each chip's default.
+  toggled: {} as { file?: boolean; problems?: boolean },
+  // The file chip hides after a send, until the editor reports another file or selection.
+  sent: false,
   checks: [] as ReadonlyArray<Check>,
   status: "",
   tick: 0,
@@ -60,7 +63,7 @@ const composer = element("div", "composer")
 const input = element("textarea", "input")
 input.rows = 2
 const bar = element("div", "bar")
-const chip = element("span", "chip")
+const chipRow = element("span", "chips")
 const agentsChip = element("button", "pick agents")
 agentsChip.type = "button"
 agentsChip.title = "Agent map"
@@ -74,7 +77,7 @@ sendButton.title = "Send"
 const stopButton = element("button", "round", "■")
 stopButton.type = "button"
 stopButton.title = "Stop"
-bar.append(chip, element("span", "spacer"), agentsChip, modeButton, modelButton, sendButton, stopButton)
+bar.append(chipRow, element("span", "spacer"), agentsChip, modeButton, modelButton, sendButton, stopButton)
 composer.append(input, bar)
 app.append(banner, scroll, menu, map, composer)
 
@@ -87,9 +90,18 @@ let plan: HTMLElement | undefined
 function submit() {
   const text = input.value.trim()
   if (!text) return
-  vscode.postMessage({ type: "send", text, selection: chipVisible() })
+  const shown = chips(state.workspace, state.toggled).filter((item) => item.on && (item.kind !== "file" || !state.sent))
+  vscode.postMessage({
+    type: "send",
+    text,
+    file: shown.some((item) => item.kind === "file"),
+    problems: shown.some((item) => item.kind === "problems"),
+  })
   input.value = ""
-  state.chip = false
+  // The editor state went with this message: the file chip waits for the editor to report a change, and problems are
+  // asked for again.
+  state.sent = true
+  state.toggled = {}
   state.started = true
   paint()
 }
@@ -130,7 +142,8 @@ window.addEventListener("message", (event: MessageEvent<ToView>) => {
       map.hidden = true
       plan = undefined
       state.started = false
-      state.chip = true
+      state.sent = false
+      state.toggled = {}
       column.replaceChildren(empty)
       return paint()
     case "busy":
@@ -143,14 +156,11 @@ window.addEventListener("message", (event: MessageEvent<ToView>) => {
       state.checks = message.checks
       return paint()
     case "workspace": {
-      const before = state.workspace.selection
-      const after = message.workspace.selection
-      // A new selection brings the chip back after it was dismissed.
-      if (
-        after &&
-        (before?.file !== after.file || before.startLine !== after.startLine || before.endLine !== after.endLine)
-      )
-        state.chip = true
+      // Another file, or a selection made, changed or cleared, brings the file chip back in its default state.
+      if (editorChanged(state.workspace, message.workspace)) {
+        state.sent = false
+        state.toggled = { ...state.toggled, file: undefined }
+      }
       state.workspace = message.workspace
       return paint()
     }
@@ -237,8 +247,11 @@ function renderPlan(todos: ReadonlyArray<Todo>) {
 
 function build(item: Item): HTMLElement {
   switch (item.type) {
-    case "user":
-      return element("div", "user", item.text)
+    case "user": {
+      const node = element("div", "user", item.text)
+      if (item.context) node.append(element("div", "context muted", item.context))
+      return node
+    }
     case "text":
       return markdown(item.text)
     case "note":
@@ -475,22 +488,25 @@ function paint() {
     : state.busy
       ? "Queue a message"
       : "Ask a follow-up"
-  const visible = chipVisible()
-  chip.hidden = !visible
-  if (visible && state.workspace.selection) {
-    const selection = state.workspace.selection
-    const close = element("span", "close", "×")
-    close.addEventListener("click", () => {
-      state.chip = false
-      paint()
-    })
-    chip.replaceChildren(
-      element("span", undefined, "⌗"),
-      element("span", "chip-text", `${basename(selection.file)}:${selection.startLine}-${selection.endLine}`),
-      close,
-    )
-    chip.title = `The selection in ${selection.file} goes with your next message`
-  }
+  chipRow.replaceChildren(
+    ...chips(state.workspace, state.toggled)
+      .filter((item) => item.kind !== "file" || !state.sent)
+      .map((item) => {
+        const node = element("button", item.on ? "chip on" : "chip off")
+        node.type = "button"
+        node.title = item.tooltip
+        node.setAttribute("aria-pressed", String(item.on))
+        node.append(
+          element("span", undefined, item.kind === "file" ? "⌗" : "⚠"),
+          element("span", "chip-text", item.label),
+        )
+        node.addEventListener("click", () => {
+          state.toggled = { ...state.toggled, [item.kind]: !item.on }
+          paint()
+        })
+        return node
+      }),
+  )
   const agents = agentsOf([...items.values()])
   const working = agents.filter((agent) => agent.status === "running").length
   agentsChip.hidden = agents.length === 0
@@ -627,8 +643,10 @@ function starter(title: string, detail: string, kind: "explain" | "fix" | "revie
   return node
 }
 
-function chipVisible() {
-  return state.chip && state.workspace.selection !== undefined
+function editorChanged(before: Workspace, after: Workspace) {
+  const range = (workspace: Workspace) =>
+    workspace.selection && `${workspace.selection.startLine}-${workspace.selection.endLine}`
+  return before.file !== after.file || range(before) !== range(after)
 }
 
 function button(label: string, onClick: () => void, className?: string) {

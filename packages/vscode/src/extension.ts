@@ -1,7 +1,19 @@
 import { Orbit } from "@orbit/client"
 import path from "node:path"
 import vscode from "vscode"
-import { ask, explain, fix, review, type Diagnostic, type Selection } from "./context.js"
+import { plain } from "@orbit/flow/plain"
+import {
+  ask,
+  context as editorContext,
+  explain,
+  fix,
+  lines,
+  place,
+  review,
+  type Diagnostic,
+  type EditorFile,
+  type Selection,
+} from "./context.js"
 import { Controller, type TrustAnswer, type Update } from "./controller.js"
 import { askForm } from "./forms.js"
 import { headers, start, version } from "./endpoint.js"
@@ -119,22 +131,30 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 /**
- * The text editor the user last worked in. While the chat tab is focused VS Code reports no active text editor, so
- * the selection, problems and folder the chat offers come from here.
+ * The file editor the user last worked in. While the chat tab is focused VS Code reports no active text editor, and a
+ * chat that opens over the editor hides it, so the file, selection, problems and folder the chat offers come from
+ * here. It keeps that editor while its document is open, visible or not. Only documents of the `file` scheme count:
+ * not an untitled buffer, an output pane, a `git:` view or the chat's own proposal diffs.
  */
 class EditorState implements vscode.Disposable {
-  private last: vscode.TextEditor | undefined = vscode.window.activeTextEditor
+  private last: vscode.TextEditor | undefined = counts(vscode.window.activeTextEditor)
   private readonly changed = new vscode.EventEmitter<void>()
   readonly onDidChange = this.changed.event
   private readonly subscriptions = [
     this.changed,
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (!editor || editor.document.uri.scheme === scheme) return
-      this.last = editor
+      const next = counts(editor)
+      if (!next) return
+      this.last = next
       this.changed.fire()
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
       if (event.textEditor !== this.last) return
+      this.changed.fire()
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      if (this.last?.document !== document) return
+      this.last = undefined
       this.changed.fire()
     }),
     vscode.languages.onDidChangeDiagnostics((event) => {
@@ -144,19 +164,37 @@ class EditorState implements vscode.Disposable {
   ]
 
   editor() {
-    if (this.last && vscode.window.visibleTextEditors.includes(this.last)) return this.last
+    if (this.last && vscode.workspace.textDocuments.includes(this.last.document)) return this.last
     return undefined
+  }
+
+  /** The file as the agent resolves it from the chat's folder. */
+  private place(editor: vscode.TextEditor) {
+    return place(directory(this), editor.document.uri.fsPath)
   }
 
   selection(): Selection | undefined {
     const editor = this.editor()
-    if (!editor || editor.selection.isEmpty) return undefined
+    if (!editor) return undefined
+    const range = lines(editor.selection.start, editor.selection.end)
+    if (!range) return undefined
     return {
-      file: vscode.workspace.asRelativePath(editor.document.uri),
+      file: this.place(editor),
       language: editor.document.languageId,
-      startLine: editor.selection.start.line + 1,
-      endLine: editor.selection.end.line + 1,
+      ...range,
       text: editor.document.getText(editor.selection),
+    }
+  }
+
+  /** The open file for the model: its path, and the selection when there is one. */
+  file(): EditorFile | undefined {
+    const editor = this.editor()
+    if (!editor) return undefined
+    const selection = this.selection()
+    return {
+      file: this.place(editor),
+      language: editor.document.languageId,
+      selection: selection && { startLine: selection.startLine, endLine: selection.endLine, text: selection.text },
     }
   }
 
@@ -169,30 +207,51 @@ class EditorState implements vscode.Disposable {
       .map(
         (item): Diagnostic => ({
           line: item.range.start.line + 1,
+          column: item.range.start.character + 1,
+          code: code(item.code),
           severity: (["error", "warning", "information", "hint"] as const)[item.severity],
           message: item.message,
           source: item.source,
         }),
       )
     if (diagnostics.length === 0) return undefined
-    return { file: vscode.workspace.asRelativePath(editor.document.uri), diagnostics }
+    return { file: this.place(editor), diagnostics }
   }
 
+  /**
+   * What the chat draws. Every string came from the repository, so each is written on one line by `plain` before the
+   * webview gets it.
+   */
   workspace(): Workspace {
     const editor = this.editor()
     const selection = this.selection()
     const problems = this.problems()
     return {
-      folder: path.basename(directory(this)),
-      file: editor ? vscode.workspace.asRelativePath(editor.document.uri) : undefined,
-      selection: selection && { file: selection.file, startLine: selection.startLine, endLine: selection.endLine },
-      problems: problems && { file: problems.file, count: problems.diagnostics.length },
+      folder: plain(path.basename(directory(this))),
+      file: editor ? plain(this.place(editor)) : undefined,
+      selection: selection && {
+        file: plain(selection.file),
+        startLine: selection.startLine,
+        endLine: selection.endLine,
+      },
+      problems: problems && { file: plain(problems.file), count: problems.diagnostics.length },
+      includeFile: includeOpenFile(),
     }
   }
 
   dispose() {
     this.subscriptions.forEach((item) => item.dispose())
   }
+}
+
+function counts(editor: vscode.TextEditor | undefined) {
+  return editor?.document.uri.scheme === "file" ? editor : undefined
+}
+
+// VS Code gives a diagnostic's code as a string, a number, or an object that holds the value.
+function code(value: vscode.Diagnostic["code"]) {
+  const inner = typeof value === "object" ? value.value : value
+  return inner === undefined || inner === "" ? undefined : String(inner)
 }
 
 /**
@@ -272,10 +331,10 @@ class Chat implements vscode.WebviewViewProvider {
     )
   }
 
-  async send(text: string) {
+  async send(text: string, context?: string, shown?: string) {
     await this.reveal()
     const controller = await this.connect()
-    if (controller) await controller.send(text)
+    if (controller) await controller.send(text, context, shown)
   }
 
   async reset() {
@@ -357,8 +416,17 @@ class Chat implements vscode.WebviewViewProvider {
         return this.loadModels(controller)
       }
       case "send": {
-        const selection = message.selection ? this.editor.selection() : undefined
-        return this.send(selection ? ask(selection, message.text) : message.text)
+        // The editor is read now, as the message goes, and the person's words stay exactly as typed.
+        const file = message.file ? this.editor.file() : undefined
+        const problems = message.problems ? this.editor.problems() : undefined
+        const shown = [
+          file?.selection &&
+            `${file.selection.endLine - file.selection.startLine + 1} line${file.selection.endLine === file.selection.startLine ? "" : "s"} selected in ${plain(file.file)}`,
+          problems && `${problems.diagnostics.length} problem${problems.diagnostics.length === 1 ? "" : "s"} in ${plain(problems.file)}`,
+        ]
+          .filter((line) => line !== undefined)
+          .join(" · ")
+        return this.send(message.text, editorContext({ file, problems }), shown || undefined)
       }
       case "starter": {
         if (message.starter === "explain") return vscode.commands.executeCommand("orbit.explainSelection")
@@ -613,6 +681,13 @@ function directory(editor: EditorState) {
 // The person's own setting. A workspace's value is never read: it would choose the program the extension runs.
 function executable() {
   return configured(vscode.workspace.getConfiguration("orbit").inspect<string>("executable"))
+}
+
+// The person's own setting, like `executable`: a repository's .vscode/settings.json must not decide how much of the
+// person's editor goes to the model.
+function includeOpenFile() {
+  const setting = vscode.workspace.getConfiguration("orbit").inspect<boolean>("context.includeOpenFile")
+  return setting?.globalValue ?? setting?.defaultValue ?? true
 }
 
 function placement() {

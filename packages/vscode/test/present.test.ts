@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { agentsOf, describe, duration, excerpt, phases, segments, tokens } from "../src/webview/present"
+import { agentsOf, chips, describe, duration, excerpt, phases, segments, tokens } from "../src/webview/present"
 
 test("reads, searches and edits read as a verb and a path from the workspace folder", () => {
   expect(
@@ -205,4 +205,43 @@ test("a file tool that carries both field spellings is drawn from the current on
       expect(shown.target).toBe("real.ts")
     }),
   )
+})
+
+test("the file chip is the base name, on by default, and off when the person's setting says so", () => {
+  const workspace = { folder: "w", file: "src/app.ts", includeFile: true }
+  expect(chips(workspace, {})).toEqual([expect.objectContaining({ kind: "file", label: "app.ts", on: true })])
+  expect(chips({ ...workspace, includeFile: false }, {})).toEqual([
+    expect.objectContaining({ kind: "file", label: "app.ts", on: false }),
+  ])
+  // A click wins over the default, either way.
+  expect(chips(workspace, { file: false })[0]?.on).toBe(false)
+  expect(chips({ ...workspace, includeFile: false }, { file: true })[0]?.on).toBe(true)
+})
+
+test("a selection adds its lines to the file chip, and a single line reads as one", () => {
+  const workspace = { folder: "w", file: "src/app.ts", includeFile: true }
+  expect(chips({ ...workspace, selection: { file: "src/app.ts", startLine: 3, endLine: 9 } }, {})[0]?.label).toBe(
+    "app.ts:3-9",
+  )
+  expect(chips({ ...workspace, selection: { file: "src/app.ts", startLine: 4, endLine: 4 } }, {})[0]?.label).toBe(
+    "app.ts:4",
+  )
+})
+
+test("the problems chip appears only with problems, singular or plural, and starts off", () => {
+  const workspace = { folder: "w", file: "src/app.ts", includeFile: true }
+  expect(chips(workspace, {}).map((chip) => chip.kind)).toEqual(["file"])
+  expect(chips({ ...workspace, problems: { file: "src/app.ts", count: 1 } }, {}).at(-1)).toMatchObject({
+    kind: "problems",
+    label: "1 problem",
+    on: false,
+  })
+  expect(chips({ ...workspace, problems: { file: "src/app.ts", count: 3 } }, { problems: true }).at(-1)).toMatchObject({
+    label: "3 problems",
+    on: true,
+  })
+})
+
+test("with no file there is no file chip", () => {
+  expect(chips({ folder: "w", includeFile: true }, {})).toEqual([])
 })

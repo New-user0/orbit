@@ -1,4 +1,4 @@
-import type { Item, WorkflowAgent } from "../protocol.js"
+import type { Item, WorkflowAgent, Workspace } from "../protocol.js"
 import { fieldNames, legacyToolName } from "../tool-name.js"
 
 // How chat items read on one line. Pure functions, shared by the webview and its tests.
@@ -193,4 +193,50 @@ export function duration(agents: ReadonlyArray<WorkflowAgent>, now: number) {
     : Math.max(...agents.map((agent) => agent.ended ?? agent.started ?? now))
   const total = Math.max(0, Math.round((end - Math.min(...starts)) / 1000))
   return total < 60 ? `${total}s` : `${Math.floor(total / 60)}m ${total % 60}s`
+}
+
+export interface Chip {
+  readonly kind: "file" | "problems"
+  readonly label: string
+  readonly tooltip: string
+  readonly on: boolean
+}
+
+/**
+ * The chips above the prompt for what the editor holds. The file chip is on as the person's setting says until they
+ * click it; the problems chip is off until they ask for it, because existing problems are never sent unasked.
+ */
+export function chips(workspace: Workspace, toggled: { readonly file?: boolean; readonly problems?: boolean }): Chip[] {
+  const name = (value: string) => value.split(/[\\/]/).at(-1) ?? value
+  const file = workspace.file
+  const selection = workspace.selection
+  const problems = workspace.problems
+  const result: Chip[] = []
+  if (file) {
+    const on = toggled.file ?? workspace.includeFile ?? true
+    const what = selection ? `${file} and the selected lines` : file
+    result.push({
+      kind: "file",
+      label: selection
+        ? `${name(file)}:${selection.startLine === selection.endLine ? selection.startLine : `${selection.startLine}-${selection.endLine}`}`
+        : name(file),
+      tooltip: on
+        ? `${what} will go with your next message. Click to leave ${selection ? "them" : "it"} out.`
+        : `${what} will stay out of your next message. Click to include ${selection ? "them" : "it"}.`,
+      on,
+    })
+  }
+  if (problems) {
+    const on = toggled.problems ?? false
+    const what = `The ${problems.count === 1 ? "problem" : "problems"} in ${problems.file}`
+    result.push({
+      kind: "problems",
+      label: `${problems.count} problem${problems.count === 1 ? "" : "s"}`,
+      tooltip: on
+        ? `${what} will go with your next message. Click to leave ${problems.count === 1 ? "it" : "them"} out.`
+        : `${what} will stay out of your next message. Click to include ${problems.count === 1 ? "it" : "them"}.`,
+      on,
+    })
+  }
+  return result
 }

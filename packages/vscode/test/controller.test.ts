@@ -152,6 +152,113 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
   controller.dispose()
 }, 90_000)
 
+const editor = "<system-reminder>\nThe person has this file open: src/app.ts\n</system-reminder>"
+
+function connect() {
+  return Orbit.make({ baseUrl: server.url ?? "", headers: { authorization: `Basic ${btoa("orbit:secret")}` } })
+}
+
+// A chat on a client; `until` ends when the reply has finished.
+async function chat(client: ReturnType<typeof connect>) {
+  const items = new Map<string, Item>()
+  const logs: string[] = []
+  const busy: boolean[] = []
+  const controller = new Controller(
+    client,
+    workspace,
+    (update) => {
+      if (update.type === "busy") return void busy.push(update.busy)
+      if (update.type === "log") return void logs.push(update.text)
+      if (update.type === "item") items.set(update.item.id, update.item)
+    },
+    neverAsked,
+  )
+  await Bun.sleep(500)
+  return { controller, items, logs, busy }
+}
+
+test("editor context is admitted as a hidden message before the prompt, and replays as nothing", async () => {
+  const client = connect()
+  const first = steps.length
+  const { controller, items, busy } = await chat(client)
+
+  await controller.send("What does this do?", editor, "2 lines selected in src/app.ts")
+  await until(() => (busy.at(-1) === false && steps.length > first ? true : undefined))
+
+  const sessionID = (await controller.sessions())[0]?.id ?? ""
+  const history = (await client.message.list({ sessionID, limit: 50, order: "asc" })).data
+  const kinds = history.map((message) => message.type)
+  // The context is a durable synthetic message with no description, and it comes first.
+  expect(kinds.indexOf("synthetic")).toBeGreaterThanOrEqual(0)
+  expect(kinds.indexOf("synthetic")).toBeLessThan(kinds.indexOf("user"))
+  const synthetic = history.find((message) => message.type === "synthetic")
+  expect(synthetic).toMatchObject({ text: editor, metadata: { context: "editor" } })
+  expect(synthetic).not.toHaveProperty("description")
+  // The person's message is exactly what they typed, with the line about what went with it.
+  expect([...items.values()].find((item) => item.type === "user")).toMatchObject({
+    text: "What does this do?",
+    context: "2 lines selected in src/app.ts",
+  })
+
+  // The model reads the context in the user turn right before the prompt.
+  const messages = (steps[first] as { messages: Array<{ role: string; content: unknown }> }).messages
+  const prompt = messages.findLastIndex((message) => JSON.stringify(message.content).includes("What does this do?"))
+  expect(prompt).toBeGreaterThan(0)
+  const before = messages.slice(0, prompt).findLast((message) => message.role === "user")
+  expect(JSON.stringify(before?.content ?? messages[prompt]?.content)).toContain("The person has this file open")
+
+  // Opening the session in another chat shows the user message and the reply, and nothing for the context.
+  const replayed = new Map<string, Item>()
+  const other = new Controller(
+    client,
+    workspace,
+    (update) => {
+      if (update.type === "item") replayed.set(update.item.id, update.item)
+    },
+    neverAsked,
+  )
+  await other.open(sessionID)
+  expect([...replayed.values()].map((item) => item.type)).toEqual(["user", "text"])
+  other.dispose()
+  controller.dispose()
+}, 60_000)
+
+test("a message with no editor context admits no synthetic message", async () => {
+  const client = connect()
+  const first = steps.length
+  const { controller, busy } = await chat(client)
+
+  await controller.send("Just a question")
+  await until(() => (busy.at(-1) === false && steps.length > first ? true : undefined))
+
+  const sessionID = (await controller.sessions())[0]?.id ?? ""
+  const history = (await client.message.list({ sessionID, limit: 50, order: "asc" })).data
+  expect(history.map((message) => message.type)).not.toContain("synthetic")
+  controller.dispose()
+}, 60_000)
+
+test("a context the server will not admit costs only itself: one log line, and the prompt still goes", async () => {
+  const real = connect()
+  const first = steps.length
+  // A client whose synthetic route rejects.
+  const client: typeof real = {
+    ...real,
+    session: { ...real.session, synthetic: () => Promise.reject(new Error("no synthetic")) },
+  }
+  const { controller, items, logs, busy } = await chat(client)
+
+  await controller.send("Still sent", editor)
+  await until(() => (busy.at(-1) === false && steps.length > first ? true : undefined))
+
+  expect(logs).toEqual([expect.stringContaining("Editor context was not sent")])
+  expect([...items.values()].find((item) => item.type === "user")).toMatchObject({ text: "Still sent" })
+  const sessionID = (await controller.sessions())[0]?.id ?? ""
+  const history = (await real.message.list({ sessionID, limit: 50, order: "asc" })).data
+  expect(history.map((message) => message.type)).toContain("user")
+  expect(history.map((message) => message.type)).not.toContain("synthetic")
+  controller.dispose()
+}, 60_000)
+
 // The server of this file trusts every folder (ORBIT_TRUST_PROJECT in `isolatedEnv`), so nothing may ask about trust.
 function neverAsked(): never {
   throw new Error("A trusted folder was asked about trust")
