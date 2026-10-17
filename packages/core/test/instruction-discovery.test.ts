@@ -1383,3 +1383,290 @@ function watchedNames(names: readonly string[]) {
     }))
 }
 const watched = watchedNames(allNames)
+
+const scoped = (where: Folders, trusted = true) => Effect.provide(layerFor(where, { trusted }))
+
+describe("ConfigInstructionPlugin.Plugin follows @imports", () => {
+  const blocks = (where: Folders, ...entries: Array<readonly [string, string]>) =>
+    entries.map(([name, content]) => `Instructions from: ${path.join(where.repo, name)}\n${content}`).join("\n\n")
+
+  for (const trusted of [true, false])
+    it.live(`renders an import as a block of its own right after its importer, in a project that ${trusted ? "is" : "is not"} trusted`, () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        yield* write(where.rootFile, "root @./docs/a.md\n")
+        yield* write(path.join(where.repo, "docs", "a.md"), "A @./b.md")
+        yield* write(path.join(where.repo, "docs", "b.md"), "B")
+        yield* Effect.gen(function* () {
+          const discovery = yield* start()
+          const initial = yield* readInitial(yield* discovery.load())
+          // The importer's own text keeps its token, and the model is not told which file imported which.
+          expect(initial.text).toBe(
+            blocks(where, ["AGENTS.md", "root @./docs/a.md\n"], ["docs/a.md", "A @./b.md"], ["docs/b.md", "B"]),
+          )
+          expect(initial.text).not.toContain("imported")
+          expect(yield* discovery.imports()).toEqual([
+            new InstructionDiscovery.Import({
+              path: AbsolutePath.make(path.join(where.repo, "docs", "a.md")),
+              importedBy: AbsolutePath.make(where.rootFile),
+            }),
+            new InstructionDiscovery.Import({
+              path: AbsolutePath.make(path.join(where.repo, "docs", "b.md")),
+              importedBy: AbsolutePath.make(path.join(where.repo, "docs", "a.md")),
+            }),
+          ])
+          // What is stored is the files and nothing about which one imported which, so no hash depends on it.
+          expect(initial.values["core/instructions"]).toEqual([
+            { path: where.rootFile, content: "root @./docs/a.md\n" },
+            { path: path.join(where.repo, "docs", "a.md"), content: "A @./b.md" },
+            { path: path.join(where.repo, "docs", "b.md"), content: "B" },
+          ])
+        }).pipe(scoped(where, trusted))
+      }),
+    )
+
+  it.live("loads a file that is both imported and found by the walk once, where it comes first", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.globalFile, `global @${where.rootFile.replaceAll("\\", "/")}`)
+      yield* write(where.rootFile, "root")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toEqual([where.globalFile, where.rootFile])
+        expect(yield* discovery.imports()).toHaveLength(1)
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("starts a watch on an import, rescans when it changes, and sends only that file's change", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const imported = path.join(where.repo, "docs", "a.md")
+      yield* write(where.rootFile, "root @./docs/a.md")
+      yield* write(imported, "first")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const watcher = yield* Watcher.Test
+        expect(yield* watcher.subscriptions()).toContainEqual({ path: imported, type: "file" })
+        const initial = yield* readInitial(yield* discovery.load())
+        yield* write(imported, "second")
+        yield* emitAndWait({ type: "update", path: imported })
+        const update = yield* readUpdate(yield* discovery.load(), initial)
+        expect(update.text).toContain(`Instructions from: ${imported}\nsecond`)
+        expect(update.text).not.toContain(where.rootFile)
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("watches an import that a saved importer newly names, and stops watching one it no longer names", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const first = path.join(where.repo, "docs", "first.md")
+      const second = path.join(where.repo, "docs", "second.md")
+      yield* write(where.rootFile, "root @./docs/first.md")
+      yield* write(first, "first")
+      yield* write(second, "second")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const watcher = yield* Watcher.Test
+        const bus = yield* Bus.Service
+        const subscribed = (target: string) =>
+          watcher.subscriptions().pipe(Effect.map((all) => all.filter((item) => item.path === target).length))
+        expect(yield* subscribed(first)).toBe(1)
+        expect(yield* subscribed(second)).toBe(0)
+
+        yield* write(where.rootFile, "root @./docs/second.md")
+        yield* emitAndWait({ type: "update", path: where.rootFile })
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, second])
+        expect(yield* subscribed(second)).toBe(1)
+
+        // The old import is not watched any more: a change to it starts no rescan.
+        let rescans = 0
+        yield* bus.subscribe(InstructionDiscovery.Event.Updated).pipe(
+          Stream.runForEach(() => Effect.sync(() => void rescans++)),
+          Effect.forkScoped,
+        )
+        yield* Effect.yieldNow
+        const watcherTest = yield* Watcher.Test
+        yield* watcherTest.emit({ type: "update", path: first })
+        yield* Effect.sleep("500 millis")
+        expect(rescans).toBe(0)
+        // The control: the one it names now still is.
+        yield* emitAndWait({ type: "update", path: second })
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("does not watch a target that is missing, a folder, or one that was refused", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const outside = path.join(where.home, "outside.md")
+      yield* write(where.rootFile, "root @./missing.md @./docs @../../outside.md @//server/share/x.md")
+      yield* write(path.join(where.repo, "docs", "x.md"), "X")
+      yield* write(outside, "OUTSIDE")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const watcher = yield* Watcher.Test
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile])
+        const subscribed = (yield* watcher.subscriptions()).map((item) => item.path.replaceAll("\\", "/"))
+        for (const wanted of [path.join(where.repo, "missing.md"), path.join(where.repo, "docs"), outside])
+          expect(subscribed).not.toContain(wanted.replaceAll("\\", "/"))
+        expect(subscribed.some((item) => item.includes("server"))).toBe(false)
+      }).pipe(scoped(where))
+    }),
+  )
+})
+
+describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the project", () => {
+  const linked = canLinkFile
+  // The folders above the project, the user's secret and the files a repository imports on its way out.
+  const layout = Effect.gen(function* () {
+    const where = yield* folders
+    const secret = path.join(path.dirname(where.home), "secret.txt")
+    const above = path.join(where.home, "above.md")
+    const inside = path.join(where.repo, "docs", "inside.md")
+    const back = path.join(where.repo, "docs", "back.md")
+    yield* write(secret, "TOP SECRET MARKER")
+    yield* write(above, "ABOVE MARKER")
+    yield* write(inside, "INSIDE MARKER")
+    yield* write(back, "BACK MARKER")
+    return { where, secret, above, inside, back }
+  })
+  const slashed = (value: string) => value.replaceAll("\\", "/")
+  const import_ = (value: string) => `@${slashed(value)}`
+
+  for (const trusted of [true, false]) {
+    it.live(`skips an import that leaves the project, with one warning for each, in a project that ${trusted ? "is" : "is not"} trusted`, () =>
+      Effect.gen(function* () {
+        const { where, secret, above, inside, back } = yield* layout
+        yield* write(
+          where.rootFile,
+          [
+            "@./docs/inside.md",
+            "@../../above.md",
+            "@~/above.md",
+            import_(above),
+            import_(secret),
+            // Out of the project and back into it: the path that results is inside.
+            "@../repo/docs/back.md",
+          ].join("\n"),
+        )
+        yield* Effect.gen(function* () {
+          const discovery = yield* start()
+          expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside, back])
+          const warned = (yield* discovery.warnings()).filter((item) => item.kind === "import")
+          expect(warned.map((item) => [String(item.path), "target" in item ? String(item.target) : undefined])).toEqual([
+            [where.rootFile, above],
+            [where.rootFile, secret],
+          ])
+          const text = (yield* readInitial(yield* discovery.load())).text
+          expect(text).toContain("INSIDE MARKER")
+          expect(text).not.toContain("ABOVE MARKER")
+          expect(text).not.toContain("TOP SECRET MARKER")
+        }).pipe(scoped(where, trusted))
+      }),
+    )
+
+    for (const mode of [
+      { how: "a link", real: true, dangling: false },
+      { how: "a dangling link", real: true, dangling: true },
+      { how: "a file that resolves like a link", real: false, dangling: false },
+    ])
+      (mode.real && !linked ? it.live.skip : it.live)(
+        `sends nothing of a file that ${mode.how} in the project leads to outside it, in a project that ${trusted ? "is" : "is not"} trusted`,
+        () =>
+          Effect.gen(function* () {
+            const { where, secret } = yield* layout
+            const target = mode.dangling ? path.join(path.dirname(secret), "not-there.txt") : secret
+            const notes = path.join(where.repo, "notes.md")
+            yield* mode.real ? Effect.promise(() => fs.symlink(target, notes)) : write(notes, "stand-in")
+            yield* write(where.rootFile, "@./notes.md\n@./docs/inside.md")
+            // A stand-in is a plain file that the file system resolves to the secret, as a link would be.
+            const filesystemLayer = mode.real
+              ? undefined
+              : Layer.effect(
+                  FSUtil.Service,
+                  FSUtil.Service.pipe(
+                    Effect.map((base) =>
+                      FSUtil.Service.of({
+                        ...base,
+                        resolve: (input) => base.resolve(path.resolve(input) === notes ? secret : input),
+                      }),
+                    ),
+                  ),
+                ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+            yield* Effect.gen(function* () {
+              const discovery = yield* start()
+              const text = (yield* readInitial(yield* discovery.load())).text
+              // The control: the import inside the project is sent.
+              expect(text).toContain("INSIDE MARKER")
+              expect(text).not.toContain("TOP SECRET MARKER")
+              expect(placesOf(yield* discovery.list())).not.toContain(secret)
+              const watcher = yield* Watcher.Test
+              expect((yield* watcher.subscriptions()).map((item) => item.path)).not.toContain(target)
+              expect((yield* discovery.warnings()).some((item) => item.kind === "import")).toBe(!mode.dangling)
+            }).pipe(Effect.provide(layerFor(where, { trusted, filesystemLayer })))
+          }),
+      )
+  }
+
+  it.live("counts an import with the drive or the folder in another case as inside on Windows", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+      const { where, inside } = yield* layout
+      yield* write(where.rootFile, `@${slashed(inside).replace(/^[A-Za-z]/, (drive) => drive.toLowerCase())}`)
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside])
+      }).pipe(scoped(where, false))
+    }),
+  )
+
+  it.live("lets the user's own file import outside every project, which is the control for the gate", () =>
+    Effect.gen(function* () {
+      const { where, above, secret } = yield* layout
+      yield* write(where.globalFile, `${import_(above)}\n${import_(secret)}`)
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toEqual([where.globalFile, above, secret])
+        expect(yield* discovery.warnings()).toEqual([])
+      }).pipe(scoped(where, false))
+    }),
+  )
+
+  for (const scope of ["global", "project"] as const)
+    it.live(`refuses a network path in the ${scope} file without reading or watching it`, () =>
+      Effect.gen(function* () {
+        const { where } = yield* layout
+        const reads: string[] = []
+        yield* write(scope === "global" ? where.globalFile : where.rootFile, "@//server/share/x.md\n@\\\\server\\share\\y.md")
+        yield* Effect.gen(function* () {
+          const discovery = yield* start()
+          const watcher = yield* Watcher.Test
+          expect(placesOf(yield* discovery.list())).toHaveLength(1)
+          expect(reads.filter((item) => item.includes("server"))).toEqual([])
+          expect((yield* watcher.subscriptions()).filter((item) => item.path.includes("server"))).toEqual([])
+        }).pipe(Effect.provide(layerFor(where, { filesystemLayer: recordingFS(reads) })))
+      }),
+    )
+
+  it.live("never opens an import that instructions_exclude names", () =>
+    Effect.gen(function* () {
+      const { where, inside } = yield* layout
+      const reads: string[] = []
+      yield* write(where.rootFile, "@./docs/inside.md @./docs/back.md")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, path.join(where.repo, "docs", "back.md")])
+        expect(reads).not.toContain(inside)
+      }).pipe(
+        Effect.provide(
+          layerFor(where, {
+            filesystemLayer: recordingFS(reads),
+            configLayer: Config.testLayer([excluding([`${slashed(inside)}`])]),
+          }),
+        ),
+      )
+    }),
+  )
+})

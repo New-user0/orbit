@@ -34,6 +34,21 @@ const fixed: Record<string, string> = {
   crlf: "text\r\n<!-- c -->\r\n".repeat(50_000),
   frontMatterNeverCloses: `---\n${"a: b\n".repeat(100_000)}`,
   frontMatterDelimiterLookalikes: `---\n${"--- x\n".repeat(100_000)}`,
+  atSigns: "@".repeat(100_000),
+  atSignsSpaced: "@ ".repeat(100_000),
+  atTokens: "@a ".repeat(100_000),
+  atTokensEscaped: "@a\\ b ".repeat(60_000),
+  unclosedSpans: Array.from({ length: 800 }, (_, index) => `${"`".repeat(index + 1)} @./a.md`).join("\n"),
+  alternatingSpans: "` `` ``` ".repeat(30_000),
+  tagsOpen: "<a ".repeat(100_000),
+  tagsMany: "<b>@./a.md</b> ".repeat(30_000),
+  linkTargetsOpen: "[x](".repeat(60_000),
+  imagesOpen: "![x ".repeat(60_000),
+  commentsOpen: "text <!-- @./a.md ".repeat(30_000),
+  longListItem: `- ${"@./a.md ".repeat(60_000)}`,
+  deepListAt: `${"- ".repeat(100_000)}@./a.md`,
+  deepQuoteAt: `${">".repeat(100_000)} @./a.md`,
+  bracketsAt: "[@./a.md".repeat(50_000),
   frontMatterAndComments: `---\n${"a: b\n".repeat(1_000)}---\n${"<!-- x -->\n\n".repeat(20_000)}`,
 }
 
@@ -70,6 +85,8 @@ let randomMs = 0
 for (const [name, text] of cases) {
   const start = performance.now()
   for (const frontmatter of [true, false]) {
+    const found = ConfigInstructionFile.imports(text)
+    if (!Array.isArray(found)) throw new Error(`${name}: imports is not a list`)
     const result = ConfigInstructionFile.parse(text, { frontmatter })
     // Whatever it was given, the text that comes back is a string, and a file that no comment went from is untouched.
     if (typeof result.content !== "string") throw new Error(`${name}: content is not a string`)

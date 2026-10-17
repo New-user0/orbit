@@ -806,3 +806,162 @@ describe("SessionInstructions applies instructions_exclude", () => {
       }),
     )
 })
+
+describe("SessionInstructions follows @imports in the files it injects", () => {
+  const slashed = (value: string) => value.replaceAll("\\", "/")
+
+  it.live("injects the imports of a nested file after it, and records every path in the ledger", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = yield* nested(dir, "AGENTS.md", "sub rules @./more.md")
+      const morePath = path.resolve(dir, "sub", "more.md")
+      const deeperPath = path.resolve(dir, "sub", "deeper.md")
+      yield* writeAgents(morePath, "more rules @./deeper.md")
+      yield* writeAgents(deeperPath, "deeper rules")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(
+        [
+          `Instructions from: ${subPath}\nsub rules @./more.md`,
+          `Instructions from: ${morePath}\nmore rules @./deeper.md`,
+          `Instructions from: ${deeperPath}\ndeeper rules`,
+        ].join("\n\n"),
+      )
+      expect(injected[0]!.description).toBe(
+        `Loaded ${[subPath, morePath, deeperPath].map((file) => path.relative(dir, file)).join(", ")}`,
+      )
+      expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath, morePath, deeperPath] } })
+    }),
+  )
+
+  it.live("injects a file that two nested files import once, and again after compaction drops it", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const first = yield* nested(dir, "AGENTS.md", "first @../shared.md", "first")
+      const second = yield* nested(dir, "AGENTS.md", "second @../shared.md", "second")
+      const sharedPath = path.resolve(dir, "shared.md")
+      yield* writeAgents(sharedPath, "shared rules")
+      const registry = yield* Tool.Service
+      const bus = yield* Bus.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-first", "first/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-second", "second/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected.map((message) => message.text)).toEqual([
+        `Instructions from: ${first}\nfirst @../shared.md\n\nInstructions from: ${sharedPath}\nshared rules`,
+        `Instructions from: ${second}\nsecond @../shared.md`,
+      ])
+      expect(injected[1]!.metadata).toEqual({ instruction: { paths: [second] } })
+
+      // The model no longer has the rules once the synthetic that carried them goes, so the next read puts them back.
+      yield* bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+      yield* bus.publish(SessionEvent.Compaction.Ended, { sessionID, reason: "manual", text: "summary", recent: "" })
+      yield* executeTool(registry, readCall(sessionID, "call-again", "second/file.txt"))
+      expect((yield* synthetics(sessionID)).map((message) => message.text)).toEqual([
+        `Instructions from: ${second}\nsecond @../shared.md\n\nInstructions from: ${sharedPath}\nshared rules`,
+      ])
+    }),
+  )
+
+  it.live("injects an import once when two loads that share it run together", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const first = yield* nested(dir, "AGENTS.md", "first @../shared.md", "first")
+      const second = yield* nested(dir, "AGENTS.md", "second @../shared.md", "second")
+      const sharedPath = path.resolve(dir, "shared.md")
+      yield* writeAgents(sharedPath, "shared rules")
+      const instructions = yield* SessionInstructions.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* Effect.all(
+        [
+          instructions.load({ sessionID, paths: [first] }),
+          instructions.load({ sessionID, paths: [second] }),
+        ],
+        { concurrency: 2 },
+      )
+
+      const text = (yield* synthetics(sessionID)).map((message) => message.text).join("\n")
+      expect(text.split("shared rules")).toHaveLength(2)
+      expect(text).toContain(`Instructions from: ${first}`)
+      expect(text).toContain(`Instructions from: ${second}`)
+    }),
+  )
+
+  const linked = canLinkFile ? it.live : it.live.skip
+  for (const [harness, name] of [
+    [it, "a project that is trusted"],
+    [untrusted, "a project that is not trusted"],
+  ] as const) {
+    harness.live(`skips an import that leaves the project, in ${name}, and still injects the one inside`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const outside = path.join(path.dirname(dir), `outside-${path.basename(dir)}.md`)
+        yield* writeAgents(outside, "OUTSIDE MARKER")
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(outside, { force: true })))
+        const subPath = yield* nested(dir, "AGENTS.md", `sub @./inside.md @${slashed(outside)} @../../${path.basename(outside)}`)
+        const insidePath = path.resolve(dir, "sub", "inside.md")
+        yield* writeAgents(insidePath, "INSIDE MARKER")
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+        const injected = yield* synthetics(sessionID)
+        expect(injected).toHaveLength(1)
+        expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath, insidePath] } })
+        expect(injected[0]!.text).toContain("INSIDE MARKER")
+        expect(injected[0]!.text).not.toContain("OUTSIDE MARKER")
+      }),
+    )
+
+    ;(canLinkFile ? harness.live : harness.live.skip)(`skips an import that is a link out of the project, in ${name}`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const outside = path.join(path.dirname(dir), `secret-${path.basename(dir)}.txt`)
+        yield* writeAgents(outside, "TOP SECRET MARKER")
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(outside, { force: true })))
+        const subPath = yield* nested(dir, "AGENTS.md", "sub @./notes.md @./inside.md")
+        yield* Effect.promise(() => fs.symlink(outside, path.resolve(dir, "sub", "notes.md")))
+        yield* writeAgents(path.resolve(dir, "sub", "inside.md"), "INSIDE MARKER")
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+        const text = (yield* synthetics(sessionID)).map((message) => message.text).join("\n")
+        expect(text).toContain(`Instructions from: ${subPath}`)
+        expect(text).toContain("INSIDE MARKER")
+        expect(text).not.toContain("TOP SECRET MARKER")
+      }),
+    )
+  }
+
+  watched.live("never opens an import that instructions_exclude names", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = yield* nested(dir, "AGENTS.md", "sub @./excluded/skip.md @./allowed.md")
+      yield* mkdir(path.resolve(dir, "sub", "excluded"))
+      const skipPath = path.resolve(dir, "sub", "excluded", "skip.md")
+      const allowedPath = path.resolve(dir, "sub", "allowed.md")
+      yield* writeAgents(skipPath, "SKIPPED")
+      yield* writeAgents(allowedPath, "allowed rules")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      reads.length = 0
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected.map((message) => message.metadata)).toEqual([{ instruction: { paths: [subPath, allowedPath] } }])
+      expect(reads).not.toContain(skipPath)
+    }),
+  )
+})

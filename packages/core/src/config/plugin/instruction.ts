@@ -5,7 +5,7 @@ import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { dirname, join, relative } from "path"
-import { Effect, PubSub, Semaphore, Stream } from "effect"
+import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
@@ -16,19 +16,24 @@ import { ProjectTrust } from "../../project-trust.js"
 import { AbsolutePath } from "../../schema.js"
 import { ConfigInstructionFile } from "../instruction-file.js"
 
-// What the files of a source add: the instruction files, and the warnings about them, which are not part of any file.
+// What the files of a source add: the instruction files, and the warnings about them, which are not part of any file. The
+// imports say which of the files another one imported, and `read` the real path of every import that was read.
 type Contribution = {
   readonly files: InstructionDiscovery.File[]
-  readonly warnings: InstructionDiscovery.Warning[]
+  readonly warnings: (InstructionDiscovery.Warning | InstructionDiscovery.ImportWarning)[]
+  readonly imports: InstructionDiscovery.Import[]
+  readonly read: string[]
 }
 
 type Loaded = ({ readonly type: "available" } & Contribution) | { readonly type: "unavailable" }
 
-const nothing: Contribution = { files: [], warnings: [] }
+const nothing: Contribution = { files: [], warnings: [], imports: [], read: [] }
 
 const merge = (contributions: readonly Contribution[]): Contribution => ({
   files: contributions.flatMap((item) => item.files),
   warnings: contributions.flatMap((item) => item.warnings),
+  imports: contributions.flatMap((item) => item.imports),
+  read: contributions.flatMap((item) => item.read),
 })
 
 const available = (source: Contribution | Instructions.Unavailable): source is Contribution =>
@@ -57,9 +62,24 @@ export const Plugin = define({
       const project = discovery.project && FSUtil.contains(root, start)
       const stop = FSUtil.contains(home, start) ? home : root
       const loaded: { current: Loaded } = { current: { type: "available", ...nothing } }
+      // One fiber for each path that is watched. The instruction files that could exist stay watched once they are,
+      // and the imports that were read are watched for as long as something imports them.
+      const watches = yield* FiberMap.make<string>()
       const watched = new Set<string>()
+      const watchedImports = new Set<string>()
+      const realFolders = yield* Effect.forEach(
+        [...new Set([location.directory, location.project.directory, location.project.canonical])],
+        fs.resolve,
+      )
 
       const publish = (update: Watcher.Update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)
+      const subscribe = Effect.fnUntraced(function* (path: string) {
+        const updates = yield* watcher.subscribe({ path, type: "file" })
+        yield* FiberMap.run(watches, path, updates.pipe(Stream.runForEach(publish)), {
+          onlyIfMissing: true,
+          startImmediately: true,
+        })
+      })
       // Which names to look for follows the compatibility switch, so every refresh resolves it again and watches any
       // name it has newly enabled. Names that were switched off are left watched, and ignored when loading.
       const watch = Effect.fn("ConfigInstructionPlugin.watch")(function* (
@@ -79,43 +99,102 @@ export const Plugin = define({
         for (const path of new Set(candidates)) {
           if (watched.has(path)) continue
           watched.add(path)
-          const updates = yield* watcher.subscribe({ path, type: "file" })
-          yield* updates.pipe(Stream.runForEach(publish), Effect.forkScoped({ startImmediately: true }))
+          // Already watched as an import: the fiber keeps running, and is now this one's.
+          if (watchedImports.delete(path)) continue
+          yield* subscribe(path)
         }
       })
 
-      // Every instruction file goes through the same processing (`ConfigInstructionFile`) before the model reads it. A
-      // file with nothing left once its comments and front matter are off adds nothing, and the first name in a directory
-      // still wins, so it does not hand its place to the next. A file over the limit is flagged, and loads whole.
-      const read = Effect.fn("ConfigInstructionPlugin.read")(function* (path: string) {
-        const text = yield* fs.readFileStringSafe(path)
-        if (text === undefined) {
+      // The real path of every import that was read is watched, and one that nothing imports any more is not. Only the
+      // set changes, so an edit that lands while it does is never lost to a clear and a new subscription. A path that was
+      // refused or is not there is never in `wanted`, so a refused path is never watched.
+      const watchImports = Effect.fn("ConfigInstructionPlugin.watchImports")(function* (wanted: readonly string[]) {
+        const next = new Set(wanted.filter((path) => !watched.has(path)))
+        for (const path of watchedImports) {
+          if (next.has(path)) continue
+          watchedImports.delete(path)
+          yield* FiberMap.remove(watches, path)
+        }
+        for (const path of next) {
+          if (watchedImports.has(path)) continue
+          watchedImports.add(path)
+          yield* subscribe(path)
+        }
+      })
+
+      // Every instruction file goes through the same processing (`ConfigInstructionFile`) before the model reads it, and
+      // so does each file that it imports. A file with nothing left once its comments and front matter are off adds nothing,
+      // and the first name in a directory still wins, so it does not hand its place to the next. A file over the limit is
+      // flagged, and loads whole. `visited` is the one set of the pass, shared by every file in it.
+      const read = Effect.fn("ConfigInstructionPlugin.read")(function* (
+        path: string,
+        scope: "user" | "project",
+        visited: Set<string>,
+        patterns: readonly string[],
+      ) {
+        const loaded = yield* ConfigInstructionFile.load({
+          path,
+          scope,
+          visited,
+          patterns,
+          home: global.home,
+          fs,
+          leads: trust.leads,
+          // A project file imports only what is inside the project, whatever the trust decision, and only what the trust
+          // decision lets the project supply: both are asked of the real path, which is the file that is read.
+          allow: (real, spelling) =>
+            realFolders.some((folder) => FSUtil.contains(folder, real))
+              ? trust.reachable(spelling)
+              : Effect.succeed(false),
+        })
+        if (loaded === undefined) {
           yield* Effect.logDebug("instruction file skipped", { path, reason: "unavailable" })
           return undefined
         }
-        const processed = ConfigInstructionFile.parse(text, { frontmatter: true })
-        if (processed.content.trim() === "") {
-          yield* Effect.logDebug("instruction file left out", { path, reason: "nothing left once processed" })
-          return nothing
-        }
         return {
-          files: [new InstructionDiscovery.File({ path: AbsolutePath.make(path), content: processed.content })],
-          warnings: ConfigInstructionFile.oversized(processed.content)
-            ? [
-                new InstructionDiscovery.Warning({
-                  path: AbsolutePath.make(path),
-                  kind: "size",
-                  characters: processed.content.length,
-                  limit: ConfigInstructionFile.LIMIT,
+          files: loaded.files.map(
+            (item) => new InstructionDiscovery.File({ path: AbsolutePath.make(item.path), content: item.content }),
+          ),
+          warnings: [
+            ...loaded.files.flatMap((item) =>
+              ConfigInstructionFile.oversized(item.content)
+                ? [
+                    new InstructionDiscovery.Warning({
+                      path: AbsolutePath.make(item.path),
+                      kind: "size",
+                      characters: item.content.length,
+                      limit: ConfigInstructionFile.LIMIT,
+                    }),
+                  ]
+                : [],
+            ),
+            ...loaded.skipped.map(
+              (item) =>
+                new InstructionDiscovery.ImportWarning({
+                  path: AbsolutePath.make(item.importer),
+                  kind: "import",
+                  target: AbsolutePath.make(item.target),
                 }),
-              ]
-            : [],
+            ),
+          ],
+          imports: loaded.files.flatMap((item) =>
+            item.importedBy === undefined
+              ? []
+              : [
+                  new InstructionDiscovery.Import({
+                    path: AbsolutePath.make(item.path),
+                    importedBy: AbsolutePath.make(item.importedBy),
+                  }),
+                ],
+          ),
+          read: loaded.read,
         }
       })
 
       const globalSource = Effect.fn("ConfigInstructionPlugin.globalSource")(function* (
         names: readonly string[],
         patterns: readonly string[],
+        visited: Set<string>,
       ) {
         if (!discovery.global) return nothing
         // An excluded file is as good as absent, so the next name takes its place.
@@ -126,13 +205,14 @@ export const Plugin = define({
         )
         const existing = yield* Effect.filter(candidates, (candidate) => fs.isFile(candidate.real))
         if (!existing[0]) return nothing
-        return (yield* read(existing[0].real)) ?? nothing
+        return (yield* read(existing[0].real, "user", visited, patterns)) ?? nothing
       })
 
       const projectSource = Effect.fn("ConfigInstructionPlugin.projectSource")(function* (
         names: readonly string[],
         globalFiles: readonly string[],
         patterns: readonly string[],
+        visited: Set<string>,
       ) {
         if (!project) return nothing
         // An excluded file is as good as absent, so the next name in its directory takes its place. Exclusion comes first,
@@ -164,7 +244,8 @@ export const Plugin = define({
             .filter((file, index) => walked.findIndex((other) => dirname(other) === dirname(file)) === index)
             .filter((file) => discovery.global || !globalFiles.includes(file)),
         )
-        const results = yield* Effect.forEach(discovered, read, { concurrency: "unbounded" })
+        // One at a time, in render order: a file that two of them import is loaded after the first and not again.
+        const results = yield* Effect.forEach(discovered, (file) => read(file, "project", visited, patterns))
         const contributions = results.filter((item): item is Contribution => item !== undefined)
         if (contributions.length < results.length) return Instructions.unavailable
         return merge(contributions)
@@ -190,14 +271,18 @@ export const Plugin = define({
             ConfigInstructionFile.excludes(yield* config.entries()),
             fs.resolve,
           )
+          // The files handled so far in this pass, which the global file and the project's share, so that a file that is
+          // imported and also found by the walk is loaded once, where it comes first. The sources load one after the other.
+          const visited = new Set<string>()
           const sources = yield* Effect.all({
-            global: isolate("global", globalSource(names, patterns)),
-            project: isolate("project", projectSource(names, globalFiles, patterns)),
+            global: isolate("global", globalSource(names, patterns, visited)),
+            project: isolate("project", projectSource(names, globalFiles, patterns, visited)),
           })
           loaded.current =
             available(sources.global) && available(sources.project)
               ? { type: "available", ...merge([sources.global, sources.project]) }
               : { type: "unavailable" }
+          yield* watchImports(loaded.current.type === "available" ? loaded.current.read : [])
           if (!file) return
           yield* Effect.logDebug("instructions rescanned", {
             file,
@@ -236,6 +321,7 @@ export const Plugin = define({
         }
         for (const file of loaded.current.files) editor.add(file)
         for (const warning of loaded.current.warnings) editor.warn(warning)
+        for (const item of loaded.current.imports) editor.imported(item.path, item.importedBy)
       })
     }).pipe(
       Effect.catchCause((cause) =>

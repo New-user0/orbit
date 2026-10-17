@@ -292,6 +292,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
+- `@path` imports in instruction files (`ConfigInstructionFile.imports` and `load`, called by `ConfigInstructionPlugin`
+  and `SessionInstructions`; class 1, 4, 5, 6 and 7). A token is hostile input: it is found by one linear pass over the
+  lines (no Markdown library), and a token with a control character is dropped alone, never joined into a path. For each
+  import, before it is statted, resolved, read or watched: a network spelling (`//host/share`, `\\host\share`) is
+  refused without any disk access, in every scope; `ProjectTrust.leads` gives the real path, which names a link to a
+  share as the share without opening it, and that real path is what is checked and read. A project file's import must
+  really lie inside the project's folders (`FSUtil.contains` on real paths, whatever the trust decision) and be accepted
+  by `ProjectTrust.reachable`; one that does not is skipped with one `ImportWarning` per importer and target, and a
+  user-level file's import is gated by the network refusal alone. Files the model's reads load later never import
+  outside the project. `instructions_exclude` is asked before the file is opened, a name outside the text extensions and
+  a NUL in the text are refused, and a missing target, a folder or a pipe is skipped silently. The watch set is the real
+  path of each import that was read, and nothing refused is ever subscribed. Managed and local files do not exist in
+  Orbit yet (prompts-context-10): when they arrive they take the project rule. Proof: the `imports` and `load` blocks of
+  `test/config/instruction-file.test.ts`, the "follows @imports" and "keeps a project's imports inside the project" blocks
+  of `test/instruction-discovery.test.ts`, and `test/session-instructions.test.ts`.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
   reads the file before any permission is asked, so it reads only when `resolve` reports no `externalDirectory`: a link
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
@@ -2078,7 +2093,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
   (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does
   start it), because `hg` loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
-- **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
+- **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4). The `@path` imports
+  of prompts-context-9b do not wire it; it stays unread and its guard waits for whichever task wires it.
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.
 - **No list of known failures.** The repository holds no list of the tests that are known to fail or to be flaky. M1's
