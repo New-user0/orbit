@@ -32,6 +32,7 @@ import { SessionModelRequest } from "./model-request.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
 import { toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
+import { isReminder } from "./reminder-text.js"
 import { toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
 
@@ -260,7 +261,7 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      const split = splitConversation(withoutReplaced(context.messages), keep)
+      const split = splitConversation(compactable(context.messages), keep)
       if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
 
       const previous = previousCompaction(context.messages)
@@ -312,10 +313,10 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      if (!withoutReplaced(context.messages).some(messageToText)) return yield* Effect.fail(NOTHING_TO_COMPACT)
+      if (!compactable(context.messages).some(messageToText)) return yield* Effect.fail(NOTHING_TO_COMPACT)
       const unsupported = (message: string) =>
         Effect.fail<Failure>({ error: { type: "provider.unsupported-operation", message } })
-      const prepared = yield* prepare(context, withoutReplaced(context.messages), budget, "session")
+      const prepared = yield* prepare(context, compactable(context.messages), budget, "session")
 
       // History is selected before request hooks, so a hook that reroutes the request cannot be honored here.
       const provenance = SessionProviderContext.provenance(context.model)
@@ -692,6 +693,10 @@ export const node = makeLocationNode({
   deps: [Bus.node, Database.node, llmClient, SessionModelRequest.node],
 })
 
+/** What a compaction reads: no replaced attempts and no reminder rows, which are collected again after the checkpoint. */
+const compactable = (messages: ReadonlyArray<SessionMessage.Info>) =>
+  withoutReplaced(messages).filter((message) => !isReminder(message))
+
 /** History loads from the latest completed compaction, so a previous one is always the first message. */
 const previousCompaction = (messages: ReadonlyArray<SessionMessage.Info>) => {
   const [first] = messages
@@ -802,7 +807,8 @@ const messageToText = (message: SessionMessage.Info): string => {
         .join("\n")
 
     case "synthetic":
-      return `[Synthetic context]: ${message.text}`
+      // Reminders are collected again after the checkpoint, so none is summarized or kept as recent text.
+      return isReminder(message) ? "" : `[Synthetic context]: ${message.text}`
 
     case "skill":
       return `[Skill activated: ${message.name}]\n${message.text}`

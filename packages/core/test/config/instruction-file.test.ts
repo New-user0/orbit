@@ -11,6 +11,7 @@ import { Directory, Document, Info, type Entry } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { scriptedMarkdown } from "../fixture/front-matter"
+import { canLinkFile } from "../fixture/symlink"
 import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 
@@ -563,4 +564,471 @@ describe("ConfigInstructionFile.parse on hostile input", () => {
     // A case that takes seconds is one that is not linear: the slowest that ran was a few tens of milliseconds.
     expect(report.filter((item) => item.ms > 5_000)).toEqual([])
   }, 90_000)
+})
+
+describe("ConfigInstructionFile.imports", () => {
+  const found = (text: string) => ConfigInstructionFile.imports(text)
+
+  test("finds a token at the start of a line, after a space and after a tab, and not in the middle of a word", () => {
+    expect(found("@./a.md")).toEqual(["./a.md"])
+    expect(found("see @./a.md now")).toEqual(["./a.md"])
+    expect(found("see\t@./a.md")).toEqual(["./a.md"])
+    expect(found("mail me at name@example.com or a@b.md")).toEqual([])
+  })
+
+  const shapes: ReadonlyArray<readonly [string, boolean]> = [
+    ["./x.md", true],
+    ["../x.md", true],
+    ["~/x.md", true],
+    ["/abs/x.md", true],
+    ["x.md", true],
+    ["docs/x.md", true],
+    [".hidden", true],
+    ["-x.md", true],
+    ["_x.md", true],
+    ["C:/x.md", true],
+    ["@x", false],
+    ["(x)", false],
+    ["#x", false],
+    ["%x", false],
+    ['"x"', false],
+    ["[x]", false],
+    ["<x>", false],
+    [":x", false],
+    ["/", false],
+    ["~", false],
+    ["~user/x", false],
+  ]
+  for (const [token, kept] of shapes)
+    test(`${kept ? "keeps" : "drops"} the token @${token}`, () => {
+      expect(found(`@${token}`)).toEqual(kept ? [token] : [])
+    })
+
+  test("cuts a token at a heading anchor, reads a backslash and space as a space and stops at another backslash", () => {
+    expect(found("@./guide.md#setup")).toEqual(["./guide.md"])
+    expect(found("@#only")).toEqual([])
+    expect(found("@./my\\ notes.md")).toEqual(["./my notes.md"])
+    expect(found("@C:\\x\\y.md")).toEqual(["C:"])
+  })
+
+  test("returns the tokens in order, each once", () => {
+    expect(found("@./b.md @./a.md\n@./b.md\n- @./c.md @./a.md")).toEqual(["./b.md", "./a.md", "./c.md"])
+  })
+
+  const notText: ReadonlyArray<readonly [string, string]> = [
+    ["a backtick fence", "```\n@./a.md\n```"],
+    ["a tilde fence", "~~~\n@./a.md\n~~~"],
+    ["a fence closed by a longer one", "```\n@./a.md\n`````\n"],
+    ["a fence that is never closed", "```\n@./a.md\n"],
+    ["indented code", "para\n\n    @./a.md\n"],
+    ["a code span", "run `@./a.md` now"],
+    ["a code span of two backticks", "run ``a ` @./a.md`` now"],
+    ["a code span over two lines", "run `a\n@./a.md` now"],
+    ["a comment block", "<!--\n@./a.md\n-->"],
+    ["a comment inside a sentence", "see <!-- @./a.md --> there"],
+    ["a comment inside a list item", "- <!-- @./a.md -->"],
+    ["an HTML block", "<div>\n@./a.md\n</div>\n\nafter"],
+    ["an inline tag", '<a href="@./a.md">link</a>'],
+    ["the target of a link", "[text](@./a.md)"],
+    ["the alt text of an image", "![@./a.md](u)"],
+    ["an escaped at sign", "\\@./a.md"],
+    ["a fence in a quote that goes on", "> ```\n> @./a.md\n> more"],
+    ["a fence in a list item that goes on, across a blank line", "- ```\n  code\n\n  @./a.md"],
+    ["a comment block that spans lines and leaves nothing", "<!--\n@./a.md\n-->\n"],
+    ["an escaped at sign after a hard break", "text\\\n\\@./a.md"],
+    ["a fence in a list item that unindented text does not end", "- ```\n  code\nplain @./a.md"],
+    ["a fence in a numbered item that unindented text does not end", "1. ```\n   code\nplain @./a.md"],
+    ["a fence in a list item that a quoted line does not end", "- ```\n  code\n> @./a.md"],
+    ["a fence in a list item that a line at the margin does not end", "- ```\n  code\n@./a.md"],
+    ["indented code after a heading ends a list item", "- Step\n# H\n    @./a.md"],
+    ["indented code after a comment ends a list item", "- a\n<!-- x -->\n    @./a.md"],
+    ["indented code after a break ends a list item", "- Step\n---\n    @./a.md"],
+    ["indented code after a fence ends a list item", "1. Step\n```\nx\n```\n\n    @./a.md"],
+    ["indented code after an HTML block ends a list item", "- Step\n<div>\n\n    @./a.md"],
+    ["a fence that a quoted closer does not close", "```\ncode\n> ```\n@./a.md\n```"],
+    ["a fence that a quoted fence example does not close", "```markdown\n> ```\n> quoted code\n> ```\n@./a.md\n```"],
+    ["a tilde fence that a quoted closer does not close", "~~~\n> ~~~\n@./a.md\n~~~"],
+  ]
+  for (const [name, text] of notText)
+    test(`finds nothing in ${name}`, () => {
+      expect(found(text)).toEqual([])
+    })
+
+  test("finds nothing in front matter, which the file is parsed without", () => {
+    const processed = ConfigInstructionFile.parse("---\nnote: '@./a.md'\n---\n\nbody", { frontmatter: true })
+    expect(found(processed.content)).toEqual([])
+  })
+
+  const text: ReadonlyArray<readonly [string, string]> = [
+    ["after a comment block on the same line", "<!-- x --> @./a.md"],
+    ["in a list item", "- @./a.md"],
+    ["in a nested list item", "- a\n  - b\n    - @./a.md"],
+    ["in an ordered list item", "1. @./a.md"],
+    ["in a quote", "> @./a.md"],
+    ["in a heading", "# See @./a.md"],
+    ["in the text of a link", "[@./a.md](u)"],
+    ["inside emphasis", "**@./a.md**"],
+    ["after an unclosed run of backticks", "` @./a.md"],
+    ["after a code span", "`code` @./a.md"],
+    ["after a closed fence", "```\ncode\n```\n@./a.md"],
+    ["after an inline tag", "<b>@./a.md</b>"],
+    ["in a paragraph after a blank line", "para\n\n@./a.md"],
+    ["after the end of a comment block that spans lines", "<!--\nnote\n--> @./a.md"],
+    ["after a comment block that spans lines and a second comment", "<!--\nnote\n--> <!-- x --> @./a.md"],
+    ["after a hard line break", "text\\\n@./a.md"],
+    ["after a backslash that escapes nothing", "path\\ @./a.md"],
+    ["after a backslash before a letter", "C:\\x @./a.md"],
+    ["after a quote that ends and closed the fence it held", "> ```\n> code\n\n@./a.md"],
+    ["after a quote that ends without a blank line and closed the fence it held", "> ```\n> code\n@./a.md"],
+    ["after a list item that ends at a blank line and closed the fence it held", "- ```\n  code\n\n@./a.md"],
+    ["after the opener of a fence in a list item that its next line leaves", "- ```\n@./a.md"],
+    ["after a list item whose fence a heading ends", "- ```\n  code\n# @./a.md"],
+    ["after a list item whose fence a new list item ends", "- ```\n  code\n- @./a.md"],
+    ["after a list item whose fence a break ends", "- ```\n  code\n---\n@./a.md"],
+    ["after the residue of a comment block that leaves a backtick open", "<!--\nnote\n--> use `foo\n@./a.md and bar`"],
+    ["after the residue of a comment line that leaves a backtick open", "<!-- x --> use `foo\n@./a.md and bar`"],
+    ["in indented text that continues a list item across a blank line", "- Step\n\n    @./a.md"],
+    ["after an escaped asterisk", "\\*@./a.md"],
+    ["after an escaped bracket", "\\[@./a.md"],
+  ]
+  for (const [name, source] of text)
+    test(`finds a token ${name}`, () => {
+      expect(found(source)).toEqual(["./a.md"])
+    })
+
+  test("drops a token with a control character and keeps the others", () => {
+    expect(found("@./a\u0000b.md @./c.md @./d\u0007.md")).toEqual(["./c.md"])
+  })
+})
+
+describe("ConfigInstructionFile.load", () => {
+  const pass = () => Effect.succeed(true)
+  const refuse = () => Effect.succeed(false)
+  // A fake that records what it is asked about answers for a network spelling by itself and never passes it on, so that a
+  // regression fails at once and does not contact a host.
+  const network = (file: string) => /^[\\/]{2}/.test(file)
+
+  // A tree of files under a fresh folder.
+  const tree = Effect.fnUntraced(function* (files: Readonly<Record<string, string>>) {
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.promise(async () => {
+      for (const [name, body] of Object.entries(files)) {
+        await fs.mkdir(path.dirname(path.join(tmp.path, name)), { recursive: true })
+        await fs.writeFile(path.join(tmp.path, name), body)
+      }
+    })
+    return tmp.path
+  })
+
+  const run = Effect.fnUntraced(function* (
+    root: string,
+    file: string,
+    options: {
+      scope?: "user" | "project"
+      visited?: Set<string>
+      patterns?: readonly string[]
+      allow?: (real: string, spelling: string) => Effect.Effect<boolean>
+      platform?: NodeJS.Platform
+      home?: string
+    } = {},
+  ) {
+    const fs_ = yield* FSUtil.Service
+    return yield* ConfigInstructionFile.load({
+      path: path.join(root, file),
+      scope: options.scope ?? "user",
+      visited: options.visited ?? new Set(),
+      patterns: options.patterns ?? [],
+      home: options.home ?? path.join(root, "home"),
+      fs: fs_,
+      leads: fs_.resolve,
+      allow: options.allow ?? pass,
+      platform: options.platform,
+    })
+  })
+
+  const names = (root: string, loaded: Effect.Success<ReturnType<typeof run>>) =>
+    loaded?.files.map((item) => path.relative(root, item.path).replaceAll("\\", "/"))
+
+  it.live("loads the importer first, then each import followed by its own imports", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({
+        "a.md": "A @./b.md and @./c.md",
+        "b.md": "B @./d.md",
+        "c.md": "C",
+        "d.md": "D",
+      })
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "b.md", "d.md", "c.md"])
+    }),
+  )
+
+  it.live("loads a file reached twice once, where it comes first", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@./b.md @./c.md", "b.md": "B @./d.md", "c.md": "C @./d.md", "d.md": "D" })
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "b.md", "d.md", "c.md"])
+    }),
+  )
+
+  it.live("leaves the token in the importer's text and records the importer on the import", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "see @./b.md", "b.md": "B" })
+      const loaded = yield* run(root, "a.md")
+      expect(loaded?.files[0]?.content).toBe("see @./b.md")
+      expect(loaded?.files[1]).toMatchObject({ content: "B", importedBy: path.join(root, "a.md") })
+    }),
+  )
+
+  it.live("resolves a token next to the importer, from the home folder, or as the absolute path it is", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({
+        "a.md": "@./sub/b.md @~/h.md",
+        "sub/b.md": "B @./c.md @../up.md",
+        "sub/c.md": "C",
+        "up.md": "UP",
+        "home/h.md": "H",
+      })
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "sub/b.md", "sub/c.md", "up.md", "home/h.md"])
+      const written = `@${path.join(root, "up.md").replaceAll("\\", "/")}`
+      const absolute = yield* tree({ "x.md": written })
+      expect((yield* run(absolute, "x.md"))?.files.map((item) => item.content)).toEqual([written, "UP"])
+    }),
+  )
+
+  const linked = canLinkFile ? it.live : it.live.skip
+  linked("resolves a token next to the target of the link that the importer was reached through", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "real/b.md": "B @./x.md", "real/x.md": "X", "other/x.md": "WRONG" })
+      yield* Effect.promise(() => fs.symlink(path.join(root, "real", "b.md"), path.join(root, "other", "b.md")))
+      const fs_ = yield* FSUtil.Service
+      const loaded = yield* ConfigInstructionFile.load({
+        path: yield* fs_.resolve(path.join(root, "other", "b.md")),
+        scope: "user",
+        visited: new Set(),
+        patterns: [],
+        home: root,
+        fs: fs_,
+        leads: fs_.resolve,
+        allow: pass,
+      })
+      expect(loaded?.files.map((item) => item.content)).toEqual(["B @./x.md", "X"])
+    }),
+  )
+
+  it.live("loads a chain of five files whole, and leaves the sixth out without a word", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({
+        "1.md": "@./2.md",
+        "2.md": "@./3.md",
+        "3.md": "@./4.md",
+        "4.md": "@./5.md",
+        "5.md": "@./6.md",
+        "6.md": "six",
+      })
+      const loaded = yield* run(root, "1.md")
+      expect(names(root, loaded)).toEqual(["1.md", "2.md", "3.md", "4.md", "5.md"])
+      expect(loaded?.skipped).toEqual([])
+    }),
+  )
+
+  it.live("lets the first visit win when a file is reached at the depth limit before a shorter way", () =>
+    Effect.gen(function* () {
+      // The long chain reaches e.md at level four first, where its import of f.md is cut off. The short way finds it handled.
+      const root = yield* tree({
+        "a.md": "@./b.md @./e.md",
+        "b.md": "@./c.md",
+        "c.md": "@./d.md",
+        "d.md": "@./e.md",
+        "e.md": "E @./f.md",
+        "f.md": "F",
+      })
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "b.md", "c.md", "d.md", "e.md"])
+    }),
+  )
+
+  it.live("ends a cycle, adds nothing for a self-import and loads two spellings of a file once", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({
+        "a.md": "@./b.md @./a.md @b.md @./sub/../b.md",
+        "b.md": "B @./a.md",
+      })
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "b.md"])
+    }),
+  )
+
+  linked("loads a file reached through a link and directly once", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@./l.md @./b.md", "b.md": "B" })
+      yield* Effect.promise(() => fs.symlink(path.join(root, "b.md"), path.join(root, "l.md")))
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "b.md"])
+    }),
+  )
+
+  it.live("folds case and slash direction when it keeps the files it has handled on Windows only", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@./B.md", "b.md": "B" })
+      const windows = new Set<string>()
+      yield* run(root, "a.md", { visited: windows, platform: "win32" })
+      expect([...windows].every((key) => key === key.toLowerCase() && !key.includes("/"))).toBe(true)
+      const elsewhere = new Set<string>()
+      yield* run(root, "a.md", { visited: elsewhere, platform: "linux" })
+      expect([...elsewhere].some((key) => key !== key.toLowerCase())).toBe(true)
+    }),
+  )
+
+  it.live("skips a missing target and a folder without a word, and still loads the importer", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@someone @./nothing.md @./dir @./b.md", "dir/x.md": "X", "b.md": "B" })
+      const loaded = yield* run(root, "a.md")
+      expect(names(root, loaded)).toEqual(["a.md", "b.md"])
+      expect(loaded?.skipped).toEqual([])
+    }),
+  )
+
+  it.live("adds nothing for an importer with only whitespace left, and does not follow its imports", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({
+        "a.md": "@./empty.md @./only.md",
+        "empty.md": "<!-- @./hidden.md -->\n",
+        "hidden.md": "H",
+        "only.md": "@./b.md",
+        "b.md": "B",
+      })
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "only.md", "b.md"])
+    }),
+  )
+
+  it.live("skips a target that is not text by its name, takes one with no extension, and refuses a NUL", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({
+        "a.md": "@./pic.png @./doc.pdf @./LICENSE @./.env @./bin.md",
+        "pic.png": "fake image",
+        "doc.pdf": "fake pdf",
+        LICENSE: "license",
+        ".env": "KEY=1",
+        "bin.md": "text\u0000binary",
+      })
+      expect(names(root, yield* run(root, "a.md"))).toEqual(["a.md", "LICENSE", ".env"])
+    }),
+  )
+
+  it.live("reads an import whatever its extension, with its front matter and comments off", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@./b.txt", "b.txt": "---\nk: v\n---\n\n<!-- c -->\n\ntext @./c.md\n", "c.md": "C" })
+      const loaded = yield* run(root, "a.md")
+      expect(loaded?.files.map((item) => item.content)).toEqual(["@./b.txt", "text @./c.md\n", "C"])
+    }),
+  )
+
+  it.live("never opens a file that instructions_exclude names, and does not follow its imports", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@./skip.md @./b.md", "skip.md": "S @./deep.md", "deep.md": "D", "b.md": "B" })
+      const fs_ = yield* FSUtil.Service
+      const opened: string[] = []
+      const patterns = yield* ConfigInstructionFile.prepare([`${root.replaceAll("\\", "/")}/skip.md`], fs_.resolve)
+      const loaded = yield* ConfigInstructionFile.load({
+        path: path.join(root, "a.md"),
+        scope: "user",
+        visited: new Set(),
+        patterns,
+        home: root,
+        fs: { ...fs_, readFileStringSafe: (target) => (opened.push(path.basename(target)), fs_.readFileStringSafe(target)) },
+        leads: fs_.resolve,
+        allow: pass,
+      })
+      expect(names(root, loaded)).toEqual(["a.md", "b.md"])
+      expect(opened).toEqual(["a.md", "b.md"])
+    }),
+  )
+
+  it.live("treats an address as a name that is not there, asked about only as a local spelling", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@https://example.invalid/x.md" })
+      const fs_ = yield* FSUtil.Service
+      const asked: string[] = []
+      const loaded = yield* ConfigInstructionFile.load({
+        path: path.join(root, "a.md"),
+        scope: "user",
+        visited: new Set(),
+        patterns: [],
+        home: path.join(root, "home"),
+        fs: fs_,
+        leads: (spelling) => (asked.push(spelling), fs_.resolve(spelling)),
+        allow: pass,
+      })
+      expect(names(root, loaded)).toEqual(["a.md"])
+      expect(asked.map((spelling) => path.relative(root, spelling).replaceAll("\\", "/"))).toEqual(["https:/example.invalid/x.md"])
+    }),
+  )
+
+  it.live("asks the gate about the real path of a project file's import, and reports each one it refuses", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "p/a.md": "@./b.md @../out.md", "p/b.md": "B", "out.md": "OUT" })
+      const loaded = yield* run(path.join(root, "p"), "a.md", {
+        scope: "project",
+        allow: (real) => Effect.succeed(real.startsWith(path.join(root, "p"))),
+      })
+      expect(loaded?.files.map((item) => item.content)).toEqual(["@./b.md @../out.md", "B"])
+      expect(loaded?.skipped).toEqual([{ importer: path.join(root, "p", "a.md"), target: path.join(root, "out.md") }])
+    }),
+  )
+
+  it.live("does not ask the gate about a user-level file's import, so that it can leave every project", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "p/a.md": "@../out.md", "out.md": "OUT" })
+      const loaded = yield* run(path.join(root, "p"), "a.md", { scope: "user", allow: refuse })
+      expect(loaded?.files.map((item) => item.content)).toEqual(["@../out.md", "OUT"])
+    }),
+  )
+
+  for (const scope of ["user", "project"] as const)
+    it.live(`refuses a network path in a ${scope} file before any file is touched or followed`, () =>
+      Effect.gen(function* () {
+        const root = yield* tree({ "a.md": "@//server/share/x.md\n\n@/server/share/y.md" })
+        const fs_ = yield* FSUtil.Service
+        const touched: string[] = []
+        const asked: string[] = []
+        const loaded = yield* ConfigInstructionFile.load({
+          path: path.join(root, "a.md"),
+          scope,
+          visited: new Set(),
+          patterns: [],
+          home: root,
+          fs: {
+            ...fs_,
+            isFile: (file) => (touched.push(file), network(file) ? Effect.succeed(false) : fs_.isFile(file)),
+            readFileStringSafe: (file) => (touched.push(file), network(file) ? Effect.succeed(undefined) : fs_.readFileStringSafe(file)),
+          },
+          leads: (spelling) => (asked.push(spelling), Effect.succeed(spelling)),
+          allow: pass,
+        })
+        expect(loaded?.files).toHaveLength(1)
+        // The second token is an ordinary absolute path, which is asked about as any other. The first never is.
+        expect(asked.map((spelling) => spelling.replaceAll("\\", "/")).filter((spelling) => spelling.startsWith("//"))).toEqual([])
+        expect(touched.some((file) => file.replaceAll("\\", "/").startsWith("//"))).toBe(false)
+      }),
+    )
+
+  it.live("refuses a link that leads to a network path, without opening it", () =>
+    Effect.gen(function* () {
+      const root = yield* tree({ "a.md": "@./l.md" })
+      const fs_ = yield* FSUtil.Service
+      const touched: string[] = []
+      const loaded = yield* ConfigInstructionFile.load({
+        path: path.join(root, "a.md"),
+        scope: "user",
+        visited: new Set(),
+        patterns: [],
+        home: root,
+        // The trust decision names a link to a share as the share, and does not open it.
+        fs: {
+          ...fs_,
+          isFile: (file) => (touched.push(file), network(file) ? Effect.succeed(false) : fs_.isFile(file)),
+          readFileStringSafe: (file) => (touched.push(file), network(file) ? Effect.succeed(undefined) : fs_.readFileStringSafe(file)),
+        },
+        leads: () => Effect.succeed("\\\\server\\share\\x.md"),
+        allow: pass,
+      })
+      expect(loaded?.files).toHaveLength(1)
+      expect(touched.filter((file) => file.includes("server"))).toEqual([])
+    }),
+  )
 })

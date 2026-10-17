@@ -41,6 +41,7 @@ import { SessionRunnerModel } from "./session/runner/model.js"
 import { SessionCompaction } from "./session/compaction.js"
 import { SessionTitle } from "./session/title.js"
 import { SessionTurnEnd } from "./session/turn-end.js"
+import { SessionReminders } from "./session/reminders.js"
 import { SessionContext } from "./session/context.js"
 import { Skill } from "./skill.js"
 import { SkillInstructions } from "./skill/instructions.js"
@@ -111,6 +112,7 @@ const nodes = [
   SessionCompaction.node,
   SessionTitle.node,
   SessionTurnEnd.node,
+  SessionReminders.node,
   SessionContext.node,
   Snapshot.node,
   SessionRunnerLLM.node,
@@ -151,6 +153,8 @@ export interface Options {
 const vanillaReplacements: LayerNode.Replacements = [
   Config.node.replace(Config.configured({ project: false, global: false })),
   InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: false, global: false })),
+  // A vanilla instance adds no reminders beyond the minimal set, as `--bare` does.
+  SessionReminders.node.replace(SessionReminders.configured(SessionReminders.minimal(SessionReminders.production))),
   // A vanilla instance reads nothing about the project it stands on, and the git snapshot is one such read.
   VcsInstructions.node.replace(Layer.succeed(VcsInstructions.Service, { source: () => Instructions.empty })),
 ]

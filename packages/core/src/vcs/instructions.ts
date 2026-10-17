@@ -8,6 +8,7 @@ import { Config } from "../config.js"
 import { Database } from "../database/database.js"
 import { Git } from "../git.js"
 import { Instructions } from "../instructions/index.js"
+import { ReminderText } from "../session/reminder-text.js"
 import { Location } from "../location.js"
 import { ProjectTrust } from "../project-trust.js"
 import { AbsolutePath } from "../schema.js"
@@ -162,15 +163,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [
-    Bus.node,
-    Config.node,
-    Database.node,
-    Git.node,
-    Location.node,
-    ProjectTrust.node,
-    SessionStore.node,
-  ],
+  deps: [Bus.node, Config.node, Database.node, Git.node, Location.node, ProjectTrust.node, SessionStore.node],
 })
 
 /** Cuts status at STATUS_LIMIT UTF-16 units, never between the halves of a surrogate pair. */
@@ -182,7 +175,13 @@ export function cutStatus(text: string) {
 }
 
 // Written for the model: the facts of the repository when the session began, in plain lines with no instructions.
+// Branch names, the user, status lines and commit subjects come from the repository, so a look-alike of a reminder tag
+// in them is escaped.
 export function render(snapshot: Snapshot) {
+  return ReminderText.neutralize(lines(snapshot))
+}
+
+function lines(snapshot: Snapshot) {
   return [
     snapshot.late
       ? "This is the state of the git repository, captured partway through the session rather than at its start, for example once the folder was trusted. It is a snapshot and is not updated as the work goes on."

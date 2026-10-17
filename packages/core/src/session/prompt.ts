@@ -113,7 +113,8 @@ const materializeAttachment = Effect.fn("SessionPrompt.materializeAttachment")(f
         start: undefined,
         end: undefined,
         name: undefined,
-        mime: undefined,
+        // Embedded text declares itself; sniffing it would read text that starts with "BM" as an image.
+        mime: /^data:text\/plain[;,]/i.test(input.uri) ? "text/plain" : undefined,
       }
     : yield* readFileAttachment(input.uri)
   if (resolved.bytes.byteLength > MAX_ATTACHMENT_BYTES)

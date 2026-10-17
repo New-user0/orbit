@@ -296,6 +296,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
+- `@path` imports in instruction files (`ConfigInstructionFile.imports` and `load`, called by `ConfigInstructionPlugin`
+  and `SessionInstructions`; class 1, 4, 5, 6 and 7). A token is hostile input: it is found by one linear pass over the
+  lines (no Markdown library), and a token with a control character is dropped alone, never joined into a path. For each
+  import, before it is statted, resolved, read or watched: a network spelling (`//host/share`, `\\host\share`) is
+  refused without any disk access, in every scope; `ProjectTrust.leads` gives the real path, which names a link to a
+  share as the share without opening it, and that real path is what is checked and read. A project file's import must
+  really lie (real paths, whatever the trust decision) inside a project folder that can be trusted for good, or inside the folder
+  the session started in when that folder can be or is trusted now; the home directory and a filesystem root can count only once a person trusts them for the session, and then only as the folder the session started in, so a session or repository at `~` that nobody trusted does not open the home
+  folder to a downloaded folder's `@~/.ssh/id_rsa` (`ProjectTrust.importable`), and be accepted by
+  `ProjectTrust.reachable`; one that does not is skipped with one `ImportWarning` per importer and target, and a
+  user-level file's import is gated by the network refusal alone. Files the model's reads load later never import
+  outside the project. `instructions_exclude` is asked before the file is opened, a name outside the text extensions and
+  a NUL in the text are refused, and a missing target, a folder or a pipe is skipped silently. The watch set is the real
+  path of each import that was read, and nothing refused is ever subscribed. Managed and local files do not exist in
+  Orbit yet (prompts-context-10): when they arrive they take the project rule. Proof: the `imports` and `load` blocks of
+  `test/config/instruction-file.test.ts`, the "follows @imports" and "keeps a project's imports inside the project" blocks
+  of `test/instruction-discovery.test.ts`, and `test/session-instructions.test.ts`, whose "home folder" blocks pin the repository-at-home row.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
   reads the file before any permission is asked, so it reads only when `resolve` reports no `externalDirectory`: a link
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
@@ -2088,7 +2105,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
   (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does
   start it), because `hg` loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
-- **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
+- **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4). The `@path` imports
+  of prompts-context-9b do not wire it; it stays unread and its guard waits for whichever task wires it.
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.
 - **No list of known failures.** The repository holds no list of the tests that are known to fail or to be flaky. M1's
@@ -2180,6 +2198,25 @@ The program-wide register of every follow-up, these gaps included, with each one
   owner call on how a user-scope document shows as withheld. `orb -p` already refuses an untrusted folder; `orb run`
   without `--trust` now runs no hook and starts no stdio server. The owner has not yet said whether headless runs keep
   the reference's implicit trust for hooks.
+
+- **Envelope look-alikes are escaped at the sinks `reminder-text.ts` is called from, and at no others.** While a request
+  is lowered, `ReminderText.neutralize` escapes the opening bracket of a `<system-reminder>` or `<system-update>` tag in
+  tool results and tool errors (local and MCP, including a wrapped error's response body, and a text or JSON file in a result, such as an MCP resource: its base64 data URL is decoded, escaped and encoded again, while images and PDFs stay byte for byte), text and directory
+  attachments (an ACP editor's embedded text resource is sent as one) and an attached file's location, the Code Mode
+  tool listing (MCP tool descriptions; baseline and updates), a tool result's text parts together (an adapter joins them
+  with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
+  command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
+  `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text. Synthetic messages are
+  recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
+  Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`
+  (most rows build each message through its real producer; the nested instruction file row writes the message by hand),
+  `session-reminder-files.test.ts` (a text file in a tool result, 12 spellings, compiled for two provider adapters, with an image control), `session-reminder-joins.test.ts` (the request bodies of two chat-completions adapters, one joining parts with nothing and one with a line break), `codemode/instructions.test.ts`, the ACP subprocess
+  row in `prompt-content.subprocess.test.ts`, the end-to-end case in `session-shell.test.ts`, `mcp-instructions.test.ts` and
+  `instruction-discovery.test.ts`. Not covered (register row FU-M4-36): skill and reference listings, the text of a
+  plugin-supplied system part, host-supplied instruction entries, a hosted tool's provider-format result, and the opaque
+  window of a native compaction; instruction text the person chose to run (an activated skill's body, command templates, MCP prompt commands); image and PDF bytes, which cannot be escaped; Unicode spellings of the tag are FU-M4-38. A new sink that puts text from a file or a
+  tool into a request needs the same call and a row in that table.
 
 ## Review checklist
 

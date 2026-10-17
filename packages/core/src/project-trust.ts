@@ -96,6 +96,15 @@ export interface Interface {
    */
   readonly leads: (file: string) => Effect.Effect<string>
   /**
+   * Whether an instruction file may import a file: `real` is where the import really leads, and `spelling` is how it was
+   * written. The import must lie inside the folder the session started in or inside a project folder, the first
+   * counted only when it can be trusted for good or is trusted now and the second only when it can be trusted for good,
+   * so a session or project at the home directory or a filesystem root that nobody trusted does not open everything below
+   * it to a downloaded folder's `@~/.ssh/id_rsa`. And `reachable` must accept the
+   * spelling, so an untrusted project supplies only what is inside it.
+   */
+  readonly importable: (spelling: string, real: string) => Effect.Effect<boolean>
+  /**
    * Whether a file that a config directory, or a root of another product, holds may be read now: its agents, commands,
    * skills and output styles. Any file may while the folder that holds the source is trusted. Until then only a file
    * whose real path is inside the folders that decision covers may, which are the project's for a source in them and
@@ -128,6 +137,22 @@ const layer = Layer.effect(
     const folders = [...new Set([location.directory, location.project.directory, location.project.canonical])]
     // Those folders as the disk has them, for comparing a real path with them however the Location was reached.
     const real = yield* Effect.forEach(folders, fs.resolve)
+
+    // The folders an instruction file may import from, as the disk has them: each project folder that can be trusted for
+    // good, and the folder the session started in when it can be too or is trusted now. The home directory and a
+    // filesystem root cannot be trusted for good and contain everything below them, so they bound nothing until a person
+    // has trusted that folder for the session. A project folder never gets that second way in: a project at home, trusted
+    // for the session, still leaves a session below it bounded by its own folder.
+    const importRoots = Effect.fnUntraced(function* () {
+      const bounded = (folder: string, now: boolean) =>
+        trust.status(folder).pipe(Effect.map((state) => state.persistent || (now && state.trusted)))
+      const projects = yield* Effect.filter(
+        [...new Set([location.project.directory, location.project.canonical])],
+        (folder) => bounded(folder, false),
+      )
+      const started = (yield* bounded(location.directory, true)) ? [location.directory] : []
+      return yield* Effect.forEach([...started, ...projects], fs.resolve)
+    })
 
     // Whether a file is in one of the project's own folders, as against a folder above them.
     const inside = (file: string) => folders.some((folder) => FSUtil.contains(folder, file))
@@ -385,6 +410,12 @@ const layer = Layer.effect(
         return yield* stays([...folders, ...real], file)
       }),
       leads: Effect.fn("ProjectTrust.leads")((file) => lead(file)),
+      importable: Effect.fn("ProjectTrust.importable")(function* (spelling, real) {
+        const roots = yield* importRoots()
+        if (!roots.some((folder) => FSUtil.contains(folder, real))) return false
+        if ((yield* trust.status(root)).trusted) return true
+        return yield* stays([...folders, ...(yield* Effect.forEach(folders, fs.resolve))], spelling)
+      }),
       escapes: Effect.fn("ProjectTrust.escapes")(function* (file) {
         if ((yield* trust.status(root)).trusted) return undefined
         const leads = yield* lead(file)

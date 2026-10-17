@@ -1,0 +1,246 @@
+export * as SessionReminders from "./reminders.js"
+
+import type { Agent } from "@orbit/schema/agent"
+import { plain } from "@orbit/util/plain"
+import { Cause, Context, Duration, Effect, Layer, Option } from "effect"
+import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { Bus } from "../bus.js"
+import type { SessionContext } from "./context.js"
+import { SessionEvent } from "./event.js"
+import type { SessionMessage } from "./message.js"
+import { ReminderText, render } from "./reminder-text.js"
+import type { SessionRunnerModel } from "./runner/model.js"
+import { withoutReplaced, type LoweredInsertion } from "./runner/to-llm-message.js"
+import type { SessionSchema } from "./schema.js"
+
+export {
+  render,
+  neutralize,
+  isReminder,
+  epochStart,
+  assistantStepsSince,
+  humanTurnsSince,
+  newestPrompt,
+} from "./reminder-text.js"
+export type Anchor = ReminderText.Anchor
+
+/**
+ * Reminders: model-facing context that the harness adds beside the conversation. Two explicit, ordered lists hold the
+ * producers; nothing registers a producer at run time and no plugin adds one.
+ *
+ * - A durable producer reports a fact that history cannot reproduce (something read outside the session). Its entries
+ *   are stored as hidden `session.synthetic` rows, once per logical step, after automatic compaction settled.
+ * - A derived producer is a pure function of the active history, the agent and the offered tool names. Its insertions
+ *   are rendered while the request is lowered and never stored.
+ *
+ * The contract:
+ * - Reminders appear in list order. Placement in the request comes from `toLLMMessages`.
+ * - A durable entry is hidden from clients unless it sets a `description`. An entry with no text and no data is dropped.
+ * - The envelope holds harness text only. Anything read from a file, a tool or an editor goes in `data`, which renders
+ *   as a labelled fenced block after the envelope, and is neutralized there.
+ * - Spacing (how many steps since the last one of mine) is read from history through the helpers, never from a counter
+ *   in memory. A durable producer must not rely on having run before in this process: a drain that restarts between
+ *   collection and the request may run it again, so it checks history for its own newest entry.
+ * - A derived insertion must be reproducible from history. For a run that is no longer the newest it may depend only on
+ *   history up to that run, so the bytes of an earlier request prefix never change. The current agent and tool names
+ *   decide only what the newest run gets.
+ * - A producer that fails, dies or runs past its time limit yields nothing and costs one log line. Interruption is
+ *   never swallowed.
+ */
+
+/** What a producer reads. `messages` leaves out replaced attempts and starts at the latest checkpoint. */
+export interface Input {
+  readonly session: SessionSchema.Info
+  readonly agent: Agent.Info
+  /** The names of the tools offered to the model for this step. */
+  readonly tools: ReadonlyArray<string>
+  readonly model: SessionRunnerModel.Resolved
+  readonly messages: ReadonlyArray<SessionMessage.Info>
+  /** The logical step within the turn, from 1. */
+  readonly step: number
+  /** Whether no assistant message follows the newest real prompt. */
+  readonly firstStep: boolean
+}
+
+export interface Entry {
+  readonly kind: string
+  /** Harness text. */
+  readonly text: string
+  readonly data?: ReminderText.Data
+  /** Short text for clients; stored escaped. Without one the row is hidden. */
+  readonly description?: string
+  readonly metadata?: Readonly<Record<string, unknown>>
+}
+
+export interface Durable {
+  readonly name: string
+  /** `primary` skips child sessions. Default `all`. */
+  readonly scope?: "all" | "primary"
+  /** Longest wait for `run`; a producer that runs longer yields nothing. Default one second. */
+  readonly timeout?: Duration.Input
+  /** Kept by the minimal instances (`orb run --bare`, a vanilla instance); only queued-input delivery belongs here. */
+  readonly minimal?: boolean
+  readonly run: (input: Input) => Effect.Effect<ReadonlyArray<Entry>>
+}
+
+export interface Insertion {
+  /** The run the reminder belongs to; `tail` is the newest run. */
+  readonly after: Anchor
+  readonly kind: string
+  readonly text: string
+  readonly data?: ReminderText.Data
+}
+
+export interface Derived {
+  readonly name: string
+  readonly scope?: "all" | "primary"
+  readonly minimal?: boolean
+  readonly run: (input: Input) => ReadonlyArray<Insertion>
+}
+
+export interface Lists {
+  readonly durable: ReadonlyArray<Durable>
+  readonly derived: ReadonlyArray<Derived>
+}
+
+export const DEFAULT_TIMEOUT = Duration.seconds(1)
+
+export interface Interface {
+  /**
+   * Runs the durable producers for one logical step and publishes one `session.synthetic` per entry, together.
+   * Returns whether anything was published, so the caller reloads history only then.
+   */
+  readonly collect: (input: { readonly loaded: SessionContext.Loaded; readonly step: number }) => Effect.Effect<boolean>
+  /** Runs the derived producers; the insertions merge in list order. */
+  readonly derive: (loaded: SessionContext.Loaded, step: number) => Effect.Effect<ReadonlyArray<LoweredInsertion>>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@orbit/SessionReminders") {}
+
+/** The production lists. Later tasks append their producers here, in the order their reminders appear. */
+export const production: Lists = { durable: [], derived: [] }
+
+/** The minimal instance keeps only the producers that mark themselves `minimal`. */
+export const minimal = (lists: Lists): Lists => ({
+  durable: lists.durable.filter((producer) => producer.minimal),
+  derived: lists.derived.filter((producer) => producer.minimal),
+})
+
+/** A node over explicit lists; tests and the minimal instances replace the node with their own. */
+export const configured = (lists: Lists) =>
+  makeLocationNode({
+    service: Service,
+    layer: Layer.effect(
+      Service,
+      Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        return make(bus, lists)
+      }),
+    ),
+    deps: [Bus.node],
+  })
+
+/** `orb run --bare` switches instruction files off, and a bare run adds nothing else to the conversation either. */
+export const node = configured(process.env.ORBIT_DISABLE_INSTRUCTIONS === "1" ? minimal(production) : production)
+
+const make = (bus: Bus.Interface, lists: Lists) => {
+  const input = (loaded: SessionContext.Loaded, step: number): Input => {
+    const messages = withoutReplaced(loaded.messages)
+    return {
+      session: loaded.session,
+      agent: loaded.agent.info,
+      tools: loaded.tools.definitions.map((tool) => tool.name),
+      model: loaded.model,
+      messages,
+      step,
+      firstStep: ReminderText.newestPrompt(messages).first,
+    }
+  }
+  const fits = (scope: "all" | "primary" | undefined, session: SessionSchema.Info) =>
+    scope !== "primary" || session.parentID === undefined
+
+  const collect: Interface["collect"] = Effect.fnUntraced(function* ({ loaded, step }) {
+    const given = input(loaded, step)
+    const results = yield* Effect.forEach(
+      lists.durable.filter((producer) => fits(producer.scope, loaded.session)),
+      (producer) => guarded(producer, given),
+      { concurrency: "unbounded" },
+    )
+    const events = results
+      .flat()
+      .filter((entry) => entry.text.length > 0 || entry.data !== undefined)
+      .map(
+        (entry) =>
+          [
+            SessionEvent.Synthetic,
+            {
+              sessionID: loaded.session.id,
+              text: render(entry),
+              description: entry.description === undefined ? undefined : plain(entry.description),
+              metadata: {
+                ...entry.metadata,
+                reminder: { kind: entry.kind, ...(entry.data ? { label: entry.data.label } : {}) },
+              },
+            },
+          ] as const,
+      )
+    const [first, ...rest] = events
+    if (first === undefined) return false
+    yield* bus.publishAll([first, ...rest])
+    return true
+  })
+
+  const derive: Interface["derive"] = Effect.fnUntraced(function* (loaded, step) {
+    const given = input(loaded, step)
+    const newest = newestRun(given.messages)
+    const results = lists.derived
+      .filter((producer) => fits(producer.scope, loaded.session))
+      .map((producer) =>
+        Effect.try({ try: () => producer.run(given), catch: (error) => error }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("A derived reminder producer failed, so it added nothing").pipe(
+              Effect.annotateLogs({ producer: producer.name, sessionID: loaded.session.id, error: String(error) }),
+              Effect.as([] as ReadonlyArray<Insertion>),
+            ),
+          ),
+        ),
+      )
+    return (yield* Effect.all(results))
+      .flat()
+      .filter((insertion) => insertion.text.length > 0 || insertion.data !== undefined)
+      .map((insertion) => ({
+        after: insertion.after === "tail" ? newest : insertion.after,
+        text: render(insertion),
+      }))
+  })
+
+  return Service.of({ collect, derive })
+}
+
+/** The run a "tail" insertion belongs to: the one after the newest assistant message in this epoch. */
+const newestRun = (messages: ReadonlyArray<SessionMessage.Info>): "start" | SessionMessage.ID => {
+  const index = messages.findLastIndex((message) => message.type === "assistant")
+  const last = messages[index]
+  return last?.type === "assistant" && index >= ReminderText.epochStart(messages) ? last.id : "start"
+}
+
+const guarded = (producer: Durable, input: Input) =>
+  producer.run(input).pipe(
+    Effect.timeoutOption(producer.timeout ?? DEFAULT_TIMEOUT),
+    Effect.flatMap((result) =>
+      Option.isSome(result)
+        ? Effect.succeed(result.value)
+        : Effect.logWarning("A reminder producer ran past its time limit, so it added nothing").pipe(
+            Effect.annotateLogs({ producer: producer.name, sessionID: input.session.id }),
+            Effect.as([] as ReadonlyArray<Entry>),
+          ),
+    ),
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterruptsOnly(cause),
+      (cause) =>
+        Effect.logWarning("A reminder producer failed, so it added nothing").pipe(
+          Effect.annotateLogs({ producer: producer.name, sessionID: input.session.id, cause: Cause.pretty(cause) }),
+          Effect.as([] as ReadonlyArray<Entry>),
+        ),
+    ),
+  )

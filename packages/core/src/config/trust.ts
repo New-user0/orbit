@@ -33,7 +33,9 @@ import { FSUtil } from "@orbit/util/fs-util"
 // - `reachable`: an instruction file (`ConfigInstructionPlugin`, `SessionInstructions`). Both then process the text with
 //   `ConfigInstructionFile.parse`, which takes the front matter off with `ConfigMarkdown.split`, by its delimiter lines
 //   alone and without parsing it, and leave out what `instructions_exclude` names, a list that an untrusted folder does
-//   not supply;
+//   not supply. The files they import with `@path` (`ConfigInstructionFile.load`) are readers of the same list: a
+//   project file's import must lie inside the folder the session started in or a project folder that can be trusted
+//   for good (the started folder also counts once it is trusted, so home and filesystem roots count only then) and pass `reachable`, and a network path is refused;
 // - `supplies`: a file of a config directory, or of another product's root, which is the agents of `ConfigAgentPlugin`,
 //   the commands of `ConfigCommandPlugin`, the skills of `ConfigSkillPlugin` and `ConfigCompatibilityPlugin`, and the
 //   output styles of `OutputStylePlugin`;
