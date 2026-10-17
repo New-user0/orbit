@@ -118,6 +118,7 @@ import { OptimizePlugin } from "./optimize.js"
 import { VcsGitPlugin } from "./vcs/git.js"
 import { VerbosityPlugin } from "./verbosity.js"
 import { OutputStylePlugin } from "./output-style.js"
+import { PromptConfigPlugin } from "./prompt-config.js"
 import { WarmingPlugin } from "./warming.js"
 import { WellKnownPlugin } from "../wellknown/plugin.js"
 
@@ -255,6 +256,8 @@ const pre = [
   PatchTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.
   ...OptimizePlugin.Plugins,
+  // After the model prompts, so the git guidance follows whichever base was chosen, and before the output style.
+  PromptConfigPlugin.Plugin,
   // After the model prompts, so a style applies to whichever base prompt was chosen.
   OutputStylePlugin.Plugin,
   VerbosityPlugin.Plugin,

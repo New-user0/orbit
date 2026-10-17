@@ -240,6 +240,8 @@ export const classification = {
     formatter: withhold("formatter"),
     lsp: withhold("lsp"),
     media: inert,
+    // The clone's own instruction files already steer commit format, and the value is an indented literal block.
+    attribution: inert,
     sandbox: withhold("sandbox"),
     // A budget: a tiny timeout turns every command into a background job whose completion wakes the session for a paid
     // request, and the atomic value would replace the user's own.

@@ -220,6 +220,7 @@ export function normalize(input: unknown): Result {
     git_status: Info.fields.git_status,
     default_agent: Info.fields.default_agent,
     output_style: Info.fields.output_style,
+    attribution: Info.fields.attribution,
     sandbox: Info.fields.sandbox,
     share: Info.fields.share,
     enterprise: Info.fields.enterprise,
@@ -237,7 +238,7 @@ export function normalize(input: unknown): Result {
   }
   // Objects whose fields are independent settings: a bad field costs only itself, so `sandbox.enabled` survives a bad
   // `sandbox.write` (class 7).
-  const independent = ["sandbox", "shell_tool", "tool_execution", "websearch", "webfetch", "worktree", "warming"]
+  const independent = ["attribution", "sandbox", "shell_tool", "tool_execution", "websearch", "webfetch", "worktree", "warming"]
   Object.entries(nativeAtomic).forEach(([key, schema]) => {
     if (!own(input, key)) return
     const value = independent.includes(key)

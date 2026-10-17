@@ -14313,6 +14313,18 @@
             },
             "additionalProperties": false
           },
+          "attribution": {
+            "type": "object",
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "pr": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
           "sandbox": {
             "type": "object",
             "properties": {

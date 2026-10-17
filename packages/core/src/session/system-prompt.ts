@@ -1,14 +1,16 @@
 export * as SessionSystemPrompt from "./system-prompt.js"
 
 import PROMPT from "./runner/prompt/system.txt"
+import GIT from "./runner/prompt/git.txt"
 
 /**
  * What a request's system prompt is made of, in order.
  *
  * - `system[0]`: the base template (`runner/prompt/system.txt`), then the model overlay (`OptimizePlugin`: a replacement
- *   that ends with `core-rules.txt`, or a block appended to the base), then the output style (`OutputStylePlugin`), which
- *   can drop `CODING_SECTIONS` and swaps `INTRO` for its own opening line. `ShellTool.AdvertisePlugin` runs last and
- *   renames `Bash` to `PowerShell` in everything before the style when that is the session's shell, so the template and
+ *   that ends with `core-rules.txt`, or a block appended to the base), then the git section (`PromptConfigPlugin`), then
+ *   the output style (`OutputStylePlugin`), which can drop `CODING_SECTIONS` and swaps `INTRO` for its own opening line.
+ *   `ShellTool.AdvertisePlugin` runs last and renames `Bash` to `PowerShell` in everything before the git section when
+ *   that is the session's shell, so the template and
  *   the guidance spell the shell tool only as the tool's name.
  * - `system[1]`: the model and agent identity of this request (`IdentityPlugin`).
  * - The last part: the instruction baseline.
@@ -48,6 +50,42 @@ export const CODING_SECTIONS = [
 
 /** The template's opening paragraph, before the first heading. An output style replaces it with a line of its own. */
 export const INTRO = PROMPT.slice(0, PROMPT.indexOf("\n\n"))
+
+/** The heading of the git section, which `PromptConfigPlugin` appends after the base or overlay prompt and before any output style. */
+export const GIT_HEADING = "# Git and pull requests"
+
+/**
+ * The git and pull request section with both attribution slots filled. Only the exact empty string means no attribution,
+ * so a value of spaces renders as given. A value is shown indented as a literal block that the model copies: it may hold
+ * several lines (several trailers), none of its lines can open a top-level section, and it does not read as Orbit's own
+ * instruction, which matters because a repository's config can set it. Slots are filled by function, so `$&` and the like
+ * in a value come out as written.
+ */
+export function renderGit(attribution: { commit: string; pr: string }) {
+  return GIT.trimEnd()
+    .replace("${ORBIT_COMMIT_ATTRIBUTION}", () =>
+      slot(
+        attribution.commit,
+        "End every commit message, after a blank line, with exactly this text (the indentation is not part of it):",
+        "Add no attribution trailer to commit messages, and do not add one of your own accord.",
+      ),
+    )
+    .replace("${ORBIT_PR_ATTRIBUTION}", () =>
+      slot(
+        attribution.pr,
+        "End every pull request description, after a blank line, with exactly this text (the indentation is not part of it):",
+        "Add no attribution footer to pull request descriptions, and do not add one of your own accord.",
+      ),
+    )
+}
+
+function slot(value: string, ask: string, none: string) {
+  if (value === "") return none
+  return `${ask}\n\n${value
+    .split(/\r\n|[\n\r\u2028\u2029]/)
+    .map((line) => `    ${line}`)
+    .join("\n")}`
+}
 
 export function make(tools: string[]) {
   return render(PROMPT, tools)
