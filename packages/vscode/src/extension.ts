@@ -1,15 +1,15 @@
 import { Orbit } from "@orbit/client"
 import path from "node:path"
 import vscode from "vscode"
-import { plain } from "@orbit/flow/plain"
 import {
   ask,
-  context as editorContext,
   explain,
   fix,
   lines,
+  outgoing,
   place,
   review,
+  workspaceView,
   type Diagnostic,
   type EditorFile,
   type Selection,
@@ -168,9 +168,15 @@ class EditorState implements vscode.Disposable {
     return undefined
   }
 
+  /**
+   * The folder the chat's agent runs in, once the chat has connected. In a multi-root workspace the file being edited
+   * can belong to another root, and a path is only meaningful against the folder the agent works in.
+   */
+  root: string | undefined
+
   /** The file as the agent resolves it from the chat's folder. */
   private place(editor: vscode.TextEditor) {
-    return place(directory(this), editor.document.uri.fsPath)
+    return place(this.root ?? directory(this), editor.document.uri.fsPath)
   }
 
   selection(): Selection | undefined {
@@ -226,17 +232,19 @@ class EditorState implements vscode.Disposable {
     const editor = this.editor()
     const selection = this.selection()
     const problems = this.problems()
-    return {
-      folder: plain(path.basename(directory(this))),
-      file: editor ? plain(this.place(editor)) : undefined,
-      selection: selection && {
-        file: plain(selection.file),
+    return workspaceView({
+      folder: path.basename(this.root ?? directory(this)),
+      file: editor && this.place(editor),
+      selection: selection && editor && {
+        file: selection.file,
         startLine: selection.startLine,
         endLine: selection.endLine,
+        startColumn: editor.selection.start.character + 1,
+        endColumn: editor.selection.end.character + 1,
       },
-      problems: problems && { file: plain(problems.file), count: problems.diagnostics.length },
+      problems: problems && { file: problems.file, count: problems.diagnostics.length },
       includeFile: includeOpenFile(),
-    }
+    })
   }
 
   dispose() {
@@ -297,6 +305,11 @@ class Chat implements vscode.WebviewViewProvider {
       this.status,
       this.untrusted,
       editor.onDidChange(() => this.post({ type: "workspace", workspace: editor.workspace() })),
+      // The file chip's default follows the setting without waiting for the next editor change.
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("orbit.context.includeOpenFile"))
+          this.post({ type: "workspace", workspace: editor.workspace() })
+      }),
     )
   }
 
@@ -417,16 +430,8 @@ class Chat implements vscode.WebviewViewProvider {
       }
       case "send": {
         // The editor is read now, as the message goes, and the person's words stay exactly as typed.
-        const file = message.file ? this.editor.file() : undefined
-        const problems = message.problems ? this.editor.problems() : undefined
-        const shown = [
-          file?.selection &&
-            `${file.selection.endLine - file.selection.startLine + 1} line${file.selection.endLine === file.selection.startLine ? "" : "s"} selected in ${plain(file.file)}`,
-          problems && `${problems.diagnostics.length} problem${problems.diagnostics.length === 1 ? "" : "s"} in ${plain(problems.file)}`,
-        ]
-          .filter((line) => line !== undefined)
-          .join(" · ")
-        return this.send(message.text, editorContext({ file, problems }), shown || undefined)
+        const sent = outgoing(message, { file: this.editor.file(), problems: this.editor.problems() })
+        return this.send(message.text, sent.context, sent.shown)
       }
       case "starter": {
         if (message.starter === "explain") return vscode.commands.executeCommand("orbit.explainSelection")
@@ -577,7 +582,8 @@ class Chat implements vscode.WebviewViewProvider {
         this.paint()
         this.post(update)
       }
-      return new Controller(client, directory(this.editor), apply, (trust) => this.askTrust(trust))
+      this.editor.root = directory(this.editor)
+      return new Controller(client, this.editor.root, apply, (trust) => this.askTrust(trust))
     })()
     return this.controller.catch((error: unknown) => {
       this.controller = undefined

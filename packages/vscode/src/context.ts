@@ -75,7 +75,8 @@ export function lines(
 /** A file as the agent resolves it: relative to its folder with `/`, else the absolute path with an upper-case drive. */
 export function place(directory: string, file: string) {
   const relative = path.relative(directory, file)
-  if (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)) return relative.replaceAll("\\", "/")
+  const outside = relative === ".." || relative.startsWith(`..${path.sep}`)
+  if (relative !== "" && !outside && !path.isAbsolute(relative)) return relative.replaceAll("\\", "/")
   return file.replace(/^[a-z]:/, (drive) => drive.toUpperCase())
 }
 
@@ -91,7 +92,7 @@ export interface EditorFile {
  * and the problems come from the repository, so each is written on one line with no character that acts on text and
  * none that can spell a reminder tag; the selected text stays verbatim inside its fence.
  */
-export function context(input: {
+export function editorContext(input: {
   readonly file?: EditorFile
   readonly problems?: { readonly file: string; readonly diagnostics: ReadonlyArray<Diagnostic> }
 }) {
@@ -110,16 +111,19 @@ export function context(input: {
 function filePart(input: EditorFile) {
   if (!input.selection) return `The person has this file open: ${single(input.file)}`
   const text = input.selection.text.replaceAll("\r\n", "\n")
-  const rest = text.slice(SELECTION_LIMIT)
+  // Step back one unit when the cut would fall between the halves of a surrogate pair.
+  const end = /[\ud800-\udbff]/.test(text[SELECTION_LIMIT - 1] ?? "") ? SELECTION_LIMIT - 1 : SELECTION_LIMIT
+  const rest = text.slice(end)
+  const count = rest.split("\n").length
   const cut = rest
-    ? `\n(The selection is cut here: ${rest.length} more characters, across ${rest.split("\n").length} lines, are left out.)`
+    ? `\n(The selection is cut here: ${rest.length} more characters, across ${count} ${count === 1 ? "line" : "lines"}, are left out.)`
     : ""
   const where = reference({
     file: single(input.file),
     startLine: input.selection.startLine,
     endLine: input.selection.endLine,
   })
-  return `The person has selected ${where}:\n${fence(single(input.language), text.slice(0, SELECTION_LIMIT))}${cut}`
+  return `The person has selected ${where}:\n${fence(single(input.language), text.slice(0, end))}${cut}`
 }
 
 function problemsPart(input: { readonly file: string; readonly diagnostics: ReadonlyArray<Diagnostic> }) {
@@ -150,4 +154,55 @@ function fence(language: string, text: string) {
   const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length))
   const marker = "`".repeat(longest + 1)
   return `${marker}${language}\n${text.replace(/\n$/, "")}\n${marker}`
+}
+
+/**
+ * What goes with a message from the editor's current state and the chips: the hidden context for the model, and the one
+ * muted line the person sees under their message. A chip that is off sends nothing for its part. Every name in the
+ * muted line came from the repository, so it passes through `plain`.
+ */
+export function outgoing(
+  chips: { readonly file: boolean; readonly problems: boolean },
+  editor: {
+    readonly file?: EditorFile
+    readonly problems?: { readonly file: string; readonly diagnostics: ReadonlyArray<Diagnostic> }
+  },
+) {
+  const file = chips.file ? editor.file : undefined
+  const problems = chips.problems ? editor.problems : undefined
+  const shown = [
+    file?.selection &&
+      `${plural(file.selection.endLine - file.selection.startLine + 1, "line")} selected in ${plain(file.file)}`,
+    problems && `${plural(problems.diagnostics.length, "problem")} in ${plain(problems.file)}`,
+  ]
+    .filter((line) => line !== undefined)
+    .join(" · ")
+  return { context: editorContext({ file, problems }), shown: shown || undefined }
+}
+
+/** What the chat draws about the editor. Every string came from the repository, so each is written on one line by `plain`. */
+export function workspaceView(input: {
+  readonly folder: string
+  readonly file?: string
+  readonly selection?: {
+    readonly file: string
+    readonly startLine: number
+    readonly endLine: number
+    readonly startColumn: number
+    readonly endColumn: number
+  }
+  readonly problems?: { readonly file: string; readonly count: number }
+  readonly includeFile: boolean
+}) {
+  return {
+    folder: plain(input.folder),
+    file: input.file === undefined ? undefined : plain(input.file),
+    selection: input.selection && { ...input.selection, file: plain(input.selection.file) },
+    problems: input.problems && { ...input.problems, file: plain(input.problems.file) },
+    includeFile: input.includeFile,
+  }
+}
+
+function plural(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`
 }

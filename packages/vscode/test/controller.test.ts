@@ -223,6 +223,69 @@ test("editor context is admitted as a hidden message before the prompt, and repl
   controller.dispose()
 }, 60_000)
 
+test("the context does not start a step by itself: no step begins before the prompt is admitted", async () => {
+  const real = connect()
+  const first = steps.length
+  let before = -1
+  // The prompt is held back; a context admitted with resume would start a step in the meantime.
+  const client: typeof real = {
+    ...real,
+    session: {
+      ...real.session,
+      prompt: async (...args: Parameters<typeof real.session.prompt>) => {
+        await Bun.sleep(2_000)
+        before = steps.length
+        return real.session.prompt(...args)
+      },
+    },
+  }
+  const { controller, busy } = await chat(client)
+
+  await controller.send("Wait for me", editor)
+  await until(() => (busy.at(-1) === false && steps.length > first ? true : undefined))
+
+  expect(before).toBe(first)
+  controller.dispose()
+}, 60_000)
+
+test("a context that the server is too slow to admit is dropped after the time limit, and the prompt still goes", async () => {
+  const real = connect()
+  const first = steps.length
+  // A synthetic route that only ends when the caller gives up.
+  const client: typeof real = {
+    ...real,
+    session: {
+      ...real.session,
+      synthetic: (_input: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise<never>((_, reject) =>
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
+        ),
+    } as typeof real.session,
+  }
+  const items = new Map<string, Item>()
+  const logs: string[] = []
+  const busy: boolean[] = []
+  const controller = new Controller(
+    client,
+    workspace,
+    (update) => {
+      if (update.type === "busy") return void busy.push(update.busy)
+      if (update.type === "log") return void logs.push(update.text)
+      if (update.type === "item") items.set(update.item.id, update.item)
+    },
+    neverAsked,
+    { read: 300, grant: 10_000 },
+  )
+  await Bun.sleep(500)
+
+  await controller.send("Slow context", editor)
+  await until(() => (busy.at(-1) === false && steps.length > first ? true : undefined))
+
+  expect(logs.filter((line) => line.includes("Editor context was not sent"))).toHaveLength(1)
+  expect([...items.values()].find((item) => item.type === "user")).toMatchObject({ text: "Slow context" })
+  controller.dispose()
+}, 60_000)
+
 test("a message with no editor context admits no synthetic message", async () => {
   const client = connect()
   const first = steps.length

@@ -211,32 +211,41 @@ export function chips(workspace: Workspace, toggled: { readonly file?: boolean; 
   const file = workspace.file
   const selection = workspace.selection
   const problems = workspace.problems
-  const result: Chip[] = []
-  if (file) {
-    const on = toggled.file ?? workspace.includeFile ?? true
-    const what = selection ? `${file} and the selected lines` : file
-    result.push({
-      kind: "file",
-      label: selection
-        ? `${name(file)}:${selection.startLine === selection.endLine ? selection.startLine : `${selection.startLine}-${selection.endLine}`}`
-        : name(file),
-      tooltip: on
-        ? `${what} will go with your next message. Click to leave ${selection ? "them" : "it"} out.`
-        : `${what} will stay out of your next message. Click to include ${selection ? "them" : "it"}.`,
-      on,
-    })
+  const fileOn = toggled.file ?? workspace.includeFile ?? true
+  const fileWhat = selection ? `${file} and the selected lines` : file
+  const problemsOn = toggled.problems ?? false
+  const problemsWhat = `The ${problems?.count === 1 ? "problem" : "problems"} in ${problems?.file}`
+  return [
+    file
+      ? ({
+          kind: "file",
+          label: selection
+            ? `${name(file)}:${selection.startLine === selection.endLine ? selection.startLine : `${selection.startLine}-${selection.endLine}`}`
+            : name(file),
+          tooltip: fileOn
+            ? `${fileWhat} will go with your next message. Click to leave ${selection ? "them" : "it"} out.`
+            : `${fileWhat} will stay out of your next message. Click to include ${selection ? "them" : "it"}.`,
+          on: fileOn,
+        } satisfies Chip)
+      : undefined,
+    problems
+      ? ({
+          kind: "problems",
+          label: `${problems.count} problem${problems.count === 1 ? "" : "s"}`,
+          tooltip: problemsOn
+            ? `${problemsWhat} will go with your next message. Click to leave ${problems.count === 1 ? "it" : "them"} out.`
+            : `${problemsWhat} will stay out of your next message. Click to include ${problems.count === 1 ? "it" : "them"}.`,
+          on: problemsOn,
+        } satisfies Chip)
+      : undefined,
+  ].filter((chip) => chip !== undefined)
+}
+
+/** Whether the editor reported another file or another selection (lines or columns), which brings the file chip back. */
+export function rearms(before: Workspace, after: Workspace) {
+  const range = (workspace: Workspace) => {
+    const selection = workspace.selection
+    return selection && `${selection.startLine}:${selection.startColumn}-${selection.endLine}:${selection.endColumn}`
   }
-  if (problems) {
-    const on = toggled.problems ?? false
-    const what = `The ${problems.count === 1 ? "problem" : "problems"} in ${problems.file}`
-    result.push({
-      kind: "problems",
-      label: `${problems.count} problem${problems.count === 1 ? "" : "s"}`,
-      tooltip: on
-        ? `${what} will go with your next message. Click to leave ${problems.count === 1 ? "it" : "them"} out.`
-        : `${what} will stay out of your next message. Click to include ${problems.count === 1 ? "it" : "them"}.`,
-      on,
-    })
-  }
-  return result
+  return before.file !== after.file || range(before) !== range(after)
 }

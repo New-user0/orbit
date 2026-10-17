@@ -12,7 +12,7 @@ import type {
   Workspace,
 } from "../protocol.js"
 import { approvalCard } from "./approval.js"
-import { agentsOf, chips, describe, duration, phases, segments, tokens } from "./present.js"
+import { agentsOf, chips, describe, duration, phases, rearms, segments, tokens } from "./present.js"
 import { legacyToolName } from "../tool-name.js"
 
 // Runs inside the webview. Every string from the model or the server is set as text, never parsed as HTML.
@@ -157,7 +157,7 @@ window.addEventListener("message", (event: MessageEvent<ToView>) => {
       return paint()
     case "workspace": {
       // Another file, or a selection made, changed or cleared, brings the file chip back in its default state.
-      if (editorChanged(state.workspace, message.workspace)) {
+      if (rearms(state.workspace, message.workspace)) {
         state.sent = false
         state.toggled = { ...state.toggled, file: undefined }
       }
@@ -641,12 +641,6 @@ function starter(title: string, detail: string, kind: "explain" | "fix" | "revie
     vscode.postMessage({ type: "starter", starter: kind })
   })
   return node
-}
-
-function editorChanged(before: Workspace, after: Workspace) {
-  const range = (workspace: Workspace) =>
-    workspace.selection && `${workspace.selection.startLine}-${workspace.selection.endLine}`
-  return before.file !== after.file || range(before) !== range(after)
 }
 
 function button(label: string, onClick: () => void, className?: string) {

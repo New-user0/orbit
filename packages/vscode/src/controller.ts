@@ -198,10 +198,13 @@ export class Controller {
       })
     const sessionID = this.session ?? (await this.create())
     // The editor context goes first, with no description so no client draws it, and without resuming so the prompt
-    // below starts the work. One that cannot be admitted costs only itself.
+    // below starts the work. One that cannot be admitted, or not soon enough, costs only itself.
     if (context !== undefined)
       await this.client.session
-        .synthetic({ sessionID, text: context, resume: false, delivery: "steer", metadata: { context: "editor" } })
+        .synthetic(
+          { sessionID, text: context, resume: false, delivery: "steer", metadata: { context: "editor" } },
+          { signal: AbortSignal.timeout(this.wait.read) },
+        )
         .catch((error: unknown) =>
           this.emit({ type: "log", text: `Editor context was not sent: ${message(error)}` }),
         )

@@ -78,7 +78,14 @@ export interface Todo {
 /** What the empty chat offers, from the editor's current state. */
 export interface Workspace {
   readonly folder: string
-  readonly selection?: { readonly file: string; readonly startLine: number; readonly endLine: number }
+  readonly selection?: {
+    readonly file: string
+    readonly startLine: number
+    readonly endLine: number
+    /** 1-based columns of the selection's ends, so selecting other text on the same lines counts as a change. */
+    readonly startColumn: number
+    readonly endColumn: number
+  }
   readonly problems?: { readonly file: string; readonly count: number }
   readonly file?: string
   /** Whether the file chip starts on: the person's own orbit.context.includeOpenFile setting. */

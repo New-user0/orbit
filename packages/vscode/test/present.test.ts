@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { agentsOf, chips, describe, duration, excerpt, phases, segments, tokens } from "../src/webview/present"
+import { agentsOf, chips, describe, duration, excerpt, phases, rearms, segments, tokens } from "../src/webview/present"
 
 test("reads, searches and edits read as a verb and a path from the workspace folder", () => {
   expect(
@@ -220,10 +220,10 @@ test("the file chip is the base name, on by default, and off when the person's s
 
 test("a selection adds its lines to the file chip, and a single line reads as one", () => {
   const workspace = { folder: "w", file: "src/app.ts", includeFile: true }
-  expect(chips({ ...workspace, selection: { file: "src/app.ts", startLine: 3, endLine: 9 } }, {})[0]?.label).toBe(
+  expect(chips({ ...workspace, selection: { file: "src/app.ts", startLine: 3, endLine: 9, startColumn: 1, endColumn: 1 } }, {})[0]?.label).toBe(
     "app.ts:3-9",
   )
-  expect(chips({ ...workspace, selection: { file: "src/app.ts", startLine: 4, endLine: 4 } }, {})[0]?.label).toBe(
+  expect(chips({ ...workspace, selection: { file: "src/app.ts", startLine: 4, endLine: 4, startColumn: 1, endColumn: 1 } }, {})[0]?.label).toBe(
     "app.ts:4",
   )
 })
@@ -244,4 +244,14 @@ test("the problems chip appears only with problems, singular or plural, and star
 
 test("with no file there is no file chip", () => {
   expect(chips({ folder: "w", includeFile: true }, {})).toEqual([])
+})
+
+test("the file chip comes back for another file or another selection, including other columns on the same lines", () => {
+  const selection = { file: "a.ts", startLine: 10, endLine: 10, startColumn: 1, endColumn: 4 }
+  const before = { folder: "w", file: "a.ts", selection }
+  expect(rearms(before, { ...before })).toBe(false)
+  expect(rearms(before, { ...before, selection: { ...selection, startColumn: 5, endColumn: 8 } })).toBe(true)
+  expect(rearms(before, { ...before, selection: { ...selection, endLine: 11 } })).toBe(true)
+  expect(rearms(before, { folder: "w", file: "a.ts" })).toBe(true)
+  expect(rearms(before, { ...before, file: "b.ts" })).toBe(true)
 })
