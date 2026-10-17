@@ -98,3 +98,63 @@ describe("Markdown files with front matter written in JavaScript", () => {
     expect(await ran(marker)).toBe(false)
   })
 })
+
+// The splitter that instruction files go through (`ConfigInstructionFile`) finds a block of front matter from its delimiter
+// lines alone, so no spelling of one is read as code, and the stripper and any later reader agree on what front matter is.
+describe("ConfigMarkdown.split", () => {
+  test("gives the block, with its delimiter lines, and the text after it", () => {
+    expect(ConfigMarkdown.split("---\nname: demo\n---\nBody.")).toEqual({
+      frontmatter: "---\nname: demo\n---\n",
+      body: "Body.",
+    })
+    expect(ConfigMarkdown.split("---\r\nname: demo\r\n---  \r\n\r\nBody.\r\n")).toEqual({
+      frontmatter: "---\r\nname: demo\r\n---  \r\n",
+      body: "\r\nBody.\r\n",
+    })
+    expect(ConfigMarkdown.split("---\n---")).toEqual({ frontmatter: "---\n---", body: "" })
+    expect(ConfigMarkdown.split("---\n---\n")).toEqual({ frontmatter: "---\n---\n", body: "" })
+  })
+
+  test("gives a block that `parseOption` reads, so that a later reader parses only what the splitter found", () => {
+    const text = "---\nname: demo\nmetadata:\n  tags: [a, b]\n---\nBody."
+    const split = ConfigMarkdown.split(text)
+    expect(ConfigMarkdown.parseOption(split.frontmatter!)).toMatchObject({
+      data: { name: "demo", metadata: { tags: ["a", "b"] } },
+      content: "",
+    })
+    expect(split.frontmatter! + split.body).toBe(text)
+  })
+
+  test("returns the text whole for everything that is not front matter", () => {
+    for (const text of [
+      "",
+      "Body.",
+      "---",
+      "---\n",
+      "---\nname: demo\nBody.",
+      "---\nname: demo---\nBody.",
+      "---\nname: demo\n----\nBody.",
+      "---\nname: demo\n--- x\nBody.",
+      "\n---\nname: demo\n---\nBody.",
+      " ---\nname: demo\n---\nBody.",
+      "----\nname: demo\n---\nBody.",
+      "---x\nname: demo\n---\nBody.",
+      "--\nname: demo\n--\nBody.",
+      ...languages.map((language) => `---${language}\nname: demo\n---\nBody.`),
+      "---coffee\nname: demo\n---\nBody.",
+    ])
+      expect(ConfigMarkdown.split(text)).toEqual({ body: text })
+  })
+
+  // Whatever follows the dashes, the text of a block is never given to a parser here: a script that would run is the
+  // text of a file whose first line is not a delimiter, and of a bare block, which only `parseOption` ever reads.
+  for (const language of languages) {
+    test(`does not take ---${language} for a delimiter, and runs nothing`, async () => {
+      await using tmp = await tmpdir()
+      const marker = path.join(tmp.path, "ran")
+      const text = scriptedMarkdown(marker, language)
+      expect(ConfigMarkdown.split(text)).toEqual({ body: text })
+      expect(await ran(marker)).toBe(false)
+    })
+  }
+})

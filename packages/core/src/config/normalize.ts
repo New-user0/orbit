@@ -246,8 +246,11 @@ export function normalize(input: unknown): Result {
     overlay(encoded, key, value, [key], diagnostics)
   })
 
-  const instructions = decodeList(input.instructions, Schema.String, ["instructions"], diagnostics, decodeEncoded)
-  if (instructions.length || Array.isArray(input.instructions)) encoded.instructions = instructions
+  const instructionLists = ["instructions", "instructions_exclude"] as const
+  instructionLists.forEach((key) => {
+    const items = decodeList(input[key], Schema.String, [key], diagnostics, decodeEncoded)
+    if (items.length || Array.isArray(input[key])) encoded[key] = items
+  })
 
   return { type: "normalized", encoded, diagnostics }
 }

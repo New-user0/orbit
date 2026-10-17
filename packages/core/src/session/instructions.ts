@@ -5,6 +5,8 @@ import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Config } from "../config.js"
+import { ConfigInstructionFile } from "../config/instruction-file.js"
 import { Location } from "../location.js"
 import { ProjectTrust } from "../project-trust.js"
 import { SessionEvent } from "./event.js"
@@ -30,6 +32,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
+    const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
@@ -72,20 +75,39 @@ const layer = Layer.effect(
       if (claimed.length === 0) return
       yield* Effect.gen(function* () {
         const alreadyInjected = yield* previouslyInjected(store, input.sessionID)
+        // What the settings of every scope exclude as of now, which is asked before anything is read: an excluded file is
+        // never opened. Exclusion only takes files out, so the gate that follows is the one that was always here.
+        const patterns = yield* ConfigInstructionFile.prepare(
+          ConfigInstructionFile.excludes(yield* config.entries()),
+          fs.resolve,
+        )
         const toInject = yield* Effect.filter(
           claimed.filter((path) => !alreadyInjected.has(path)),
-          reachable,
+          (path) =>
+            ConfigInstructionFile.excluded(patterns, [path])
+              ? Effect.logDebug("instruction file excluded", { path }).pipe(Effect.as(false))
+              : reachable(path),
         )
         if (toInject.length === 0) return
+        // The model reads each file as the session start does (`ConfigInstructionFile`). Injecting it is not a read as the
+        // edit tools count it: the ledger is not told, so changing the file still needs a real read of it. A file that is
+        // excluded, or has nothing left once processed, is not recorded either, and the next read looks at it again. Only
+        // the files loaded at the start are flagged for their size, so no warning is made here.
         const files = yield* Effect.forEach(
           toInject,
           (path) =>
-            fs
-              .readFileStringSafe(path)
-              .pipe(Effect.map((content) => (content === undefined ? undefined : { path, content }))),
+            fs.readFileStringSafe(path).pipe(
+              Effect.map((text) =>
+                text === undefined
+                  ? undefined
+                  : { path, content: ConfigInstructionFile.parse(text, { frontmatter: true }).content },
+              ),
+            ),
           { concurrency: "unbounded" },
         )
-        const readable = files.filter((file): file is { path: string; content: string } => file !== undefined)
+        const readable = files.filter(
+          (file): file is { path: string; content: string } => file !== undefined && file.content.trim() !== "",
+        )
         if (readable.length === 0) return
         // Publish directly rather than through Session.synthetic: a Location-scoped layer
         // cannot depend on Session (it routes through LocationServiceMap, forming a type
@@ -141,5 +163,5 @@ function describePath(root: string, path: string) {
 export const node = makeLocationNode({
   name: "session-instructions",
   layer,
-  deps: [Bus.node, FSUtil.node, Location.node, ProjectTrust.node, SessionStore.node],
+  deps: [Bus.node, Config.node, FSUtil.node, Location.node, ProjectTrust.node, SessionStore.node],
 })

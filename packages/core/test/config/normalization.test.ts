@@ -371,6 +371,27 @@ describe("ConfigNormalize", () => {
     expect(result.diagnostics.filter((item) => item.kind === "invalid")).toHaveLength(4)
   })
 
+  test("recovers list items for instructions_exclude, and reports each one that is not text", () => {
+    const result = normalized({ instructions_exclude: ["**/a/**", 2, null, "/b/AGENTS.md", { x: 1 }] })
+    expect(result.encoded.instructions_exclude).toEqual(["**/a/**", "/b/AGENTS.md"])
+    expect(result.diagnostics.filter((item) => item.kind === "invalid").map((item) => item.path)).toEqual([
+      ["instructions_exclude", "1"],
+      ["instructions_exclude", "2"],
+      ["instructions_exclude", "4"],
+    ])
+  })
+
+  test("omits an instructions_exclude that is not a list, and keeps the empty list it was given", () => {
+    const bad = normalized({ instructions_exclude: "**/AGENTS.md", instructions: ["one"] })
+    expect(bad.encoded).not.toHaveProperty("instructions_exclude")
+    expect(bad.encoded.instructions).toEqual(["one"])
+    expect(bad.diagnostics.filter((item) => item.kind === "invalid").map((item) => item.path)).toEqual([
+      ["instructions_exclude"],
+    ])
+    expect(normalized({ instructions_exclude: [] }).encoded.instructions_exclude).toEqual([])
+    expect(normalized({}).encoded).not.toHaveProperty("instructions_exclude")
+  })
+
   test("omits malformed collection roots instead of synthesizing empty values", () => {
     const result = normalized({
       commands: [],

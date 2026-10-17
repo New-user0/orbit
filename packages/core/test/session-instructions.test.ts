@@ -34,6 +34,10 @@ import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Tool } from "@orbit/core/tool"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { ConfigTrust } from "@orbit/core/config/trust"
+import { AbsolutePath } from "@orbit/core/schema"
+import { Document, Info } from "@orbit/schema/config"
+import { scriptedMarkdown } from "./fixture/front-matter"
 import { tempLocationLayer } from "./fixture/location"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -65,7 +69,11 @@ const asserted: Permission.AssertInput[] = []
 const permission = permissionLayer({ assert: (input) => Effect.sync(() => void asserted.push(input)) })
 
 // Every folder is trusted, as the core tests run, unless `trusted` is false.
-const sessionLayer = (config: ReturnType<typeof Config.testLayer>, trusted = true) => {
+const sessionLayer = (
+  config: ReturnType<typeof Config.testLayer>,
+  trusted = true,
+  filesystem?: Layer.Layer<FSUtil.Service>,
+) => {
   const imageLayer = AppNodeBuilder.build(Image.node, [Config.node.replace(config)])
   return AppNodeBuilder.build(
     LayerNode.group([
@@ -79,6 +87,7 @@ const sessionLayer = (config: ReturnType<typeof Config.testLayer>, trusted = tru
       FileAccess.node,
       ReadToolFileSystem.node,
       readToolNode,
+      FileLedger.node,
       Tool.node,
       PluginHooks.node,
       ProjectTrust.node,
@@ -94,6 +103,7 @@ const sessionLayer = (config: ReturnType<typeof Config.testLayer>, trusted = tru
       Config.node.replace(config),
       Image.node.replace(imageLayer),
       WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: trusted })),
+      ...(filesystem ? [FSUtil.node.replace(filesystem)] : []),
     ],
   )
 }
@@ -524,4 +534,275 @@ describe("SessionInstructions in a project that is not trusted", () => {
       expect(injected[0]!.text).toBe(`Instructions from: ${subPath}\nsub-instructions`)
     }),
   )
+})
+
+// A nested file that the model's reads find goes through the same processing as the files that a session starts with
+// (`ConfigInstructionFile`), and is left out by the same `instructions_exclude`.
+const excluding = (patterns: string[], scope: "user" | "project" = "user") =>
+  new Document({ type: "document", scope, info: new Info({ instructions_exclude: patterns }) })
+
+// A folder with a nested instruction file, and a file to read in it.
+const nested = (directory: string, name: string, text: string, folder = "sub") =>
+  Effect.gen(function* () {
+    const file = path.resolve(directory, folder, name)
+    yield* mkdir(path.resolve(directory, folder))
+    yield* writeAgents(file, text)
+    yield* Effect.promise(() => fs.writeFile(path.resolve(directory, folder, "file.txt"), "content"))
+    return file
+  })
+
+const sessionIn = (directory: string) =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    return (yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory) }) })).id
+  })
+
+const excludesSub = Config.testLayer([excluding(["**/excluded/**", "**/sub/ORBIT.md"])])
+// The same harness with the settings in hand, to change them between two reads.
+const excluded = testEffect(Layer.mergeAll(sessionLayer(excludesSub), excludesSub))
+
+// The files that the file system was asked to read, for the harness that watches them.
+const reads: string[] = []
+const recordingFS = Layer.effect(
+  FSUtil.Service,
+  FSUtil.Service.pipe(
+    Effect.map((fs) =>
+      FSUtil.Service.of({ ...fs, readFileStringSafe: (target) => (reads.push(target), fs.readFileStringSafe(target)) }),
+    ),
+  ),
+).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+const watched = testEffect(sessionLayer(Config.testLayer([excluding(["**/excluded/**"])]), true, recordingFS))
+
+describe("SessionInstructions processes what it injects", () => {
+  it.live("injects a nested file without its comments and front matter", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = yield* nested(
+        dir,
+        "AGENTS.md",
+        "---\ntitle: x\n---\n<!-- private note -->\n\n# Sub rules\n\nUse tabs.\n<!-- tail -->\n",
+      )
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${subPath}\n# Sub rules\n\nUse tabs.\n`)
+      expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath] } })
+    }),
+  )
+
+  it.live("injects nothing for a nested file that holds only comments or front matter, and looks at it again later", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = yield* nested(dir, "AGENTS.md", "---\ntitle: x\n---\n<!-- nothing yet -->\n")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-before", "sub/file.txt"))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+
+      // Nothing was recorded for it, so a later read finds it again once it has something to say.
+      yield* writeAgents(subPath, "# Now it does\n")
+      yield* executeTool(registry, readCall(sessionID, "call-after", "sub/file.txt"))
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${subPath}\n# Now it does\n`)
+    }),
+  )
+
+  it.live("sends a large nested file whole, and flags nothing", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const large = `# Rules\n${"x".repeat(40_000)}\n`
+      const subPath = yield* nested(dir, "AGENTS.md", large)
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-large", "sub/file.txt"))
+      expect((yield* synthetics(sessionID))[0]!.text).toBe(`Instructions from: ${subPath}\n${large}`)
+    }),
+  )
+
+  // The model's own reads decide when an instruction file is injected, and that must never count as a read of the file:
+  // the edit tools ask the ledger, and a file whose comments were taken off the copy must be read for real before it changes.
+  it.live("does not count the injection as a read of the file, so that changing it still needs a real read", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = yield* nested(dir, "AGENTS.md", "# Rules\n<!-- hidden from the model -->\nUse tabs.\n")
+      const registry = yield* Tool.Service
+      const ledger = yield* FileLedger.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+      expect((yield* synthetics(sessionID))[0]!.text).toBe(`Instructions from: ${subPath}\n# Rules\nUse tabs.\n`)
+
+      const failure = yield* ledger.assertFresh(sessionID, subPath, "sub/AGENTS.md").pipe(Effect.flip)
+      expect(failure.code).toBe("file.unread")
+      expect(failure.message).toContain("has not been read in this session")
+
+      // The control: a real read of the file is what makes it fresh.
+      yield* executeTool(registry, readCall(sessionID, "call-direct", "sub/AGENTS.md"))
+      yield* ledger.assertFresh(sessionID, subPath, "sub/AGENTS.md")
+    }),
+  )
+
+  // A nested file is a reader of front matter too: it is never evaluated, and a language after the opening dashes makes
+  // the text plain, as the reference keeps it.
+  for (const language of ["js", "javascript", "JS", "JavaScript", " js", "coffee"])
+    it.live(`injects front matter that opens with ---${language} as text, and runs nothing`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const marker = path.resolve(dir, "ran")
+        const text = scriptedMarkdown(marker, language)
+        const subPath = yield* nested(dir, "AGENTS.md", text)
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+        expect((yield* synthetics(sessionID))[0]!.text).toBe(`Instructions from: ${subPath}\n${text}`)
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+      }),
+    )
+
+  it.live("removes a bare block that a script fills, with CRLF line endings, and runs nothing", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const marker = path.resolve(dir, "ran")
+      const script = `{ description: (require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran"), "x") }`
+      const subPath = yield* nested(dir, "AGENTS.md", `---\r\n${script}\r\n---\r\nRules.\r\n`)
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+      expect((yield* synthetics(sessionID))[0]!.text).toBe(`Instructions from: ${subPath}\nRules.\r\n`)
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+    }),
+  )
+})
+
+describe("SessionInstructions applies instructions_exclude", () => {
+  excluded.live("injects nothing for an excluded nested file, records nothing, and reads it again once it is allowed", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = yield* nested(dir, "AGENTS.md", "excluded rules", "excluded")
+      const registry = yield* Tool.Service
+      const settings = yield* Config.Test
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-before", "excluded/file.txt"))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+
+      yield* settings.setEntries([])
+      yield* executeTool(registry, readCall(sessionID, "call-after", "excluded/file.txt"))
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath] } })
+    }),
+  )
+
+  watched.live("never opens an excluded nested file", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const excludedPath = yield* nested(dir, "AGENTS.md", "excluded rules", "excluded")
+      const allowedPath = yield* nested(dir, "AGENTS.md", "allowed rules", "allowed")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      reads.length = 0
+
+      yield* executeTool(registry, readCall(sessionID, "call-excluded", "excluded/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-allowed", "allowed/file.txt"))
+
+      expect((yield* synthetics(sessionID)).map((message) => message.text)).toEqual([
+        `Instructions from: ${allowedPath}\nallowed rules`,
+      ])
+      // The control: the file that is not excluded was opened.
+      expect(reads).toContain(allowedPath)
+      expect(reads).not.toContain(excludedPath)
+    }),
+  )
+
+  watched.live("never opens an excluded path that it is given", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const excludedPath = yield* nested(dir, "AGENTS.md", "excluded rules", "excluded")
+      const allowedPath = yield* nested(dir, "AGENTS.md", "allowed rules", "allowed")
+      const instructions = yield* SessionInstructions.Service
+      const sessionID = yield* sessionIn(dir)
+      reads.length = 0
+
+      yield* instructions.load({ sessionID, paths: [excludedPath, allowedPath] })
+
+      expect((yield* synthetics(sessionID)).map((message) => message.text)).toEqual([
+        `Instructions from: ${allowedPath}\nallowed rules`,
+      ])
+      expect(reads).toContain(allowedPath)
+      expect(reads).not.toContain(excludedPath)
+    }),
+  )
+
+  excluded.live("asks again for every path it is given, so that no caller loads a file the settings exclude", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const excludedPath = yield* nested(dir, "AGENTS.md", "excluded rules", "excluded")
+      const allowedPath = yield* nested(dir, "AGENTS.md", "allowed rules", "allowed")
+      const instructions = yield* SessionInstructions.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* instructions.load({ sessionID, paths: [excludedPath, allowedPath] })
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${allowedPath}\nallowed rules`)
+      expect(injected[0]!.metadata).toEqual({ instruction: { paths: [allowedPath] } })
+    }),
+  )
+
+  excluded.live("hands a folder to its next name when the first is excluded, as the session start does", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* nested(dir, "ORBIT.md", "orbit rules")
+      const agentsPath = yield* nested(dir, "AGENTS.md", "agents rules")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${agentsPath}\nagents rules`)
+    }),
+  )
+
+  // The settings are read as the config stamped them: the document of a project that is not trusted has lost its list, and
+  // the same document in a project that is trusted keeps it.
+  const projectDocument = (info: Info) =>
+    new Document({ type: "document", scope: "project", path: AbsolutePath.make(path.resolve("/repo/orbit.json")), info })
+  const listed = new Info({ instructions_exclude: ["**/sub/**"] })
+  const place = { roots: [path.resolve("/repo")], directory: path.resolve("/repo") }
+  const stamped = ConfigTrust.stamp(projectDocument(listed), place)
+  const projectList = testEffect(sessionLayer(Config.testLayer([projectDocument(listed)])))
+  const withheld = testEffect(sessionLayer(Config.testLayer([stamped])))
+
+  for (const [harness, name, injects] of [
+    [projectList, "a project that is trusted", false],
+    [withheld, "a project that is not trusted, whose list was withheld", true],
+  ] as const)
+    harness.live(`${injects ? "injects" : "leaves out"} the nested file that the list of ${name} names`, () =>
+      Effect.gen(function* () {
+        expect(stamped).toMatchObject({ trusted: false, withheld: ["settings"] })
+        expect(stamped.type === "document" && stamped.info.instructions_exclude).toBeUndefined()
+        const dir = (yield* Location.Service).directory
+        const subPath = yield* nested(dir, "AGENTS.md", "sub rules")
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+        const injected = yield* synthetics(sessionID)
+        expect(injected.map((message) => message.text)).toEqual(injects ? [`Instructions from: ${subPath}\nsub rules`] : [])
+      }),
+    )
 })
