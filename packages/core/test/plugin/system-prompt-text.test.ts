@@ -82,9 +82,21 @@ describe("no contradiction of the core rules", () => {
     ["reminders are to be followed unscoped", /(follow|obey)[^.\n]*(reminder|system-update)/i],
     ["git procedure", /git add|git commit|commit message|--amend|stag(e|ing) (the|files|changes)|pull request (title|body|description)/i],
     ["pre-approval", /without (asking|confirm|permission)|(no|not|never) (need to )?(ask|confirm)[^.\n]*(permission|approval|confirm)|approval flows?|assume (you have )?(approval|permission)/i],
-    ["discouraging verification", /(do not|don't|never|avoid|skip) (run|running|write|writing) (any |new |the )?(tests?|checks?)\b|stop without report/i],
+    ["discouraging verification", /\b(do not|don't|never|avoid|not bother( to)?) (run|running|write|writing)\b[^.\n]*\b(tests?|checks?)\b|\b(skip|omit) (the |any |all |new )*(tests?|checks?)\b|stop without report/i],
     ["silence around tool calls", /(no|without|never)[^.\n]*explanation[^.\n]*tool/i],
-    ["blanket data rule", /(all|any|every) (text|content|output)[^.\n]*tool results?[^.\n]*(is|are) (just )?data/i],
+    ["blanket data rule", /(all|any|every) (text|content|output)[^.\n]*tool results?[^.\n]*(is|are) (just )?data|\btool results?\b[^.\n]*\bas data\b/i],
+    // Reminders are Orbit's own messages and the shared rules own the whole subject, so no other file names them.
+    ["mentions reminders or updates at all", /reminder|system-update/i],
+    ["delegation, subagents or skills (the tool guidance owns them)", /subagent|sub-agent|delegat|\bskills?\b/i],
+    ["hides the reason for a refusal", /(do not|don't|never)[^.\n]*(say|explain|state|give)[^.\n]*\b(why|reasons?)\b/i],
+    ["shouted emphasis or a nagging commit line", /\*\*\*|IMPORTANT:|VERY IMPORTANT|too proactive|commit[^.\n]*unless the user explicitly/],
+    ["names a docs or instruction file", /\b[A-Z][A-Z0-9_]+\.md\b/],
+    ["old action-bias wording", /bias towards action|helpful enough|"can you\.\.\."/i],
+    ["numeric reply cap", /(fewer|less|more) than \d+ (lines|sentences)|\d+ lines? (or (fewer|less)|at most|maximum)|\bone[- ]word\b/i],
+    ["stop after editing without saying what changed", /(just|simply) stop\b|stop (after|once) (editing|working|you)/i],
+    ["bans all comments", /\b(NEVER|DO NOT|DON'T)\b[^.\n]*\bcomments?\b|\b(NEVER|DO NOT|DON'T)\b[^.\n]*\bCOMMENTS?\b|no comments? (at all|ever|unless asked)|any comments? unless/],
+    ["skips an independent re-check on a claim", /"already verified"|no need to re-?check/i],
+    ["makes the model ask before reading", /(ask|clarify)[^.\n]*before (reading|looking|making)/i],
   ] as const
 
   test.each(cells.flatMap(([cell, pattern]) => everyRow.filter(([name]) => name !== "core-rules").map(([name, text]) => [`${cell}: ${name}`, pattern, text] as const)))(
@@ -108,11 +120,13 @@ describe("no contradiction of the core rules", () => {
 describe("tool-neutral and shell-neutral text", () => {
   const toolNames = [...SessionSystemPrompt.GUIDANCE.map((entry) => entry.tool), "Patch", "WebSearch"]
 
-  test.each(overrideRows)("%s names no tool", (_, text) => {
+  test.each([...overrideRows, ["local", PROMPT_LOCAL], ["anthropic", PROMPT_ANTHROPIC]])("%s names no tool", (_, text) => {
     const body = withoutPlaceholder(text)
     toolNames.forEach((tool) => {
       expect(body).not.toContain(`\`${tool}\``)
       expect(body).not.toContain(`${tool} tool`)
+      // A bare name in a list or before "tools" ("Read, Grep and Edit tools").
+      expect(body).not.toMatch(new RegExp(`\\b${tool}(,| tools\\b)`))
     })
     expect(body).not.toMatch(/\bBash\b/)
   })
@@ -147,6 +161,10 @@ describe("text hygiene", () => {
     expect(lines(text).filter((line) => line.startsWith(">"))).toEqual([])
   })
 
+  test.each(everyRow)("%s never runs two bullets together on one line", (_, text) => {
+    expect(text).not.toContain(".- ")
+  })
+
   test.each(overrideRows)("%s is shorter than the base", (_, text) => {
     expect(text.length).toBeLessThan(BASE.length)
   })
@@ -171,6 +189,20 @@ describe("family specifics and the content contract", () => {
     expect(PROMPT_ASTRA).toContain("Being autonomous does not lift the need to ask")
   })
 
+  test("astra's first autonomy bullet states the confirmation limit itself", () => {
+    const bullet = lines(PROMPT_ASTRA).find((line) => line.includes("A question about whether you can do something"))
+    expect(bullet).toMatch(/destructive[^.]*wait for the user's go-ahead/)
+  })
+
+  test("local also follows the instruction files", () => {
+    expect(PROMPT_LOCAL).toContain("Follow the user's and the project's instruction files")
+  })
+
+  test("anthropic only narrows the base comment policy", () => {
+    expect(PROMPT_ANTHROPIC).not.toMatch(/density|match the surrounding/i)
+    expect(PROMPT_ANTHROPIC).toContain("Never add more comments than the rules above allow.")
+  })
+
   test("kimi replies in the user's language and makes changes with tools", () => {
     expect(PROMPT_KIMI).toContain("Reply in the language the user writes in")
     expect(PROMPT_KIMI).toContain("make the change with your tools")
@@ -190,8 +222,11 @@ describe("family specifics and the content contract", () => {
     ["owner/repo#123", /`owner\/repo#123`/],
     ["no emojis", /No emojis unless/],
     ["period before a tool call", /ends with a period, not a colon/],
-    ["word anchors", /about 25 words/],
+    ["25-word anchor", /about 25 words/],
+    ["100-word anchor", /about 100 words/],
+    ["follows instruction files", /Follow the user's and the project's instruction files, which come later in this prompt; where they conflict with this guidance, they win\./],
     ["no commit unless asked", /commit, push or open pull requests unless asked/],
+    ["approval covers one action", /approval covers only/],
     ["comment policy", /(Comment only where|never what)/],
     ["investigate before asking", /nvestigate/],
     ["parallel independent calls", /independent calls together/],

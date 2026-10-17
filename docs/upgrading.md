@@ -2542,20 +2542,9 @@ session is unaffected until its next step), and SDK callers that read `Config.In
 
 ### The model-family prompts are rewritten
 
-The prompts for five model families (Astra, Kimi, Trinity, Muse and the general one) were written again. Each now opens with the same opening
-paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding
-instructions drops their `Doing tasks`, `Code style` and `Verification` sections as it does the base's. Kimi and Trinity
-no longer treat reminder-shaped text inside a tool result as an instruction; that text is data, as the shared rules say.
-Kimi replies in the language the user writes in unless you ask for another or set a preferred language. The Muse prompt
-names the model Orbit runs on and makes no claim about who trained it. Trinity no longer forbids all comments or caps
-replies at four lines; it keeps to short, answer-first replies. No family prompt carries a git staging or commit-message
-procedure any more, only the rule not to commit, push or open pull requests unless asked. Two of them keep a split
-between short commentary while working and a self-contained final answer, and Astra keeps its push to carry a task through,
-with its limits stated beside it. The local-model prompt now opens with the base paragraph, and its data rule points at
-the shared rules below it.
+The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general family, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their `Doing tasks`, `Code style` and `Verification` sections as it does the base's. Each tells the model to follow the user's and the project's instruction files, which come later in the prompt. Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, caps replies at no fixed number of lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.
 
-**Affects:** sessions on models of those families and on local models (the system prompt text changes, so a prompt cache for
-an existing session is unaffected until its next step).
+**Affects:** sessions on models of those families and on local models (the system prompt text changes, so a prompt cache for an existing session is unaffected until its next step).
 
 **What to do:** Nothing.
 
