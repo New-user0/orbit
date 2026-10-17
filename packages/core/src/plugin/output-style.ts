@@ -116,17 +116,20 @@ export const Plugin = define({
         if (!system) return
         const style = yield* load(name)
         if (!style) return
-        // Sections are cut from Orbit's own text only: each piece the person wrote is swapped for a token that holds no
-        // heading of its own while the cut runs: each token starts a chunk, so it keeps every section it has and ends the
-        // section before it.
+        // Sections are cut from Orbit's own text only. While the cut runs, each piece the person wrote is swapped for a
+        // token that is a heading line of its own: it starts a chunk, which no coding-section name matches, and it ends the
+        // section before it. A token is put back by its heading line whether or not the newline in front of it survived
+        // (that newline belongs to the chunk before, which the cut may have dropped), with the blank line that separated
+        // the piece, or none at the start of the text.
         const pieces = SessionSystemPrompt.personal.get(event) ?? []
-        const tokens = pieces.map((_, index) => `\n# \u0000personal${index}\u0000`)
+        const token = (index: number) => `# \u0000personal${index}\u0000`
         const sections = style.keepCodingInstructions
           ? system.text
-          : tokens.reduce(
-              (text, token, index) => text.replace(token, () => pieces[index]!),
+          : pieces.reduce(
+              (text, piece, index) =>
+                text.replace(new RegExp(`\n*${token(index)}`), (_found, at: number) => (at === 0 ? "" : "\n\n") + piece),
               withoutSections(
-                pieces.reduce((text, piece, index) => text.replace(piece, () => tokens[index]!), system.text),
+                pieces.reduce((text, piece, index) => text.replace(piece, () => `\n${token(index)}`), system.text),
                 SessionSystemPrompt.CODING_SECTIONS,
               ),
             )

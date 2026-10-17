@@ -695,24 +695,28 @@ describe("system prompt keys", () => {
     }),
   )
 
-  it.effect("keeps appended text after an agent prompt that ends in a coding section, under a style", () =>
-    Effect.gen(function* () {
-      const { host, root } = yield* setup()
-      yield* OutputStylePlugin.Plugin.effect(host)
-      const directory = yield* reviewerStyle
-      // An agent prompt that ends in a coding section, and no shell tool, so nothing of Orbit's stands between that prompt
-      // and the appended text.
-      const text = yield* request(
-        [...styled(directory), document({ append_system_prompt: "APPEND-MARK" })],
-        { sessionID: root.id, agent: "own", text: "Own prompt\n\n# Verification\nRun the tests.", tools: ["Read"] },
-      )
-      // The coding section of the prompt is cut, the appended text is not, and the style comes after it.
-      expect(text).not.toContain("# Verification")
-      expect(text.startsWith("Own prompt")).toBe(true)
-      expect(text.indexOf("APPEND-MARK")).toBeGreaterThan(0)
-      expect(text.indexOf("# Output style: reviewer")).toBeGreaterThan(text.indexOf("APPEND-MARK"))
-    }),
-  )
+  // An agent prompt that ends in a coding section, or is one, and no shell tool, so nothing of Orbit's stands between that
+  // prompt and the appended text. The appended text always follows, after one blank line, and no token is left behind.
+  for (const row of [
+    { name: "ends in a coding section", text: "Own prompt\n\n# Verification\nRun the tests.", head: "Own prompt\n\nAPPEND-MARK" },
+    { name: "is a coding section", text: "# Doing tasks\nDo things.", head: "APPEND-MARK" },
+  ])
+    it.effect(`keeps appended text after an agent prompt that ${row.name}, under a style`, () =>
+      Effect.gen(function* () {
+        const { host, root } = yield* setup()
+        yield* OutputStylePlugin.Plugin.effect(host)
+        const directory = yield* reviewerStyle
+        const text = yield* request(
+          [...styled(directory), document({ append_system_prompt: "APPEND-MARK" })],
+          { sessionID: root.id, agent: "own", text: row.text, tools: ["Read"] },
+        )
+        expect(text).not.toContain("# Verification")
+        expect(text).not.toContain("# Doing tasks")
+        expect(text).not.toContain("\u0000")
+        expect(text.startsWith(row.head)).toBe(true)
+        expect(text.indexOf("# Output style: reviewer")).toBeGreaterThan(text.indexOf("APPEND-MARK"))
+      }),
+    )
 
   it.effect("keeps the sections of a replacement that is named like a coding section, under a style", () =>
     Effect.gen(function* () {

@@ -30,7 +30,11 @@ export const unresolved = (file: string) => `${prefix}${file.replace(/[\\/:]+/g,
  * `\\.\`), or a rooted `\??\` (the NT spelling, which Windows opens as a share too). Such a path is never walked part by
  * part, because reading a link on it connects to the host.
  */
-export const isShare = (file: string) => /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(file)
+export const isShare = (file: string) => SHARE.test(file) || SHARE.test(path.win32.normalize(file))
+
+// The walks resolve `.` and `..` before they read a part, so a dot segment in front of `??` (`\x\..\??\UNC\h\s`) is the
+// share too: a spelling is tested as written and as normalized.
+const SHARE = /^[\\/]{2}|^[\\/]\?\?[\\/]/
 
 export const isUnresolved = (file: string) => file.startsWith(prefix)
 
