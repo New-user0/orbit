@@ -147,7 +147,7 @@ export const GUIDANCE = [
     tool: "Skill",
     lines: [
       "- When a skill in the skill list matches the task, load it with Skill by its ID before you start the work. A `/name` typed by the user that names a skill is a request to load it.",
-      "- Use only IDs from the skill list or ones the user named: never guess an ID, and never call Skill for a built-in command. A loaded skill's instructions apply to the task it was loaded for.",
+      "- Important: use only IDs from the skill list or ones the user named. Never guess an ID, and never call Skill for a built-in command. A loaded skill's instructions apply to the task it was loaded for.",
     ],
   },
   {

@@ -23,17 +23,24 @@ import type { PluginInternal } from "./internal.js"
  *
  * The name is one file name, so a repository's config cannot make it climb out of the directory, and a file in a
  * directory whose folder is not trusted is read only when its real path is inside that folder (`ProjectTrust.supplies`).
+ * Reading it is all that gate allows: a style from a folder that is not trusted still goes last in the prompt under its
+ * own heading, but it does not replace the opening line, because that line says what the agent is for and would pass the
+ * clone's text off as Orbit's. The folder is asked at each request (`ProjectTrust.trustedSource`), so a grant or a revoke
+ * takes effect at once. Every kind of style leaves the sections that govern approvals as they are.
  */
 
 interface Style {
   readonly name: string
   readonly body: string
   readonly keepCodingInstructions: boolean
+  /** Whether the folder that holds the style is trusted. A built-in style is Orbit's own. */
+  readonly trusted: boolean
 }
 
 const BUILT_IN: Record<string, Style> = {
   explanatory: {
     name: "Explanatory",
+    trusted: true,
     keepCodingInstructions: true,
     body: [
       "While you work, help the user understand the codebase and your choices.",
@@ -44,6 +51,7 @@ const BUILT_IN: Record<string, Style> = {
   },
   learning: {
     name: "Learning",
+    trusted: true,
     keepCodingInstructions: true,
     body: [
       "The user wants to learn by doing, so share the work with them.",
@@ -94,6 +102,7 @@ export const Plugin = define({
           name: typeof markdown.data.name === "string" ? markdown.data.name : name,
           body: markdown.content.trim(),
           keepCodingInstructions: keep === true || keep === "true",
+          trusted: yield* trust.trustedSource(source),
         } satisfies Style
       }
       yield* Effect.logWarning("output style not found", { name })
@@ -110,9 +119,10 @@ export const Plugin = define({
         const sections = style.keepCodingInstructions
           ? system.text
           : withoutSections(system.text, SessionSystemPrompt.CODING_SECTIONS)
-        const base = sections.startsWith(SessionSystemPrompt.INTRO)
-          ? `${STYLED_INTRO}${sections.slice(SessionSystemPrompt.INTRO.length)}`
-          : sections
+        const base =
+          style.trusted && sections.startsWith(SessionSystemPrompt.INTRO)
+            ? `${STYLED_INTRO}${sections.slice(SessionSystemPrompt.INTRO.length)}`
+            : sections
         event.system[0] = { ...system, text: `${base}${STYLE_HEADING}${style.name}\n${style.body}` }
       }).pipe(Effect.catch(() => Effect.void))
 

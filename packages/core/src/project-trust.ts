@@ -103,6 +103,14 @@ export interface Interface {
    * into the prompt. A file that is left out is logged once, as a warning that says `config file skipped`.
    */
   readonly supplies: (source: Source, file: string) => Effect.Effect<boolean>
+  /**
+   * Whether the folder that holds a config source is trusted now, which is what `supplies` asks before it lets a file that
+   * stays inside the folder be read. A source that is not a project's or a local one is the person's own and always is. A
+   * source in the project's folders follows the decision just made, and one above them the decision for the folder that
+   * holds it, as its stamp has it. `supplies` only says that a file may be read: ask this before text that a source holds
+   * speaks for Orbit or for the person, as the opening line of an output style does.
+   */
+  readonly trustedSource: (source: Source) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ProjectTrust") {}
@@ -167,12 +175,15 @@ const layer = Layer.effect(
       return ConfigTrust.reach({ holder, container: source, persistent: (yield* trust.status(holder)).persistent })
     })
 
-    const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
+    const trustedSource = Effect.fn("ProjectTrust.trustedSource")(function* (source: Source) {
       if (source.scope !== "project" && source.scope !== "local") return true
       // The project's own folders follow the decision just made, because a stamp can trail it, and what sits above
       // them follows the decision for the folder that holds it, which only its stamp knows.
-      const own = inside(source.path)
-      if (own ? (yield* trust.status(root)).trusted : source.trusted !== false) return true
+      return inside(source.path) ? (yield* trust.status(root)).trusted : source.trusted !== false
+    })
+
+    const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
+      if (yield* trustedSource(source)) return true
       const roots = yield* boundOf(source.path)
       if (yield* stays([...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
       if (skipped.has(file)) return false
@@ -396,6 +407,7 @@ const layer = Layer.effect(
         }
       }),
       supplies,
+      trustedSource,
     })
   }),
 )
