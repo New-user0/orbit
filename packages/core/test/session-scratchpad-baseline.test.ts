@@ -130,14 +130,12 @@ describe("the scratchpad among the sources of the baseline", () => {
       const entries = yield* InstructionEntry.Service
       yield* entries.put({ sessionID: ids.main, key: InstructionEntry.Key.make("notes"), value: "from the API" })
       const keys: string[] = (yield* select(ids.main)).instructions.map((source) => source.key)
-      expect(keys.filter((key) => /^(core\/date|core\/environment|core\/scratchpad|api\/)/.test(key))).toEqual([
-        "core/date",
-        "core/environment",
-        "core/scratchpad",
-        "api/notes",
-      ])
-      // Directly after the environment and directly before the entries: nothing else sits between them.
-      expect(keys[keys.indexOf("core/environment") + 1]).toBe("core/scratchpad")
+      expect(
+        keys.filter((key) => /^(core\/date|core\/environment|core\/vcs-snapshot|core\/scratchpad|api\/)/.test(key)),
+      ).toEqual(["core/date", "core/environment", "core/vcs-snapshot", "core/scratchpad", "api/notes"])
+      // The git snapshot sits directly after the environment and the scratchpad directly after it, before the entries.
+      expect(keys[keys.indexOf("core/environment") + 1]).toBe("core/vcs-snapshot")
+      expect(keys[keys.indexOf("core/vcs-snapshot") + 1]).toBe("core/scratchpad")
       expect(keys[keys.indexOf("core/scratchpad") + 1]).toBe("api/notes")
     }),
   )

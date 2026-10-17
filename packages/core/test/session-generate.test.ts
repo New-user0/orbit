@@ -57,6 +57,7 @@ import { Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
 import { noScratchpad } from "./lib/scratchpad"
+import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
 
 const requests: LLMRequest[] = []
@@ -163,6 +164,7 @@ const it = testEffect(
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(builtins),
       noScratchpad,
+      noVcsSnapshot,
       InstructionDiscovery.node.replace(discovery),
       SkillInstructions.node.replace(skills),
       ReferenceInstructions.node.replace(references),

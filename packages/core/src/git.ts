@@ -52,6 +52,7 @@ export class OperationError extends Schema.TaggedError<OperationError>()("Git.Op
     "list_files",
     "diff",
     "restore",
+    "status",
   ]),
   message: Schema.String,
   directory: Schema.optional(AbsolutePath),
@@ -94,6 +95,29 @@ export interface Interface {
     readonly branch: (repository: Repository) => Effect.Effect<string | undefined>
     readonly defaultRemoteBranch: (repository: Repository, remote?: string) => Effect.Effect<string | undefined>
     readonly rootCommits: (repository: Repository) => Effect.Effect<readonly string[]>
+    /** The branch checked out in `directory`; undefined for a detached head. */
+    readonly current: (directory: AbsolutePath) => Effect.Effect<string | undefined>
+    /**
+     * The branch that pull requests usually target, read from the remote-tracking refs of `origin` only: its head, else
+     * `main`, else `master`, else the name `main`. It never contacts the remote.
+     */
+    readonly mainBranch: (directory: AbsolutePath) => Effect.Effect<string>
+    /**
+     * The newest `count` commits as `git log --oneline` prints them. Empty when there are none. It reaches config keys
+     * (`gpg.program` when `log.showSignature` is set), so call it only behind `ProjectTrust.trusted()`.
+     */
+    readonly recent: (directory: AbsolutePath, count: number) => Effect.Effect<readonly string[]>
+    /** The `user.name` that git resolves in `directory`, undefined when none is set. */
+    readonly userName: (directory: AbsolutePath) => Effect.Effect<string | undefined>
+  }
+  readonly status: {
+    /**
+     * `git status --short` run in `directory`, so paths are relative to it. It reaches config keys (`core.fsmonitor`, clean
+     * filters), so call it only behind `ProjectTrust.trusted()`. It takes no optional lock, and a result
+     * longer than `maxBytes` is cut to whole lines. A failure to start git or a non-zero exit is an error: a failed
+     * status must not read as a clean tree.
+     */
+    readonly short: (directory: AbsolutePath, maxBytes: number) => Effect.Effect<string, OperationError>
   }
   readonly sync: {
     readonly fetchRemotes: (repository: Repository, input?: { prune?: boolean }) => Effect.Effect<void, OperationError>
@@ -217,19 +241,74 @@ const layer = Layer.effect(
       return result.text.trim() || undefined
     })
 
-    const branch = Effect.fn("Git.history.branch")(function* (repository: Repository) {
-      const result = yield* run(repository.worktree, proc, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    const currentBranch = Effect.fn("Git.history.current")(function* (directory: string) {
+      const result = yield* run(directory, proc, ["symbolic-ref", "--quiet", "--short", "HEAD"])
       if (result.exitCode !== 0) return undefined
       return result.text.trim() || undefined
+    })
+
+    const branch = Effect.fn("Git.history.branch")((repository: Repository) => currentBranch(repository.worktree))
+
+    const headOf = Effect.fnUntraced(function* (directory: string, remoteName: string) {
+      const result = yield* run(directory, proc, ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`])
+      if (result.exitCode !== 0) return undefined
+      return result.text.trim().replace(new RegExp(`^refs/remotes/${remoteName}/`), "") || undefined
     })
 
     const remoteHead = Effect.fn("Git.history.defaultRemoteBranch")(function* (
       repository: Repository,
       remoteName = "origin",
     ) {
-      const result = yield* run(repository.worktree, proc, ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`])
+      return yield* headOf(repository.worktree, remoteName)
+    })
+
+    const mainBranch = Effect.fn("Git.history.mainBranch")(function* (directory: AbsolutePath) {
+      const head = yield* headOf(directory, "origin")
+      if (head) return head
+      for (const name of ["main", "master"]) {
+        const result = yield* run(directory, proc, ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${name}`])
+        if (result.exitCode === 0) return name
+      }
+      return "main"
+    })
+
+    const recent = Effect.fn("Git.history.recent")(function* (directory: AbsolutePath, count: number) {
+      const result = yield* proc
+        .run(
+          ChildProcess.make(gitExecutable, ["--no-optional-locks", "log", "--oneline", "-n", String(count)], {
+            cwd: directory,
+            extendEnv: true,
+            stdin: "ignore",
+          }),
+          { maxOutputBytes: SNAPSHOT_OUTPUT_BYTES },
+        )
+        .pipe(Effect.orElseSucceed(() => undefined))
+      // A repository with no commits yet exits non-zero; it has nothing to list.
+      if (!result || result.exitCode !== 0) return []
+      return wholeLines(result.stdout.toString("utf8"), result.stdoutTruncated)
+    })
+
+    const userName = Effect.fn("Git.history.userName")(function* (directory: AbsolutePath) {
+      const result = yield* run(directory, proc, ["config", "user.name"])
       if (result.exitCode !== 0) return undefined
-      return result.text.trim().replace(new RegExp(`^refs/remotes/${remoteName}/`), "") || undefined
+      return result.text.trim() || undefined
+    })
+
+    const shortStatus = Effect.fn("Git.status.short")(function* (directory: AbsolutePath, maxBytes: number) {
+      const failed = (message: string, cause?: unknown) =>
+        new OperationError({ operation: "status", directory, message, cause })
+      const result = yield* proc
+        .run(
+          ChildProcess.make(gitExecutable, ["--no-optional-locks", "status", "--short"], {
+            cwd: directory,
+            extendEnv: true,
+            stdin: "ignore",
+          }),
+          { maxOutputBytes: maxBytes },
+        )
+        .pipe(Effect.mapError((cause) => failed(cause.message, cause)))
+      if (result.exitCode !== 0) return yield* failed(result.stderr.toString("utf8").trim() || "Git status failed")
+      return wholeLines(result.stdout.toString("utf8"), result.stdoutTruncated).join("\n")
     })
 
     const operation = Effect.fnUntraced(function* (
@@ -711,7 +790,17 @@ const layer = Layer.effect(
     return Service.of({
       repo: { discover, clone, create },
       remote: { get: remote },
-      history: { head, branch, defaultRemoteBranch: remoteHead, rootCommits: roots },
+      history: {
+        head,
+        branch,
+        defaultRemoteBranch: remoteHead,
+        rootCommits: roots,
+        current: currentBranch,
+        mainBranch,
+        recent,
+        userName,
+      },
+      status: { short: shortStatus },
       sync: { fetchRemotes: fetch, fetchBranch, checkoutRemoteBranch: checkout, resetHard: reset },
       worktree: { create: worktreeCreate, remove: worktreeRemove, list: worktreeList },
       index: { refresh, ignored },
@@ -757,6 +846,16 @@ function execute(cwd: string, proc: AppProcess.Interface, args: string[]) {
           }) satisfies Result,
       ),
     )
+}
+
+// Room for 2,000 characters of status at four bytes each, with plenty over, and a bound on a log with a huge subject.
+const SNAPSHOT_OUTPUT_BYTES = 64 * 1024
+
+/** The lines of git output; when it was cut at a byte limit, the last line is dropped because it may be partial. */
+function wholeLines(text: string, truncated: boolean) {
+  const lines = text.split(/\r?\n/)
+  if (truncated) lines.pop()
+  return lines.filter((line) => line.length > 0)
 }
 
 /** Split NUL-terminated git output into its records. */

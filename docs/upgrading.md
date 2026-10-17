@@ -2521,6 +2521,25 @@ edit the model catalog.
 
 **What to do:** Nothing.
 
+### A session starts with a snapshot of the git repository
+
+In a trusted git folder, the baseline of a session now carries a snapshot of the repository taken once: the current
+branch, the main branch (from `origin`'s head or its `main` or `master`, else `main`), the git user name, the short
+status (cut at 2,000 characters, with a note when it is longer) and the last five commits. The text says it is a
+snapshot and is not updated, and a status that cannot be read leaves the snapshot out rather than reporting a clean tree.
+A subagent sees its parent's snapshot, and a fork keeps its session's. The snapshot starts no git in a folder that is not
+trusted. If a folder is trusted partway through a session, the next step adds one snapshot, worded as taken partway
+through; if trust is taken away, the next step tells the model the snapshot no longer applies. `orb run --bare` keeps
+the snapshot; an embedded instance that boots with `discovery: false` has none.
+
+Set `"git_status": false` in any config scope to turn it off. A project's own `orbit.json` may set it, because it can
+only drop the snapshot. The generated client types gain the optional `git_status` boolean in `Config.Info`.
+
+**Affects:** every session in a git folder (the baseline text and its size change; a prompt cache for an existing
+session is unaffected until its next step), and SDK callers that read `Config.Info`.
+
+**What to do:** Nothing, or set `git_status` to `false` to keep git state out of the prompt.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs

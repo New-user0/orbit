@@ -119,6 +119,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     plants a program that the config names, which records its runs, and carries the plain git command that runs it as the
     control (all but `core.pager`, which git runs only for a terminal that no test has); git's own trace (`GIT_TRACE2`)
     says whether any git started.
+- The git snapshot of a session (`VcsInstructions`, `packages/core/src/vcs/instructions.ts`): `status --short`, `log
+  --oneline`, `config user.name` and the refs of `origin` run in the session's folder, and git applies that folder's
+  config to them (`core.fsmonitor`, `include.path`, `gpg.program` with `log.showSignature`), with no `-c` override. The
+  source asks `ProjectTrust.trusted()` first at every read, whatever else it knows, and starts no git for a folder that is
+  not trusted. A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
+  once when trust is granted, as a durable update. A repository is told by `Location.vcs`, which `Project.resolve` reads
+  from files, never by `Git.repo.discover`, which starts `git rev-parse`. `git_status` is inert in `ConfigTrust`: it can
+  only drop the snapshot. Proof: `test/session-context-vcs.test.ts` (an untrusted run with `core.fsmonitor` planted
+  leaves no marker and no git in the trace, a trusted control writes the marker, and a revoke starts no git),
+  `test/git-snapshot.test.ts`, `test/vcs-instructions.test.ts`.
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
   `ConfigTrust.sanitize`, as `ConfigTrust.classification` says. Proof: `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
@@ -2054,7 +2064,7 @@ The program-wide register of every follow-up, these gaps included, with each one
   watcher start no git in a folder that `WorkspaceTrust` does not trust, and read its files instead (`GitLayout`;
   `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
   control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read-only calls
-  of the `Git` service still run git in an untrusted folder, with its config in effect, and reach none of those keys
+  of the `Git` service still run git in an untrusted folder, with its config in effect, and reach none of those keys except two: `status.short` runs `core.fsmonitor` and clean filters, and `history.recent` runs `gpg.program` when `log.showSignature` is set. Those two are called only by `VcsInstructions`, behind `ProjectTrust.trusted()`
   (`test/snapshot-trust.test.ts`, `test/git.test.ts`); that is a fact about the commands and the git versions the tests ran
   with (2.52 on Windows, the container's on Linux), not a gate. What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
   and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the

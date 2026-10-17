@@ -223,6 +223,8 @@ export const classification = {
     model: withhold("providers"),
     fallback_model: withhold("providers"),
     output_token_cap: withhold("providers"),
+    // It can only drop the git snapshot, and the snapshot runs only in a trusted folder anyway.
+    git_status: inert,
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,

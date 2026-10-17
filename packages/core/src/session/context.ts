@@ -16,6 +16,7 @@ import { McpInstructions } from "../mcp/instructions.js"
 import { McpTool } from "../tool/mcp.js"
 import { ReferenceInstructions } from "../reference/instructions.js"
 import { SkillInstructions } from "../skill/instructions.js"
+import { VcsInstructions } from "../vcs/instructions.js"
 import { Tool } from "../tool.js"
 import { AgentNotFoundError } from "./error.js"
 import { SessionHistory } from "./history.js"
@@ -108,6 +109,7 @@ const layer = Layer.effect(
     const scratchpad = yield* SessionScratchpad.Service
     const skillInstructions = yield* SkillInstructions.Service
     const store = yield* SessionStore.Service
+    const vcsInstructions = yield* VcsInstructions.Service
     const registry = yield* Tool.Service
     const config = yield* Config.Service
 
@@ -194,8 +196,9 @@ const layer = Layer.effect(
         agent: { ...agent, info: agent.info },
         // Ordered from most to least shared across sessions so the baseline stays a reusable
         // prompt-cache prefix: user-level catalog and guidance, then project instructions, then
-        // the date and environment, which vary by day and directory, then the scratchpad, which
-        // varies by the session the lineage goes back to.
+        // the date and environment, which vary by day and directory, then the git snapshot, which
+        // varies by the moment the session began, then the scratchpad, which varies by the session
+        // the lineage goes back to.
         instructions: Instructions.combine([
           CodeModeInstructions.make(loaded.tools.codeModeCatalog),
           loaded.mcp,
@@ -203,6 +206,7 @@ const layer = Layer.effect(
           loaded.skills,
           loaded.discovery,
           loaded.builtins,
+          vcsInstructions.source(session),
           scratchpad.source(session),
           loaded.entries,
         ]),
@@ -257,5 +261,6 @@ export const node = makeLocationNode({
     SessionStore.node,
     SkillInstructions.node,
     Tool.node,
+    VcsInstructions.node,
   ],
 })

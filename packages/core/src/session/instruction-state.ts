@@ -181,6 +181,17 @@ export const current = Effect.fn("InstructionState.current")(function* (
   return (yield* find(db, sessionID))?.current_values
 })
 
+/** The value that a session currently holds for one source, or undefined when it holds none. */
+export const value = Effect.fn("InstructionState.value")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  key: Instructions.Key,
+) {
+  const hash = (yield* current(db, sessionID))?.[key]
+  if (hash === undefined) return undefined
+  return (yield* loadBlobs(db, [hash])).get(hash)
+})
+
 export const preview = Effect.fn("InstructionState.preview")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
