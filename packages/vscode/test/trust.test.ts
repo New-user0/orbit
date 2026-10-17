@@ -381,7 +381,7 @@ test("sends nothing, and says so, while the server has not answered the trust re
     const { controller, updates, questions } = chat(server.client, project, "later", limits)
 
     // The first read, and the one the message waits for, each have the time that a person would wait: two seconds.
-    await controller.send("hello").catch(() => undefined)
+    await controller.send("hello", "<system-reminder>editor</system-reminder>").catch(() => undefined)
     const waited = performance.now() - started
 
     expect(limits.read).toBe(2_000)
@@ -390,6 +390,8 @@ test("sends nothing, and says so, while the server has not answered the trust re
     // Silence may be an old server that is slow to say it has no such route, so no session was created and the person
     // was told; no question was asked, because the server is the one that decides.
     expect(server.seen).not.toContain("POST /api/session")
+    // The editor context is admitted only by a send that was not refused, so none of it went out either.
+    expect(server.seen.filter((line) => line.includes("synthetic"))).toEqual([])
     expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining("trust could not be reached")])
     expect(questions).toEqual([])
     expect(trusts(updates)).toEqual([])

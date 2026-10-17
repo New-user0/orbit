@@ -522,7 +522,7 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M4-001 | A bare name that is on no PATH is resolved by cross-spawn in the working folder, and a file with a shebang there starts its interpreter | 10 | On Windows a file called hg or az with a #! line in the folder runs when Orbit starts that program and it is on no PATH. | low; needs the program missing from PATH, and a trusted folder for hg | M: find the program with which in the spawner and fail for one it does not find, which changes what a relative PATH entry of a child does (FU-M1-013, owner) | sweep | git-untrusted PR (the decoy rows of FU-M1-012); Known gaps (A bare name that is on no PATH) | packages/util/src/cross-spawn-spawner.ts:298 hands command.command to cross-spawn; bare names at packages/core/src/project.ts:335 and packages/core/src/plugin/vcs/hg.ts:174 (hg), packages/core/src/plugin/provider/azure.ts:86 (az); the control row of packages/core/test/util/git-executable.test.ts starts a file called git through cross-spawn |
 | FU-M3-422 | core config/normalization.test.ts property test hits the 5 s limit under load (timeout only, passes alone) | 14 | 100 FastCheck round-trips took 5958 ms under 8 workers in the full Linux core run at bcfcfd7; the file passes alone (50 pass). | 1 of 1 full Linux core run in round 9 | XS: give the test an explicit 30 s limit | sweep | M3 verification round 9, follow-up 65 | packages/core/test/config/normalization.test.ts:172 |
 
-### Owner (92)
+### Owner (93)
 
 These rows have no plan task and no decision to wait for. The owner gives each one a plan task or the sweep, or accepts the gap and closes it; until then the row stays here.
 
@@ -604,6 +604,7 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 | FU-M3-173 | multiSelect from the reference is silently ignored | 7 | A multi-select question is drawn as single-select. | medium | S | owner | PR #96 C0-C4 | packages/core/src/tool/names.ts has no multiSelect alias |
 | FU-M3-177 | Managed MCP parity: a person cannot keep a managed server off; /mcps and orb mcp list do not label managed servers; orb mcp add validates before refusing | parity | Parity gaps. | low | M | owner | PR #97 C0-C2 | Mcp.remove lasts until restart |
 | FU-M4-1 | Should project output styles and skills reach the prompt before the folder is trusted at all | 8 | Text from an untrusted clone reaches the model as a style or a loaded skill; this PR only keeps it from replacing the opening line and from granting approval. | medium | S | owner | PR #115 review major 2 | packages/core/src/plugin/output-style.ts (ProjectTrust.supplies lets the style be read) |
+| FU-M4-35 | The editor context of the VS Code chat and of the terminal UI is sent without asking whether the server's read rules allow the file | 8 | A file the person's read rules deny is still named, and its selected text still sent, with the next message; the chip shows the file before it goes and can turn it off. | low | S | owner | clients-ux-35 spec (known gap) | packages/vscode/src/extension.ts (EditorState.file), packages/tui/src/component/prompt/index.tsx (pendingEditorSelection); a server check on synthetic items marked as editor context, or a route that answers whether a path may be read |
 | FU-M3-184 | Exit classification: variable head judged by its expanded value; PowerShell read from the shell before hooks; opaque line exit 1 fails | 7 | G=grep; $G x f exiting 1 is not a failure (reference: failure). | low | S | owner | PR #102 C0-C2 m1 | packages/core/src/shell/exit.ts:36 (only escaped words) |
 | FU-M3-188 | PDF follow-ups: a range read parses twice; untyped intermediate Pages undercounted; looping /Parent counts but fails the cut | perf,7 | Double parse cost (about 20 s for 31 MiB). | low | S | owner | PR #99 C2-C4 | packages/core/src/tool/read-filesystem.ts:237,265 |
 | FU-M3-199 | Path extraction cost: repeated which lookups per inspect; walk.finish() outside the walker's catch | perf,7 | 13-46 ms per inspect; a throw would fail the call instead of degrading. | certain (cost); very low (throw) | S | owner | PR #100 C5 | packages/core/src/shell/paths.ts locate per head; packages/core/src/shell/analysis.ts:312 |
@@ -830,11 +831,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) = 709.
-- Output: 626 rows plus 83 listed duplicates = 709. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 626 register rows have a table entry.
-- Open minors by carrier: M4: 16, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 146, Owner: 92.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) = 710.
+- Output: 627 rows plus 83 listed duplicates = 710. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 627 register rows have a table entry.
+- Open minors by carrier: M4: 16, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 146, Owner: 93.
 - Open majors: 14 open, plus 5 marked major in "For the owner" that wait for a decision = 19.
 - For the owner: 86.
 - Fixed: 113.
 - Duplicates: 83.
-- Check: 427 open + 86 owner + 113 fixed + 83 duplicates = 709, the 709 inputs.
+- Check: 428 open + 86 owner + 113 fixed + 83 duplicates = 710, the 710 inputs.

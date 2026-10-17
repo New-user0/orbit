@@ -293,6 +293,12 @@
           ],
           "description": "Where the Orbit chat opens. Reload the window after changing it."
         },
+        "orbit.context.includeOpenFile": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "markdownDescription": "Send the path of the file you last worked in, and any text you have selected there, with each message you type in the Orbit chat. A chip above the prompt turns it off for one message. Only your user settings count: a workspace cannot set this, because it decides how much of your editor goes to the model."
+        },
         "orbit.notifications": {
           "type": "boolean",
           "default": true,
