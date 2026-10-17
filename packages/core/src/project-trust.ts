@@ -6,6 +6,7 @@ import type { Entry, Scope } from "@orbit/schema/config"
 import { Trust } from "@orbit/schema/trust"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Agent } from "./agent.js"
 import { Config } from "./config.js"
 import { AgentFile } from "./config/plugin/agent-file.js"
 import { CommandFile } from "./config/plugin/command-file.js"
@@ -226,7 +227,16 @@ const layer = Layer.effect(
           Object.fromEntries(commands.map((command) => [command.name, command.info])),
           place,
         ).withheld,
-        ...agents.flatMap((agent) => ConfigTrust.sanitize(agent.info, place).withheld),
+        ...agents.flatMap((agent) => [
+          ...ConfigTrust.sanitize(agent.info, place).withheld,
+          // A file under agent/ or agents/ that names an agent which exists is held back whole (`ConfigAgentPlugin`).
+          // Only the agents that Orbit ships are known here; one that an earlier entry defines is held back too, unlisted.
+          ...(agent.path !== undefined &&
+          AgentFile.defines(directory, agent.path) &&
+          Object.keys(agent.info.agents ?? {}).some((id) => Agent.shipped.has(id))
+            ? ["permissions" as const]
+            : []),
+        ]),
       ]
       const kinds = Trust.Kinds.filter((kind) => held.includes(kind))
       byDirectory.set(directory, kinds)

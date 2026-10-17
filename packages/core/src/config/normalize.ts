@@ -139,7 +139,7 @@ export function normalize(input: unknown): Result {
   )
 
   const legacyAgents = mapValues(
-    decodeMap(input.agent, ConfigAgentV1.Info, ["agent"], diagnostics, decodeValue),
+    decodeMap(plainNames(input.agent, ["agent"], diagnostics), ConfigAgentV1.Info, ["agent"], diagnostics, decodeValue),
     (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value)),
   )
   const legacySmallModel = own(input, "small_model")
@@ -159,13 +159,38 @@ export function normalize(input: unknown): Result {
       model: migratedSmallModel,
       ...legacyAgents.title,
     }
-  const modeAgents = mapValues(decodeMap(input.mode, ConfigAgentV1.Info, ["mode"], diagnostics, decodeValue), (value) =>
-    canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
+  const modeAgents = mapValues(
+    decodeMap(plainNames(input.mode, ["mode"], diagnostics), ConfigAgentV1.Info, ["mode"], diagnostics, decodeValue),
+    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
   )
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
-  const nativeAgents = decodeMap(input.agents, ConfigAgent.Info, ["agents"], diagnostics, (schema, value, at, found) =>
-    decodeFields(schema, value, at, found, "permissions"),
-  )
+  // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style and migrated as a whole;
+  // a string or a list of tools is native.
+  const agentEntries = plainNames(input.agents, ["agents"], diagnostics)
+  const isLegacyEntry = (entry: unknown) => isRecord(entry) && isPlainRecord(entry.tools)
+  const nativeAgents = {
+    ...decodeMap(
+      isRecord(agentEntries)
+        ? Object.fromEntries(Object.entries(agentEntries).filter(([, entry]) => !isLegacyEntry(entry)))
+        : agentEntries,
+      ConfigAgent.Info,
+      ["agents"],
+      diagnostics,
+      (schema, value, at, found) => decodeFields(schema, value, at, found, "permissions"),
+    ),
+    ...mapValues(
+      decodeMap(
+        isRecord(agentEntries)
+          ? Object.fromEntries(Object.entries(agentEntries).filter(([, entry]) => isLegacyEntry(entry)))
+          : undefined,
+        ConfigAgentV1.Info,
+        ["agents"],
+        diagnostics,
+        decodeValue,
+      ),
+      (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value)),
+    ),
+  }
   diagnoseAgentUnsupported(input.agent, ["agent"], diagnostics)
   diagnoseAgentUnsupported(input.mode, ["mode"], diagnostics)
   mergeMap(
@@ -216,6 +241,7 @@ export function normalize(input: unknown): Result {
     shell: Info.fields.shell,
     model: Info.fields.model,
     fallback_model: Info.fields.fallback_model,
+    model_aliases: Info.fields.model_aliases,
     output_token_cap: Info.fields.output_token_cap,
     git_status: Info.fields.git_status,
     default_agent: Info.fields.default_agent,
@@ -237,7 +263,16 @@ export function normalize(input: unknown): Result {
   }
   // Objects whose fields are independent settings: a bad field costs only itself, so `sandbox.enabled` survives a bad
   // `sandbox.write` (class 7).
-  const independent = ["sandbox", "shell_tool", "tool_execution", "websearch", "webfetch", "worktree", "warming"]
+  const independent = [
+    "sandbox",
+    "shell_tool",
+    "tool_execution",
+    "websearch",
+    "webfetch",
+    "worktree",
+    "warming",
+    "model_aliases",
+  ]
   Object.entries(nativeAtomic).forEach(([key, schema]) => {
     if (!own(input, key)) return
     const value = independent.includes(key)
@@ -629,6 +664,19 @@ function diagnoseProviderUnsupported(value: unknown, path: string[], diagnostics
     if (own(model, "interleaved") && typeof model.interleaved === "boolean")
       unsupportedIfPresent(model, "interleaved", [...path, "models", name, "interleaved"], diagnostics)
   })
+}
+
+// An agent name becomes a folder, a file name and a title, so a key that is not a plain name defines no agent and costs
+// only itself.
+function plainNames(value: unknown, path: string[], diagnostics: Diagnostic[]) {
+  if (!isRecord(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).filter(([name]) => {
+      if (ConfigAgent.isName(name)) return true
+      invalid([...path, name], diagnostics)
+      return false
+    }),
+  )
 }
 
 function diagnoseAgentUnsupported(value: unknown, path: string[], diagnostics: Diagnostic[]) {

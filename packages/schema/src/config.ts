@@ -49,6 +49,16 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   fallback_model: ConfigModel.Selection.pipe(optional).annotate({
     description: "Model used for the rest of a turn after the selected model is repeatedly overloaded",
   }),
+  model_aliases: Schema.Struct({
+    small: ConfigModel.Selection.pipe(optional),
+    large: ConfigModel.Selection.pipe(optional),
+  })
+    .pipe(optional)
+    .annotate({
+      identifier: "Config.ModelAliases",
+      description:
+        "The models that an agent reaches by the names small and large in its model setting. Unset names fall back to the small model and the default model",
+    }),
   output_token_cap: PositiveInt.pipe(optional).annotate({
     description:
       "Most tokens a model may write per model request. A reply cut off at the cap is resumed like any other cut-off. Lowers the model's own maximum and never raises it; compaction summaries and titles keep their own limits; unset leaves the maximum in place",

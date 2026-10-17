@@ -214,6 +214,24 @@ describe("ProjectTrust.status", () => {
     }),
   )
 
+  it.live("lists a file that names a shipped agent as held back, and a file for a new agent as not", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.repo, ".orbit", "agents", "explore.md"), "---\ndescription: Mine\n---\nMine."),
+          write(path.join(folders.work, ".orbit", "agents", "fresh.md"), "---\ndescription: Mine\n---\nMine."),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        expect<unknown>(held(folders.root, yield* project.status())).toEqual([
+          [path.join("work", "repo", ".orbit"), ["permissions"]],
+        ])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
   it.live("lists a command that names an agent, and an agent that sets its mode, as held back", () =>
     Effect.gen(function* () {
       const folders = yield* bare

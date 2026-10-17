@@ -525,6 +525,46 @@ method on its editor.
 leading rule line with a heading. Add `instructions_exclude` to your own config to skip instruction files that you do
 not want the model to read.
 
+### An agent file defines its agent, and an agent definition has more keys
+
+A Markdown file under `agent/` or `agents/` in a config directory used to be merged field by field into an agent of
+the same name, so a file named `explore.md` kept the rules of the built-in explore agent. It now defines the agent: it
+replaces whatever an earlier entry made of that name, built-ins included, and nothing of the earlier definition
+survives, its permission rules included. To tune a built-in, put the changes under `agents.<id>` in `orbit.json`, which
+still merges field by field, in entry order. Files under `mode/` and `modes/` still tune, and so does a file named
+`plan`, so Plan mode keeps its read-only limits. Replacing a hidden system agent (`title`, `compaction`, `summary`,
+`side`) gives exactly what the file says: the agent is not hidden and has no small model unless the file says so. A file
+under `agent/` or `agents/` that names no `mode` now gets `all`, so the model may start it as a subagent and a person
+may run it as the main agent; a file under `mode/` or `modes/` stays `primary`.
+
+An agent file or `agents.<id>` entry can set `model` (also `inherit`, `small` or `large`, which `model_aliases` and the
+default model resolve later), `effort`, `tools` and `disallowed_tools` (a string or a list; a `*` in `tools` means every
+tool, and a `*` in `disallowed_tools` denies every tool), `permission_mode`, `mcp_servers`, `hooks`, `max_turns` (an
+alias of `steps`), `skills`, `initial_prompt`, `memory` (`user`, `project` or `local`), `background`, `isolation`
+(`worktree`) and `context` (`instructions` and `git_status`, which only remove context). `orbit.json` also accepts
+`model_aliases` with `small` and `large`. These keys are stored and shown by `agent.list` and `agent.get`; what they do
+when an agent runs lands with later changes. A field with a bad value is dropped with a log line or a diagnostic and
+the agent still loads. An agent whose `tools` is a map of tool names to booleans is still read as before, in the
+legacy v1 style. The camelCase spellings of these keys are not read in Orbit's own folders.
+
+An agent name must be plain: segments separated by `/`, each starting with a letter or digit and holding only letters,
+digits, `.`, `_` and `-`, not ending with `.`, and not a Windows device name such as `nul` or `con`. A file or an
+`agents`, `agent` or `mode` key with another name defines no agent and is reported.
+
+In a folder that is not trusted, a file under `agent/` or `agents/` no longer changes an agent that exists: it is
+held back whole, and the folder is listed as holding back permissions when the file names an agent that Orbit ships.
+Trusting the folder applies it. The file may still define a new agent, cut down to the keys that are safe: `context`,
+`background`, `disallowed_tools`, `system`, `description`, `color` and an `initial_prompt` that is plain text. The keys
+that choose a model, a budget, tools, a mode, a memory scope, servers, hooks, skills or isolation, and an
+`initial_prompt` that starts with a slash command, wait for trust, and so does `model_aliases` in `orbit.json`.
+
+**Affects:** people who keep an agent file named after a built-in or after an agent in another entry, relying on it
+to add to that agent; repositories that ship such a file; clients that read `agent.list` or `agent.get`, whose agents
+gain optional fields.
+
+**What to do:** Move the changes to a built-in into `agents.<id>` in `orbit.json`, or keep the file and copy the rules
+you still want into it. Rename an agent whose name is not plain.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
