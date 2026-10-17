@@ -151,9 +151,7 @@ export const node = configured(
 
 function render(files: ReadonlyArray<File>) {
   // Instruction files come from the folder, so a look-alike of an envelope tag in one is escaped where it is rendered.
-  return files
-    .map((file) => ReminderText.neutralize(`Instructions from: ${file.path}\n${file.content}`))
-    .join("\n\n")
+  return files.map((file) => ReminderText.neutralize(`Instructions from: ${file.path}\n${file.content}`)).join("\n\n")
 }
 
 function renderUpdate(previous: ReadonlyArray<File>, current: ReadonlyArray<File>) {

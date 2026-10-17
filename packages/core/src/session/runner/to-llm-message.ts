@@ -141,12 +141,14 @@ const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: Provider
 
 // Tool output is data, whatever produced it: a look-alike of an envelope tag in it is escaped as it is lowered, so the
 // stored row keeps the original bytes.
-const neutralizeContent = <T extends { readonly type: string }>(content: ReadonlyArray<T>) =>
-  content.map((item) =>
-    item.type === "text"
-      ? { ...item, text: ReminderText.neutralize((item as unknown as { text: string }).text) }
-      : item,
+const neutralizeContent = <T extends { readonly type: string }>(content: ReadonlyArray<T>) => {
+  // The text parts are escaped together, because an adapter joins them into one string.
+  const texts = content.flatMap((item, index) => (item.type === "text" ? [index] : []))
+  const escaped = ReminderText.neutralizeParts(
+    texts.map((index) => (content[index] as unknown as { text: string }).text),
   )
+  return content.map((item, index) => (item.type === "text" ? { ...item, text: escaped[texts.indexOf(index)] } : item))
+}
 
 // A wrapped provider error can carry the response body, which is data from the other end.
 const neutralizeError = <E extends { readonly message: string; readonly response?: { readonly body?: string } }>(
@@ -289,10 +291,13 @@ const modelSwitched = (message: SessionMessage.ModelSelected, model: Model.Ref):
 
 // Most synthetics are Orbit's own envelopes and stay as stored. These carry data from outside: a shell's output, a
 // subagent's reply, and an instruction file's text, so a look-alike of a reminder tag in them is escaped.
+// A reminder row is Orbit's own envelope, already rendered with its data escaped, even when its producer copied a
+// `source` or `instruction` key into the row's metadata.
 const syntheticText = (message: Extract<SessionMessage.Info, { type: "synthetic" }>) =>
-  message.metadata?.source === "shell" ||
-  message.metadata?.source === "subagent" ||
-  message.metadata?.instruction !== undefined
+  !ReminderText.isReminder(message) &&
+  (message.metadata?.source === "shell" ||
+    message.metadata?.source === "subagent" ||
+    message.metadata?.instruction !== undefined)
     ? ReminderText.neutralize(message.text)
     : message.text
 

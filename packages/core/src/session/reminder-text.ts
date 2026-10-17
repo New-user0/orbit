@@ -27,6 +27,27 @@ const TAG = /<(?=\s*\/?\s*system\s*-\s*(?:reminder|update))/gi
 export const neutralize = (text: string) => text.replace(TAG, "&lt;")
 
 /**
+ * Neutralizes text parts that an adapter may join into one string. A provider joins tool-result parts with nothing or
+ * with a line break, and the server chooses where the parts split, so a tag cut across parts is escaped when it would
+ * read as a tag under either join. Each returned part is the input part with its `<` escaped.
+ */
+export const neutralizeParts = (parts: ReadonlyArray<string>) => {
+  const marked = parts.map(() => new Set<number>())
+  for (const separator of ["", "\n"]) {
+    const starts = parts.map((_, index) =>
+      parts.slice(0, index).reduce((sum, part) => sum + part.length + separator.length, 0),
+    )
+    for (const match of parts.join(separator).matchAll(TAG)) {
+      const part = starts.findLastIndex((start) => start <= match.index)
+      marked[part].add(match.index - starts[part])
+    }
+  }
+  return parts.map((part, index) =>
+    part.replace(/</g, (_, offset: number) => (marked[index].has(offset) ? "&lt;" : "<")),
+  )
+}
+
+/**
  * The model-facing text of one reminder. The envelope holds harness text only. A payload follows it in the same
  * message as a labelled fenced block, because Orbit's base prompt promises that nothing inside an envelope came from a
  * file or a tool.

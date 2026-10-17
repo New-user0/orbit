@@ -636,6 +636,17 @@ describe("derived insertions", () => {
     expect(allTexts(s.requests[1]).join("\n")).toContain("DERIVED-0")
   })
 
+  scenario("drops a derived insertion with no text and no data", function* (s) {
+    s.reminders.derived = [
+      { name: "empty", run: () => [{ after: "tail", kind: "empty", text: "" }] },
+      { name: "none", run: () => [] },
+    ]
+    yield* s.llm.push(TestLLM.text("Answer", "answer"))
+    yield* s.runPrompt("Question")
+
+    expect(messageTexts(s.requests[0])).toEqual(["Question"])
+  })
+
   scenario("lets a failing derived producer cost only itself", function* (s) {
     s.reminders.derived = [
       {
@@ -1060,6 +1071,12 @@ ${p}`,
     const own = SessionReminders.render({ text: "T" })
 
     expect(lowered([note(1, undefined, own)])).toContain(own)
+  })
+
+  test("leaves a reminder row's own envelope alone even when its metadata names a source or an instruction", () => {
+    const own = SessionReminders.render({ text: "T" })
+    for (const extra of [{ source: "shell" }, { source: "subagent" }, { instruction: { paths: ["/w/AGENTS.md"] } }])
+      expect(lowered([note(1, { reminder: { kind: "k" }, ...extra }, own)])).toContain(own)
   })
 
   test("leaves the person's own typed prompt and Orbit's own envelope alone", () => {

@@ -2570,7 +2570,7 @@ anything it quotes from a file or a tool follows in a labelled fenced block outs
 
 The base prompt has always said that a `<system-reminder>` or `<system-update>` block comes only from Orbit. To make that
 true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lowers text that is data: tool results and
-tool errors (local and MCP), attached files and folder listings, the output of a shell command you ran or that ran in the
+tool errors (local and MCP, also when a server splits one result into several text parts and a tag is cut across them), attached files (including a file that an ACP editor embeds in a prompt) and folder listings, the Code Mode tool listing (which carries MCP tool descriptions), the output of a shell command you ran or that ran in the
 background, the reply of a background subagent, the summary and recent text of a compaction checkpoint, instruction files
 with their updates (including the ones loaded when a file is read), MCP server instructions, and the git snapshot (branch,
 user, status and commit subjects). The stored row keeps the original

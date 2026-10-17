@@ -445,7 +445,8 @@ const layer = Layer.effect(
         let loaded = before
         if (!collected) {
           collected = true
-          if (yield* reminders.collect({ loaded: before, step })) loaded = yield* loadSelected(selection, current.fallback)
+          if (yield* reminders.collect({ loaded: before, step }))
+            loaded = yield* loadSelected(selection, current.fallback)
         }
         const recovery = yield* outputRecovery(db, sessionID)
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
