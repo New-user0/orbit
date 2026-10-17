@@ -280,6 +280,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/plugin/output-style.test.ts` (six places a style can come from, three spellings of the key, before a grant, after
   one and after a revoke, the clone's claim of approval as the body), `test/project-trust.test.ts` (`trustedSource`),
   `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval).
+- A folder's `attribution` text (class 8, prompt form): it reaches `system[0]` in the git section as an indented literal
+  block, line for line, split on every line separator (`\n`, `\r\n`, `\r`, U+2028, U+2029), so no line can open a
+  top-level section that an output style would cut at. Proof: `test/plugin/prompt-config.test.ts` (the separator table)
+  and `test/session-system-prompt.test.ts`.
 - Instruction files (`AGENTS.md`, `ORBIT.md`): `ProjectTrust.reachable`, asked by `ConfigInstructionPlugin` and
   `SessionInstructions`. Both then process every file with `ConfigInstructionFile.parse` (class 11). Its front matter is
   taken off by `ConfigMarkdown.split`, which finds the delimiter lines and parses and evaluates nothing, so a `---js`

@@ -7,9 +7,10 @@ import GIT from "./runner/prompt/git.txt"
  * What a request's system prompt is made of, in order.
  *
  * - `system[0]`: the base template (`runner/prompt/system.txt`), then the model overlay (`OptimizePlugin`: a replacement
- *   that ends with `core-rules.txt`, or a block appended to the base), then the output style (`OutputStylePlugin`), which
- *   can drop `CODING_SECTIONS` and swaps `INTRO` for its own opening line. `ShellTool.AdvertisePlugin` runs last and
- *   renames `Bash` to `PowerShell` in everything before the style when that is the session's shell, so the template and
+ *   that ends with `core-rules.txt`, or a block appended to the base), then the git section (`PromptConfigPlugin`), then
+ *   the output style (`OutputStylePlugin`), which can drop `CODING_SECTIONS` and swaps `INTRO` for its own opening line.
+ *   `ShellTool.AdvertisePlugin` runs last and renames `Bash` to `PowerShell` in everything before the git section when
+ *   that is the session's shell, so the template and
  *   the guidance spell the shell tool only as the tool's name.
  * - `system[1]`: the model and agent identity of this request (`IdentityPlugin`).
  * - The last part: the instruction baseline.
@@ -65,14 +66,14 @@ export function renderGit(attribution: { commit: string; pr: string }) {
     .replace("${ORBIT_COMMIT_ATTRIBUTION}", () =>
       slot(
         attribution.commit,
-        "End every commit message, after a blank line, with exactly this text:",
+        "End every commit message, after a blank line, with exactly this text (the indentation is not part of it):",
         "Add no attribution trailer to commit messages, and do not add one of your own accord.",
       ),
     )
     .replace("${ORBIT_PR_ATTRIBUTION}", () =>
       slot(
         attribution.pr,
-        "End every pull request description, after a blank line, with exactly this text:",
+        "End every pull request description, after a blank line, with exactly this text (the indentation is not part of it):",
         "Add no attribution footer to pull request descriptions, and do not add one of your own accord.",
       ),
     )
@@ -81,7 +82,7 @@ export function renderGit(attribution: { commit: string; pr: string }) {
 function slot(value: string, ask: string, none: string) {
   if (value === "") return none
   return `${ask}\n\n${value
-    .split(/\r?\n/)
+    .split(/\r\n|[\n\r\u2028\u2029]/)
     .map((line) => `    ${line}`)
     .join("\n")}`
 }

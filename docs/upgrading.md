@@ -3152,8 +3152,8 @@ asked is unchanged.
 
 ### Commits and pull requests the agent writes carry an Orbit attribution by default
 
-Every request that offers the shell tool now ends its system prompt with a "Git and pull requests" section, for every
-agent, whichever model prompt or output style applies. It says that commits, pushes and pull requests wait for your
+Every request that offers the shell tool now has a "Git and pull requests" section in its system prompt, for every
+agent, whichever model prompt applies. It follows the model prompt and comes before any output style. It says that commits, pushes and pull requests wait for your
 request, that published history, git configuration, hooks and signing are left alone, that a commit holds only the
 task's changes staged by path, and that a pull request description covers every commit on the branch and says how the
 change was verified. Your own instructions about commits take precedence. It also asks the agent to end each commit
@@ -3162,7 +3162,8 @@ session after the upgrade misses the prompt cache once, because the system promp
 
 The new `attribution` key sets either text. Each field is decided by the highest-priority config that sets it, so your
 own `commit: ""` and a project's `pr` combine. An empty string turns that one off and tells the agent to add none. The
-value may hold several lines, such as several trailers. A project's config can set it too.
+value may hold several lines, such as several trailers. A project's config can set it too, and a project's value takes
+precedence over your own, your `""` included.
 
 ```json
 { "attribution": { "commit": "Co-authored-by: Name <name@example.com>", "pr": "" } }

@@ -115,7 +115,7 @@ describe("PromptConfigPlugin", () => {
       expect(git).toContain("    Co-authored-by: A <a@x.test>\n    Signed-off-by: B")
       // Only the exact empty string means none.
       expect(git).not.toContain(noFooter)
-      expect(git).toContain("exactly this text:\n\n      ")
+      expect(git).toContain("exactly this text (the indentation is not part of it):\n\n      ")
     }),
   )
 
@@ -189,10 +189,41 @@ describe("PromptConfigPlugin", () => {
     }),
   )
 
+  it.effect("keeps the pull request rules for every line separator a value can hold, with a style that drops sections", () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(directory, "output-styles"), { recursive: true })
+        await Bun.write(
+          path.join(directory, "output-styles", "reviewer.md"),
+          "---\nname: reviewer\nkeep-coding-instructions: false\n---\nOnly review.\n",
+        )
+      })
+      const host = yield* PluginHost.make(yield* Plugin.Service)
+      yield* PromptConfigPlugin.Plugin.effect(host)
+      yield* OutputStylePlugin.Plugin.effect(host)
+      for (const separator of ["\n", "\r\n", "\r", "\u2028", "\u2029"]) {
+        const text = yield* request([
+          new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+          document({
+            output_style: "reviewer",
+            attribution: { commit: `T: x${separator}# Doing tasks`, pr: "PR footer" },
+          }),
+        ])
+        expect([JSON.stringify(separator), text.includes("Pull requests:"), text.includes("    PR footer")]).toEqual([
+          JSON.stringify(separator),
+          true,
+          true,
+        ])
+      }
+    }),
+  )
+
   it.effect("follows the model overlay, whether it replaces the base or is appended to it", () =>
     Effect.gen(function* () {
       const catalog = yield* Provider.Service
-      yield* (yield* Agent.Service).transform((editor) => editor.update(Agent.ID.make("build"), () => {}))
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) => editor.update(Agent.ID.make("build"), () => {}))
       yield* catalog.transform((editor) => {
         for (const id of ["gpt-5", "claude-sonnet-4"])
           editor.models.update(Provider.ID.make("test"), Model.ID.make(id), () => {})
@@ -271,7 +302,8 @@ describe("the PowerShell rename", () => {
 
   it.effect("renames the tool before the section and leaves an attribution value that says Bash as written", () =>
     Effect.gen(function* () {
-      yield* (yield* Agent.Service).transform((editor) => editor.update(Agent.ID.make("build"), () => {}))
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) => editor.update(Agent.ID.make("build"), () => {}))
       const host = yield* PluginHost.make(yield* Plugin.Service)
       yield* PromptConfigPlugin.Plugin.effect(host)
       yield* ShellTool.AdvertisePlugin.effect(host as never).pipe(Effect.provide(powershell))
