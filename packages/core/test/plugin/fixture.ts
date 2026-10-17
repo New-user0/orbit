@@ -22,6 +22,9 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Provider } from "@orbit/core/provider"
 import { Session } from "@orbit/core/session"
+import { Database } from "@orbit/core/database/database"
+import { SessionProjector } from "@orbit/core/session/projector"
+import { SessionStore } from "@orbit/core/session/store"
 import { PersistentPty } from "@orbit/core/persistent-pty"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -95,6 +98,9 @@ export const PluginTestLayer = AppNodeBuilder.build(
     ManagedPolicy.node,
     Mcp.node,
     Session.node,
+    Database.node,
+    SessionProjector.node,
+    SessionStore.node,
     PersistentPty.node,
     LocationServiceMap.node,
     FileAccess.node,

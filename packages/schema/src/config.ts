@@ -81,7 +81,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   system_prompt_file: Schema.String.pipe(optional).annotate({
     description:
-      "Like system_prompt, with the text read from a UTF-8 file at each request. The path is absolute, starts with ~/, or is relative to the folder of the config that names it (to the project folder when the config has no file). A file that cannot be read, or that is on a network share, is skipped with a warning and the default prompt is kept. Ignored in a config that sets system_prompt, and withheld from a folder that is not trusted",
+      "Like system_prompt, with the text read from a UTF-8 file at each request. The path is absolute, starts with ~/, or is relative to the folder of the config that names it (to the folder the session runs in when the config has no file). A file that cannot be read, or that is on a network share, is skipped with a warning and the default prompt is kept. Ignored in a config that sets system_prompt, and withheld from a folder that is not trusted",
   }),
   append_system_prompt: Schema.String.pipe(optional).annotate({
     description:

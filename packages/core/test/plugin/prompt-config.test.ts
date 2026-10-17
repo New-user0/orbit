@@ -15,6 +15,10 @@ import { PromptConfigPlugin } from "@orbit/core/plugin/prompt-config"
 import { Provider } from "@orbit/core/provider"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
+import { Bus } from "@orbit/core/bus"
+import { Database } from "@orbit/core/database/database"
+import { SessionInbox } from "@orbit/core/session/inbox"
+import { IdentityPlugin } from "@orbit/core/plugin/identity"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
@@ -343,6 +347,7 @@ describe("system prompt keys", () => {
     })
     const host = yield* PluginHost.make(yield* Plugin.Service)
     yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(host), { discard: true })
+    yield* IdentityPlugin.Plugin.effect(host)
     yield* PromptConfigPlugin.Plugin.effect(host).pipe(Effect.provideService(FSUtil.Service, wrap(yield* FSUtil.Service)))
     const root = yield* host.session.create({ title: "root" })
     const child = yield* host.session.create({ title: "child", parentID: root.id })
@@ -430,7 +435,9 @@ describe("system prompt keys", () => {
       expect(PromptConfigPlugin.mainThread(forkOfRoot, root)).toBe(true)
       expect(PromptConfigPlugin.mainThread(child)).toBe(false)
       expect(PromptConfigPlugin.mainThread(forkOfChild, child)).toBe(false)
-      expect(PromptConfigPlugin.mainThread(forkOfRoot)).toBe(false)
+      // A fork whose source was deleted is a fresh main conversation; a fork of a subagent stays one.
+      expect(PromptConfigPlugin.mainThread(forkOfRoot)).toBe(true)
+      expect(PromptConfigPlugin.mainThread({ ...forkOfRoot, parentID: child.id })).toBe(false)
       // A subagent child keeps the default prompt and gets no appended text.
       expect(yield* templateRequest(entries, { sessionID: child.id })).toBe(
         `${base}\n\n${SessionSystemPrompt.renderGit(defaults)}`,
@@ -489,10 +496,14 @@ describe("system prompt keys", () => {
       const absolute = document({ system_prompt_file: path.join(dir, "abs.md") })
       expect((yield* templateRequest([absolute], { sessionID: root.id })).startsWith("ABSOLUTE")).toBe(true)
       // The home folder of the test run is isolated, so a file can be put under it.
-      if (os.homedir().includes("orbit-core-test")) {
-        yield* Effect.promise(() => Bun.write(path.join(os.homedir(), "home-prompt.md"), "IN-HOME"))
-        const home = document({ system_prompt_file: "~/home-prompt.md" })
+      const testRoot = process.env.ORBIT_TEST_ROOT
+      if (testRoot && os.homedir().startsWith(testRoot)) {
+        // On Linux the home is shared by the workers, so the file name is per process.
+        const name = `home-prompt-${process.pid}.md`
+        yield* Effect.promise(() => Bun.write(path.join(os.homedir(), name), "IN-HOME"))
+        const home = document({ system_prompt_file: `~/${name}` })
         expect((yield* templateRequest([home], { sessionID: root.id })).startsWith("IN-HOME")).toBe(true)
+        yield* Effect.promise(() => fs.rm(path.join(os.homedir(), name), { force: true }))
       }
     }),
   )
@@ -530,6 +541,10 @@ describe("system prompt keys", () => {
     ["a backslash share", "\\\\host\\share\\p.md"],
     ["a slash share", "//host/share/p.md"],
     ["a device path", "\\\\?\\UNC\\host\\share\\p.md"],
+    ["a rooted NT share", "\\??\\UNC\\host\\share\\p.md"],
+    ["a lower-case NT share", "\\??\\unc\\localhost\\C$\\Windows\\win.ini"],
+    ["an NT mup device", "\\??\\GLOBALROOT\\Device\\Mup\\host\\share\\p.md"],
+    ["a slash NT share", "/??/UNC/host/share/p.md"],
   ] as const
 
   it.effect("refuses a share path before any file system call", () =>
@@ -566,6 +581,62 @@ describe("system prompt keys", () => {
         ),
       ).toBe(true)
       expect(calls.length).toBeGreaterThan(0)
+    }),
+  )
+
+  it.effect("renders a real fork like its parent, also after the source is deleted", () =>
+    Effect.gen(function* () {
+      const { root } = yield* setup()
+      const sessions = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const entries = [document({ system_prompt: "BASE-MARK", append_system_prompt: "APPEND-MARK" })]
+      yield* sessions.prompt({ sessionID: root.id, text: "Fork context", resume: false })
+      yield* SessionInbox.promote(db, bus, root.id, "steer")
+      const forked = yield* sessions.fork({ sessionID: root.id })
+      const expected = yield* templateRequest(entries, { sessionID: root.id })
+      expect(expected).toContain("APPEND-MARK")
+      expect(yield* templateRequest(entries, { sessionID: forked.id })).toBe(expected)
+      yield* sessions.remove(root.id)
+      expect(yield* templateRequest(entries, { sessionID: forked.id })).toBe(expected)
+    }),
+  )
+
+  it.effect("keeps the identity part second and the baseline last next to a replacement", () =>
+    Effect.gen(function* () {
+      const { root } = yield* setup()
+      const hooks = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([document({ system_prompt: "BASE-MARK" })])
+      const event = { ...context({ sessionID: root.id, tools }), system: [SystemPart.make(base), SystemPart.make("BASELINE")] }
+      yield* hooks.trigger("session", "context", event as never)
+      expect(event.system[0]?.text.startsWith("BASE-MARK")).toBe(true)
+      expect(event.system[1]?.text.startsWith("# Your Model")).toBe(true)
+      expect(event.system.at(-1)?.text).toBe("BASELINE")
+    }),
+  )
+
+  // A folder on the path is a link to a share: the target must not be opened.
+  it.effect("refuses a path that leads to a share through a link, before reading it", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+      const calls: string[] = []
+      const linked = (real: FSUtil.Interface) =>
+        ({
+          ...real,
+          readLink: (file: string) =>
+            path.basename(file) === "linked" ? Effect.succeed("\\\\host\\share") : real.readLink(file),
+          readFileStringSafe: (file: string) => {
+            calls.push(file)
+            return real.readFileStringSafe(file)
+          },
+        }) as FSUtil.Interface
+      const { root } = yield* setup(linked)
+      const dir = (yield* tmpdirScoped()).path
+      const defaultText = `${base}\n\n${SessionSystemPrompt.renderGit(defaults)}`
+      const entries = [document({ system_prompt_file: path.join(dir, "linked", "p.md") })]
+      expect(yield* templateRequest(entries, { sessionID: root.id })).toBe(defaultText)
+      expect(calls).toEqual([])
     }),
   )
 

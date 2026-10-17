@@ -63,7 +63,8 @@ export const Plugin = define({
     const readFile = Effect.fn("PromptConfigPlugin.readFile")(function* (document: Document, value: string) {
       const expanded = value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value
       const base = document.path ? path.dirname(document.path) : ctx.location.directory
-      const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(base, expanded)
+      // Resolving also turns a rooted NT spelling (`\??\UNC\...`) into `<drive>:\??\...`, which cannot be opened as a share.
+      const resolved = path.resolve(base, expanded)
       // Before any file system call: a share is a request to a host that a config chose.
       const relative = !path.isAbsolute(expanded)
       if (network(expanded) || network(resolved) || (relative && network(base))) {
@@ -162,10 +163,11 @@ export const Plugin = define({
 /**
  * Whether the config's system prompt keys apply to a session: it has no parent, or it is a fork whose source has no
  * parent. A fork child keeps its parent's agent and so renders its parent's `system[0]`, which keeps the provider cache.
- * A subagent, and a fork of a subagent, keep their own prompt. A fork whose source is not known is not a main thread.
+ * A subagent, and a fork of a subagent, keep their own prompt. A fork whose source was deleted is a fresh main
+ * conversation (it has no parent), so it keeps the keys and `system[0]` does not change mid-conversation.
  */
 export function mainThread(session: Pick<Session.Info, "parentID" | "fork">, source?: Pick<Session.Info, "parentID">) {
-  if (session.fork) return source !== undefined && !source.parentID
+  if (session.fork && source) return !source.parentID
   return !session.parentID
 }
 
@@ -198,7 +200,7 @@ export function promptKeys(entries: readonly Entry[]) {
   }
 }
 
-// Two separators start a share (`\\host\share`, `//host/share`) or a device path (`\\?\UNC\`, `\\.\`).
+// A rooted `\??\` is the NT spelling of a device path. Two separators start a share (`\\host\share`, `//host/share`) or a device path (`\\?\UNC\`, `\\.\`).
 function network(file: string) {
-  return /^[\\/]{2}/.test(file)
+  return /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(file)
 }

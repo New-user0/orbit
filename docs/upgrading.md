@@ -3235,8 +3235,9 @@ Three keys change the system prompt of the main thread of a session (a session w
   read from a project or local config until the folder is trusted.
 - `append_system_prompt` adds text after the base and the git section, also on top of an agent's own prompt.
 
-An agent with a prompt of its own and a subagent keep their own prompt and get no replacement or appended text. The
-highest-priority config that sets a replacement decides, and an empty string counts as unset.
+An agent with a prompt of its own keeps it and gets no replacement; the appended text still applies on the main thread.
+Subagent child sessions get neither. A config with no file resolves a relative `system_prompt_file` against the folder
+the session runs in. The highest-priority config that sets a replacement decides, and an empty string counts as unset.
 
 **Affects:** people who set these keys, and SDK callers.
 
