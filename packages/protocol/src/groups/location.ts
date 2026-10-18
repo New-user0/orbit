@@ -1,9 +1,10 @@
+import { Instruction } from "@orbit/schema/instruction"
 import { Location } from "@orbit/schema/location"
 import { AbsolutePath } from "@orbit/schema/schema"
 import { Trust } from "@orbit/schema/trust"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { ServiceUnavailableError } from "../errors.js"
+import { InvalidRequestError, ServiceUnavailableError } from "../errors.js"
 
 export const LocationQuery = Schema.Struct({
   location: Schema.optional(
@@ -104,6 +105,47 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             summary: "Update workspace trust",
             description:
               "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which turns what was held back on or off, and publishes trust.updated.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("instruction.note.targets", "/api/location/instructions/note", {
+        query: LocationQuery,
+        success: Schema.Struct({ data: Schema.Array(Instruction.NoteTarget) }),
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "instruction.note.targets",
+            summary: "List instruction note targets",
+            description:
+              "For the user, project and local scopes, in that order, the instruction file a note would be added to, whether it exists, whether the scope's instruction files are loaded here, and whether the file is loaded now. It reads the instruction files from disk again first, so the answer does not depend on a file watcher. Nothing is written.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("instruction.note.add", "/api/location/instructions/note", {
+        query: LocationQuery,
+        payload: Schema.Struct({
+          scope: Instruction.NoteScope,
+          text: Schema.Trim.pipe(
+            Schema.check(Schema.isMinLength(1), Schema.isMaxLength(Instruction.NOTE_LIMIT)),
+          ).annotate({
+            description: `The note, without surrounding white space: 1 to ${Instruction.NOTE_LIMIT} characters. Its first line becomes a bullet and later lines are indented under it.`,
+          }),
+        }),
+        success: Schema.Struct({ data: Instruction.NoteAdded }),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "instruction.note.add",
+            summary: "Add an instruction note",
+            description:
+              "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
           }),
         ),
     )

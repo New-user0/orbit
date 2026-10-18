@@ -48,6 +48,7 @@ import { SkillInstructions } from "./skill/instructions.js"
 import { AgentInstructions } from "./agent/instructions.js"
 import { Snapshot } from "./snapshot.js"
 import { InstructionDiscovery } from "./instruction-discovery.js"
+import { InstructionNotes } from "./instruction-notes.js"
 import { InstructionBuiltIns } from "./instructions/builtins.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
 import { SessionInstructions } from "./session/instructions.js"
@@ -93,6 +94,7 @@ const nodes = [
   Skill.node,
   InstructionBuiltIns.node,
   InstructionDiscovery.node,
+  InstructionNotes.node,
   FileAccess.node,
   FileMutation.node,
   Formatter.node,

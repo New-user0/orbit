@@ -59,3 +59,36 @@ export class Status extends Schema.Class<Status>("Instruction.Status")({
   /** False when a source could not be read, so the list is incomplete. */
   available: Schema.Boolean,
 }) {}
+
+/** Whose instruction file a note is added to: the person's own, the project's shared one, or the person's private one for the project. */
+export const NoteScope = Schema.Literals(["user", "project", "local"])
+export type NoteScope = typeof NoteScope.Type
+
+/** The most characters one note may hold, after it is trimmed. */
+export const NOTE_LIMIT = 2_000
+
+/** Why a note was refused. Nothing is created or changed for any of them. */
+export const NoteRefusal = Schema.Literals(["disabled", "unavailable", "excluded", "outside"])
+export type NoteRefusal = typeof NoteRefusal.Type
+
+/** The file a note for one scope would be added to. */
+export class NoteTarget extends Schema.Class<NoteTarget>("Instruction.NoteTarget")({
+  scope: NoteScope,
+  /** The file the note would land in. When it does not exist yet, this is the file that would be created. */
+  path: Schema.String,
+  exists: Schema.Boolean,
+  /** False when this scope's instruction files are not loaded in this location, so a note would be refused. */
+  enabled: Schema.Boolean,
+  /** Whether the file is among the loaded instruction files right now. */
+  loaded: Schema.Boolean,
+}) {}
+
+/** The outcome of adding a note. */
+export class NoteAdded extends Schema.Class<NoteAdded>("Instruction.NoteAdded")({
+  scope: NoteScope,
+  path: Schema.String,
+  /** True when the note created the file. */
+  created: Schema.Boolean,
+  /** Whether the file is among the loaded instruction files after the note. False when a setting excludes it. */
+  loaded: Schema.Boolean,
+}) {}

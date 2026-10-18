@@ -10,6 +10,10 @@ import type {
   LocationTrustGetOutput,
   LocationTrustUpdateInput,
   LocationTrustUpdateOutput,
+  LocationInstructionNoteTargetsInput,
+  LocationInstructionNoteTargetsOutput,
+  LocationInstructionNoteAddInput,
+  LocationInstructionNoteAddOutput,
   LocationTrustListOutput,
   LocationTrustRevokeInput,
   LocationTrustRevokeOutput,
@@ -521,6 +525,35 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+      },
+      instruction: {
+        note: {
+          targets: (input?: LocationInstructionNoteTargetsInput, requestOptions?: RequestOptions) =>
+            request<{ readonly data: LocationInstructionNoteTargetsOutput }>(
+              {
+                method: "GET",
+                path: `/api/location/instructions/note`,
+                query: { location: input?.["location"] },
+                successStatus: 200,
+                declaredStatuses: [400, 401],
+                empty: false,
+              },
+              requestOptions,
+            ).then((value) => value.data),
+          add: (input: LocationInstructionNoteAddInput, requestOptions?: RequestOptions) =>
+            request<{ readonly data: LocationInstructionNoteAddOutput }>(
+              {
+                method: "POST",
+                path: `/api/location/instructions/note`,
+                query: { location: input["location"] },
+                body: { scope: input["scope"], text: input["text"] },
+                successStatus: 200,
+                declaredStatuses: [400, 401, 503],
+                empty: false,
+              },
+              requestOptions,
+            ).then((value) => value.data),
+        },
       },
     },
     agent: {

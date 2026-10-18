@@ -1,8 +1,9 @@
+import { InstructionNotes } from "@orbit/core/instruction-notes"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
-import { ServiceUnavailableError } from "@orbit/protocol/errors"
+import { InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
 import { AbsolutePath } from "@orbit/schema/schema"
 import { Cause, Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -32,6 +33,29 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
               : Effect.fail(new ServiceUnavailableError({ message: Cause.pretty(cause), service: "location" })),
           ),
         ),
+      )
+      .handle(
+        "instruction.note.targets",
+        Effect.fn(function* () {
+          const notes = yield* InstructionNotes.Service
+          return { data: yield* notes.targets() }
+        }),
+      )
+      .handle(
+        "instruction.note.add",
+        Effect.fn(function* (ctx) {
+          const notes = yield* InstructionNotes.Service
+          return {
+            data: yield* notes.add(ctx.payload).pipe(
+              Effect.catchTags({
+                "InstructionNotes.TargetError": (error) =>
+                  Effect.fail(new InvalidRequestError({ message: error.message, kind: error.reason, field: "scope" })),
+                "InstructionNotes.WriteError": (error) =>
+                  Effect.fail(new ServiceUnavailableError({ message: error.message, service: "instructions" })),
+              }),
+            ),
+          }
+        }),
       )
       .handle("location.trust.get", () => ProjectTrust.Service.use((trust) => trust.status()))
       .handle(

@@ -16,6 +16,10 @@ import type {
   LocationTrustGetOutput,
   LocationTrustUpdateInput,
   LocationTrustUpdateOutput,
+  LocationInstructionNoteTargetsInput,
+  LocationInstructionNoteTargetsOutput,
+  LocationInstructionNoteAddInput,
+  LocationInstructionNoteAddOutput,
   LocationTrustListOutput,
   LocationTrustRevokeInput,
   LocationTrustRevokeOutput,
@@ -337,6 +341,27 @@ const EndpointLocationTrustUpdate = (raw: RawClient["server.location"]) => (inpu
     }).pipe(Effect.mapError(mapClientError)),
   )
 
+const EndpointLocationInstructionNoteTargets =
+  (raw: RawClient["server.location"]) => (input?: LocationInstructionNoteTargetsInput) =>
+    preserveEffect<LocationInstructionNoteTargetsOutput>()(
+      raw["instruction.note.targets"]({ query: { location: input?.["location"] } }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointLocationInstructionNoteAdd =
+  (raw: RawClient["server.location"]) => (input: LocationInstructionNoteAddInput) =>
+    preserveEffect<LocationInstructionNoteAddOutput>()(
+      raw["instruction.note.add"]({
+        query: { location: input["location"] },
+        payload: { scope: input["scope"], text: input["text"] },
+      }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
 const EndpointLocationTrustList = (raw: RawClient["server.location"]) => () =>
   preserveEffect<LocationTrustListOutput>()(raw["trust.list"]({}).pipe(Effect.mapError(mapClientError)))
 
@@ -353,6 +378,9 @@ const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
     update: EndpointLocationTrustUpdate(raw),
     list: EndpointLocationTrustList(raw),
     revoke: EndpointLocationTrustRevoke(raw),
+  },
+  instruction: {
+    note: { targets: EndpointLocationInstructionNoteTargets(raw), add: EndpointLocationInstructionNoteAdd(raw) },
   },
 })
 
