@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { DevicePath } from "@orbit/core/device-path"
 
+const OLD = "10.0.19045"
+const NEW = "10.0.26200"
+
 // Every platform's table runs on any host, because `blocked` chooses its rules from the platform argument.
 const cases: ReadonlyArray<readonly [NodeJS.Platform, string, boolean]> = [
   ["linux", "/dev/zero", true],
@@ -79,8 +82,37 @@ const cases: ReadonlyArray<readonly [NodeJS.Platform, string, boolean]> = [
 describe("DevicePath.blocked", () => {
   for (const [platform, file, expected] of cases)
     test(`${platform} ${file} is ${expected ? "blocked" : "allowed"}`, () => {
-      expect(DevicePath.blocked(file, platform)).toBe(expected)
+      expect(DevicePath.blocked(file, platform, OLD)).toBe(expected)
     })
+
+  // FU-M3-077: from Windows 11 (build 22000) a reserved name with an extension is an ordinary file, and only the bare
+  // name, once trailing dots and spaces are dropped, is a device. The namespace forms are devices on every build.
+  const builds: ReadonlyArray<readonly [string, string, boolean, boolean]> = [
+    // path, name, blocked on 10.0.19045, blocked on 10.0.26200
+    ["C:\\work\\con.txt", "an extension", true, false],
+    ["C:\\work\\nul .txt", "a space before the extension", true, false],
+    ["C:\\work\\AUX.tar.gz", "two extensions", true, false],
+    ["C:\\work\\com1.log", "a port with an extension", true, false],
+    ["C:\\work\\CON", "the bare name", true, true],
+    ["C:\\work\\con.", "a trailing dot", true, true],
+    ["C:\\work\\con ", "a trailing space", true, true],
+    ["C:\\work\\NUL..", "trailing dots", true, true],
+    ["C:\\work\\COM\u00b9", "a superscript port", true, true],
+    ["C:\\work\\CONIN$", "the console input", true, true],
+    ["\\\\.\\COM1", "the device namespace", true, true],
+    ["\\\\?\\GLOBALROOT\\Device\\x", "the root namespace", true, true],
+    ["C:\\work\\console.log", "a name that only starts like one", false, false],
+  ]
+  for (const [file, name, old, current] of builds) {
+    test(`win32 ${name} (${file}): blocked ${old} on 10.0.19045, ${current} on 10.0.26200`, () => {
+      expect(DevicePath.blocked(file, "win32", OLD)).toBe(old)
+      expect(DevicePath.blocked(file, "win32", NEW)).toBe(current)
+    })
+  }
+
+  test("a release that cannot be read keeps the older rule", () => {
+    expect(DevicePath.blocked("C:\\work\\con.txt", "win32", "unknown")).toBe(true)
+  })
 
   test("defaults to the host platform", () => {
     expect(DevicePath.blocked(process.platform === "win32" ? "C:\\work\\NUL" : "/dev/zero")).toBe(true)
