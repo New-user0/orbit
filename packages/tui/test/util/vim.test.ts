@@ -29,6 +29,7 @@ function editor(fixture: string, input: { mode?: Vim.Mode; register?: string; cl
   }
   const history: Array<{ text: string; cursor: number }> = []
   const written: string[] = []
+  let selection: Vim.Result["selection"]
   const snapshot = (): Vim.Snapshot => ({
     text: state.text,
     cursor: state.cursor,
@@ -55,6 +56,7 @@ function editor(fixture: string, input: { mode?: Vim.Mode; register?: string; cl
     state.text = Vim.apply(state.text, result.edits)
     state.cursor = result.cursor
     state.vim = result.state
+    selection = result.selection
     if (result.clipboard && "write" in result.clipboard) written.push(result.clipboard.write)
     if (result.clipboard && "read" in result.clipboard) {
       const text = input.clip === "fail" ? undefined : Vim.clipboardText(input.clip)
@@ -67,12 +69,38 @@ function editor(fixture: string, input: { mode?: Vim.Mode; register?: string; cl
     written,
     passed: [] as string[],
     press(keys: string) {
-      for (const token of keys.match(/<[A-Za-z-]+>|[\s\S]/gu) ?? []) {
-        const result = Vim.step(state.vim, key(token), snapshot())
-        if (result.pass) this.passed.push(token)
-        run(result)
-      }
+      for (const token of keys.match(/<[A-Za-z-]+>|[\s\S]/gu) ?? []) this.send(key(token), token)
       return this
+    },
+    /** One key. In insert mode the key is typed into the text the way the prompt's textarea would, and recorded. */
+    send(input: Vim.Key, token = input.sequence ?? input.name) {
+      if (state.vim.mode === "insert") {
+        if (input.name === "escape") {
+          state.cursor = Vim.leaveInsert(snapshot())
+          state.vim = Vim.leave(state.vim)
+          return this
+        }
+        state.vim = Vim.insertKey(state.vim, input)
+        const insert = input.name === "return" ? "\n" : input.ctrl || input.meta ? "" : (input.sequence ?? "")
+        if (input.name === "backspace") {
+          if (state.cursor > 0) {
+            state.text = state.text.slice(0, state.cursor - 1) + state.text.slice(state.cursor)
+            state.cursor--
+          }
+        } else if (insert === "\n" || (insert.length > 0 && !/\p{Cc}/u.test(insert))) {
+          state.text = state.text.slice(0, state.cursor) + insert + state.text.slice(state.cursor)
+          state.cursor += insert.length
+        }
+        return this
+      }
+      const result = Vim.step(state.vim, input, snapshot())
+      if (result.pass) this.passed.push(token)
+      run(result)
+      return this
+    },
+    /** The text the engine says is selected. */
+    selected() {
+      return selection ? state.text.slice(selection.start, selection.end) : undefined
     },
     shown() {
       return state.text.slice(0, state.cursor) + "|" + state.text.slice(state.cursor)
@@ -92,6 +120,9 @@ function key(token: string): Vim.Key {
     "<CR>": { name: "return", sequence: "\r" },
     "<Tab>": { name: "tab", sequence: "\t" },
     "<C-r>": { name: "r", sequence: "\x12", ctrl: true },
+    "<C-x>": { name: "x", sequence: "\x18", ctrl: true },
+    "<S-Right>": { name: "right", sequence: "\x1b[1;2C", shift: true },
+    "<S-Left>": { name: "left", sequence: "\x1b[1;2D", shift: true },
   }
   const found = named[token]
   if (found) return found
@@ -275,8 +306,7 @@ table("line commands and single commands", [
   ["  a|b", "a", "  ab|", { mode: "insert" }],
   ["ab|\ncd", "a", "ab|\ncd", { mode: "insert" }],
   ["|abc", "?", "|abc"],
-  ["|abc", "f", "|abc"],
-  ["|abc", "t", "|abc"],
+  ["|abc", "v?", "|abc", { mode: "visual" }],
   ["|", ">>", "  |"],
   ["|a\n\nb", "3>>", "  |a\n  \n  b"],
   ["a\n|\nb", ">>", "a\n  |\nb"],
@@ -511,6 +541,309 @@ describe("long first line that wraps (C4)", () => {
   })
 })
 
+const char = (value: string): Vim.Key => ({ name: value.toLowerCase(), sequence: value })
+
+describe("find motions", () => {
+  table("f, F, t, T and the repeats", [
+    ["|a-b-c", "f-", "a|-b-c"],
+    ["|a-b-c", "2f-", "a-b|-c"],
+    ["|a-b-c", "f-;", "a-b|-c"],
+    ["|a-b-c", "f-;,", "a|-b-c"],
+    ["|a-b-c-d", "f-2;", "a-b-c|-d"],
+    ["|abc-d", "t-", "ab|c-d"],
+    ["|a-b-c", "t-", "|a-b-c"],
+    // After a t whose target is the next grapheme, ; stays put instead of skipping ahead.
+    ["|a-b-c", "t-;", "|a-b-c"],
+    ["a-bc|d", "F-", "a|-bcd"],
+    ["a-bc|d", "T-", "a-|bcd"],
+    ["|abc", "Fa", "|abc"],
+    ["|ab\ncd", "fc", "ab\n|cd"],
+    ["|a-b-c-", "f-fz;", "a-b|-c-"],
+    ["|a3b", "f3", "a|3b"],
+    ["|adb", "fd", "a|db"],
+    ["|a b", "f ", "a| b"],
+    ["|a[[@x(y)]]b(", "f(", "a@x(y)b|("],
+    ["|a-b", ";", "|a-b"],
+    ["a-b|-c", ",", "a-b|-c"],
+    ["|a-b-c", "f-,", "a|-b-c"],
+    ["|a-b", "f<Esc>", "|a-b"],
+    ["|a-b", "f<BS>", "|a-b"],
+    ["|a-b", "f<Left>", "|a-b"],
+    ["|a-b", "f<Tab>", "|a-b"],
+  ])
+
+  test("a failed find keeps the last find, and a repeat does not replace it", () => {
+    const e = editor("|a-b-c-").press("f-fz")
+    expect(e.state.vim.lastFind).toEqual({ kind: "f", char: "-" })
+    e.press(",")
+    expect(e.state.vim.lastFind).toEqual({ kind: "f", char: "-" })
+  })
+
+  test("Enter while a find waits passes and leaves nothing pending", () => {
+    const e = editor("|a-b").press("f<CR>")
+    expect(e.passed).toEqual(["<CR>"])
+    expect(e.state.vim.pending).toEqual({ kind: "idle" })
+  })
+
+  test("a multi-code-point grapheme matches whole, a bare part of it does not", () => {
+    const e = editor("|a\u{1F44D}\u{1F3FD}b\u{1F44D}\u{1F3FD}")
+    e.send(char("f")).send({ name: "", sequence: "\u{1F44D}" })
+    expect(e.state.cursor).toBe(0)
+    e.send(char("f")).send({ name: "", sequence: "\u{1F44D}\u{1F3FD}" })
+    expect(e.state.cursor).toBe(1)
+  })
+
+  test("a count above the text finishes at once and moves nothing", () => {
+    const e = editor("|a-b").press("10000f-")
+    expect(e.shown()).toBe("|a-b")
+  })
+
+  table("an operator with a find", [
+    ["|abc-def", "df-", "|def", { reg: "abc-" }],
+    ["|abc-def", "dt-", "|-def", { reg: "abc" }],
+    ["|abc-def", "cf-", "|def", { reg: "abc-", mode: "insert" }],
+    ["|abc-def", "yf-", "|abc-def", { reg: "abc-" }],
+    ["abc-de|f", "dF-", "ab|c", { reg: "-def" }],
+    ["abc-de|f", "dT-", "abc|-", { reg: "def" }],
+    ["|a-b", "dt-", "|-b", { reg: "a" }],
+    ["|a-b-c-d-e", "d2f-", "|c-d-e", { reg: "a-b-" }],
+    ["|a-b-c-d-e", "2df-", "|c-d-e", { reg: "a-b-" }],
+    ["|abcd", "xdfz", "|bcd", { reg: "a" }],
+    ["|abc", "dfz", "|abc", { reg: "" }],
+    ["|a-b", "f-d;", "a|-b"],
+    ["|a-b", "f-c,", "a|-b"],
+    ["|abc[[@x]]-d", "df-", "|d", { reg: "abc@x-" }],
+    ["|abc-[[@x]]d", "dt-", "|-@xd", { reg: "abc" }],
+  ])
+
+  test("an operator find remembers the find", () => {
+    const e = editor("|a-b-c").press("df-fz")
+    expect(e.state.vim.lastFind).toEqual({ kind: "f", char: "-" })
+  })
+})
+
+describe("percent", () => {
+  table("bracket matching", [
+    ["|(a(b)c)", "%", "(a(b)c|)"],
+    ["|(a(b)c)", "%%", "|(a(b)c)"],
+    ["x|y(a)", "%", "xy(a|)"],
+    ["(a\nb|)", "%", "|(a\nb)"],
+    ["|ab\n(c)", "%", "|ab\n(c)"],
+    ["|abc", "%", "|abc"],
+    ["|(abc", "%", "|(abc"],
+    ["|([)]", "%", "([|)]"],
+    ["|<a>", "%", "|<a>"],
+    ['|("(")', "%", '|("(")'],
+    ["|(a)", "5%", "|(a)"],
+    ["|[[@f(x)]](y)", "%", "@f(x)(y|)"],
+    ["x|(a)y", "d%", "x|y", { reg: "(a)" }],
+    ["|x(a)y", "d%", "|y", { reg: "x(a)" }],
+    ["(a|b)", "d%", "|)", { reg: "(ab" }],
+    ["|(a)b", "y%", "|(a)b", { reg: "(a)" }],
+    ["|(a)b", "c%", "|b", { reg: "(a)", mode: "insert" }],
+    ["|(a)", "d5%", "|(a)"],
+    ["|(a)", "5d%", "|(a)"],
+  ])
+
+  test("a long unbalanced line finishes at once", () => {
+    const e = editor("|" + "(".repeat(20000))
+    e.press("%")
+    expect(e.state.cursor).toBe(0)
+  })
+})
+
+describe("dot repeat", () => {
+  table("repeating the last change", [
+    ["|a\nb\nc\nd\ne", "2dd.", "|e"],
+    ["a\nb\n|c\nd\ne", "dgg", "|d\ne"],
+    ["a\nb\n|c\nd\ne", "dggj.", "|"],
+    ["|a\nb\nc\nd", "d3G.", "|"],
+    ["|a b c d", "dw.", "|c d"],
+    ["|abcdef", "2x.", "|ef"],
+    // A count typed before . is dropped: the change repeats with its own count.
+    ["|abcdef", "x5.", "|cdef"],
+    ["|abcd", "rXl.", "X|Xcd"],
+    ["|ab", "~.", "AB|"],
+    ["|a\nb", ">>j.", "  a\n  |b"],
+    ["|a\nb\nc", "J.", "a b| c"],
+    ["|a-b-c", "df-.", "|c"],
+    ["|a-b-c-d", "df-fz.", "|c-d"],
+    ["|abcdef", "D.", "|"],
+    ["|a\nb\nc", "yyj.", "a\n|b\nc", { reg: "b\n" }],
+    ["|abcd", "xdfz.", "|cd"],
+    ["|abc", "xp.", "b|c"],
+    ["|abc", ".", "|abc"],
+    ["|a b c", "dww.", "b| "],
+    ["|one two", "dwyw.", "|two", { reg: "two" }],
+  ])
+
+  test("the line operators repeat as they ran, and cc repeats into insert mode", () => {
+    const e = editor("|ab\ncd").press("cc<Esc>j.")
+    expect(e.state.text).toBe("\n")
+    expect(e.state.vim.mode).toBe("insert")
+  })
+
+  test("typed text is repeated at the cursor and leaves normal mode with the cursor after it", () => {
+    const e = editor("|xy").press("ihello<Esc>$.")
+    expect(e.state.text).toBe("helloxyhello")
+    expect(e.shown()).toBe("helloxyhello|")
+    expect(e.state.vim.mode).toBe("normal")
+  })
+
+  test("Backspace trims what was typed, and an empty record ignores it", () => {
+    expect(editor("|").press("iabc<BS>d<Esc>.").state.text).toBe("ababdd")
+    const e = editor("ab|", { mode: "insert" }).press("<BS><BS>x<Esc>")
+    expect(e.state.vim.lastChange).toEqual({ kind: "text", text: "x" })
+  })
+
+  test("typed text replaces the change that opened insert mode", () => {
+    const e = editor("|one two").press("cwfoo<Esc>w.")
+    expect(e.state.text).toBe("foo footwo")
+  })
+
+  test("an insert with nothing typed keeps the opening change", () => {
+    const e = editor("|one two").press("cw<Esc>w.")
+    expect(e.state.text).toBe(" ")
+    expect(e.state.vim.mode).toBe("insert")
+  })
+
+  test("o with text repeats the text, not the new line", () => {
+    const e = editor("|ab").press("oabc<Esc>.")
+    expect(e.state.text).toBe("ab\nababcc")
+  })
+
+  test("a replay does not replace the change, and can be repeated", () => {
+    const e = editor("|abcdef").press("x...")
+    expect(e.state.text).toBe("ef")
+    expect(e.state.vim.lastChange).toEqual({ kind: "keys", keys: ["x"] })
+  })
+
+  test("restarting the typed record keeps the last change", () => {
+    const base = editor("|abc").press("x").state.vim
+    const typing = Vim.insertKey({ ...base, mode: "insert" }, char("a"))
+    expect(typing.typed).toBe("a")
+    const sent = Vim.restartTyped(typing)
+    expect(sent.typed).toBe("")
+    expect(sent.lastChange).toEqual(base.lastChange)
+  })
+
+  test("keys that are not typing add nothing to the record", () => {
+    const e = editor("|", { mode: "insert" })
+    e.send({ name: "x", sequence: "\x18", ctrl: true })
+      .send({ name: "return", sequence: "\r" })
+      .send({ name: "tab", sequence: "\t" })
+      .send({ name: "left", sequence: "\x1b[D" })
+    expect(e.state.vim.typed).toBe("")
+    e.send(char("a")).send({ name: "left", sequence: "\x1b[D" }).send(char("b"))
+    expect(e.state.vim.typed).toBe("ab")
+  })
+
+  test("replaying an operator find uses its own find and remembers it again", () => {
+    const e = editor("|a-b+c-d+e").press("df-f+.")
+    expect(e.state.text).toBe("bd+e")
+    expect(e.state.vim.lastFind).toEqual({ kind: "f", char: "-" })
+  })
+})
+
+describe("visual mode", () => {
+  table("operators on a selection", [
+    ["|abc def", "vlld", "| def", { reg: "abc" }],
+    ["|abc def", "vey", "|abc def", { reg: "abc" }],
+    ["|abc def", "vec", "| def", { reg: "abc", mode: "insert" }],
+    ["a|bc\nde", "v$d", "a|de", { reg: "bc\n" }],
+    ["a|bc\nde", "vjd", "|a", { reg: "bc\nde" }],
+    ["|abcdef", "vllold", "a|def", { reg: "bc" }],
+    ["|a\nb\nc", "Vd", "|b\nc", { reg: "a\n" }],
+    ["|a\nb\nc", "Vjd", "|c", { reg: "a\nb\n" }],
+    ["|a\nb\nc", "Vjy", "|a\nb\nc", { reg: "a\nb\n" }],
+    ["|a\nb", "Vc", "|\nb", { reg: "a\n", mode: "insert" }],
+    ["|ab\ncd", "vjVd", "|", { reg: "ab\ncd\n" }],
+    ["|ab", "Vvd", "|b", { reg: "a" }],
+    ["|ab", "vv", "|ab"],
+    ["|a\nb", "Vj>", "  |a\n  b"],
+    ["|a\nb", "V2>", "    |a\nb"],
+    ["|  a\n  b", "vj<", "|a\nb"],
+    ["|a\nb", "v>", "  |a\nb"],
+    ["|abcdef", "v3ld", "|ef", { reg: "abcd" }],
+    ["|a-b-c", "vf-d", "|b-c", { reg: "a-" }],
+    ["|a-b-c", "vf-;d", "|c", { reg: "a-b-" }],
+    ["|(ab)c", "v%d", "|c", { reg: "(ab)" }],
+    ["|ab", "v<Esc>", "|ab"],
+    ["|ab", "vl<CR>", "a|b"],
+    ["|abc", "v<Right><Right>d", "|", { reg: "abc" }],
+    ["|abc", "v<S-Right>d", "|c", { reg: "ab" }],
+    ["a|bc", "v<BS>d", "|c", { reg: "ab" }],
+    ["|[[@x]]b", "vd", "|b", { reg: "@x" }],
+    ["|", "vd", "|"],
+    ["|", "Vd", "|", { reg: "\n" }],
+    ["|", "vc", "|", { mode: "insert" }],
+    ["|ab", "vp", "|ab", { mode: "visual" }],
+    ["|ab", "vu", "|ab", { mode: "visual" }],
+    ["|ab", "vx", "|ab", { mode: "visual" }],
+    ["|ab", "v.", "|ab", { mode: "visual" }],
+    ["|ab", "3v", "|ab", { mode: "visual" }],
+    ["|abc", "vlll<Esc>", "abc|"],
+  ])
+
+  test('"+y in visual mode sends the selection to the clipboard and the register', () => {
+    const e = editor("|abc").press('vl"+y')
+    expect(e.written).toEqual(["ab"])
+    expect(e.state.vim.register).toBe("ab")
+  })
+
+  test("the selection follows the head, o swaps the ends, and leaving removes it", () => {
+    const e = editor("|abcdef").press("vll")
+    expect(e.selected()).toBe("abc")
+    e.press("o")
+    expect(e.selected()).toBe("abc")
+    expect(e.shown()).toBe("|abcdef")
+    e.press("V")
+    expect(e.selected()).toBe("abcdef")
+    e.press("<Esc>")
+    expect(e.selected()).toBeUndefined()
+  })
+
+  test("Escape is consumed, Enter and a chord pass and end the selection", () => {
+    const esc = editor("|ab").press("v<Esc>")
+    expect(esc.passed).toEqual([])
+    expect(esc.state.vim.mode).toBe("normal")
+    const enter = editor("|ab").press("vl<CR>")
+    expect(enter.passed).toEqual(["<CR>"])
+    expect(enter.state.vim.mode).toBe("normal")
+    const chord = editor("|ab").press("v<C-x>")
+    expect(chord.passed).toEqual(["<C-x>"])
+    expect(chord.state.vim.mode).toBe("normal")
+    expect(chord.selected()).toBeUndefined()
+  })
+
+  test("repeating a visual operator covers the same amount of text", () => {
+    expect(editor("|abcdef").press("vlld.").state.text).toBe("")
+    expect(editor("|a\nb\nc\nd").press("Vjd.").state.text).toBe("")
+    const e = editor("|ab\ncd\nef").press("vjd")
+    expect(e.shown()).toBe("|d\nef")
+    e.press(".")
+    expect(e.shown()).toBe("|f")
+  })
+
+  test("a visual yank is recorded like the other operators", () => {
+    const e = editor("|ab cd").press("vly")
+    expect(e.state.vim.lastChange?.kind).toBe("visual")
+  })
+
+  test("a count before v is dropped and pending state is cleared on leaving", () => {
+    const e = editor("|abc").press("2v")
+    expect(e.state.vim.mode).toBe("visual")
+    e.press("2<Esc>")
+    expect(e.state.vim.pending).toEqual({ kind: "idle" })
+    expect(e.state.vim.mode).toBe("normal")
+  })
+
+  test("the selection ends at a part, never inside one", () => {
+    const e = editor("a|b[[@file]]c").press("vl")
+    expect(e.selected()).toBe("b@file")
+  })
+})
+
 // A loop that never advances blocks the event loop, so these run in a child process with a deadline.
 describe("loops", () => {
   test("a huge count, a bracket search and a word motion next to a part finish at once", async () => {
@@ -534,6 +867,8 @@ const press = (text, cursor, parts, keys) => {
 press("word ".repeat(2000), 0, [], "9999w")
 press("(".repeat(5000) + "x" + ")".repeat(5000), 5000, [], "di(")
 press("ab cd ef", 0, [{ start: 3, end: 5 }], "www")
+press("a-".repeat(30000), 0, [], "10000f-")
+press("(".repeat(20000), 0, [], "%d%")
 console.log("done")`,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },

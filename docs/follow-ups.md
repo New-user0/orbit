@@ -360,7 +360,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 | FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | agents-extensibility-43 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
 
-### Sweep (163)
+### Sweep (164)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -529,6 +529,7 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M4-59 | A pending permission ask surviving the report is pinned only at the config level | test hygiene | The server harness cannot hold an ask in a session of the default instance, so "other asks survive" is shown by `notify` neither reloading nor announcing `config.updated`, not by an ask that stays answerable. | low | M: a harness that keeps a session instance alive across a request | sweep | clients-ux-48 (test 21) | packages/core/test/config/notify.test.ts |
 | FU-M4-60 | `/agents` > Edit opens a project agent file through the person's editor with the path the server listed, without a containment check of its own | review of the clients-ux-48 pull request (#139), declined in round 1 | Opening a listed project agent path hands it to `$VISUAL`/`$EDITOR` or the platform opener; the file is in the person's own project. | low; the person picks the row | S: route the open through the same containment check as the write | sweep | clients-ux-48 | packages/tui/src/component/dialog-agent.tsx (open) |
 | FU-M4-61 | `/ide` does not know the VS Code Insiders program name, so an Insiders window cannot be launched from the dialog | review of the clients-ux-48 pull request (#139), declined in round 1 | Choosing an Insiders window that is not already running does nothing useful. | low | S: add the program name to the editor table in packages/compat | sweep | clients-ux-48 | packages/compat editors table |
+| FU-M4-62 | Vim keys the prompt does not have yet: visual text objects, visual p/x/s/r/~/J/I/A/u/U, gv, a count before v, N%, Ctrl+V blockwise; and normal mode still lets the text area take Backspace and arrows | behaviour | Each key does nothing in visual mode (swallowed; Ctrl+V ends the selection and pastes) or, in normal mode, Backspace deletes a character, where the spec says it acts as h, and `d` then Left moves the cursor and leaves d pending. A characterwise register that ends with a line break pastes linewise, and `.` of a one-line v$d stops at the line end instead of joining lines. | low | M: one visual key at a time; for normal mode, a prompt layer like the visual one | sweep | clients-ux-9 review (follow-up) | packages/tui/src/component/prompt/vim-state.ts (visualKey); packages/tui/src/context/keymap.tsx (registerManagedTextareaLayer, priority -1) |
 
 ### Owner (98)
 
@@ -863,11 +864,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) plus 10 rows that the M4 task clients-ux-48 raised (FU-M4-52 to FU-M4-61) plus 2 rows split off the parts that file-web-tools-9 closed (FU-M3-154a, FU-M3-154b) = 737.
-- Output: 655 rows plus 83 listed duplicates = 738. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 655 register rows have a table entry.
-- Open minors by carrier: M4: 5, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 163, Owner: 96.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) plus 10 rows that the M4 task clients-ux-48 raised (FU-M4-52 to FU-M4-61) plus 2 rows split off the parts that file-web-tools-9 closed (FU-M3-154a, FU-M3-154b) plus 1 row that the M4 task clients-ux-9 raised (FU-M4-62) = 738.
+- Output: 656 rows plus 83 listed duplicates = 739. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 656 register rows have a table entry.
+- Open minors by carrier: M4: 5, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 164, Owner: 96.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
 - Fixed: 132.
 - Duplicates: 83.
-- Check: 429 open + 86 owner + 132 fixed + 83 duplicates = 730, the 730 inputs.
+- Check: 430 open + 86 owner + 132 fixed + 83 duplicates = 731, the 731 inputs.
