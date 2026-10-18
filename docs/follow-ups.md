@@ -153,7 +153,7 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (5)
+### M4 (6)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -161,6 +161,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M4-37 | The reminder tests carry a 699-line copy of the runner harness beside the one in session-runner.test.ts | test hygiene | Two harnesses must be kept in step; a change to one can leave the other testing old behaviour. | low | M: move session-runner.test.ts onto packages/core/test/lib/runner.ts and delete the copy | loop-robustness-17 | prompts-context-5 review (minor) | packages/core/test/lib/runner.ts, packages/core/test/session-runner.test.ts |
 | FU-M4-45 | Nested instruction files have no trigger from an @-mention, the file open in the editor, a post-compaction restore or a hook payload (spec 2.8) | behaviour | Only a read brings nested files (an edit or write already does, pinned by a row); the other hand-offs of the reference are not built. | low | M per carrier; each must call InstructionTriggers.touched and be gated the same way (class 12). Carriers: @-mentioned files (session/prompt.ts), the file open in the editor (prompts-context-13), files restored after compaction (context-memory-5), the hook fields (hooks-14) | prompts-context-13 | prompts-context-12 review (minor) | packages/core/src/instruction-triggers.ts; packages/core/src/tool/plugin/read.ts |
 | FU-M4-51 | A nested instruction file the session already read or wrote is injected again (spec 2.5) | behaviour | The reference skips a nested file the session has already loaded; here it costs tokens twice. | low | S: record loaded nested files per session and skip them | prompts-context-13 | prompts-context-12 review (minor) | packages/core/src/instruction-triggers.ts |
+| FU-M4-r1-home | A depth-0 instruction file that is a link out of the started folder loads when the session's project is home or a filesystem root | 3, 4 | With home a repository trusted for the session, a session started at `~/Downloads/x` (no repository of its own) loads `~/Downloads/x/AGENTS.md` even when it links to `~/.ssh/id_rsa`; imports stay bounded to the started folder, so only the depth-0 file leaks. The reference shares it. | low; needs home as a repository, trusted for the session | S: in `projectSource`, when the project root is not persistent, gate walk candidates with `trust.importable(file, real)` instead of `reachable` | prompts-context-9c | M4 verification round 1 (prompts-context-9b, 9c) | packages/core/src/config/plugin/instruction.ts, packages/core/src/project-trust.ts |
 | FU-M4-46 | The started-folder bound compares spellings with === and !== | 4 | Safe today because FileAccess re-anchors the read target to the Location spelling; a caller that passes another spelling is not. | low | S: use FSUtil.contains both ways before FU-M4-45 adds callers | prompts-context-13 | prompts-context-12 review (follow-up) | packages/core/src/instruction-triggers.ts (walk) |
 
 ### M5 (5)
@@ -866,11 +867,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) plus 10 rows that the M4 task clients-ux-48 raised (FU-M4-52 to FU-M4-61) plus 2 rows split off the parts that file-web-tools-9 closed (FU-M3-154a, FU-M3-154b) plus 1 row that the M4 task clients-ux-9 raised (FU-M4-62) plus 2 rows that the M4 task prompts-context-19 raised (FU-M4-63, FU-M4-64) = 740.
-- Output: 658 rows plus 83 listed duplicates = 741. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 658 register rows have a table entry.
-- Open minors by carrier: M4: 5, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 167, Owner: 96.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) plus 10 rows that the M4 task clients-ux-48 raised (FU-M4-52 to FU-M4-61) plus 2 rows split off the parts that file-web-tools-9 closed (FU-M3-154a, FU-M3-154b) plus 1 row that the M4 task clients-ux-9 raised (FU-M4-62) plus 2 rows that the M4 task prompts-context-19 raised (FU-M4-63, FU-M4-64) plus 1 row that the M4 verification round 1 registered (FU-M4-r1-home) = 741.
+- Output: 659 rows plus 83 listed duplicates = 742. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 659 register rows have a table entry.
+- Open minors by carrier: M4: 6, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 167, Owner: 96.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
 - Fixed: 133.
 - Duplicates: 83.
-- Check: 431 open + 86 owner + 133 fixed + 83 duplicates = 733, the 733 inputs.
+- Check: 432 open + 86 owner + 133 fixed + 83 duplicates = 734, the 734 inputs.
