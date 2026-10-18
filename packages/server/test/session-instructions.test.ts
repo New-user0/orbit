@@ -264,6 +264,12 @@ it.live("lists no files for an agent that leaves instruction files out of its co
     expect(explore.initial ?? "").not.toContain("project rules")
     expect(explore.status.files).toEqual([])
     expect(explore.status.warnings).toEqual([])
+    // It reads no source, so an unreadable one leaves its empty list complete.
+    s.unreadable.current = true
+    yield* s.write(path.join(s.project, "ORBIT.md"), "changed rules")
+    const unreadable = yield* s.preview((yield* s.session(s.project, "explore")).id)
+    expect(unreadable.status.files).toEqual([])
+    expect(unreadable.status.available).toBe(true)
   }).pipe(Effect.scoped),
 )
 

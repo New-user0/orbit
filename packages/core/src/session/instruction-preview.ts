@@ -36,9 +36,9 @@ export const preview = Effect.fn("SessionInstructionPreview.preview")(function* 
     const discovery = yield* InstructionDiscovery.Service
     const database = yield* Database.Service
     const selection = yield* context.select(session.id)
-    // An agent that leaves the instruction files out of its context sends none of them, so none are listed.
+    // An agent that leaves the instruction files out of its context reads no source, so its empty list is complete.
     const status = selection.agent.info.context?.instructions === false
-      ? new Instruction.Status({ files: [], warnings: [], available: (yield* discovery.status()).available })
+      ? new Instruction.Status({ files: [], warnings: [], available: true })
       : yield* discovery.status()
     return yield* SessionHistory.preview(database.db, session.id, selection.instructions, "local").pipe(
       Effect.map((history): Result => ({ status, initial: history.initial, update: history.instructionUpdate ?? "" })),
