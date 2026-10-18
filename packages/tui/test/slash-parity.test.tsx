@@ -106,9 +106,10 @@ test("the commands the running app reaches, and the ones the source declares, ag
   // What is reachable is listed. A listed command that is not reachable here is one that appears only in some state.
   const unreachable = problems(registered(live)).filter((problem) => problem.includes("is listed as present but"))
   expect(problems(registered(live)).filter((problem) => !unreachable.includes(problem))).toEqual([])
-  expect(unreachable.map((problem) => problem.split(" ")[0]).toSorted()).toEqual(
-    ["redo", "restart", "terminal", "trust", "unshare", "update"],
-  )
+  // `terminal` is reachable only where the terminal pane exists, which depends on the platform.
+  const stateful = unreachable.map((problem) => problem.split(" ")[0]!)
+  for (const name of ["redo", "restart", "trust", "unshare", "update"]) expect(stateful).toContain(name)
+  for (const name of stateful) expect(["redo", "restart", "terminal", "trust", "unshare", "update"]).toContain(name)
   const source = registered(await declared())
   expect(problems(source)).toEqual([])
   // Whatever is reachable is declared, so nothing is registered that the source scan cannot see.
