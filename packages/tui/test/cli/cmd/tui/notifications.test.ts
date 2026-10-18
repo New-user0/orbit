@@ -21,6 +21,7 @@ async function setup(
     title,
     ...(parentID && { parentID }),
   })
+  const open = { permissions: [] as { id: string; sessionID: string }[], forms: [] as { id: string; sessionID: string }[] }
   const sessions: Record<string, Session> = {
     session: session("session", "Demo session"),
     subagent: session("subagent", "Subagent session", "session"),
@@ -61,6 +62,14 @@ async function setup(
       session: {
         get: (sessionID: string) => sessions[sessionID],
         status: () => "running" as const,
+        root: (sessionID: string) => sessions[sessionID]?.parentID ?? sessionID,
+        family: (sessionID: string) =>
+          Object.values(sessions)
+            .filter((item) => item.id === sessionID || item.parentID === sessionID)
+            .map((item) => item.id),
+        // The data store's lists of open requests, which the real store keeps up to date from the same events.
+        permission: { list: (sessionID: string) => open.permissions.filter((item) => item.sessionID === sessionID) },
+        form: { list: (sessionID: string) => open.forms.filter((item) => item.sessionID === sessionID) },
       },
     },
   } as unknown as Context)
@@ -70,6 +79,12 @@ async function setup(
     keys,
     toasts,
     emit(event: OrbitEvent) {
+      if (event.type === "permission.asked") open.permissions.push({ id: event.data.id, sessionID: event.data.sessionID })
+      if (event.type === "permission.replied")
+        open.permissions = open.permissions.filter((item) => item.id !== event.data.requestID)
+      if (event.type === "form.created") open.forms.push({ id: event.data.form.id, sessionID: event.data.form.sessionID })
+      if (event.type === "form.replied" || event.type === "form.cancelled")
+        open.forms = open.forms.filter((item) => item.id !== event.data.id)
       for (const handler of handlers.get(event.type) ?? []) handler(event)
     },
   }
