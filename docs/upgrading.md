@@ -2689,6 +2689,20 @@ The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for 
 
 **What to do:** Nothing.
 
+### Plan mode, todo and verification reminders are derived from history
+
+The Plan mode text no longer arrives as a stored `session.synthetic` row. The model now gets it from three derived reminder producers, computed again whenever a request is built and never stored.
+
+- Plan mode: the first Plan step of a session (and the first after a compaction) gets the full instructions, which now tell the model to explore, design, check the plan against the request and present it through `ExitPlanMode`. After that a reminder comes back only once five prompts have passed since the last one; every fifth is the full text and the rest are one short paragraph. A child session running as the Plan agent gets a shorter subagent text. The first step that is not in Plan mode gets one note that Plan mode has ended. A person who returns to Plan mode within five prompts of the last reminder gets no new reminder until that point, because a leave resets the full and short cycle but not the five-prompt wait. When a plan was approved earlier in the session, the first reminder after a return starts with a note to read the saved plan and decide whether the task is the same. `ExitPlanMode` now also records `approved` and the saved plan's path in the call's metadata for that purpose, so a fork names the file its parent wrote. The leave and re-entry notes are worked out from the history the request carries, so a compaction drops a note that was still owed; the first step after one gets the ordinary plan reminder or none.
+- Todo: once ten assistant text and tool-call blocks (not reasoning) have passed since the last `TodoWrite`, `TaskCreate` or `TaskUpdate` call and since the last nudge, the next step gets a nudge to update or tidy the list, with the current items. It is skipped when neither `TodoWrite` nor `TaskUpdate` is offered.
+- Verification: when a call closes out a list of three or more (every call that leaves every item completed, including one that sends an all-completed list again) whose items are none about checking (`verif` in any letter case), the next step is asked to run the relevant checks before reporting and to say what it did not check.
+
+Sessions that already hold the old Plan mode rows keep working: an old enter row counts as the first reminder and an old leave row as the leave. A running session sees one prompt-cache miss when it first picks this build up.
+
+**Affects:** sessions that use Plan mode, `TodoWrite` or the task tools; clients that listed the Plan reminders as hidden `session.synthetic` rows will no longer see new ones.
+
+**What to do:** Nothing.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs

@@ -5,6 +5,8 @@ import { plain } from "@orbit/util/plain"
 import { Cause, Context, Duration, Effect, Layer, Option } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
+import { PlanReminders } from "../plan/reminders.js"
+import { TodoReminders } from "../tool/todo-reminders.js"
 import type { SessionContext } from "./context.js"
 import { SessionEvent } from "./event.js"
 import type { SessionMessage } from "./message.js"
@@ -12,6 +14,7 @@ import { ReminderText, render } from "./reminder-text.js"
 import type { SessionRunnerModel } from "./runner/model.js"
 import { withoutReplaced, type LoweredInsertion } from "./runner/to-llm-message.js"
 import type { SessionSchema } from "./schema.js"
+import { Verification } from "./verification.js"
 
 export {
   render,
@@ -21,6 +24,7 @@ export {
   assistantStepsSince,
   humanTurnsSince,
   newestPrompt,
+  runs,
 } from "./reminder-text.js"
 export type Anchor = ReminderText.Anchor
 
@@ -118,7 +122,10 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@orbit/SessionReminders") {}
 
 /** The production lists. Later tasks append their producers here, in the order their reminders appear. */
-export const production: Lists = { durable: [], derived: [] }
+export const production: Lists = {
+  durable: [],
+  derived: [PlanReminders.derived(), TodoReminders.producer, Verification.producer],
+}
 
 /** The minimal instance keeps only the producers that mark themselves `minimal`. */
 export const minimal = (lists: Lists): Lists => ({
