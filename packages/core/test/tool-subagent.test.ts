@@ -33,6 +33,7 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Permission } from "@orbit/core/permission"
+import { AgentInstructions } from "@orbit/core/agent/instructions"
 import { SubagentTool } from "@orbit/core/tool/plugin/subagent"
 import { WorkflowTool } from "@orbit/core/tool/plugin/workflow"
 import { Tool } from "@orbit/core/tool"
@@ -299,6 +300,18 @@ describe("SubagentTool", () => {
           const locations = yield* LocationServiceMap.Service
           const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
           expect((yield* registry.snapshot()).definitions.map((tool) => tool.name)).toContain(SubagentTool.name)
+          // The agent list lives in `core/agent-guidance`: the definitions are the static module text, whatever agents exist.
+          const definitions = (yield* registry.snapshot()).definitions
+          expect(definitions.find((tool) => tool.name === SubagentTool.name)?.description).toBe(SubagentTool.description)
+          expect(definitions.find((tool) => tool.name === WorkflowTool.name)?.description).toBe(WorkflowTool.description)
+          expect(SubagentTool.description).toContain("listed in the conversation context")
+          expect(SubagentTool.name).toBe(AgentInstructions.NAME)
+          expect(
+            definitions
+              .filter((tool) => tool.name === SubagentTool.name || tool.name === WorkflowTool.name)
+              .map((tool) => tool.description)
+              .join("\n"),
+          ).not.toContain("- reviewer")
           expect(
             yield* executeTool(registry, {
               sessionID: parent.id,
