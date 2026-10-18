@@ -30,7 +30,7 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
 export const Input = Schema.Struct({
   agent: Schema.String.annotate({
     description:
-      "The type of specialized agent to use for this task. Your context carries a roster of the agents you may pick from. If the user asks for a subagent by a name that is not one of them, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
+      "Which agent should take this job. Your context carries a roster of the agents you may pick from. If the user asks for a subagent by a name that is not one of them, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
   }),
   description: Schema.String.annotate({ description: "A short 3-5 word label for the task, displayed to the user" }),
   prompt: Schema.String.annotate({ description: "The task for the subagent to perform" }),
