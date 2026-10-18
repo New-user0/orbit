@@ -329,24 +329,24 @@ const queuedNote = (origin: unknown) =>
   ReminderText.render({
     text:
       origin === "agent"
-        ? "The agent that started this one sent the message below while you were working. Handle it before you finish your current task, and do not ignore it."
-        : "The person sent the message below while you were working. You MUST NOT ignore it: finish your current task, then deal with what it says.",
+        ? "The agent that started you added the message below partway through. Deal with it before you wrap up your current task, and do not let it be dropped."
+        : "After you began your current task the person added the message below. When that task is done you MUST act on it; skipping it is not allowed.",
   })
 
 const agentHints = (agents: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["agents"]>) =>
   [...new Set(agents.map((agent) => agent.name))].map((name) =>
     ReminderText.render({
-      text: `The person asked for the agent named below. Start it with the ${ToolNames.tools.subagent} tool and give it the context it needs.`,
+      text: `The person would like the agent named below to be used. Launch it with the ${ToolNames.tools.subagent} tool, passing along the context it will need.`,
       data: { label: "requested agent", content: name },
     }),
   )
 
 const editorNote = (editor: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["editor"]>) => {
-  const caveat = "It may have nothing to do with the task at hand."
+  const caveat = "This may be unrelated to your task."
   const selection = editor.selection
   if (selection === undefined || selection.text === "")
     return ReminderText.render({
-      text: `The person has the file named below open in their editor. ${caveat}`,
+      text: `The file named below is the one open in the person's editor right now. ${caveat}`,
       data: { label: "open file", content: editor.path },
     })
   // Line endings are normalized first, so a file cuts at the same place on every platform.
@@ -356,10 +356,12 @@ const editorNote = (editor: NonNullable<Extract<SessionMessage.Info, { type: "us
   const end =
     split && /[\uD800-\uDBFF]/.test(text[EDITOR_SELECTION_LIMIT - 1]) ? EDITOR_SELECTION_LIMIT - 1 : EDITOR_SELECTION_LIMIT
   const kept = split ? text.slice(0, end) : text
+  const range = selection.start === selection.end ? `line ${selection.start}` : `lines ${selection.start} to ${selection.end}`
+  const left = text.length - kept.length
   return ReminderText.render({
     text: [
-      `The person selected lines ${selection.start} to ${selection.end} of the file named below in their editor; the selected text follows. ${caveat}`,
-      ...(split ? [`The selection was cut: ${text.length - kept.length} characters at its end are not shown.`] : []),
+      `The person has highlighted ${range} in the file named below; the highlighted text follows. ${caveat}`,
+      ...(split ? [`The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at its end ${left === 1 ? "is" : "are"} not shown.`] : []),
     ].join(" "),
     data: { label: editor.path, content: kept },
   })
@@ -393,10 +395,13 @@ function toLLMMessage(
         }),
       ]
     case "user":
+      const queued = lowering.queued.has(message.id)
+      // Input delivered mid-turn gets only the note; hints and the editor note belong to a prompt sent while idle.
+      const context = !lowering.minimal && !queued
       const content = [
-        ...(lowering.queued.has(message.id) ? [Message.text(queuedNote(message.metadata?.origin))] : []),
-        ...(lowering.minimal || !message.agents?.length ? [] : agentHints(message.agents).map((hint) => Message.text(hint))),
-        ...(lowering.minimal || !message.editor ? [] : [Message.text(editorNote(message.editor))]),
+        ...(queued ? [Message.text(queuedNote(message.metadata?.origin))] : []),
+        ...(context && message.agents?.length ? agentHints(message.agents).map((hint) => Message.text(hint)) : []),
+        ...(context && message.editor ? [Message.text(editorNote(message.editor))] : []),
         ...(message.skills ?? []).flatMap((skill) => (skill.text === undefined ? [] : [Message.text(skill.text)])),
         ...(message.text === "" ? [] : [Message.text(message.text)]),
         ...userAttachmentContent(message.files ?? []),

@@ -399,6 +399,8 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       id: SessionMessage.ID.create(),
       type: "user" as const,
       text: "Manual compaction should include this short conversation.",
+      agents: [{ name: "helper" }],
+      editor: { path: "/project/src/open-file.ts" },
       skills: [
         {
           id: Skill.ID.make("effect"),
@@ -455,6 +457,9 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("Manual compaction should include this short conversation.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("Use Effect services and generators.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("User shell pwd completed: /project")
+    // A summary does not carry the hint or the editor note that belonged to the original prompt's request.
+    expect(JSON.stringify(requests[0]?.messages)).not.toContain("requested agent")
+    expect(JSON.stringify(requests[0]?.messages)).not.toContain("open-file.ts")
     expect(requests[0]?.messages).toHaveLength(hooked + 1)
     expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("Summarize only what")
     expect(JSON.stringify(requests[0]?.messages)).not.toContain("display-only-output")

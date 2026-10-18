@@ -977,6 +977,10 @@ describe("SubagentTool in Plan mode", () => {
         expect((yield* sessions.inbox(child!.id)).find((message) => message.type === "user")?.payload.text).toBe(
           "scan it",
         )
+        // A workflow agent's brief is the parent agent's words too, so it is marked like the Agent tool's.
+        expect((yield* sessions.inbox(child!.id)).find((message) => message.type === "user")?.payload.metadata).toEqual({
+          origin: "agent",
+        })
       }),
     ),
   )

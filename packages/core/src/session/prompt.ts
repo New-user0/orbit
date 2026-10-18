@@ -143,8 +143,12 @@ const readableEditor = Effect.fn("SessionPrompt.readableEditor")(function* (
       Effect.annotateLogs({ reason, sessionID: session.id }),
       Effect.as(undefined),
     )
-  // `~` is a spelling the read tool's resolver accepts, so it passes here and is resolved below.
-  if (!editor.path.startsWith("~") && !path.posix.isAbsolute(editor.path) && !path.win32.isAbsolute(editor.path)) return yield* dropped("path is not absolute")
+  // Only the home spellings the resolver expands pass as they are: `~`, `~/` and, on Windows, `~\`. Any other leading `~`
+  // (`~name/...`) would resolve under the session folder, so it is a relative path like the rest.
+  const home =
+    editor.path === "~" || editor.path.startsWith("~/") || (process.platform === "win32" && editor.path.startsWith("~\\"))
+  if (!home && !path.posix.isAbsolute(editor.path) && !path.win32.isAbsolute(editor.path))
+    return yield* dropped("path is not absolute")
   if (editor.selection && editor.selection.end < editor.selection.start) return yield* dropped("selection ends before it starts")
   const access = yield* FileAccess.Service
   const permission = yield* Permission.Service

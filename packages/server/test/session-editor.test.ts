@@ -84,3 +84,65 @@ it.live("takes an editor field on a prompt, rejects a malformed one, and keeps i
     ])
   }),
 )
+
+it.live("keeps the first admission when an ID is retried with another editor, and a command carries none", () =>
+  Effect.gen(function* () {
+    const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-session-editor-retry-")))
+    const record = path.join(tmp.path, "invocation.json")
+    yield* Effect.promise(() =>
+      Bun.write(
+        path.join(tmp.path, ".orbit/plugins/record.ts"),
+        `export default {
+          id: "record-invocation",
+          async setup(ctx) {
+            await ctx.command.transform((editor) =>
+              editor.add({
+                name: "record",
+                execute: async (input) => {
+                  await Bun.write(${JSON.stringify(record)}, JSON.stringify(input))
+                },
+              }),
+            )
+          },
+        }`,
+      ),
+    )
+    const handler = yield* ServerFetch.make(
+      {
+        app: { version: "test-version" },
+        database: { path: ":memory:" },
+        fs: { filewatcher: false },
+        models: { fetch: false },
+        trust: { implicit: true },
+      },
+      { overrides: [SessionExecution.node.replace(SessionExecution.noopLayer)] },
+    )
+    const request = (url: string, body?: unknown) =>
+      Effect.promise(async () => {
+        const response = await handler(
+          new Request(`http://orbit.local${url}`, {
+            method: body === undefined ? "GET" : "POST",
+            headers: body === undefined ? undefined : { "content-type": "application/json" },
+            body: body === undefined ? undefined : JSON.stringify(body),
+          }),
+        )
+        const text = await response.text()
+        return { status: response.status, body: text === "" ? undefined : (JSON.parse(text) as Record<string, unknown>) }
+      })
+    const created = yield* request("/api/session", { location: { directory: tmp.path } })
+    const sessionID = Session.ID.make((created.body?.data as { id: string }).id)
+    const id = SessionMessage.ID.create()
+    const first = { path: path.join(tmp.path, "a.ts"), selection: { start: 1, end: 1, text: "first" } }
+    const second = { path: path.join(tmp.path, "b.ts") }
+
+    yield* request(`/api/session/${sessionID}/prompt`, { id, text: "Work", editor: first, resume: false })
+    const retried = yield* request(`/api/session/${sessionID}/prompt`, { id, text: "Work", editor: second, resume: false })
+    expect(retried.body?.data).toMatchObject({ id, payload: { editor: first } })
+
+    const command = yield* request(`/api/session/${sessionID}/command`, { name: "record", text: "go", editor: first })
+    expect(command.status).toBe(204)
+    const invocation = JSON.parse(yield* Effect.promise(() => Bun.file(record).text())) as { prompt: Record<string, unknown> }
+    expect(invocation.prompt.text).toBe("go")
+    expect(invocation.prompt).not.toHaveProperty("editor")
+  }),
+)

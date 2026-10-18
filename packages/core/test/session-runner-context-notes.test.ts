@@ -51,7 +51,7 @@ const parts = (messages: ReturnType<typeof toLLMMessages>, value: string) => {
   return message.content.map((part) => (part.type === "text" ? part.text : `<${part.type}>`))
 }
 
-const NOTE = "<system-reminder>\nThe person sent"
+const NOTE = "<system-reminder>\nAfter you began"
 const hasNote = (messages: ReturnType<typeof toLLMMessages>, value: string) => parts(messages, value)[0].startsWith(NOTE)
 
 describe("the note on input sent while work was in progress", () => {
@@ -65,7 +65,7 @@ describe("the note on input sent while work was in progress", () => {
     expect(body).toHaveLength(2)
     expect(body[0]).toStartWith("<system-reminder>\n")
     expect(body[0]).toEndWith("\n</system-reminder>")
-    expect(body[0]).toContain("MUST NOT ignore")
+    expect(body[0]).toContain("MUST act on it")
     expect(body[0]).not.toContain("words of b")
     expect(body[1]).toBe("words of b")
   })
@@ -136,8 +136,8 @@ describe("the note on input sent while work was in progress", () => {
   test("input marked as from the parent agent gets the parent framing", () => {
     const out = toLLMMessages([user("a"), toolStep("s1"), user("b", { metadata: { origin: "agent" } })], model)
     const note = parts(out, "b")[0]
-    expect(note).toContain("agent that started this one")
-    expect(note).not.toContain("The person sent")
+    expect(note).toContain("agent that started you")
+    expect(note).not.toContain("the person added")
   })
 
   test("a history prefix lowers to the same bytes when two more steps are added", () => {
@@ -190,7 +190,7 @@ describe("editor context", () => {
   test("an open file renders a note and the path in a data block", () => {
     const body = parts(editorOf({ path: "/p/src/a.ts" }), "a")
     expect(body).toHaveLength(2)
-    expect(body[0]).toContain("open in their editor")
+    expect(body[0]).toContain("open in the person's editor")
     expect(body[0].split("</system-reminder>")[0]).not.toContain("/p/src/a.ts")
     expect(body[0]).toContain("open file:\n```\n/p/src/a.ts\n```")
     expect(body[1]).toBe("words of a")
@@ -198,7 +198,7 @@ describe("editor context", () => {
 
   test("a selection with empty text renders the open-file form", () => {
     const body = parts(editorOf({ path: "/p/a.ts", selection: { start: 3, end: 3, text: "" } }), "a")
-    expect(body[0]).toContain("open in their editor")
+    expect(body[0]).toContain("open in the person's editor")
     expect(body[0]).not.toContain("lines 3")
   })
 
@@ -219,7 +219,7 @@ describe("editor context", () => {
     expect(at).not.toContain("cut")
     expect(at).toContain("a".repeat(2000))
     const over = parts(editorOf({ path: "/p/a", selection: { start: 1, end: 1, text: "a".repeat(2001) } }), "a")[0]
-    expect(over).toContain("1 characters at its end are not shown")
+    expect(over).toContain("1 character at its end is not shown")
     expect(over).toContain("a".repeat(2000) + "\n```")
     // 1,000 CRLF pairs are 1,000 characters once normalized, so nothing is cut.
     const crlf = parts(editorOf({ path: "/p/a", selection: { start: 1, end: 1, text: "a\r\n".repeat(1000) } }), "a")[0]
@@ -268,12 +268,43 @@ test("a message lowers its note, agents, editor, skill, text and file in that or
     skills: [skill],
     files: [file],
   })
+  const body = parts(toLLMMessages([user("a"), idle, message], model), "b")
+  expect(body).toHaveLength(5)
+  expect(body[0]).toContain("requested agent")
+  expect(body[1]).toContain("open file")
+  expect(body[2]).toBe("SKILL")
+  expect(body[3]).toBe("words of b")
+  expect(body[4]).toContain("Attached file")
+})
+
+test("a steer delivered mid-turn lowers to the note and the text only", () => {
+  const message = user("b", { agents: [AgentAttachment.make({ name: "alpha" })], editor: { path: "/p/a", selection: { start: 1, end: 2, text: "x" } } })
   const body = parts(toLLMMessages([user("a"), toolStep("s1"), message], model), "b")
-  expect(body).toHaveLength(6)
-  expect(body[0]).toContain("MUST NOT ignore")
-  expect(body[1]).toContain("requested agent")
-  expect(body[2]).toContain("open file")
-  expect(body[3]).toBe("SKILL")
-  expect(body[4]).toBe("words of b")
-  expect(body[5]).toContain("Attached file")
+  expect(body).toHaveLength(2)
+  expect(body[0]).toContain("MUST act on it")
+  expect(body[1]).toBe("words of b")
+})
+
+test("a mid-turn steer keeps its metadata agents", () => {
+  const message = user("b", { agents: [AgentAttachment.make({ name: "alpha" })] })
+  const out = toLLMMessages([user("a"), toolStep("s1"), message], model)
+  expect(out.find((item) => item.id === id("b"))?.metadata?.agents).toEqual(message.agents)
+})
+
+describe("the boundary a mid-turn note needs", () => {
+  // Only the fields the lowering reads; the rest of the row is not part of the boundary.
+  const shell = { id: id("sh"), type: "shell", command: "ls", output: { output: "x" }, time: { created } } as unknown as SessionMessage.Info
+  const moved = {
+    id: id("mv"),
+    type: "location-switched",
+    location: { directory: "/other" },
+    time: { created },
+  } as unknown as SessionMessage.Info
+
+  test.each([
+    ["a shell command", shell],
+    ["a location switch", moved],
+  ])("%s between a tool step and a steer ends the boundary", (_, between) => {
+    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), between, user("b")], model), "b")).toBe(false)
+  })
 })

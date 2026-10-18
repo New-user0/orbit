@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import fs from "fs"
 import path from "path"
 import { Effect, Layer } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -162,6 +163,63 @@ describe("editor context at admission", () => {
         ...(process.platform === "win32" ? [["other drive-letter case", "hi", false] as const] : []),
         ["trusted control", "hi", true],
       ])
+    }),
+  )
+
+  // The class matrix of the editor path: every spelling of the denied file, then of the home folder. A row is kept (true)
+  // only when the rule does not cover it.
+  const matrix = (project: string, home: string) => {
+    const secret = path.join(project, "secret", "key.txt")
+    const posix = (value: string) => value.replaceAll("\\", "/")
+    const drive = secret[0].toLowerCase()
+    const windowsOnly = process.platform === "win32"
+    fs.mkdirSync(path.join(project, "secret"), { recursive: true })
+    fs.mkdirSync(path.join(project, "open"), { recursive: true })
+    if (windowsOnly) fs.symlinkSync(path.join(project, "secret"), path.join(project, "open", "link"), "junction")
+    return [
+      ["plain path", secret, false],
+      ["dot-dot segments", path.join(project, "open", "..", "secret", "key.txt"), false],
+      ["trusted control", path.join(project, "open", "a.txt"), true],
+      ["~/ home spelling", "~/.ssh/id_rsa", false],
+      ["~/ home spelling, allowed file", "~/notes/a.txt", true],
+      ["~name is a relative path", "~root/.ssh/id_rsa", false],
+      ["~name with a backslash", "~root\\.ssh\\id_rsa", false],
+      ...(windowsOnly
+        ? ([
+            ["forward slashes", posix(secret), false],
+            ["upper-case folder", secret.toUpperCase(), false],
+            ["other drive-letter case", secret.replace(/^./, (c) => c.toLowerCase()), false],
+            ["Git Bash drive form", `/${drive}${posix(secret).slice(2)}`, false],
+            ["WSL drive form", `/mnt/${drive}${posix(secret).slice(2)}`, false],
+            ["extended-length prefix", `\\\\?\\${secret}`, false],
+            ["trailing dot", `${secret}.`, false],
+            ["trailing space", `${secret} `, false],
+            ["alternate data stream", `${secret}::$DATA`, false],
+            ["administrative share on localhost", `\\\\localhost\\${secret[0]}$${secret.slice(2)}`, false],
+            ["junction into the folder", path.join(project, "open", "link", "key.txt"), false],
+            ["~\\ home spelling", "~\\.ssh\\id_rsa", false],
+            ["~\\ home spelling, allowed file", "~\\notes\\a.txt", true],
+          ] as const)
+        : []),
+    ] as const
+  }
+
+  it.live("every spelling of a denied path is dropped, and an allowed one is kept", () =>
+    Effect.gen(function* () {
+      const project = (yield* tmpdirScoped()).path
+      const home = Global.Path.home.replaceAll("\\", "/")
+      const rows = matrix(project, home)
+      const results = yield* Effect.gen(function* () {
+        yield* prepare(project, [
+          allow,
+          { action: "Read", resource: "secret/*", effect: "deny" },
+          { action: "Read", resource: `${home}/.ssh/*`, effect: "deny" },
+        ])
+        return yield* Effect.forEach(rows, ([name, file]) =>
+          admit({ text: "hi", editor: { path: file } }).pipe(Effect.map((payload) => [name, payload.editor !== undefined] as const)),
+        )
+      }).pipe(provide(project))
+      expect([...results]).toEqual(rows.map(([name, , kept]) => [name, kept] as const))
     }),
   )
 

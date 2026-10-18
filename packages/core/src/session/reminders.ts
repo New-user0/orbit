@@ -226,7 +226,14 @@ const make = (bus: Bus.Interface, lists: Lists) => {
       }))
   })
 
-  return Service.of({ collect, derive, minimal: lists.minimal === true })
+  // Read on use, like the lists: a test sets the lists after the node is built.
+  return Service.of({
+    collect,
+    derive,
+    get minimal() {
+      return lists.minimal === true
+    },
+  })
 }
 
 /** The run a "tail" insertion belongs to: the one after the newest assistant message in this epoch. */

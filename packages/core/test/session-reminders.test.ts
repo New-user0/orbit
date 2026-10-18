@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "path"
 import {
   AIError,
   CompactionCheckpointResponse,
@@ -11,6 +12,7 @@ import {
 import { TestLLM } from "@orbit/ai/testing"
 import { Project } from "@orbit/core/project"
 import { Session } from "@orbit/core/session"
+import { SessionInbox } from "@orbit/core/session/inbox"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionReminders } from "@orbit/core/session/reminders"
 import { ReminderText } from "@orbit/core/session/reminder-text"
@@ -147,6 +149,49 @@ const unavailable = () =>
   new AIError({
     reason: new TransportError({ message: "Provider unavailable", transport: "http", operation: "request" }),
   })
+
+// The prompts are admitted with the editor and agents their payload carries, as the server stores them: admission
+// itself is tested in session-prompt-editor.test.ts.
+const admitWithContext = (s: Scenario, text: string, name: string) =>
+  s.sessionInbox.admit({
+    id: SessionMessage.ID.create(),
+    sessionID,
+    item: {
+      type: "user",
+      delivery: "steer",
+      payload: SessionInbox.UserPayload.make({
+        text,
+        agents: [{ name }],
+        editor: { path: path.join(process.cwd(), `${name}.ts`) },
+      }),
+    },
+  })
+
+describe("a prompt's context notes on a minimal instance", () => {
+  for (const minimal of [false, true])
+    scenario(`${minimal ? "a minimal" : "the production"} instance lowers a prompt's notes`, function* (s) {
+      s.reminders.minimal = minimal
+      yield* admitWithContext(s, "Look and echo", "first")
+      yield* s.llm.push(
+        TestLLM.toolCalls(LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "keep" } })),
+        TestLLM.text("Handled", "text-after-steer"),
+      )
+      const tools = yield* s.blockTools(1)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* tools.started
+      yield* admitWithContext(s, "STEER", "second")
+      yield* tools.release
+      yield* Fiber.join(run)
+
+      // The first prompt keeps its hint and editor note on the production instance only. The steer keeps the mid-turn
+      // note on both, and neither hint nor editor note.
+      expect(messageTexts(s.requests[0]).length).toBe(minimal ? 1 : 3)
+      expect(messageTexts(s.requests[0]).at(-1)).toBe("Look and echo")
+      const steer = messageTexts(s.requests[1]).slice(-2)
+      expect(steer[0]).toContain("MUST act on it")
+      expect(steer[1]).toBe("STEER")
+    })
+})
 
 describe("collection", () => {
   scenario(

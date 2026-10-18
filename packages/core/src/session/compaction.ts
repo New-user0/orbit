@@ -588,7 +588,8 @@ export const layer = Layer.effect(
       budget: number,
       webSocket?: "session",
     ) => {
-      const base = transcript(context, messages)
+      // Hints and the editor note belong to the request they were written for; a summary does not carry them.
+      const base = transcript(context, messages, true)
       return requests.compaction({
         session: context.session,
         agent: context.agent.id,
@@ -703,13 +704,18 @@ const previousCompaction = (messages: ReadonlyArray<SessionMessage.Info>) => {
   return first?.type === "compaction" && first.status === "completed" ? first : undefined
 }
 
-const transcript = (context: SessionContext.Loaded, messages: ReadonlyArray<SessionMessage.Info>) =>
+const transcript = (
+  context: SessionContext.Loaded,
+  messages: ReadonlyArray<SessionMessage.Info>,
+  minimal?: boolean,
+) =>
   SessionModelRequest.baseTranscript({
     agent: context.agent.info,
     model: context.model,
     tools: context.tools,
     initial: context.initial,
     messages,
+    minimal,
   })
 
 /**
@@ -876,7 +882,7 @@ export const recentUserMessages = (
 ) => {
   const users = messages
     .filter((message) => message.type === "user")
-    .map((message) => ({ ...message, skills: undefined }))
+    .map((message) => ({ ...message, skills: undefined, agents: undefined, editor: undefined }))
   const sendable = SessionModelRequest.boundImages(
     SessionModelRequest.unsupportedParts(toLLMMessages(users, model.ref), model.capabilities),
   )

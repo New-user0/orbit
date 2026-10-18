@@ -40,6 +40,8 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
     tools: selection.tools,
     initial: history.initial,
     messages: history.messages,
+    // A side query is not the prompt: its hints and editor note are left out.
+    minimal: true,
   })
   return {
     system: base.system,

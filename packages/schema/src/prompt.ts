@@ -68,7 +68,8 @@ const Line = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
  * The client converts the editor's positions before sending: lines are 1-based and inclusive, and a selection that ends
  * at column 0 of its last line stops at the line before it. A selection that ends before it starts
  * is dropped at admission, and the prompt is admitted without the field. A command (`session.command`) accepts the field
- * but does not carry it on.
+ * but does not carry it on. A steer delivered while the agent is still working is stored with the field, but the model
+ * is not shown it: only a prompt sent while idle carries the editor context.
  */
 export interface EditorContext extends Schema.Schema.Type<typeof EditorContext> {}
 export const EditorContext = Schema.Struct({

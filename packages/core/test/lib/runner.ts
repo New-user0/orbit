@@ -194,6 +194,7 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     reminders: { durable: [], derived: [] } as {
       durable: SessionReminders.Durable[]
       derived: SessionReminders.Derived[]
+      minimal?: boolean
     },
     traitGate: Deferred.makeUnsafe<void>(),
     asking: Deferred.makeUnsafe<void>(),
