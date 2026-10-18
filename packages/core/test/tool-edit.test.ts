@@ -1293,7 +1293,6 @@ describe("EditTool fidelity", () => {
     { name: "Q11 em dash only", file: 'x = “a” + "b"—c\n', old: 'x = “a” + "b"-c', new: 'x = “a” + "d"-c', expected: 'x = “a” + "d"-c\n' },
     { name: "Q12 no-break space only", file: "\u2018a\u2019 <a k='b'\u00a0/>\n", old: "\u2018a\u2019 <a k='b' />", new: "\u2018a\u2019 <a k='c' />", expected: "\u2018a\u2019 <a k='c' />\n" },
     { name: "Q13 dash differs, quotes curly in both", file: "a “b”—c\n", old: "a “b”-c", new: 'a "b"-c', expected: 'a "b"-c\n' },
-    { name: "Q9 low-9 quotes detect nothing", file: "x „y‟\n", old: 'x "y"', new: 'x "z"', expected: 'x "z"\n' },
     ...(
       [
         ['He said "goodbye".', "He said “goodbye”."],
@@ -1329,6 +1328,24 @@ describe("EditTool fidelity", () => {
           expect(result.settled).toMatchObject({ status: "completed" })
           expect(result.text).toBe(row.expected)
           if (row.replacements) expect(result.settled).toMatchObject({ output: { replacements: row.replacements } })
+        }),
+      ),
+    )
+
+  // FU-M3-117: only U+2018, U+2019, U+201C and U+201D are matched as straight quotes. The low-9 (U+201A, U+201E) and
+  // reversed (U+201B, U+201F) forms, such as German quotes, do not match, so the edit is not found and the file stays.
+  for (const [name, file, old] of [
+    ["Q9 low-9 quotes do not match straight quotes", "x „y‟\n", 'x "y"'],
+    ["Q9 German opening quote", "Er sagte „Hallo“.\n", 'Er sagte "Hallo".'],
+    ["Q9 low-9 single quote", "x ‚y‘\n", "x 'y'"],
+    ["Q9 reversed double quote", "x ‟y”\n", 'x "y"'],
+    ["Q9 reversed single quote", "x ‛y’\n", "x 'y'"],
+  ] as const)
+    it.live(`quote style ${name}`, () =>
+      editFile(file, { old_string: old, new_string: "z" }).pipe(
+        Effect.map((result) => {
+          expect(result.settled).toMatchObject({ status: "error", error: { type: "edit.no-match" } })
+          expect(result.text).toBe(file)
         }),
       ),
     )

@@ -24,7 +24,7 @@ import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
-const asked: { files: string[]; options: { readonly save?: boolean } | undefined }[] = []
+const asked: { files: string[]; options: { readonly save?: boolean; readonly background?: boolean } | undefined }[] = []
 const lspLayer = Layer.mock(Lsp.Service, {
   diagnostics: (files, options) =>
     Effect.sync(() => {

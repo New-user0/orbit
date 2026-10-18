@@ -3181,9 +3181,14 @@ rules for the `https:` form of a URL. Behind a proxy that resolves names this ma
 
 When Edit finds `old_string` only after matching typography (curly quotes, dashes, spaces) or ignoring trailing whitespace, and the quote characters of the text it found differ from those of `old_string`, it writes the straight `"` and `'` of `new_string` in the quote style of the text it replaced: curly doubles are used only if the replaced text has curly doubles, curly singles only if it has curly singles, and a quote opens at the start of `new_string`, after a space, tab or line break, after `(`, `[` or `{`, or after an en or em dash, and closes anywhere else (a no-break space and a hyphen-minus close). A match whose quotes equal `old_string`'s (an exact match, or one that differs only in whitespace, dashes or spaces) is never restyled. When `new_string` is empty and the matched text is the only thing on its line (apart from whitespace), Edit also removes the line break, so no blank line is left; a deletion in the middle of a line, or one whose `old_string` starts or ends with a line break, removes only the matched text.
 
-**Affects:** people and scripts that rely on the exact bytes Edit writes.
+Only the four English curly quotes (U+2018, U+2019, U+201C and U+201D) match a straight quote when Edit looks for
+`old_string`. A file that spells its quotes with the low-9 forms (U+201A and U+201E, as German does) or the reversed
+forms (U+201B and U+201F) no longer matches an `old_string` with straight quotes: the edit fails as not found and the
+file is left alone, so spell the quotes of the file in `old_string` (pinned by the `Q9` rows in `test/tool-edit.test.ts`).
 
-**What to do:** Nothing.
+**Affects:** people and scripts that rely on the exact bytes Edit writes, and edits of text with German or reversed quotes.
+
+**What to do:** Nothing, or copy the file's own quote characters into `old_string`.
 
 ### WebFetch answers a question about the page
 
