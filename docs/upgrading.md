@@ -1936,8 +1936,12 @@ scanner found, and the folder question held the folders the scanner found.
 - A statement with no command, such as `> file`, and a PowerShell statement that is not a pipeline of commands (an
   assignment, an expression such as `[IO.File]::WriteAllText(...)`, an `if`, a loop, a function) is asked about by its own
   text. Before, its resources were empty and it ran under any `shell *` ask rule. A saved grant for the commands inside it does not cover it.
-- For input Orbit can analyse, a person's `Read` and `Edit` deny rules now stop a shell command that names the file, and
-  a deny anywhere in a call (the shell request, the folder question, a path rule) blocks it before any question is shown. A
+- For input Orbit can analyse, a person's `Read` and `Edit` deny rules now stop a shell command that names the file as a
+  literal operand or target: `cat secret.txt` and `cp secret.txt copy.txt` for a `Read` deny, and a redirect target
+  (`> out`), `tee out` and the output file of a read-class command (`sort -o out`, `uniq f out`, `find . -fprint out`,
+  `tree -o out`, `sed -n 'w out'`) for an `Edit` deny, in both scanner modes (`test/tool-shell.test.ts`,
+  `test/shell-guard.test.ts`). A file that a command reaches in another way is not covered yet: see the caveat under
+  "What to do". A deny anywhere in a call (the shell request, the folder question, a path rule) blocks it before any question is shown. A
   `!` span of a slash command counts with the others: a deny on any span of the template blocks it before a question about
   the first. Plan mode's own deny of every edit is not such a rule: a command in Plan mode is still asked about, as it always
   was, and only an `Edit` deny of your own stops it. `New-PSDrive` is an ordinary PowerShell command that is asked about
@@ -1957,7 +1961,9 @@ now also carries `findings`.
 **What to do:** Approve the folder once, or add an `external_directory` allow for it. Write an allow rule for the commands you
 mean, such as `Bash printf *`. Until the follow-up that makes these asks unliftable (shell-safety-12), a broad allow rule
 (the default `* *` allow included) still lifts a statement with no command and input Orbit cannot read, because it matches
-every resource of the request.
+every resource of the request. It also still lifts a target that is built when the command runs
+(`Remove-Item (Join-Path ...)`) and a read through a glob, a .NET call or a nested shell, even when a `Read` deny names
+the file: the deny meets only the files that Orbit can name before the command runs.
 
 ### A PowerShell command spelled as a path to a location cmdlet is asked about
 
@@ -3052,7 +3058,9 @@ The shell tool also reports `readOnly` and `destructive` for each call (advisory
 is allowed or asked differently because of them). `rm -rf x`, `git reset --hard`, `git push --force`, `DROP TABLE` and
 similar are destructive; every command under `cmd.exe` or an unrecognised shell is. `destructive` is read from the command
 text alone; `readOnly` also depends on where each program would be found, so a program on a relative `PATH` entry or in
-the working folder is not read-only.
+the working folder is not read-only. An empty entry of a Windows `Path` does not count as the working folder, because Git
+Bash drops it and Windows PowerShell 5.1 does not search the folder for it (`test/shell-analysis/readonly-tools.test.ts`);
+an empty entry of a POSIX `PATH` still does.
 
 **Affects:** people whose model issues several shell commands in one step, and plugins or SDK code that read the
 `error` field of a shell result's metadata.
