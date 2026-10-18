@@ -37,6 +37,13 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
     ?.info[key]
 }
 
+/** The last document that sets this experimental key decides it; a later block hides only the keys it sets. */
+export function experimental<K extends keyof NonNullable<Info["experimental"]>>(entries: readonly Entry[], key: K) {
+  return entries.findLast(
+    (entry): entry is Document => entry.type === "document" && entry.info.experimental?.[key] !== undefined,
+  )?.info.experimental?.[key]
+}
+
 /** A root that other agent products keep config in, with what is decided for the folder it belongs to. */
 export interface CompatRoot extends CompatRoots.Root {
   /**

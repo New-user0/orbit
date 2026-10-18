@@ -231,7 +231,7 @@ export const Plugin = {
         shell: invocation.shell,
         cwd: target,
         env: invocation.env,
-        portable: Config.latest(entries, "experimental")?.portable_shell_scanner === true,
+        portable: Config.experimental(entries, "portable_shell_scanner") === true,
         writable,
         base: { sessionID: context.sessionID, agent: context.agent, source },
       }).pipe(Effect.provideContext(guarded))

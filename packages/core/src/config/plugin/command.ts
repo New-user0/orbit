@@ -270,7 +270,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
     const shell = yield* services.shell.resolve({ priority: "compat" })
     const entries = yield* services.config.entries()
     const sandbox = Config.latest(entries, "sandbox")
-    const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
+    const portable = Config.experimental(entries, "portable_shell_scanner") === true
     const cwd = services.location.directory
     const settingsEnv = services.location.workspaceID === undefined ? ConfigEnv.resolve(entries) : {}
     const failure = (source: string) => (error: Error) =>
