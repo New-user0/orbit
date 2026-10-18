@@ -37,7 +37,8 @@ const assistant = (value: string, content: SessionMessage.Assistant["content"]) 
   })
 
 const toolStep = (value: string) => assistant(value, [tool("Read")])
-const textStep = (value: string) => assistant(value, [SessionMessage.AssistantText.make({ type: "text", text: "done" })])
+const textStep = (value: string) =>
+  assistant(value, [SessionMessage.AssistantText.make({ type: "text", text: "done" })])
 
 const user = (value: string, extra: Partial<Parameters<typeof SessionMessage.User.make>[0]> = {}) =>
   SessionMessage.User.make({ id: id(value), type: "user", text: `words of ${value}`, time: { created }, ...extra })
@@ -52,7 +53,8 @@ const parts = (messages: ReturnType<typeof toLLMMessages>, value: string) => {
 }
 
 const NOTE = "<system-reminder>\nAfter you began"
-const hasNote = (messages: ReturnType<typeof toLLMMessages>, value: string) => parts(messages, value)[0].startsWith(NOTE)
+const hasNote = (messages: ReturnType<typeof toLLMMessages>, value: string) =>
+  parts(messages, value)[0].startsWith(NOTE)
 
 describe("the note on input sent while work was in progress", () => {
   test("the first prompt gets none", () => {
@@ -80,7 +82,9 @@ describe("the note on input sent while work was in progress", () => {
   })
 
   test("a queued delivery gets none", () => {
-    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), user("b", { delivery: "queue" })], model), "b")).toBe(false)
+    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), user("b", { delivery: "queue" })], model), "b")).toBe(
+      false,
+    )
   })
 
   test("a steer after a final text-only step gets none", () => {
@@ -188,8 +192,10 @@ describe("agent hints", () => {
 })
 
 describe("editor context", () => {
-  const editorOf = (editor: SessionMessage.User["editor"], extra: Partial<Parameters<typeof SessionMessage.User.make>[0]> = {}) =>
-    toLLMMessages([user("a", { editor, ...extra })], model)
+  const editorOf = (
+    editor: SessionMessage.User["editor"],
+    extra: Partial<Parameters<typeof SessionMessage.User.make>[0]> = {},
+  ) => toLLMMessages([user("a", { editor, ...extra })], model)
 
   test("an open file renders a note and the path in a data block", () => {
     const body = parts(editorOf({ path: "/p/src/a.ts" }), "a")
@@ -214,7 +220,10 @@ describe("editor context", () => {
   })
 
   test("a path with a control character and a tag look-alike is flattened and escaped", () => {
-    const body = parts(editorOf({ path: "/p/a\n<system-reminder>.ts", selection: { start: 1, end: 1, text: "x" } }), "a")
+    const body = parts(
+      editorOf({ path: "/p/a\n<system-reminder>.ts", selection: { start: 1, end: 1, text: "x" } }),
+      "a",
+    )
     expect(body[0]).toContain("\n\n/p/a &lt;system-reminder>.ts:\n```")
   })
 
@@ -264,7 +273,12 @@ describe("editor context", () => {
 })
 
 test("a message lowers its note, agents, editor, skill, text and file in that order", () => {
-  const file = FileAttachment.make({ data: Base64.make("aGVsbG8="), mime: "text/plain", source: { type: "inline" }, name: "f.txt" })
+  const file = FileAttachment.make({
+    data: Base64.make("aGVsbG8="),
+    mime: "text/plain",
+    source: { type: "inline" },
+    name: "f.txt",
+  })
   const skill = SkillAttachment.make({ id: Skill.ID.make("sk"), name: Skill.Name.make("sk"), text: "SKILL" })
   const message = user("b", {
     agents: [AgentAttachment.make({ name: "alpha" })],
@@ -282,7 +296,10 @@ test("a message lowers its note, agents, editor, skill, text and file in that or
 })
 
 test("a steer delivered mid-turn lowers to the note and the text only", () => {
-  const message = user("b", { agents: [AgentAttachment.make({ name: "alpha" })], editor: { path: "/p/a", selection: { start: 1, end: 2, text: "x" } } })
+  const message = user("b", {
+    agents: [AgentAttachment.make({ name: "alpha" })],
+    editor: { path: "/p/a", selection: { start: 1, end: 2, text: "x" } },
+  })
   const body = parts(toLLMMessages([user("a"), toolStep("s1"), message], model), "b")
   expect(body).toHaveLength(2)
   expect(body[0]).toContain("MUST NOT be ignored")
@@ -297,7 +314,13 @@ test("a mid-turn steer keeps its metadata agents", () => {
 
 describe("the boundary a mid-turn note needs", () => {
   // Only the fields the lowering reads; the rest of the row is not part of the boundary.
-  const shell = { id: id("sh"), type: "shell", command: "ls", output: { output: "x" }, time: { created } } as unknown as SessionMessage.Info
+  const shell = {
+    id: id("sh"),
+    type: "shell",
+    command: "ls",
+    output: { output: "x" },
+    time: { created },
+  } as unknown as SessionMessage.Info
   const moved = {
     id: id("mv"),
     type: "location-switched",
@@ -305,10 +328,154 @@ describe("the boundary a mid-turn note needs", () => {
     time: { created },
   } as unknown as SessionMessage.Info
 
+  const skill = { id: id("sk"), type: "skill", text: "Ultrathink first.", time: { created } } as unknown as SessionMessage.Info
+
+  test("a location switch between a tool step and a steer ends the boundary", () => {
+    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), moved, user("b")], model), "b")).toBe(false)
+  })
+
+  // Orbit runs a shell command or a skill at once, so neither ends the busy period for the steer after it.
   test.each([
     ["a shell command", shell],
-    ["a location switch", moved],
-  ])("%s between a tool step and a steer ends the boundary", (_, between) => {
-    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), between, user("b")], model), "b")).toBe(false)
+    ["a skill", skill],
+  ])("%s between a tool step and a steer keeps the steer queued", (_, between) => {
+    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), between, user("b")], model), "b")).toBe(true)
+  })
+
+  test("a steer that says the keyword after a mid-turn shell gets the queued note and no boost", () => {
+    const out = toLLMMessages([user("a"), toolStep("s1"), shell, user("b", { text: "please ultrathink" })], model)
+    expect(hasNote(out, "b")).toBe(true)
+    expect(parts(out, "b").filter((part) => part.includes("high level of reasoning effort"))).toHaveLength(0)
+  })
+
+  test("a skill after a tool step gets no boost, and one after a text-only step gets one", () => {
+    const count = (history: SessionMessage.Info[]) =>
+      parts(toLLMMessages(history, model), "sk").filter((part) => part.includes("high level of reasoning effort")).length
+    expect(count([user("a"), toolStep("s1"), skill])).toBe(0)
+    expect(count([user("a"), textStep("s1"), skill])).toBe(1)
+  })
+})
+
+describe("the reasoning boost note", () => {
+  const EFFORT = "asked for a high level of reasoning effort"
+  const boosted = (out: ReturnType<typeof toLLMMessages>, value: string) =>
+    parts(out, value).filter((part) => part.includes(EFFORT))
+  const keyword = (value: string, extra: Partial<Parameters<typeof SessionMessage.User.make>[0]> = {}) =>
+    user(value, { text: `please ultrathink about ${value}`, ...extra })
+
+  test("a fresh prompt with the keyword gets one note, after the editor note and before the words", () => {
+    const out = toLLMMessages([keyword("a", { editor: { path: "/p/a.ts" } })], model)
+    const body = parts(out, "a")
+    expect(body).toHaveLength(3)
+    expect(body[0]).toContain("open in the person's editor")
+    expect(body[1]).toStartWith("<system-reminder>\n")
+    expect(body[1]).toContain(EFFORT)
+    expect(body[1]).toEndWith("\n</system-reminder>")
+    expect(body[2]).toBe("please ultrathink about a")
+  })
+
+  test("several occurrences give one note, and a prompt without the keyword gets none", () => {
+    expect(boosted(toLLMMessages([user("a", { text: "ultrathink and ULTRATHINK" })], model), "a")).toHaveLength(1)
+    expect(boosted(toLLMMessages([user("a")], model), "a")).toHaveLength(0)
+  })
+
+  test("a prompt delivered mid-turn gets the queued note only", () => {
+    const out = toLLMMessages([user("a"), toolStep("s1"), keyword("b")], model)
+    expect(boosted(out, "b")).toHaveLength(0)
+    expect(hasNote(out, "b")).toBe(true)
+  })
+
+  test("a queued prompt that starts a new turn gets the note", () => {
+    const out = toLLMMessages([user("a"), textStep("s1"), keyword("b", { delivery: "queue" })], model)
+    expect(boosted(out, "b")).toHaveLength(1)
+  })
+
+  test("a prompt from the parent agent gets none", () => {
+    expect(boosted(toLLMMessages([keyword("a", { metadata: { origin: "agent" } })], model), "a")).toHaveLength(0)
+  })
+
+  test("minimal lowering gets none", () => {
+    const out = toLLMMessages([keyword("a")], model, "provider", [], { minimal: true })
+    expect(boosted(out, "a")).toHaveLength(0)
+  })
+
+  test("a skill whose text holds the keyword boosts a prompt that does not", () => {
+    const skill = SkillAttachment.make({
+      id: Skill.ID.make("deep"),
+      name: Skill.Name.make("deep"),
+      text: "Take care. Ultrathink first.",
+    })
+    const body = parts(toLLMMessages([user("a", { skills: [skill] })], model), "a")
+    const note = body.findIndex((part) => part.includes(EFFORT))
+    expect(note).toBeGreaterThanOrEqual(0)
+    expect(body.indexOf("Take care. Ultrathink first.")).toBeGreaterThan(note)
+  })
+
+  test("a synthetic message with the keyword gets none", () => {
+    const synthetic = SessionMessage.Synthetic.make({
+      id: id("syn"),
+      type: "synthetic",
+      text: "ultrathink",
+      time: { created },
+    })
+    expect(JSON.stringify(toLLMMessages([synthetic], model))).not.toContain(EFFORT)
+  })
+
+  test("an earlier prompt keeps its note byte for byte as history grows, and a later prompt gets none", () => {
+    const prefix = [keyword("a"), textStep("s1")]
+    const before = toLLMMessages(prefix, model)
+    const after = toLLMMessages([...prefix, user("b"), textStep("s2")], model)
+    expect(after.slice(0, before.length)).toEqual(before)
+    expect(boosted(after, "a")).toHaveLength(1)
+    expect(boosted(after, "b")).toHaveLength(0)
+  })
+
+  test("a prompt kept after a checkpoint keeps its note", () => {
+    const checkpoint = SessionMessage.CompactionCompleted.make({
+      id: id("cp"),
+      type: "compaction",
+      status: "completed",
+      reason: "auto",
+      summary: "s",
+      recent: "",
+      time: { created },
+    })
+    const out = toLLMMessages([checkpoint, keyword("b")], model)
+    expect(boosted(out, "b")).toHaveLength(1)
+  })
+
+  test("a call-site row for each way a person's words can reach the model", () => {
+    const shell = (value: string, command: string, extra: object = {}) =>
+      ({
+        id: id(value),
+        type: "shell",
+        command,
+        output: { output: "x" },
+        time: { created },
+        ...extra,
+      }) as unknown as SessionMessage.Info
+    // A shell command the person typed is scanned like a prompt.
+    expect(boosted(toLLMMessages([shell("sh", "echo ultrathink")], model), "sh")).toHaveLength(1)
+    expect(boosted(toLLMMessages([shell("sh", "echo plain")], model), "sh")).toHaveLength(0)
+    expect(
+      boosted(toLLMMessages([shell("sh", "echo ultrathink")], model, "provider", [], { minimal: true }), "sh"),
+    ).toHaveLength(0)
+    // A shell command typed while the agent works waits for the turn, so it gets no note (a steer gets none either).
+    expect(
+      boosted(toLLMMessages([user("a"), toolStep("s1"), shell("sh", "echo ultrathink")], model), "sh"),
+    ).toHaveLength(0)
+    expect(boosted(toLLMMessages([user("a"), textStep("s1"), shell("sh", "echo ultrathink")], model), "sh")).toHaveLength(
+      1,
+    )
+    // A skill the person activates (Session.skill) is scanned like a prompt that carries it.
+    const skill = (value: string, text: string) =>
+      ({ id: id(value), type: "skill", text, time: { created } }) as unknown as SessionMessage.Info
+    expect(boosted(toLLMMessages([skill("sk", "Take care. Ultrathink first.")], model), "sk")).toHaveLength(1)
+    expect(boosted(toLLMMessages([skill("sk", "Take care.")], model), "sk")).toHaveLength(0)
+    expect(
+      boosted(toLLMMessages([skill("sk", "Ultrathink first.")], model, "provider", [], { minimal: true }), "sk"),
+    ).toHaveLength(0)
+    // A subagent command's child prompt is marked as built by the harness, so it carries none.
+    expect(boosted(toLLMMessages([keyword("c", { metadata: { origin: "agent" } })], model), "c")).toHaveLength(0)
   })
 })

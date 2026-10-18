@@ -7,6 +7,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { Config } from "@orbit/core/config"
 import { Instance } from "@orbit/core/instance"
+import { InstructionBuiltIns } from "@orbit/core/instructions/builtins"
 import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { LocationServiceMap } from "@orbit/core/location-services"
 import { Location } from "@orbit/core/location"
@@ -27,7 +28,7 @@ const hostConfig: LayerNode.Replacements = [
     Config.configured({
       project: false,
       global: false,
-      content: JSON.stringify({ shell: "vanilla-host" }),
+      content: JSON.stringify({ shell: "vanilla-host", language: "Japanese" }),
     }),
   ),
 ]
@@ -96,12 +97,14 @@ describe("Instance vanilla", () => {
               const discovery = yield* InstructionDiscovery.Service
               const entries = yield* config.entries()
               const vcs = yield* VcsInstructions.Service
+              const builtIns = yield* InstructionBuiltIns.Service
               return {
                 documents: entries.filter(
                   (entry) => "path" in entry && typeof entry.path === "string" && entry.path.startsWith(ref.directory),
                 ),
                 instructions: yield* discovery.list(),
                 shell: Config.latest(entries, "shell"),
+                preferences: (yield* builtIns.preferences()).map((source) => source.key),
                 snapshot: vcs.source({ id: SessionSchema.ID.make("ses_vanilla") }).map((source) => source.key),
               }
             }).pipe(Effect.scoped, Effect.provide(locations.get(ref)))
@@ -111,6 +114,8 @@ describe("Instance vanilla", () => {
           expect(vanilla.instructions).toEqual([])
           // A vanilla instance reads nothing of the project, and the git snapshot is one such read.
           expect(vanilla.snapshot).toEqual([])
+          // The reply language is dropped from a vanilla instance, even one the host configured with a language.
+          expect(vanilla.preferences).toEqual([])
           // Host-injected content survives discovery: false.
           expect(vanilla.shell).toBe("vanilla-host")
 
@@ -119,10 +124,12 @@ describe("Instance vanilla", () => {
           expect(bare.documents).toEqual([])
           expect(bare.instructions).toEqual([])
           expect(bare.snapshot).toEqual([])
+          expect(bare.preferences).toEqual([])
           expect(bare.shell).toBeUndefined()
 
           const discovery = yield* read(yield* plant("discovery"))
           expect(discovery.snapshot).toEqual([VcsInstructions.key])
+          expect(discovery.preferences.map(String)).toEqual(["core/language"])
           expect(discovery.documents.length).toBeGreaterThan(0)
           expect(
             Array.isArray(discovery.instructions) &&

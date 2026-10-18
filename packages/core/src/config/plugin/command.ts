@@ -147,6 +147,8 @@ export const Plugin = define({
                     ...input.prompt,
                     sessionID: child.id,
                     text,
+                    // The child's prompt is built by the harness, not typed by the person: the effort keyword does not boost it.
+                    metadata: { origin: "agent" },
                     resume: false,
                   })
                   const recovery = {

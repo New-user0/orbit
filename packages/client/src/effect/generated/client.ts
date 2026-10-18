@@ -1619,9 +1619,9 @@ const EndpointConfigShells = (raw: RawClient["server.config"]) => () =>
 
 const EndpointConfigUpdate = (raw: RawClient["server.config"]) => (input?: ConfigUpdateInput) =>
   preserveEffect<ConfigUpdateOutput>()(
-    raw["config.update"]({ payload: { shell: input?.["shell"], output_style: input?.["output_style"] } }).pipe(
-      Effect.mapError(mapClientError),
-    ),
+    raw["config.update"]({
+      payload: { shell: input?.["shell"], output_style: input?.["output_style"], language: input?.["language"] },
+    }).pipe(Effect.mapError(mapClientError)),
   )
 
 const EndpointConfigSourcesChanged = (raw: RawClient["server.config"]) => (input: ConfigSourcesChangedInput) =>

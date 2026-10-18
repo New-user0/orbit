@@ -15,6 +15,7 @@ import { InstructionDiscovery } from "../instruction-discovery.js"
 import { Instructions } from "../instructions/index.js"
 import { InstructionBuiltIns } from "../instructions/builtins.js"
 import { Location } from "../location.js"
+import { PromptConfigPlugin } from "../plugin/prompt-config.js"
 import { McpInstructions } from "../mcp/instructions.js"
 import { McpTool } from "../tool/mcp.js"
 import { ReferenceInstructions } from "../reference/instructions.js"
@@ -208,6 +209,11 @@ const layer = Layer.effect(
         },
         { concurrency: "unbounded" },
       )
+      // The reply language is for the main thread: a subagent answers its parent, not the person. A fork follows its source.
+      const forkSource = session.fork && (yield* store.get(session.fork.sessionID))
+      const preferences = PromptConfigPlugin.mainThread(session, forkSource || undefined)
+        ? yield* builtins.preferences()
+        : Instructions.empty
       return {
         session,
         agent: { ...agent, info: agent.info },
@@ -224,6 +230,7 @@ const layer = Layer.effect(
           loaded.references,
           loaded.skills,
           loaded.agents,
+          preferences,
           loaded.discovery,
           loaded.builtins,
           vcsInstructions.source(session, { enabled: agent.info.context?.git_status !== false }),

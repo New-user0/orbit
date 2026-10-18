@@ -2272,6 +2272,7 @@ export type ConfigEntry =
         git_status?: boolean
         default_agent?: string
         output_style?: string
+        language?: string
         system_prompt?: string
         system_prompt_file?: string
         append_system_prompt?: string
@@ -7232,8 +7233,21 @@ export type ConfigEffectiveOutput = ConfigEffective
 export type ConfigShellsOutput = Array<ConfigShellOption>
 
 export type ConfigUpdateInput = {
-  readonly shell?: { readonly shell?: string | null; readonly output_style?: string | null }["shell"]
-  readonly output_style?: { readonly shell?: string | null; readonly output_style?: string | null }["output_style"]
+  readonly shell?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+  }["shell"]
+  readonly output_style?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+  }["output_style"]
+  readonly language?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+  }["language"]
 }
 
 export type ConfigUpdateOutput = void

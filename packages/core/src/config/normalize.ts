@@ -294,6 +294,7 @@ export function normalize(input: unknown): Result {
     git_status: Info.fields.git_status,
     default_agent: Info.fields.default_agent,
     output_style: Info.fields.output_style,
+    language: Info.fields.language,
     system_prompt: Info.fields.system_prompt,
     system_prompt_file: Info.fields.system_prompt_file,
     append_system_prompt: Info.fields.append_system_prompt,

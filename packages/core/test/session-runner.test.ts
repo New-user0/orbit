@@ -500,6 +500,7 @@ const makeLayer = (persist: boolean, real = false) =>
     })
     const systemContextKey = Instructions.Key.make("test/context")
     const systemContext = Layer.mock(InstructionBuiltIns.Service, {
+      preferences: () => Effect.succeed(Instructions.empty),
       load: () =>
         Effect.sync(() =>
           Instructions.make({
@@ -1212,6 +1213,29 @@ describe("SessionRunnerLLM", () => {
 
     expect((yield* s.session.get(sessionID)).title).toBe("Generated title")
     yield* Fiber.interrupt(fiber)
+  })
+
+  scenario("an ultrathink prompt sends the same model and options as the runs around it, and only adds the note", function* (s) {
+    yield* s.llm.push(TestLLM.text("One", "boost-1"), TestLLM.text("Two", "boost-2"), TestLLM.text("Three", "boost-3"))
+    yield* s.runPrompt("A plain opener")
+    yield* s.runPrompt("Please ultrathink about this")
+    yield* s.runPrompt("A plain follow-up")
+
+    expect(s.requests).toHaveLength(3)
+    const [plain, boosted, after] = s.requests
+    // Everything but the messages is identical: the keyword changes no request parameter, and a later prompt that
+    // follows the keyword in history is not affected either.
+    const options = (request: typeof plain) => ({ ...request, messages: undefined, id: undefined })
+    expect(options(boosted)).toEqual(options(plain))
+    expect(options(after)).toEqual(options(plain))
+    // The recorded model and variant of every step are the same too.
+    const steps = (yield* s.messages).flatMap((message) => (message.type === "assistant" ? [message.model] : []))
+    expect(steps).toHaveLength(3)
+    expect(steps[1]).toEqual(steps[0])
+    expect(steps[2]).toEqual(steps[0])
+    const EFFORT = "asked for a high level of reasoning effort"
+    const noted = (request: typeof plain) => JSON.stringify(request.messages).split(EFFORT).length - 1
+    expect([noted(plain), noted(boosted), noted(after)]).toEqual([0, 1, 1])
   })
 
   scenario("does not automatically replace an existing session title", function* (s) {

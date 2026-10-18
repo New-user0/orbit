@@ -99,6 +99,7 @@ const catalogModels = Layer.mock(Model.Service, {
     Effect.succeed(id === pinnedInfo.id ? pinnedInfo : id === primaryInfo.id ? primaryInfo : undefined),
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
+  preferences: () => Effect.succeed(Instructions.empty),
   load: () =>
     Effect.succeed(
       Instructions.make({

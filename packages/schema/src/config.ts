@@ -75,6 +75,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description:
       'How the agent communicates: "default", a built-in style ("explanatory", "learning"), or the name of a Markdown file in an output-styles directory',
   }),
+  language: Schema.String.pipe(optional).annotate({
+    description:
+      'The language the agent replies to the person in, as any language name or spelling, for example "Japanese" or "español". Code, commands and technical terms are left untranslated. Unset, or empty, means no preference',
+  }),
   system_prompt: Schema.String.pipe(optional).annotate({
     description:
       "Text that replaces Orbit's base system prompt for the main thread of a session: sessions without a parent, and forks of them. Orbit's base sections and the model-specific prompt are dropped and its core rules are kept; the git section, an output style and tool descriptions still apply. ${ORBIT_TOOL_GUIDANCE} in the text is replaced by the guidance lines of the tools on offer. Agents with a prompt of their own and subagents keep their own prompt. The highest-priority config that sets this or system_prompt_file decides; an empty string counts as unset",
@@ -191,6 +195,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
 export const Patch = Schema.Struct({
   shell: Schema.optionalKey(Schema.NullOr(Schema.String)),
   output_style: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  language: Schema.optionalKey(Schema.NullOr(Schema.String)),
 }).annotate({ identifier: "Config.Patch" })
 export interface Patch extends Schema.Schema.Type<typeof Patch> {}
 

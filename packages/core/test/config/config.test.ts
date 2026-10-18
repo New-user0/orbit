@@ -91,6 +91,29 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.live("writes the reply language to the user's own file and removes it again with null", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const project = path.join(tmp.path, "project")
+        const file = path.join(global, "orbit.jsonc")
+        return Effect.promise(() =>
+          Promise.all([fs.mkdir(project, { recursive: true }), fs.mkdir(global, { recursive: true })]),
+        ).pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              yield* config.update!({ language: "Japanese" })
+              expect(JSON.parse(yield* Effect.promise(() => fs.readFile(file, "utf8"))).language).toBe("Japanese")
+              yield* config.update!({ language: null })
+              expect(JSON.parse(yield* Effect.promise(() => fs.readFile(file, "utf8")))).not.toHaveProperty("language")
+            }).pipe(Effect.provide(testLayer(project, global))),
+          ),
+        )
+      }),
+    ),
+  )
+
   it.live("excludes the home directory's compatibility roots when global is disabled", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {

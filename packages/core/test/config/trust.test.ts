@@ -167,6 +167,7 @@ describe("ConfigTrust.sanitize", () => {
     const inert = decode({
       $schema: "https://example.com/orbit.json",
       output_style: "explanatory",
+      language: "Japanese",
       username: "dev",
       snapshots: false,
       watcher: { ignore: ["dist"] },

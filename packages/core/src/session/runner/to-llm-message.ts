@@ -14,6 +14,7 @@ import { SessionMessage } from "../message.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { ToolNames } from "../../tool/names.js"
 import { ReminderText } from "../reminder-text.js"
+import { SessionEffort } from "../effort.js"
 import type { FileAttachment } from "@orbit/schema/prompt"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
@@ -354,14 +355,21 @@ const editorNote = (editor: NonNullable<Extract<SessionMessage.Info, { type: "us
   const split = text.length > EDITOR_SELECTION_LIMIT
   // Never inside a surrogate pair.
   const end =
-    split && /[\uD800-\uDBFF]/.test(text[EDITOR_SELECTION_LIMIT - 1]) ? EDITOR_SELECTION_LIMIT - 1 : EDITOR_SELECTION_LIMIT
+    split && /[\uD800-\uDBFF]/.test(text[EDITOR_SELECTION_LIMIT - 1])
+      ? EDITOR_SELECTION_LIMIT - 1
+      : EDITOR_SELECTION_LIMIT
   const kept = split ? text.slice(0, end) : text
-  const range = selection.start === selection.end ? `line ${selection.start}` : `lines ${selection.start} to ${selection.end}`
+  const range =
+    selection.start === selection.end ? `line ${selection.start}` : `lines ${selection.start} to ${selection.end}`
   const left = text.length - kept.length
   return ReminderText.render({
     text: [
       `The person has highlighted ${range} in the file named below; the highlighted text follows. ${caveat}`,
-      ...(split ? [`The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at its end ${left === 1 ? "is" : "are"} not shown.`] : []),
+      ...(split
+        ? [
+            `The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at its end ${left === 1 ? "is" : "are"} not shown.`,
+          ]
+        : []),
     ].join(" "),
     data: { label: editor.path, content: kept },
   })
@@ -398,10 +406,16 @@ function toLLMMessage(
       const queued = lowering.queued.has(message.id)
       // Input delivered mid-turn gets only the note; hints and the editor note belong to a prompt sent while idle.
       const context = !lowering.minimal && !queued
+      // A prompt a parent agent wrote is not the person asking. The keyword may sit in the prompt or in a skill's text.
+      const boosted =
+        context &&
+        message.metadata?.origin !== "agent" &&
+        [message.text, ...(message.skills ?? []).map((skill) => skill.text ?? "")].some(SessionEffort.requested)
       const content = [
         ...(queued ? [Message.text(queuedNote(message.metadata?.origin))] : []),
         ...(context && message.agents?.length ? agentHints(message.agents).map((hint) => Message.text(hint)) : []),
         ...(context && message.editor ? [Message.text(editorNote(message.editor))] : []),
+        ...(boosted ? [Message.text(ReminderText.render({ text: SessionEffort.note }))] : []),
         ...(message.skills ?? []).flatMap((skill) => (skill.text === undefined ? [] : [Message.text(skill.text)])),
         ...(message.text === "" ? [] : [Message.text(message.text)]),
         ...userAttachmentContent(message.files ?? []),
@@ -421,7 +435,20 @@ function toLLMMessage(
     case "synthetic":
       return [Message.make({ id: message.id, role: "user", content: syntheticText(message) })]
     case "skill":
-      return [Message.make({ id: message.id, role: "user", content: message.text, metadata: message.metadata })]
+      return [
+        Message.make({
+          id: message.id,
+          role: "user",
+          content: [
+            // A skill the person activates is scanned like a prompt that carries it, unless it arrives mid-turn.
+            ...(!lowering.minimal && !lowering.queued.has(message.id) && SessionEffort.requested(message.text)
+              ? [Message.text(ReminderText.render({ text: SessionEffort.note }))]
+              : []),
+            Message.text(message.text),
+          ],
+          metadata: message.metadata,
+        }),
+      ]
     case "system":
       return [Message.system(message.text)]
     case "shell":
@@ -431,7 +458,16 @@ function toLLMMessage(
         Message.make({
           id: message.id,
           role: "user",
-          content: `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${ReminderText.neutralize(message.output?.output ?? "")}`,
+          content: [
+            Message.text(
+              `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${ReminderText.neutralize(message.output?.output ?? "")}`,
+            ),
+            // Shell input the person typed is scanned like a prompt.
+            // A command typed while the agent works runs at once and belongs to that turn, so it gets no note.
+            ...(!lowering.minimal && !lowering.queued.has(message.id) && SessionEffort.requested(message.command)
+              ? [Message.text(ReminderText.render({ text: SessionEffort.note }))]
+              : []),
+          ],
           metadata: message.metadata,
         }),
       ]
@@ -494,8 +530,12 @@ const queuedInput = (history: readonly SessionMessage.Info[]) => {
         if (message.delivery === "queue") open = false
         else if (open) queued.add(message.id)
         return
-      case "idle":
       case "shell":
+      case "skill":
+        // Orbit runs both at once, so neither ends the busy period for the input that follows.
+        if (open) queued.add(message.id)
+        return
+      case "idle":
       case "location-switched":
         open = false
         return
