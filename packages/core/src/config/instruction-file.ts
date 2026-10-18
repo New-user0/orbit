@@ -1129,7 +1129,22 @@ function expandBraces(pattern: string): string[] {
 export function ruleMatches(patterns: readonly string[], base: string, target: string) {
   const from = relative(base, target)
   if (from === "" || !FSUtil.contains(base, target)) return false
-  return ignore()
-    .add([...patterns])
-    .ignores(from.replaceAll("\\", "/"))
+  const real = from.replaceAll("\\", "/")
+  // A path this long or this deep matches nothing, so the matcher's work cannot grow with what a repository names.
+  if (real.length > RULE_PATH_LENGTH || real.split("/").length > RULE_PATH_DEPTH) return false
+  const usable = patterns.filter(cheapPattern)
+  if (usable.length === 0) return false
+  return ignore().add(usable).ignores(real)
+}
+
+const RULE_PATH_LENGTH = 1_024
+const RULE_PATH_DEPTH = 32
+
+// `ignore` compiles a pattern to a backtracking regular expression, so a pattern with many wildcards can take minutes on one
+// file name. Only a pattern whose work stays small is matched: at most two runs of stars in a segment and two `**` segments
+// in all. The rest are dropped, as if they matched nothing.
+export function cheapPattern(pattern: string) {
+  const segments = pattern.split("/")
+  if (segments.filter((segment) => segment === "**").length > 2) return false
+  return segments.every((segment) => segment === "**" || (segment.match(/\*+/g)?.length ?? 0) <= 2)
 }

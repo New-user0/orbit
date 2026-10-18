@@ -85,6 +85,39 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     }
   }, 90_000)
 
+  // `ignore` backtracks, and the repository writes both the pattern and the file name: a read must cost a small fixed amount.
+  test("matches a read in bounded time, whatever wildcards and depth a repository writes", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "rule-match-stress.ts")],
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 60_000)
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    const report = JSON.parse(out) as { readonly name: string; readonly ms: number; readonly matched: boolean }[]
+    expect(report.map((item) => item.name)).toEqual([
+      "manyStars",
+      "threeGlobstars",
+      "twoGlobstarsDeep",
+      "twoGlobstarsAtLimit",
+      "worstAllowed",
+      "twoStarRuns",
+      "control",
+    ])
+    for (const item of report) expect(item.ms).toBeLessThan(1_000)
+    expect(report.find((item) => item.name === "control")?.matched).toBe(true)
+    expect(report.find((item) => item.name === "manyStars")?.matched).toBe(false)
+  }, 90_000)
+
+  test("drops a pattern with many wildcards and keeps the realistic ones", () => {
+    const cheap = ConfigInstructionFile.cheapPattern
+    expect(["*.ts", "src/**/*.test.ts", "**/*.{ts}", "/src/*.ts", "!a/*.md"].filter(cheap)).toHaveLength(5)
+    expect(cheap(`${"*a".repeat(20)}*ab`)).toBe(false)
+    expect(cheap("**/a/**/b/**/c")).toBe(false)
+  })
+
   test("reads the block with plain delimiters, whatever spaces follow the dashes on its own lines", () => {
     const frontmatter = ConfigMarkdown.split("---  \npaths: a\n---\t\nBody.").frontmatter
     expect(ConfigInstructionFile.rulePatterns(frontmatter)).toEqual({ patterns: ["a"], malformed: false })

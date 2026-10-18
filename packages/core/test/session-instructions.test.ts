@@ -2020,7 +2020,7 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
   // Class 4: a rule of the project that was already a link out of it when it was found (`real` is the outside file, the base
   // is the project) is refused at injection in a trusted project, as an import is. Only a folder above the project may
   // vouch for a rule that lies outside it. A plain rule of the project is the control.
-  ;(canLinkFile ? it.live : it.live.skip)("injects a rule of the project that leads out of it, but not one that stays inside", () =>
+  ;(canLinkFile ? it.live : it.live.skip)("does not inject a rule of the project that leads out of it, and injects one that stays inside", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory
       const outside = yield* outsideFolder
