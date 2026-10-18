@@ -77,6 +77,7 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
     yield* Effect.promise(() => Bun.$`git init -q`.cwd(project).quiet())
     const llm = yield* TestLLM.Test.pipe(Effect.provide(TestLLM.testLayer({ fallback: TestLLM.text("side", "side_text") })))
     const unreadable = { current: false }
+    const reads: string[] = []
     const replacements: LayerNode.Replacements = [
       Global.node.replace(Global.layerWith({ home, config, data: path.join(root, "data"), cache: path.join(root, "cache"), state: path.join(root, "state"), tmp: path.join(root, "tmp") })),
       Database.node.replace(Database.configured({ path: ":memory:" })),
@@ -93,7 +94,8 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
               FSUtil.Service.of({
                 ...fs,
                 readFileStringSafe: (file) =>
-                  unreadable.current && path.basename(file) === "ORBIT.md" ? Effect.undefined : fs.readFileStringSafe(file),
+                  Effect.sync(() => reads.push(file)).pipe(Effect.andThen(
+                  unreadable.current && path.basename(file) === "ORBIT.md" ? Effect.undefined : fs.readFileStringSafe(file))),
               }),
             ),
           ),
@@ -142,6 +144,7 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
       project,
       llm,
       unreadable,
+      reads,
       sessions,
       /** Previews until `done` accepts the answer, which lets a watcher rescan land. */
       until: (id: string, done: (preview: Preview) => boolean) =>
@@ -267,6 +270,8 @@ it.live("lists no files for an agent that leaves instruction files out of its co
     // It reads no source, so an unreadable one leaves its empty list complete.
     s.unreadable.current = true
     yield* s.write(path.join(s.project, "ORBIT.md"), "changed rules")
+    // Wait for the rescan to mark the source unavailable, so `available: true` below cannot come from discovery.
+    yield* s.until((yield* s.session()).id, (preview) => !preview.status.available)
     const unreadable = yield* s.preview((yield* s.session(s.project, "explore")).id)
     expect(unreadable.status.files).toEqual([])
     expect(unreadable.status.available).toBe(true)
@@ -463,6 +468,37 @@ it.live("separates an import left out from one inside the project, trusted or no
       }
       expect(preview.initial).not.toContain("OUTSIDE-MARKER")
       expect(preview.status.warnings).toMatchObject([{ type: "import-untrusted", target: outside, directory: s.project }])
+    }
+  }).pipe(Effect.scoped),
+)
+
+it.live("reads no file a link leads out of an untrusted project to, and a second preview reads no instruction file", () =>
+  Effect.gen(function* () {
+    const { canLinkFile } = yield* Effect.promise(() => import("../../core/test/fixture/symlink"))
+    if (!canLinkFile) return
+    for (const trusted of [false, true]) {
+      const s = yield* server({ trusted })
+      const outside = path.join(s.root, "outside")
+      yield* s.write(path.join(outside, "ORBIT.md"), "LINKED-OUT-MARKER-A")
+      yield* s.write(path.join(outside, "ORBIT.local.md"), "LINKED-OUT-MARKER-B")
+      yield* Effect.promise(() =>
+        Promise.all([
+          fs.symlink(path.join(outside, "ORBIT.md"), path.join(s.project, "ORBIT.md")),
+          fs.symlink(path.join(outside, "ORBIT.local.md"), path.join(s.project, "ORBIT.local.md")),
+        ]),
+      )
+      const id = (yield* s.session()).id
+      const first = yield* s.preview(id)
+      const read = s.reads.some((file) => file.startsWith(outside))
+      const step = yield* s.step(id, "go")
+      const system = JSON.stringify(step?.system ?? "")
+      expect(read).toBe(trusted)
+      expect((first.initial ?? "").includes("LINKED-OUT-MARKER")).toBe(trusted)
+      expect(system.includes("LINKED-OUT-MARKER")).toBe(trusted)
+
+      s.reads.length = 0
+      yield* s.preview(id)
+      expect(s.reads.filter((file) => file.endsWith(".md"))).toEqual([])
     }
   }).pipe(Effect.scoped),
 )
