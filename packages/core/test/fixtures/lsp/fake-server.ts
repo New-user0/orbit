@@ -29,7 +29,7 @@ const MARKERS = [
 // The files whose late problems were already published, so that later publications keep them.
 const lateReady = new Set<string>()
 const found = (text: string, uri = "") =>
-  text.split(String.fromCharCode(10)).flatMap((line, index) => {
+  text.split("\n").flatMap((line, index) => {
     const code = /CODE=(\S+)/.exec(line)?.[1]
     const extra = code === undefined ? {} : { code, source: "fake" }
     const marked = MARKERS.filter(([name]) => line.includes(name)).map(([name, severity]) =>
@@ -41,10 +41,13 @@ const found = (text: string, uri = "") =>
         : []
     return [...marked, ...late]
   })
-// `--encoded-uris` writes the drive the way several servers do on Windows: lower case, with the colon encoded.
+// `--encoded-uris` writes the address the way several servers do: the drive in lower case with the colon encoded on
+// Windows, and every dash percent-encoded, which is a second spelling of the same file on any platform.
 const spelled = (uri: string) =>
   process.argv.includes("--encoded-uris")
-    ? uri.replace(/^file:\/\/\/([A-Za-z]):/, (_, drive: string) => `file:///${drive.toLowerCase()}%3A`)
+    ? uri
+        .replace(/^file:\/\/\/([A-Za-z]):/, (_, drive: string) => `file:///${drive.toLowerCase()}%3A`)
+        .replaceAll("-", "%2D")
     : uri
 const publish = (uri: string, diagnostics: ReturnType<typeof found>) =>
   connection.sendNotification("textDocument/publishDiagnostics", {
@@ -99,8 +102,7 @@ connection.onNotification(
   "textDocument/didChange",
   (params: { textDocument: { uri: string }; contentChanges: { text: string }[] }) => {
     // `--changes=<file>` appends a line for every document change, so a test can count how often a text was sent.
-    if (changes) appendFileSync(changes, `${params.textDocument.uri}
-`)
+    if (changes) appendFileSync(changes, `${params.textDocument.uri}\n`)
     return remember(params.textDocument.uri, params.contentChanges.at(-1)?.text ?? "")
   },
 )

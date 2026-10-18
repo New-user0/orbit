@@ -47,12 +47,11 @@ export const Plugin = define({
           return list.length === 0 ? [] : [[file, list] as const]
         })
         // A server may publish after the wait below, so the files are remembered for the next step's reminder, with the
-        // errors that this block shows. A subagent's files are remembered for its top-level session as well, because only
-        // that conversation gets the reminder.
+        // errors that this block shows. A subagent's files are remembered for its top-level session only, because only that
+        // conversation gets the reminder, and a child's own record would never be drained.
         const shown = Object.fromEntries(errors.map(([file, items]) => [file, items.slice(0, MAX_PER_FILE)]))
-        yield* collector.touch(event.sessionID, Object.keys(found), shown)
         const top = yield* topLevel(event.sessionID)
-        if (top !== event.sessionID) yield* collector.touch(top, Object.keys(found), {})
+        yield* collector.touch(top, Object.keys(found), top === event.sessionID ? shown : {})
         if (errors.length === 0) return
         const lines = errors.flatMap(([file, items]) => [
           `${path.relative(location.directory, file)}:`,

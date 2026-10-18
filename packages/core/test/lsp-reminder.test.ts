@@ -32,7 +32,7 @@ const server = path.join(import.meta.dir, "fixtures", "lsp", "fake-server.ts")
 const it = testEffect(PluginTestLayer)
 
 // The server publishes a LATE line this long after the text arrives, which is after the inline wait has settled.
-const LATE_MS = 700
+const LATE_MS = 1500
 
 type Place = { readonly directory: string; readonly marker: string; readonly changes: string }
 
@@ -286,7 +286,7 @@ describe("the language-server reminder", () => {
     Effect.gen(function* () {
       const h = yield* setup()
       const session = yield* h.create()
-      yield* h.edit(session.id, "gone.fake", "a HINT" + String.fromCharCode(10))
+      yield* h.edit(session.id, "gone.fake", "a HINT\n")
       expect(yield* h.collector.size(session.id)).toBe(1)
       yield* h.bus.publish(SessionEvent.Moved, {
         sessionID: session.id,
@@ -324,11 +324,51 @@ describe("the language-server reminder", () => {
 
   it.live("never starts a server to read what was published", () =>
     Effect.gen(function* () {
-      const h = yield* setup([], { trusted: true })
+      // A server start sends `initialize`, which `--record-init` writes down; a document open would not show it.
+      const initialized = path.join((yield* tmpdirScoped()).path, "init.json")
+      const h = yield* setup([`--record-init=${initialized}`], { trusted: true })
       const file = path.join(h.place.directory, "cold.fake")
       yield* Effect.promise(() => Bun.write(file, "a HINT\n"))
       expect(yield* h.lsp.current([file])).toEqual({})
+      // A file touched before this Location's servers existed (the Lsp was rebuilt) is read and reported as nothing.
+      const session = yield* h.create()
+      yield* h.collector.touch(session.id, [file], {})
+      expect(yield* reminder(h, session)).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(initialized).exists())).toBe(false)
       expect(yield* h.lines(h.place.marker)).toEqual([])
+    }),
+  )
+
+  it.live("reads 100 touched files without a lookup, inside the framework's time limit", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const session = yield* h.create()
+      yield* h.edit(session.id, "warm.fake", "a HINT\n")
+      const files = Array.from({ length: 100 }, (_, index) => path.join(h.place.directory, `many-${index}.fake`))
+      yield* h.collector.touch(session.id, files, {})
+      // A sampler tells how long the event loop was held in one piece.
+      let last = performance.now()
+      let longest = 0
+      const sampler = setInterval(() => {
+        const now = performance.now()
+        longest = Math.max(longest, now - last)
+        last = now
+      }, 5)
+      const run = yield* reminder(h, session).pipe(Effect.timeoutOption("1 second"), Effect.ensuring(Effect.sync(() => clearInterval(sampler))))
+      expect(run._tag).toBe("Some")
+      // Each PATH scan used to cost about 90 ms on its own, and one ran per file.
+      expect(longest).toBeLessThan(500)
+    }),
+  )
+
+  it.live("records a subagent's file under its top-level session only", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const parent = yield* h.create()
+      const child = yield* h.sessions.create({ parentID: parent.id })
+      yield* h.edit(child.id, "only-top.fake", "a HINT\n")
+      expect(yield* h.collector.size(child.id)).toBe(0)
+      expect(yield* h.collector.size(parent.id)).toBe(1)
     }),
   )
 
@@ -336,8 +376,8 @@ describe("the language-server reminder", () => {
     Effect.gen(function* () {
       const h = yield* setup(["--encoded-uris"])
       const session = yield* h.create()
-      yield* h.edit(session.id, "a folder/spaced.fake", "a HINT\n")
-      expect(content(yield* reminder(h, session))).toEqual([`${path.join("a folder", "spaced.fake")}:\n  hint 1:3 found HINT`])
+      yield* h.edit(session.id, "a folder/spa-ced.fake", "a HINT\n")
+      expect(content(yield* reminder(h, session))).toEqual([`${path.join("a folder", "spa-ced.fake")}:\n  hint 1:3 found HINT`])
     }),
   )
 
@@ -351,7 +391,10 @@ describe("the language-server reminder", () => {
       yield* Effect.addFinalizer(() => Effect.sync(() => void (console.warn = original)))
       yield* h.edit(session.id, "bad.fake", "a HINT\n")
       expect(content(yield* reminder(h, session))).toEqual(["bad.fake:\n  hint 1:3 found HINT"])
-      expect(warned.some((args) => String(args[0]).includes("malformed diagnostic"))).toBe(true)
+      // One line for the publication, with the count; the open and the save publish once each at most.
+      const lines = warned.filter((args) => String(args[0]).includes("malformed diagnostics in one publication"))
+      expect(lines.length).toBeGreaterThan(0)
+      expect(lines.every((args) => String(args[0]).includes("sent 1 malformed"))).toBe(true)
     }),
   )
 })

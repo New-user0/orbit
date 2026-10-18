@@ -10,6 +10,9 @@ import {
   type LLMRequest,
 } from "@orbit/ai"
 import { TestLLM } from "@orbit/ai/testing"
+import { Location } from "@orbit/core/location"
+import { LspDiagnostics } from "@orbit/core/lsp/collector"
+import { LspReminder } from "@orbit/core/lsp/reminder"
 import { Project } from "@orbit/core/project"
 import { Session } from "@orbit/core/session"
 import { SessionInbox } from "@orbit/core/session/inbox"
@@ -559,6 +562,111 @@ describe("collect", () => {
 
       expect(published).toBe(true)
       expect(warnings.toSorted()).toEqual(["dies", "hangs"])
+    }),
+  )
+})
+
+describe("the language-server reminder", () => {
+  const problem = {
+    file: "/project/src/late.ts",
+    diagnostics: [
+      { range: { start: { line: 2, character: 4 }, end: { line: 2, character: 9 } }, severity: 1, message: "late problem" },
+    ],
+  }
+  /** A collector that holds one late problem, handed out once, and counts its drains. */
+  const holding = () => {
+    const state = { drains: 0, pending: true }
+    const collector: LspDiagnostics.Interface = {
+      touch: () => Effect.void,
+      size: () => Effect.succeed(0),
+      drain: () =>
+        Effect.sync(() => {
+          state.drains++
+          if (!state.pending) return []
+          state.pending = false
+          return [problem]
+        }),
+    }
+    return { state, collector }
+  }
+  const lspRows = (messages: ReadonlyArray<SessionMessage.Info>) =>
+    reminderRows(messages).filter((row) => row.text.includes("language servers reported"))
+
+  // The scenario offers no shell tool, which the producer asks for; its own gate is pinned in lsp-reminder.test.ts.
+  const withShell = (collector: LspDiagnostics.Interface): SessionReminders.Durable => {
+    const real = LspReminder.durable(collector, "/project")
+    return { ...real, run: (input) => real.run({ ...input, tools: [...input.tools, "Bash"] }) }
+  }
+
+  scenario("publishes one hidden row for a late problem, none on a retried attempt", function* (s) {
+    const held = holding()
+    s.reminders.durable = [withShell(held.collector)]
+    s.currentModel = fittedOutputModel
+    yield* s.configControl!.setEntries([
+      new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+    ])
+    yield* s.llm.push(lengthStop("first", "FirstCut"), TestLLM.text("Whole", "whole"))
+    yield* s.runPrompt("Question")
+
+    const rows = lspRows(yield* s.context)
+    expect(rows).toHaveLength(1)
+    expect(held.state.drains).toBe(1)
+    expect(s.requests[1]?.messages).toEqual(s.requests[0]?.messages)
+    expect(allTexts(s.requests[0]).join("\n")).toContain("late problem")
+  })
+
+  scenario("gives a child session no language-server row", function* (s) {
+    const held = holding()
+    s.reminders.durable = [withShell(held.collector)]
+    const child = Session.ID.make("ses_reminder_lsp_child")
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: child,
+        project_id: Project.ID.global,
+        parent_id: sessionID,
+        slug: child,
+        directory: "/project",
+        title: "child",
+        version: "test",
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* s.llm.push(TestLLM.text("Answer", "answer"))
+    yield* s.session.prompt({ sessionID: child, text: "Child question", resume: false })
+    yield* s.session.resume(child)
+
+    expect(held.state.drains).toBe(0)
+    expect(lspRows(yield* s.context)).toEqual([])
+  })
+
+  const unit = testEffect(Layer.empty)
+  unit.effect("is wired into the production node, which publishes the row", () =>
+    Effect.gen(function* () {
+      const held = holding()
+      const published = yield* Effect.gen(function* () {
+        const reminders = yield* SessionReminders.Service
+        return yield* reminders.collect({
+          loaded: {
+            session: { id: sessionID },
+            agent: { info: {} },
+            model: {},
+            tools: { definitions: [{ name: "Bash" }] },
+            messages: [],
+          } as unknown as SessionContext.Loaded,
+          step: 1,
+        })
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Bus.node, SessionReminders.node]), [
+            LspDiagnostics.node.replace(Layer.succeed(LspDiagnostics.Service, held.collector)),
+            Location.node.replace(Layer.succeed(Location.Service, { directory: "/project" } as Location.Interface)),
+          ]),
+        ),
+      )
+      expect(published).toBe(true)
+      expect(held.state.drains).toBe(1)
     }),
   )
 })

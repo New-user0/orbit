@@ -102,7 +102,8 @@ const layer = Layer.effect(
     // One start attempt per server; a server that fails to start stays off until the Location reloads.
     const clients = new Map<string, Promise<LspClient.Client | undefined>>()
     // The servers that finished starting, so a read of what they published never starts or waits for one.
-    const running = new Map<string, LspClient.Client>()
+    // Each one keeps the extensions it was chosen for, so `current` answers without reading config or scanning PATH.
+    const running = new Map<string, { readonly client: LspClient.Client; readonly extensions: readonly string[] }>()
     yield* Effect.addFinalizer(() =>
       Effect.promise(() =>
         Promise.all(
@@ -140,9 +141,7 @@ const layer = Layer.effect(
       return (yield* servers()).find((item) => item.extensions.includes(path.extname(file).toLowerCase()))
     })
 
-    const client = Effect.fn("Lsp.client")(function* (file: string) {
-      const server = yield* serverFor(file)
-      if (!server) return undefined
+    const start = Effect.fnUntraced(function* (server: Server) {
       const pending =
         clients.get(server.id) ??
         // The settings' `env` sits under the server's own variables.
@@ -159,7 +158,7 @@ const layer = Layer.effect(
           spawner,
         })
           .then((started) => {
-            running.set(server.id, started)
+            running.set(server.id, { client: started, extensions: server.extensions })
             return started
           })
           .catch((error: unknown) => {
@@ -168,6 +167,11 @@ const layer = Layer.effect(
           })
       clients.set(server.id, pending)
       return yield* Effect.promise(() => pending)
+    })
+
+    const client = Effect.fnUntraced(function* (file: string) {
+      const server = yield* serverFor(file)
+      return server ? yield* start(server) : undefined
     })
 
     // A server reads the configuration near the file it is told about, and several of them run it, so a file outside the
@@ -189,7 +193,8 @@ const layer = Layer.effect(
         return yield* new Error({ message: "Language servers stay off until this folder is trusted." })
       if (!(yield* allowed(file)))
         return yield* new Error({ message: "Language servers stay off for a file whose folder is not trusted." })
-      if (!(yield* serverFor(file)))
+      const server = yield* serverFor(file)
+      if (!server)
         return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
       // The size and the read come before the server starts, so a file it would refuse never starts one.
       const size = yield* fs.stat(file).pipe(
@@ -202,7 +207,7 @@ const layer = Layer.effect(
         })
       const text = yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
       if (text === undefined) return yield* new Error({ message: `Cannot read ${file}.` })
-      const target = yield* client(file)
+      const target = yield* start(server)
       if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
       const failed = (cause: unknown) =>
         new Error({
@@ -243,14 +248,15 @@ const layer = Layer.effect(
       current: Effect.fn("Lsp.current")(
         function* (files) {
           if (!(yield* trust.trusted())) return {}
-          const found = yield* Effect.forEach(files, (file) =>
-            Effect.gen(function* () {
-              const server = yield* serverFor(file)
-              const items = server ? running.get(server.id)?.current(file) : undefined
-              return items === undefined ? [] : [[file, items] as const]
-            }),
-          )
-          return Object.fromEntries(found.flat())
+          const found = files.flatMap((file) => {
+            const extension = path.extname(file).toLowerCase()
+            const items = [...running.values()]
+              .filter((entry) => entry.extensions.includes(extension))
+              .map((entry) => entry.client.current(file))
+              .find((published) => published !== undefined)
+            return items === undefined ? [] : [[file, items] as const]
+          })
+          return Object.fromEntries(found)
         },
         Effect.orElseSucceed(() => ({})),
       ),

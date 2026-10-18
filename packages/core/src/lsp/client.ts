@@ -53,8 +53,6 @@ export interface Client {
   readonly open: (file: string, text: string) => Promise<string>
   /** Sends a request with exactly these params; nothing about a document is added. */
   readonly send: (method: string, params: Record<string, unknown>) => Promise<unknown>
-  /** Opens or refreshes the file, then sends a request about it. */
-  readonly request: (method: string, file: string, text: string, params: Record<string, unknown>) => Promise<unknown>
   readonly shutdown: () => Promise<void>
 }
 
@@ -207,10 +205,6 @@ export async function start(input: {
     },
     open: sync,
     send: (method, params) => connection.sendRequest(method, params),
-    request: async (method, file, text, params) => {
-      const uri = await sync(file, text)
-      return connection.sendRequest(method, { textDocument: { uri }, ...params })
-    },
     shutdown: async () => {
       await Promise.race([
         connection.sendRequest("shutdown").then(() => connection.sendNotification("exit")),
@@ -231,12 +225,10 @@ function decodePublication(params: unknown) {
   if (!isRecord(params) || typeof params.uri !== "string" || !Array.isArray(params.diagnostics)) return undefined
   const file = fileOf(params.uri)
   if (file === undefined) return undefined
-  const diagnostics = params.diagnostics.flatMap((entry: unknown) => {
-    const decoded = decodeDiagnostic(entry)
-    if (decoded) return [decoded]
-    console.warn("language server sent a malformed diagnostic, which was dropped")
-    return []
-  })
+  const decoded = params.diagnostics.map(decodeDiagnostic)
+  const diagnostics = decoded.filter((entry) => entry !== undefined)
+  const dropped = decoded.length - diagnostics.length
+  if (dropped > 0) console.warn(`language server sent ${dropped} malformed diagnostics in one publication, which were dropped`)
   return { file, diagnostics }
 }
 

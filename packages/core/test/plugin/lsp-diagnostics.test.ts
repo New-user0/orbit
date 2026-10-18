@@ -103,12 +103,15 @@ describe("LspPlugin", () => {
       ] as const
       for (const [given, expected] of rows) {
         asked.length = 0
+        touched.length = 0
         yield* hooks.trigger(
           "tool",
           "execute.after",
           base("Write", { file_path: given, content: "x" }, { content: "Wrote it" } as Tool.Result),
         )
         expect({ given, asked }).toEqual({ given, asked: [{ files: [expected], options: { save: true } }] })
+        // The collector is told the same file, under the session that made the edit.
+        expect({ given, touched }).toEqual({ given, touched: [{ sessionID: "ses_lsp_plugin", files: [expected] }] })
       }
       // The older field name, as a plugin hook may leave it.
       asked.length = 0
