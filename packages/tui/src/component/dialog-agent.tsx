@@ -1,6 +1,7 @@
 import { useRenderer } from "@opentui/solid"
 import { plain } from "@orbit/flow/plain"
 import { existsSync } from "node:fs"
+import { isIPv4 } from "node:net"
 import path from "node:path"
 import { createMemo } from "solid-js"
 import { useClient } from "../context/client"
@@ -33,7 +34,7 @@ export function DialogAgent() {
     const url = client.url
     if (!url || !URL.canParse(url)) return false
     const host = new URL(url).hostname
-    return (host === "localhost" || host === "[::1]" || host.startsWith("127.")) && existsSync(ref().directory)
+    return (host === "localhost" || host === "[::1]" || (isIPv4(host) && host.startsWith("127."))) && existsSync(ref().directory)
   }
   const configDirectory = (scope: "project" | "user") =>
     scope === "project"

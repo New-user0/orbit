@@ -74,5 +74,8 @@ test("a plan longer than the screen scrolls inside the dialog and says so", asyn
   await Bun.sleep(60)
   for (let index = 0; index < 40; index++) setup.mockInput.pressArrow("down")
   const last = await setup.waitForFrame((frame) => frame.includes("Step 40"))
-  expect(last).not.toContain("Step 1\n")
+  // Rows are padded to the terminal width, so compare trimmed rows.
+  const trimmed = last.split("\n").map((line) => line.trimEnd())
+  expect(trimmed.some((line) => line.endsWith("Step 1"))).toBe(false)
+  expect(trimmed.some((line) => line.endsWith("Step 40"))).toBe(true)
 })

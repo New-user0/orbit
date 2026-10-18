@@ -1,6 +1,6 @@
 import type { Plugin } from "@orbit/plugin/tui"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createMemo, createSignal } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { TodosView } from "../../../component/dialog-todos"
 import type { TodoItem } from "../../../util/tool-display"
 import type { Story } from "./index"
@@ -44,7 +44,10 @@ function TodosStory(props: { context: Plugin.Context }) {
   const [index, setIndex] = createSignal(0)
   const fixture = createMemo(() => FIXTURES[index()])
 
+  // The view's scroll keys live in the modal layer, as in the dialog; the story's own keys join them.
+  createEffect(() => onCleanup(props.context.keymap.mode.push("modal")))
   props.context.keymap.layer(() => ({
+    mode: "modal",
     commands: [
       {
         bind: "escape",

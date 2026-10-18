@@ -22,7 +22,9 @@ const editableAgent = (dir: string) => ({
 
 function recorder(dir: string) {
   const reported: { search: string; body: unknown }[] = []
+  const requested: string[] = []
   const fetch = async (url: URL, request: Request) => {
+    requested.push(url.pathname)
     // The fixture server places every session in a folder that is not on this machine.
     if (url.pathname === "/api/location") return json({ directory: dir, project: { id: "proj_test", directory: dir, canonical: dir } })
     if (url.pathname.endsWith("/config/sources/changed")) {
@@ -30,7 +32,7 @@ function recorder(dir: string) {
       return new Response(null, { status: 204 })
     }
   }
-  return { reported, fetch }
+  return { reported, requested, fetch }
 }
 
 async function until(setup: Awaited<ReturnType<typeof renderLocal>>, text: string) {
@@ -65,7 +67,7 @@ test("on a server that is not on this machine, Create says it is unavailable and
 
 test("on a server on this machine, both rows appear and Create reports the written file once, without a reload", async () => {
   await using tmp = await project()
-  const { reported, fetch } = recorder(tmp.dir)
+  const { reported, requested, fetch } = recorder(tmp.dir)
   await using setup = await renderLocal({
     directory: tmp.dir,
     url: "http://127.0.0.1:4096",
@@ -110,6 +112,17 @@ test("on a server on this machine, both rows appear and Create reports the writt
   const file = path.join(tmp.dir, ".orbit", "agents", "scribe.md")
   expect(await readFile(file, "utf8")).toContain("Records decisions")
   expect(reported).toHaveLength(1)
+  // No request reloads the location, so questions waiting in other sessions stay open.
+  expect(requested.filter((item) => item === "/api/location/reload")).toEqual([])
   expect(reported[0]!.body).toEqual({ paths: [file] })
   expect(new URL(`http://x/${reported[0]!.search}`).searchParams.get("location[directory]")).toBe(tmp.dir)
+})
+
+test("a host that only starts with 127. is not this machine", async () => {
+  await using tmp = await project()
+  const { fetch } = recorder(tmp.dir)
+  await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.example.com:4096", agents: [editableAgent(tmp.dir)], fetch })
+  setup.dialog.replace(() => <DialogAgent />)
+  const frame = await until(setup, "Select agent")
+  expect(frame).toContain("Unavailable")
 })
