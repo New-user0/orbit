@@ -168,10 +168,13 @@ function hasEditorRangeSelection(selection: EditorSelection["ranges"][number]) {
   )
 }
 
-function getEditorRangeLabel(selection: EditorSelection["ranges"][number]) {
+// Positions count from 1. A selection that ends at the first character of a later line does not cover that line.
+export function getEditorRangeLabel(selection: EditorSelection["ranges"][number]) {
   if (!hasEditorRangeSelection(selection)) return
-  if (selection.selection.start.line === selection.selection.end.line) return `#${selection.selection.start.line}`
-  return `#${selection.selection.start.line}-${selection.selection.end.line}`
+  const { start, end } = selection.selection
+  const last = end.character === 1 && end.line > start.line ? end.line - 1 : end.line
+  if (start.line === last) return `#${start.line}`
+  return `#${start.line}-${last}`
 }
 
 function formatEditorContext(selection: EditorSelection) {
