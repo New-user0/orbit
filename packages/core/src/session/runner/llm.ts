@@ -531,15 +531,6 @@ const layer = Layer.effect(
             if (limit) return yield* new StepFailedError({ error: limit })
             // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
             if (recovery.streak >= MAX_OUTPUT_RECOVERIES) return "limited" as const
-            // A text-only resume never reaches the step boundary, so a waiting steered message would sit behind up to
-            // three requests. Return now: the boundary delivers it and its user message starts a fresh streak.
-            if (
-              !outcome.needsContinuation &&
-              (yield* SessionInbox.list(db, sessionID)).some(
-                (item) => item.type === "user" && item.delivery === "steer",
-              )
-            )
-              return "ended" as const
             // The first cut-off of a reply that ran no tool, under the runner's own lowered cap, retries the same
             // request at the model's maximum before any resume. A hosted tool call counts: repeating it reruns and
             // rebills it. The notice replaces the cut-off attempt, which later requests leave out.

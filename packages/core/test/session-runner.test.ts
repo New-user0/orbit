@@ -10046,11 +10046,13 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests.map((request) => request.toolChoice?.type)).not.toContain("none")
   })
 
-  scenario("delivers a steered message at a text-only output-limit stop instead of resuming", function* (s) {
+  // FU-M2-058: a text-only cut-off is resumed in the same step before any waiting steer is delivered.
+  scenario("resumes a text-only output-limit stop before it delivers a waiting steer", function* (s) {
     yield* s.admit("Write a long answer")
     yield* s.llm.push(
       lengthStop("steer-1", "A"),
       TestLLM.text("Answer", "steer-done"),
+      TestLLM.text("After the steer", "steer-after"),
     )
     const first = yield* s.llm.gate
     const run = yield* s.resume.pipe(Effect.forkChild)
@@ -10059,10 +10061,35 @@ describe("SessionRunnerLLM", () => {
     yield* first.release
     yield* Fiber.join(run)
 
-    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[1]).includes("STEER")).toBe(false)
+    expect(userTexts(s.requests[1]).at(-1)).toContain("reached the output limit. Resume exactly where it stopped")
+    expect(userTexts(s.requests[2]).at(-1)).toBe("STEER")
     expect(
-      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
-    ).toHaveLength(0)
+      (yield* s.context).map((message) =>
+        message.type === "synthetic" ? `synthetic:${message.metadata?.notice}` : message.type,
+      ),
+    ).toEqual(["user", "assistant", "synthetic:output-limit", "assistant", "user", "assistant"])
+  })
+
+  scenario("resumes a text-only output-limit stop whose waiting steer was cancelled, and asks the turn-end checks once", function* (s) {
+    let asked = 0
+    s.turnEnd = () => Effect.sync(() => void asked++).pipe(Effect.as(undefined))
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(lengthStop("cancel-1", "A"), TestLLM.text("Answer", "cancel-done"))
+    const first = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    const steer = yield* s.admit("STEER")
+    yield* s.session.cancelInbox({ sessionID, inboxID: steer.id }).pipe(Effect.orDie)
+    yield* first.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(userTexts(s.requests[1]).at(-1)).toContain("reached the output limit. Resume exactly where it stopped")
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+    // The checks ask once, after the finished reply, and not at the cut-off.
+    expect(asked).toBe(1)
   })
 
   const notices = (messages: ReadonlyArray<SessionMessage.Info>, notice: string) =>
@@ -10202,11 +10229,15 @@ describe("SessionRunnerLLM", () => {
     expect(notices(yield* s.context, "output-escalation")).toHaveLength(1)
   })
 
-  scenario("delivers a waiting steer instead of escalating", function* (s) {
+  scenario("delivers a waiting steer after the escalated retry", function* (s) {
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
     s.currentModel = fittedOutputModel
     yield* s.admit("Write a long answer")
-    yield* s.llm.push(lengthStop("esc-steer-1", "A"), TestLLM.text("Answer", "esc-steer-done"))
+    yield* s.llm.push(
+      lengthStop("esc-steer-1", "A"),
+      TestLLM.text("Answer", "esc-steer-done"),
+      TestLLM.text("After the steer", "esc-steer-after"),
+    )
     const first = yield* s.llm.gate
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* first.started
@@ -10214,8 +10245,9 @@ describe("SessionRunnerLLM", () => {
     yield* first.release
     yield* Fiber.join(run)
 
-    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
-    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
+    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, false, true])
+    expect(s.requests.map((request) => request.generation?.maxTokens).slice(0, 2)).toEqual([8_000, 64_000])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(1)
   })
 
   scenario("leaves an escalated attempt out of a fork's requests", function* (s) {

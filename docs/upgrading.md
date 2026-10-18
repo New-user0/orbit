@@ -2478,9 +2478,11 @@ that finishes with `stop` or `tool-calls` and after a new message from you. A co
 cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
 `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
 no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
-an incomplete stream's continuation does; the allowance is bounded. A text-only cut-off is not resumed when a steered
-message from you is already waiting: that message is delivered at once and starts a new count. A steer that arrives
-during a resume waits for at most the three resumes.
+an incomplete stream's continuation does; the allowance is bounded. A text-only cut-off is always resumed first, also
+when a steered message from you is waiting: the resume request does not carry that message, and the message is
+delivered after the resumed reply, at the next step boundary (a change from the build before this one, which delivered
+it at once instead of resuming; pinned by `test/session-runner.test.ts`). A steer that arrives during a resume waits for
+at most the three resumes, and a steer withdrawn during the cut-off leaves the reply resumed, not left unfinished.
 
 **Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
 session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
@@ -2567,7 +2569,9 @@ session's messages but are left out of every later request, token estimate, comp
 whose copy of the note names the copied attempt. The larger limit lasts until a response ends normally. While it lasts,
 `session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction does not end it, and
 a stretch escalates at most once however often it compacts. A `session.context` hook that changes or removes the
-output limit keeps the limit it chose, and a request already at the model's maximum is not repeated.
+output limit keeps the limit it chose, and a request already at the model's maximum is not repeated. A steered message
+that is waiting does not skip the repeat: the repeated request does not carry it, and it is delivered after the reply
+(pinned by `delivers a waiting steer after the escalated retry` in `test/session-runner.test.ts`).
 
 **Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
 
