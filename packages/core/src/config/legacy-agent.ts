@@ -47,7 +47,7 @@ export function prepare(entry: Record<string, unknown>) {
   )
   // A tools map and a permission object are lists of independent entries: one bad entry costs only itself, so a deny
   // written beside it still holds.
-  const kept = {
+  const kept: Record<string, unknown> = {
     ...unforeign,
     ...(isToolMap(unforeign.tools) ? { tools: onlyBooleans(unforeign.tools, notes) } : {}),
     ...(isRecord(unforeign.permission) ? { permission: onlyActions(unforeign.permission, notes) } : {}),
@@ -86,7 +86,7 @@ function onlyBooleans(tools: Record<string, unknown>, notes: { key: string; mess
 
 function onlyActions(permission: Record<string, unknown>, notes: { key: string; message: string }[]) {
   return Object.fromEntries(
-    Object.entries(permission).flatMap(([name, rule]) => {
+    Object.entries(permission).flatMap(([name, rule]): [string, unknown][] => {
       if (isAction(rule)) return [[name, rule]]
       if (isRecord(rule)) {
         const patterns = Object.entries(rule).filter(([pattern, action]) => {

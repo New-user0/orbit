@@ -705,12 +705,13 @@ describe("agent definition: a bad field beside a tools map", () => {
   const denyYaml = "permissions:\n  - action: Bash\n    resource: '*'\n    effect: deny"
   // The shared keys and the legacy-only ones that fail, and the models that must survive; each sits beside a tools map
   // and a Bash deny, which must stay in every cell, in both doors.
-  const rows: { name: string; key: string; yaml: string; json: unknown; model?: unknown }[] = [
+  const rows: { name: string; key: string; at?: string; yaml: string; json: unknown; model?: unknown }[] = [
     { name: "steps of zero", key: "steps", yaml: "steps: 0", json: 0 },
     { name: "a temperature that is no number", key: "temperature", yaml: "temperature: warm", json: "warm" },
     {
       name: "a tool value that is no boolean",
       key: "tools",
+      at: "tools.webfetch",
       yaml: "tools:\n  webfetch: maybe",
       json: { webfetch: "maybe" },
     },
@@ -739,7 +740,7 @@ describe("agent definition: a bad field beside a tools map", () => {
         const agent = yield* loadOne(front).pipe(Effect.provide(logged(logs)))
         expect(Permission.evaluate("Bash", "x", agent.permissions).effect).toBe("deny")
         if (row.model) expect(agent.model).toMatchObject(row.model)
-        if (bad(row)) expect(logs.some((line) => line.includes(`"${row.key}"`))).toBe(true)
+        if (bad(row)) expect(logs.some((line) => line.includes(`"${row.at ?? row.key}"`))).toBe(true)
       }),
     )
 
@@ -752,7 +753,7 @@ describe("agent definition: a bad field beside a tools map", () => {
         const result = ConfigNormalize.normalize(input)
         if (result.type !== "normalized") throw new Error("expected normalized config")
         // The bad field is reported at its own path and nothing else is.
-        expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(bad(row) ? [`agents.a.${row.key}`] : [])
+        expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(bad(row) ? [`agents.a.${row.at ?? row.key}`] : [])
         const agent = yield* get(yield* load({}, () => [jsonDocument(input)]), "a")
         if (!agent) throw new Error("expected the agent a")
         expect(Permission.evaluate("Bash", "x", agent.permissions).effect).toBe("deny")
