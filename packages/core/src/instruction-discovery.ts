@@ -30,13 +30,15 @@ export class Warning extends Schema.Class<Warning>("InstructionDiscovery.Warning
 
 /**
  * An import that an instruction file in the project made and that was left out, because the file it names is outside the
- * project. `path` is the file that made it and `target` the real path it leads to, never the text of the token. Like
- * every warning it never reaches the model.
+ * project's folders and the folder that holds the importing file is not trusted to reach out. `path` is the file that
+ * made it and `target` the real path it leads to, never the text of the token. `directory` is the folder whose trust
+ * would load it; it is unset when no grant made from this session could. Like every warning it never reaches the model.
  */
 export class ImportWarning extends Schema.Class<ImportWarning>("InstructionDiscovery.ImportWarning")({
   path: AbsolutePath,
   kind: Schema.Literal("import"),
   target: AbsolutePath,
+  directory: Schema.optional(AbsolutePath),
 }) {}
 
 /**

@@ -729,8 +729,12 @@ const TEXT = new Set(
 /** A file that an instruction file imported, or the file itself when `importedBy` is not set. `path` is the real path. */
 export type Loaded = { readonly path: string; readonly content: string; readonly importedBy?: string }
 
-/** An import that a project file made and that was left out because it leads outside the project. */
-export type Skipped = { readonly importer: string; readonly target: string }
+/**
+ * An import that a project file made and that was left out because it leads outside the project and the folder that holds
+ * the importing file is not trusted to reach out. `directory` is the folder whose trust would lift it, when a grant made
+ * from this session could.
+ */
+export type Skipped = { readonly importer: string; readonly target: string; readonly directory?: string }
 
 type LoadInput = {
   /** The file itself, as a real path. */
@@ -746,6 +750,12 @@ type LoadInput = {
   readonly leads: (spelling: string) => Effect.Effect<string>
   /** Whether a project file may import this file (project scope only): its real path and the way it was spelled. */
   readonly allow: (real: string, spelling: string) => Effect.Effect<boolean>
+  /**
+   * Asked only after `allow` refused: whether the folder that holds the importing file (a real path) lets it import from
+   * outside, and the folder to trust to make it so. Its answer is kept for one pass and never longer, so that a grant is
+   * seen by the next one. Without it a refused import stays refused.
+   */
+  readonly outward?: (importer: string) => Effect.Effect<{ readonly open: boolean; readonly directory?: string }>
   /** Asked before an import is read, to leave out one that something else already has. */
   readonly claim?: (real: string) => Effect.Effect<boolean>
   readonly platform?: NodeJS.Platform
@@ -766,6 +776,7 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
   const files: Loaded[] = []
   const skipped: Skipped[] = []
   const read: string[] = []
+  const outward = new Map<string, { readonly open: boolean; readonly directory?: string }>()
   const key = (value: string) =>
     platform === "win32" ? win32.normalize(value).replaceAll("/", "\\").toLowerCase() : posix.normalize(value)
 
@@ -797,9 +808,17 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
         // Not there, or not a file (a folder, a pipe, a device): skipped without a word, as prose such as `@team` is common.
         if (!(yield* input.fs.isFile(real))) return true
         if (input.scope === "project" && !(yield* input.allow(real, spelling))) {
-          // One warning for each importer and target, however many ways the importer spells it.
-          if (!skipped.some((item) => item.importer === importer && item.target === real)) skipped.push({ importer, target: real })
-          return true
+          // The holder of the importing file decides, not the file that was imported: a chain does not inherit.
+          const known = outward.get(importer) ?? (input.outward ? yield* input.outward(importer) : { open: false })
+          outward.set(importer, known)
+          if (!known.open) {
+            // One warning for each importer and target, however many ways the importer spells it.
+            if (!skipped.some((item) => item.importer === importer && key(item.target) === key(real)))
+              skipped.push(
+                known.directory === undefined ? { importer, target: real } : { importer, target: real, directory: known.directory },
+              )
+            return true
+          }
         }
         if (!isText(spelling)) {
           yield* Effect.logDebug("instruction import skipped", { path: spelling, reason: "not a text file" })

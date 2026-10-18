@@ -3360,6 +3360,26 @@ the session runs in. The highest-priority config that sets a replacement decides
 
 **What to do:** Nothing; trust the folder, or use a 40-character hash, to keep a hand-written ID.
 
+## A trusted project's instruction files can import files outside the project
+
+- An `@path` import in a project instruction file (`AGENTS.md` and the like) may now name a file outside the project's
+  folders, such as `@~/team/rules.md`, `@../shared.md` or an absolute path, once the folder that holds the importing
+  file is trusted. Until then the import is skipped and the file is not sent to the model; a warning names the folder
+  whose trust would load it. Granting or revoking trust rescans the files. Before this change such an import was always
+  skipped.
+- The project's own decision covers the files in the project. A file above the project, or one that a trusted file
+  imports from outside, needs the folder that owns it trusted before it imports anything from outside. When the
+  repository is the home folder itself (or a filesystem root), a session started below it imports only from the folder
+  it started in, even with home trusted for the session. A file above the project that the home folder or a root owns
+  (`~/AGENTS.md` for a project in `~/code/repo`) never imports from outside. A session started at home itself, with
+  home trusted for the session, does let home's own files import from outside.
+- Network paths are never read, trusted or not, and files that the model's reads load later never import from outside.
+
+**Affects:** people who trust a project whose instruction files import files outside it.
+
+**What to do:** Nothing for a project you trust; the outside files are sent with the first request. Run
+`orb trust --revoke` in a folder to stop its files importing from outside.
+
 ## Turn cost, token and step limits count every spend and every response
 
 - `--max-cost` and `--max-tokens` now count what side queries (a fetched page's summary, a hook prompt, memory
