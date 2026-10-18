@@ -2556,7 +2556,11 @@ export type ConfigShellsOutput = ReadonlyArray<{
 }>
 export type ConfigShellsOperation<E = never> = () => Effect.Effect<ConfigShellsOutput, E>
 
-export type ConfigUpdateInput = { readonly shell?: string | null; readonly output_style?: string | null }
+export type ConfigUpdateInput = {
+  readonly shell?: string | null
+  readonly output_style?: string | null
+  readonly language?: string | null
+}
 export type ConfigUpdateOutput = void
 export type ConfigUpdateOperation<E = never> = (input?: ConfigUpdateInput) => Effect.Effect<ConfigUpdateOutput, E>
 

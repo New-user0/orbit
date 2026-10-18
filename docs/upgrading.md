@@ -2802,6 +2802,16 @@ A nested instruction file that is a link leading out of the project is no longer
 
 **What to do:** Nothing. Copy a linked instruction file into the project if you want it loaded.
 
+### A reply language setting and the `ultrathink` keyword
+
+The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. The key is allowed in a project's config, because it is only text in the prompt.
+
+A prompt you send while the agent is idle that holds the word `ultrathink` (any case, as a whole word) now carries a short note asking for a high level of reasoning effort for that turn. No model, variant or request setting changes, and the note stays in the conversation from then on, so the cached prompt prefix is unaffected. Input that arrives while the agent is working, a prompt a parent agent gives a subagent and background completions never carry it.
+
+**Affects:** anyone who types `ultrathink` in a prompt or a command or skill text, and anyone who wants replies in another language.
+
+**What to do:** Nothing. Set `language` in `orbit.json` to use the reply language.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs

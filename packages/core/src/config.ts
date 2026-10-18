@@ -668,7 +668,7 @@ export const layer = (options?: Options) =>
           const filepath = (yield* Effect.filter(candidates, fs.isFile)).at(-1) ?? path.join(directory, "orbit.jsonc")
           const text = (yield* fs.readFileStringSafe(filepath)) ?? "{}\n"
           // Only the keys present in the patch change; null removes a key.
-          const keys = (["shell", "output_style"] as const).filter((key) => key in patch)
+          const keys = (["shell", "output_style", "language"] as const).filter((key) => key in patch)
           const updated = yield* Effect.try({
             try: () =>
               keys.reduce(

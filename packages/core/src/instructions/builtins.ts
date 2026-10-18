@@ -3,12 +3,16 @@ export * as InstructionBuiltIns from "./builtins.js"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import os from "os"
+import { Config } from "../config.js"
 import { Location } from "../location.js"
+import { ReminderText } from "../session/reminder-text.js"
 import { ShellSelect } from "../shell/select.js"
 import { Instructions } from "./index.js"
 
 export interface Interface {
   readonly load: () => Effect.Effect<Instructions.List>
+  /** The person's own preferences. Only the main thread of a session carries them, so the caller decides whether to include the list. */
+  readonly preferences: () => Effect.Effect<Instructions.List>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/InstructionBuiltIns") {}
@@ -59,7 +63,30 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const location = yield* Location.Service
     const shells = yield* ShellSelect.Service
+    const config = yield* Config.Service
     return Service.of({
+      preferences: () =>
+        Effect.succeed(
+          Instructions.combine([
+            Instructions.make({
+              key: Instructions.Key.make("core/language"),
+              codec: Schema.toCodecJson(Schema.String),
+              // A value from a file is one line of text: a line break in it must not start a new section.
+              read: config.entries().pipe(
+                Effect.map((entries) => ReminderText.oneLine(Config.latest(entries, "language") ?? "")),
+                Effect.map((value) => (value === "" ? Instructions.removed : value)),
+              ),
+              render: {
+                initial: (language) =>
+                  `Preferred reply language: ${language}. Write your replies to the person, including explanations and comments addressed to them, in that language. Code, commands, file paths and technical terms keep their original form.`,
+                changed: (_previous, language) =>
+                  `The person's preferred reply language is now ${language}. From here on, write replies to the person in it; the same exceptions for code and technical terms apply.`,
+                removed: () =>
+                  "The person no longer has a preferred reply language. Reply in the language their messages are written in.",
+              },
+            }),
+          ]),
+        ),
       load: () =>
         Effect.succeed(
           Instructions.combine([
@@ -105,4 +132,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Location.node, ShellSelect.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [Config.node, Location.node, ShellSelect.node] })

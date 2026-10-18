@@ -14577,6 +14577,9 @@
           "output_style": {
             "type": "string"
           },
+          "language": {
+            "type": "string"
+          },
           "system_prompt": {
             "type": "string"
           },
@@ -15452,6 +15455,16 @@
             ]
           },
           "output_style": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "language": {
             "anyOf": [
               {
                 "type": "string"

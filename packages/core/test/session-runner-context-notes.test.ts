@@ -312,3 +312,85 @@ describe("the boundary a mid-turn note needs", () => {
     expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), between, user("b")], model), "b")).toBe(false)
   })
 })
+
+describe("the reasoning boost note", () => {
+  const EFFORT = "asked for a high level of reasoning effort"
+  const boosted = (out: ReturnType<typeof toLLMMessages>, value: string) =>
+    parts(out, value).filter((part) => part.includes(EFFORT))
+  const keyword = (value: string, extra: Partial<Parameters<typeof SessionMessage.User.make>[0]> = {}) =>
+    user(value, { text: `please ultrathink about ${value}`, ...extra })
+
+  test("a fresh prompt with the keyword gets one note, after the editor note and before the words", () => {
+    const out = toLLMMessages([keyword("a", { editor: { path: "/p/a.ts" } })], model)
+    const body = parts(out, "a")
+    expect(body).toHaveLength(3)
+    expect(body[0]).toContain("open in the person's editor")
+    expect(body[1]).toStartWith("<system-reminder>\n")
+    expect(body[1]).toContain(EFFORT)
+    expect(body[1]).toEndWith("\n</system-reminder>")
+    expect(body[2]).toBe("please ultrathink about a")
+  })
+
+  test("several occurrences give one note, and a prompt without the keyword gets none", () => {
+    expect(boosted(toLLMMessages([user("a", { text: "ultrathink and ULTRATHINK" })], model), "a")).toHaveLength(1)
+    expect(boosted(toLLMMessages([user("a")], model), "a")).toHaveLength(0)
+  })
+
+  test("a prompt delivered mid-turn gets the queued note only", () => {
+    const out = toLLMMessages([user("a"), toolStep("s1"), keyword("b")], model)
+    expect(boosted(out, "b")).toHaveLength(0)
+    expect(hasNote(out, "b")).toBe(true)
+  })
+
+  test("a queued prompt that starts a new turn gets the note", () => {
+    const out = toLLMMessages([user("a"), textStep("s1"), keyword("b", { delivery: "queue" })], model)
+    expect(boosted(out, "b")).toHaveLength(1)
+  })
+
+  test("a prompt from the parent agent gets none", () => {
+    expect(boosted(toLLMMessages([keyword("a", { metadata: { origin: "agent" } })], model), "a")).toHaveLength(0)
+  })
+
+  test("minimal lowering gets none", () => {
+    const out = toLLMMessages([keyword("a")], model, "provider", [], { minimal: true })
+    expect(boosted(out, "a")).toHaveLength(0)
+  })
+
+  test("a skill whose text holds the keyword boosts a prompt that does not", () => {
+    const skill = SkillAttachment.make({ id: Skill.ID.make("deep"), name: Skill.Name.make("deep"), text: "Take care. Ultrathink first." })
+    const body = parts(toLLMMessages([user("a", { skills: [skill] })], model), "a")
+    const note = body.findIndex((part) => part.includes(EFFORT))
+    expect(note).toBeGreaterThanOrEqual(0)
+    expect(body.indexOf("Take care. Ultrathink first.")).toBeGreaterThan(note)
+  })
+
+  test("a synthetic message with the keyword gets none", () => {
+    const synthetic = SessionMessage.Synthetic.make({ id: id("syn"), type: "synthetic", text: "ultrathink", time: { created } })
+    expect(JSON.stringify(toLLMMessages([synthetic], model))).not.toContain(EFFORT)
+  })
+
+  test("an earlier prompt keeps its note byte for byte as history grows, and a later prompt gets none", () => {
+    const prefix = [keyword("a"), textStep("s1")]
+    const before = toLLMMessages(prefix, model)
+    const after = toLLMMessages([...prefix, user("b"), textStep("s2")], model)
+    expect(after.slice(0, before.length)).toEqual(before)
+    expect(boosted(after, "a")).toHaveLength(1)
+    expect(boosted(after, "b")).toHaveLength(0)
+  })
+
+  test("a prompt kept after a checkpoint keeps its note, and history that starts at the checkpoint holds none from before it", () => {
+    const checkpoint = SessionMessage.CompactionCompleted.make({
+      id: id("cp"),
+      type: "compaction",
+      status: "completed",
+      reason: "auto",
+      summary: "s",
+      recent: "",
+      time: { created },
+    })
+    // The runner reads history from the latest completed checkpoint, so a summarised prompt is not lowered at all.
+    const out = toLLMMessages([checkpoint, keyword("b")], model)
+    expect(JSON.stringify(out.filter((message) => message.id !== id("b")))).not.toContain(EFFORT)
+    expect(boosted(out, "b")).toHaveLength(1)
+  })
+})

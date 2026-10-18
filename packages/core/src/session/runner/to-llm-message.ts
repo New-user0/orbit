@@ -14,6 +14,7 @@ import { SessionMessage } from "../message.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { ToolNames } from "../../tool/names.js"
 import { ReminderText } from "../reminder-text.js"
+import { SessionEffort } from "../effort.js"
 import type { FileAttachment } from "@orbit/schema/prompt"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
@@ -398,10 +399,16 @@ function toLLMMessage(
       const queued = lowering.queued.has(message.id)
       // Input delivered mid-turn gets only the note; hints and the editor note belong to a prompt sent while idle.
       const context = !lowering.minimal && !queued
+      // A prompt a parent agent wrote is not the person asking. The keyword may sit in the prompt or in a skill's text.
+      const boosted =
+        context &&
+        message.metadata?.origin !== "agent" &&
+        [message.text, ...(message.skills ?? []).map((skill) => skill.text ?? "")].some(SessionEffort.requested)
       const content = [
         ...(queued ? [Message.text(queuedNote(message.metadata?.origin))] : []),
         ...(context && message.agents?.length ? agentHints(message.agents).map((hint) => Message.text(hint)) : []),
         ...(context && message.editor ? [Message.text(editorNote(message.editor))] : []),
+        ...(boosted ? [Message.text(ReminderText.render({ text: SessionEffort.note }))] : []),
         ...(message.skills ?? []).flatMap((skill) => (skill.text === undefined ? [] : [Message.text(skill.text)])),
         ...(message.text === "" ? [] : [Message.text(message.text)]),
         ...userAttachmentContent(message.files ?? []),

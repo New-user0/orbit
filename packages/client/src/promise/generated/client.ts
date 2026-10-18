@@ -2277,7 +2277,7 @@ export function make(options: ClientOptions) {
           {
             method: "PATCH",
             path: `/api/experimental/config`,
-            body: { shell: input?.["shell"], output_style: input?.["output_style"] },
+            body: { shell: input?.["shell"], output_style: input?.["output_style"], language: input?.["language"] },
             successStatus: 204,
             declaredStatuses: [400, 401],
             empty: true,

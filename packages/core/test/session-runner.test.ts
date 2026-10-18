@@ -500,6 +500,7 @@ const makeLayer = (persist: boolean, real = false) =>
     })
     const systemContextKey = Instructions.Key.make("test/context")
     const systemContext = Layer.mock(InstructionBuiltIns.Service, {
+      preferences: () => Effect.succeed(Instructions.empty),
       load: () =>
         Effect.sync(() =>
           Instructions.make({
@@ -1212,6 +1213,23 @@ describe("SessionRunnerLLM", () => {
 
     expect((yield* s.session.get(sessionID)).title).toBe("Generated title")
     yield* Fiber.interrupt(fiber)
+  })
+
+  scenario("an ultrathink prompt sends the same model and options as a plain one, and only adds the note", function* (s) {
+    yield* s.llm.push(TestLLM.text("First answer", "boost-1"), TestLLM.text("Second answer", "boost-2"))
+    yield* s.runPrompt("Please ultrathink about this")
+    yield* s.runPrompt("A plain follow-up")
+
+    expect(s.requests).toHaveLength(2)
+    const [first, second] = s.requests
+    // Everything but the messages is identical: the keyword changes no request parameter.
+    expect({ ...first, messages: undefined, id: undefined }).toEqual({ ...second, messages: undefined, id: undefined })
+    const noted = (request: typeof first) =>
+      JSON.stringify(request.messages).includes("asked for a high level of reasoning effort")
+    expect(noted(first)).toBe(true)
+    // The next request still carries the earlier prompt's note, and the later prompt has none of its own.
+    expect(noted(second)).toBe(true)
+    expect(JSON.stringify(second.messages).split("asked for a high level of reasoning effort")).toHaveLength(2)
   })
 
   scenario("does not automatically replace an existing session title", function* (s) {
