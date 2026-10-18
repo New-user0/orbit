@@ -440,8 +440,8 @@ function toLLMMessage(
           id: message.id,
           role: "user",
           content: [
-            // A skill the person activates is scanned like a prompt that carries it.
-            ...(!lowering.minimal && SessionEffort.requested(message.text)
+            // A skill the person activates is scanned like a prompt that carries it, unless it arrives mid-turn.
+            ...(!lowering.minimal && !lowering.queued.has(message.id) && SessionEffort.requested(message.text)
               ? [Message.text(ReminderText.render({ text: SessionEffort.note }))]
               : []),
             Message.text(message.text),
@@ -463,7 +463,7 @@ function toLLMMessage(
               `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${ReminderText.neutralize(message.output?.output ?? "")}`,
             ),
             // Shell input the person typed is scanned like a prompt.
-            // A command typed while the agent works waits for the turn to end, so it gets no note.
+            // A command typed while the agent works runs at once and belongs to that turn, so it gets no note.
             ...(!lowering.minimal && !lowering.queued.has(message.id) && SessionEffort.requested(message.command)
               ? [Message.text(ReminderText.render({ text: SessionEffort.note }))]
               : []),
@@ -531,8 +531,9 @@ const queuedInput = (history: readonly SessionMessage.Info[]) => {
         else if (open) queued.add(message.id)
         return
       case "shell":
+      case "skill":
+        // Orbit runs both at once, so neither ends the busy period for the input that follows.
         if (open) queued.add(message.id)
-        open = false
         return
       case "idle":
       case "location-switched":

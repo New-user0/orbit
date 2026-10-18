@@ -328,11 +328,31 @@ describe("the boundary a mid-turn note needs", () => {
     time: { created },
   } as unknown as SessionMessage.Info
 
+  const skill = { id: id("sk"), type: "skill", text: "Ultrathink first.", time: { created } } as unknown as SessionMessage.Info
+
+  test("a location switch between a tool step and a steer ends the boundary", () => {
+    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), moved, user("b")], model), "b")).toBe(false)
+  })
+
+  // Orbit runs a shell command or a skill at once, so neither ends the busy period for the steer after it.
   test.each([
     ["a shell command", shell],
-    ["a location switch", moved],
-  ])("%s between a tool step and a steer ends the boundary", (_, between) => {
-    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), between, user("b")], model), "b")).toBe(false)
+    ["a skill", skill],
+  ])("%s between a tool step and a steer keeps the steer queued", (_, between) => {
+    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), between, user("b")], model), "b")).toBe(true)
+  })
+
+  test("a steer that says the keyword after a mid-turn shell gets the queued note and no boost", () => {
+    const out = toLLMMessages([user("a"), toolStep("s1"), shell, user("b", { text: "please ultrathink" })], model)
+    expect(hasNote(out, "b")).toBe(true)
+    expect(parts(out, "b").filter((part) => part.includes("high level of reasoning effort"))).toHaveLength(0)
+  })
+
+  test("a skill after a tool step gets no boost, and one after a text-only step gets one", () => {
+    const count = (history: SessionMessage.Info[]) =>
+      parts(toLLMMessages(history, model), "sk").filter((part) => part.includes("high level of reasoning effort")).length
+    expect(count([user("a"), toolStep("s1"), skill])).toBe(0)
+    expect(count([user("a"), textStep("s1"), skill])).toBe(1)
   })
 })
 
