@@ -307,6 +307,20 @@ describe("PromptConfigPlugin", () => {
   )
 })
 
+describe("the memory index", () => {
+  it.effect("is activated after the instruction files, so it renders last", () =>
+    Effect.gen(function* () {
+      const source = yield* Effect.promise(() =>
+        Bun.file(path.join(import.meta.dir, "../../src/plugin/internal.ts")).text(),
+      )
+      const at = (name: string) => source.indexOf(name, source.indexOf("const post = ["))
+      expect(at("ConfigInstructionPlugin.Plugin")).toBeGreaterThan(-1)
+      expect(at("ConfigInstructionPlugin.Plugin")).toBeLessThan(at("MemoryTool.Plugin"))
+      expect(source.indexOf("MemoryTool.Plugin", source.indexOf("const pre = ["))).toBeGreaterThan(source.indexOf("const post = ["))
+    }),
+  )
+})
+
 describe("the PowerShell rename", () => {
   // The session's shell is PowerShell: a stand-in for the one method the plugin calls.
   const powershell = Layer.succeed(ShellSelect.Service, { resolve: () => Effect.succeed("pwsh") } as never)

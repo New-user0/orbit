@@ -2699,6 +2699,15 @@ describe("InstructionDiscovery renders kinds, the header and order notes", () =>
     }),
   )
 
+  it.effect("renders no header in an update whose stored previous value does not decode", () =>
+    Effect.gen(function* () {
+      const discovery = yield* withFiles([file("/repo/AGENTS.md", "rules")])
+      const update = (yield* readUpdate(yield* discovery.load(), stored([{ path: "/repo/AGENTS.md", content: "old", kind: "unknown" }]))).text
+      expect(update).toContain("/repo/AGENTS.md")
+      for (const anchor of anchors) expect(update).not.toContain(anchor)
+    }),
+  )
+
   it.effect("renders no header in the update that brings the first instruction file of a session", () =>
     Effect.gen(function* () {
       const discovery = yield* withFiles([file("/repo/ORBIT.md", "created later")])
