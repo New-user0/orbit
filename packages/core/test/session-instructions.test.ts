@@ -575,8 +575,9 @@ describe("SessionInstructions in a project that is not trusted", () => {
       expect(yield* providerText(sessionID)).not.toContain("TOP SECRET")
 
       yield* trust.grant({ persist: false, via: "test" })
-      yield* executeTool(registry, readCall(sessionID, "call-trusted", "sub/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-trusted", "sub/file.txt", { limit: 5 }))
       // The grant does not open a link that leads out: what the model's reads load stays inside the project.
+      // A different range, so the read is not answered with the "has not changed" stub before touched() runs.
       expect(yield* synthetics(sessionID)).toHaveLength(0)
       expect(yield* providerText(sessionID)).not.toContain("TOP SECRET")
     }).pipe(Effect.provide(logger))
