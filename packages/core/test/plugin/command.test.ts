@@ -17,6 +17,7 @@ import { DateTime } from "effect"
 import { emptyMcpLayer } from "../fixture/mcp"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
+import { slashParity } from "../../../tui/test/fixture/slash-parity"
 import { host } from "./host"
 import PROMPT_INITIALIZE from "../../src/plugin/command/initialize.txt"
 import PROMPT_REVIEW from "../../src/plugin/command/review.txt"
@@ -195,6 +196,34 @@ describe("CommandPlugin.Plugin", () => {
           delivery: "steer",
         },
       ])
+    }),
+  )
+
+  // The list of built-ins in the terminal UI's tests names the ones the server registers. A name there that the server
+  // does not register would leave a command that people expect with nobody to run it.
+  it.effect("registers every built-in that the parity list says the server serves", () =>
+    Effect.gen(function* () {
+      const command = yield* Command.Service
+      yield* CommandPlugin.Plugin.effect(
+        host({
+          command: {
+            list: () => Effect.die("unused command.list"),
+            transform: command.transform,
+            reload: command.reload,
+          },
+        }),
+      ).pipe(
+        Effect.provideService(
+          Location.Service,
+          Location.Service.of(location({ directory }, { projectDirectory: project })),
+        ),
+      )
+      const served = slashParity.flatMap((entry) => (entry.state === "server" ? [entry.name] : []))
+      // The control: the list does name some, so the loop below checks something.
+      expect(served.length).toBeGreaterThan(0)
+      for (const name of served) expect(yield* command.get(name)).toMatchObject({ name })
+      // And a name that is not registered is not found, so that a typo in the list fails the loop.
+      expect(yield* command.get("no-such-built-in")).toBeUndefined()
     }),
   )
 })

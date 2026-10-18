@@ -344,7 +344,7 @@ function Commands(props: { context: Plugin.Context }) {
         id: "plugins.list",
         title: "Plugins",
         group: "System",
-        slash: { name: "plugins" },
+        slash: { name: "plugins", aliases: ["plugin"] },
         palette: true,
         run() {
           props.context.ui.dialog.show(() => <PluginsDialog context={props.context} plugins={plugins} />)

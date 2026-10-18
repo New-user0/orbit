@@ -45,7 +45,7 @@ async function renderEditor(
     /** The state folder, which holds the locks in `ide`. */
     state?: string
     autoConnect?: boolean
-    timing?: { poll: number; window: number; delays: number[] }
+    timing?: { poll: number; window: number; delays: number[]; connect?: number }
   } = {},
 ) {
   let editor!: ReturnType<typeof useEditorContext>

@@ -274,6 +274,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  ConfigSourcesChangedInput,
+  ConfigSourcesChangedOutput,
 } from "./types.js"
 import { ClientError } from "./client-error.js"
 
@@ -2284,6 +2286,21 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      sources: {
+        changed: (input: ConfigSourcesChangedInput, requestOptions?: RequestOptions) =>
+          request<ConfigSourcesChangedOutput>(
+            {
+              method: "POST",
+              path: `/api/experimental/config/sources/changed`,
+              query: { location: input["location"] },
+              body: { paths: input["paths"] },
+              successStatus: 204,
+              declaredStatuses: [400, 401],
+              empty: true,
+            },
+            requestOptions,
+          ),
+      },
     },
   }
 }

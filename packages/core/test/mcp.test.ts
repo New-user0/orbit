@@ -326,6 +326,7 @@ function resourceMcpLayer(
                 changes: () => Stream.never,
                 fingerprints: () => Effect.succeed([]),
                 pluginsChanged: () => Effect.succeed(false),
+                notify: () => Effect.void,
               }),
             )
           : Config.testLayer([

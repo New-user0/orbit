@@ -19,6 +19,7 @@ const config = (plugins: Info["plugins"] = []) =>
       changes: () => Stream.never,
       fingerprints: () => Effect.succeed([]),
       pluginsChanged: () => Effect.succeed(false),
+      notify: () => Effect.void,
     }),
   )
 

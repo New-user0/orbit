@@ -46,7 +46,7 @@ import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogIntegration } from "./component/dialog-integration"
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
-import { EditorContextProvider } from "./context/editor"
+import { EditorContextProvider, useEditorContext } from "./context/editor"
 import { useEvent } from "./context/event"
 import { ClientProvider, useClient } from "./context/client"
 import { StartupLoading } from "./component/startup-loading"
@@ -65,6 +65,7 @@ import { DialogFlowRuns } from "./component/dialog-flow-runs"
 import { DialogAgentMap } from "./component/dialog-agent-map"
 import { DialogContext } from "./component/dialog-context"
 import { DialogCost } from "./component/dialog-cost"
+import { DialogTodos } from "./component/dialog-todos"
 import { DialogOutputStyle } from "./component/dialog-output-style"
 import { DialogStatus } from "./component/dialog-status"
 import { DialogConfig } from "./component/dialog-config"
@@ -82,6 +83,11 @@ import { createPaneResize } from "./ui/pane-resize"
 import { PaneResizeHandle } from "./ui/pane-resize-handle"
 import { ThemeErrorToast } from "./component/theme-error-toast"
 import { editKeybindings, KeybindingsToast } from "./component/keybindings-toast"
+import { runTerminalSetup } from "./component/terminal-setup"
+import { DialogIde, DialogIdeOpen } from "./component/dialog-ide"
+import { CompatEditors } from "@orbit/compat/editors"
+import { editorPort, runProgram } from "./editor"
+import { stringifyKeyStroke } from "@opentui/keymap"
 import { createThemeSource, ThemeProvider, useTheme, useThemes } from "./context/theme"
 import { Home } from "./routes/home"
 import { PromptHistoryProvider } from "./prompt/history"
@@ -505,6 +511,7 @@ function App() {
   const plugins = usePlugin()
   const trust = useTrust()
   const clipboard = useClipboard()
+  const editorContext = useEditorContext()
   const terminalEnvironment = useTuiTerminalEnvironment()
   let paletteTimer: ReturnType<typeof setTimeout> | undefined
   const afterFrame = () => {
@@ -872,7 +879,7 @@ function App() {
         title: "Switch model",
         suggested: true,
         category: "Agent",
-        slash: { name: "models" },
+        slash: { name: "models", aliases: ["model"] },
         run: () => {
           dialog.replace(() => <DialogModel />)
         },
@@ -926,7 +933,7 @@ function App() {
         name: "mcp.list",
         title: "MCP servers",
         category: "Agent",
-        slash: { name: "mcps" },
+        slash: { name: "mcps", aliases: ["mcp"] },
         run: () => {
           dialog.replace(() => <DialogMcp />)
         },
@@ -983,6 +990,16 @@ function App() {
           if (route.data.type !== "session") return
           const sessionID = route.data.sessionID
           dialog.replace(() => <DialogCost sessionID={sessionID} />)
+        },
+      },
+      {
+        name: "session.todos",
+        title: "Session plan",
+        category: "Session",
+        slash: { name: "todos" },
+        run: () => {
+          const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+          dialog.replace(() => <DialogTodos sessionID={sessionID} />)
         },
       },
       {
@@ -1046,9 +1063,138 @@ function App() {
         name: "orbit.settings",
         title: "Open settings",
         suggested: true,
-        slash: { name: "settings" },
+        slash: { name: "settings", aliases: ["config"] },
         run: () => {
           dialog.replace(() => <DialogConfig />)
+        },
+        category: "System",
+      },
+      {
+        name: "ide.connect",
+        title: "Connect to an editor",
+        slash: { name: "ide", arguments: true as const },
+        category: "System",
+        run: async (input: string | undefined) => {
+          const argument = input?.trim()
+          if (argument && argument !== "open") {
+            toast.show({
+              variant: "error",
+              message: "Use /ide to choose an editor, or /ide open to open this folder in one.",
+            })
+            return
+          }
+          const session = route.data.type === "session" ? data.session.get(route.data.sessionID) : undefined
+          const directory = session?.location.directory ?? location.ref?.directory ?? data.location.default().directory
+          const windows = editorContext.list()
+          if (argument === "open") {
+            if (windows.matched.length === 0) {
+              toast.show({
+                variant: "info",
+                message: "No editor with the Orbit extension has this folder open. Install the extension and open the folder in the editor.",
+              })
+              return
+            }
+            dialog.replace(() => (
+              <DialogIdeOpen
+                windows={windows.matched}
+                directory={directory}
+                onCancel={() => dialog.clear()}
+                onSelect={async (chosen) => {
+                  dialog.clear()
+                  const program = CompatEditors.program(chosen.name)
+                  if (!program) {
+                    toast.show({
+                      variant: "info",
+                      message: `Orbit cannot start ${plain(chosen.name)}. Open ${plain(directory)} in it yourself.`,
+                    })
+                    return
+                  }
+                  const result = await runProgram(program, [directory], directory)
+                  if (result.type === "exit" && result.code === 0) {
+                    toast.show({ variant: "success", message: `Opened ${plain(directory)} in ${plain(chosen.name)}.` })
+                    return
+                  }
+                  toast.show({
+                    variant: "error",
+                    message: `Could not open ${plain(directory)} in ${plain(chosen.name)}. Open it yourself.`,
+                  })
+                }}
+              />
+            ))
+            return
+          }
+          dialog.replace(() => (
+            <DialogIde
+              windows={windows}
+              directory={directory}
+              inEditor={editorPort(process.env) !== undefined || process.env.TERM_PROGRAM === "vscode"}
+              onCancel={() => dialog.clear()}
+              onSelect={async (port) => {
+                dialog.clear()
+                if (port === undefined) {
+                  const name = plain(editorContext.server()?.name ?? "") || undefined
+                  editorContext.disconnect()
+                  toast.show({
+                    variant: "info",
+                    message: name ? `Disconnected from ${name}.` : "No editor was chosen.",
+                  })
+                  return
+                }
+                const name = plain(windows.matched.find((item) => item.port === port)?.name ?? "the editor")
+                toast.show({ variant: "info", message: `Connecting to ${name}…` })
+                const result = await editorContext.connect(port)
+                toast.show(
+                  result === "connected"
+                    ? { variant: "success", message: `Connected to ${name}.` }
+                    : {
+                        variant: "error",
+                        message: result === "timeout" ? `Timed out connecting to ${name}.` : `Could not connect to ${name}.`,
+                      },
+                )
+              }}
+            />
+          ))
+        },
+      },
+      {
+        name: "terminal.setup",
+        title: "Set up Shift+Enter for newlines",
+        slash: { name: "terminal-setup" },
+        run: () =>
+          runTerminalSetup({
+            env: process.env,
+            platform: process.platform,
+            capabilities: renderer.capabilities,
+            newlineKeys: config.data.keybinds
+              .get("input.newline")
+              .map((item) => (typeof item.key === "string" ? item.key : stringifyKeyStroke(item.key as never)))
+              .join(", "),
+            dialog,
+            toast,
+            copy: (text) => clipboard.write(text),
+          }),
+        category: "System",
+      },
+      {
+        name: "prompt.vim.toggle",
+        title: "Toggle Vim keys in the prompt",
+        slash: { name: "vim" },
+        run: async () => {
+          dialog.clear()
+          const info = await config
+            .update((draft) => {
+              draft.prompt ??= {}
+              draft.prompt.vim = draft.prompt.vim !== true
+            })
+            .catch((error: unknown) => void toast.error(error))
+          if (!info) return
+          toast.show({
+            variant: "info",
+            message:
+              info.prompt?.vim === true
+                ? "Vim keys are on. Escape switches between insert and normal mode."
+                : "Vim keys are off. The standard line-editing keys apply.",
+          })
         },
         category: "System",
       },

@@ -88,6 +88,13 @@ export interface Interface {
    * source files they parse and rebuild their own state.
    */
   readonly changes: () => Stream.Stream<Watcher.Update>
+  /**
+   * Reports that the files at `paths` changed, to every `changes()` subscriber, for a server that has no file watcher or
+   * a client that wrote a file and does not want to wait for one. It does not reload the config and publishes no
+   * `config.updated`, so the services of the location and the asks pending in its sessions are left alone; an owner that
+   * does not read one of the paths ignores it. The caller decides which paths count.
+   */
+  readonly notify: (paths: readonly string[]) => Effect.Effect<void>
   /** Updates supported global config fields while preserving unrelated JSONC content. */
   readonly update?: (patch: Patch) => Effect.Effect<void, FSUtil.Error>
   /**
@@ -146,6 +153,8 @@ export const testLayer = (initial: Entry[] = [], compat: Compat = defaultCompat)
         compatEnabled: () => Effect.succeed(compat.enabled),
         compat: () => Effect.succeed(compat),
         changes: () => Stream.fromPubSub(updates),
+        notify: (paths) =>
+          Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
         fingerprints: () => Effect.succeed([]),
         pluginsChanged: () => Effect.succeed(false),
         setEntries: (next) => Ref.set(entries, next),
@@ -701,6 +710,8 @@ export const layer = (options?: Options) =>
           return { enabled, roots: yield* Effect.forEach(present, stampRoot) }
         }),
         changes: () => Stream.fromPubSub(updates),
+        notify: (paths) =>
+          Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
         update,
         fingerprints: () => Effect.sync(() => observed),
         pluginsChanged: Effect.fn("Config.pluginsChanged")(function* (directory) {
