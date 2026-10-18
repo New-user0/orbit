@@ -68,6 +68,12 @@ export interface Interface {
     files: readonly string[],
     options?: { readonly save?: boolean },
   ) => Effect.Effect<Record<string, Diagnostic[]>>
+  /**
+   * The last diagnostics each of these files was published, from servers that are already running. It never starts a
+   * server, syncs a file or waits, and gives nothing while the folder is not trusted. The caller passes only files that
+   * were synced before, which already passed the trust check for their own folder.
+   */
+  readonly current: (files: readonly string[]) => Effect.Effect<Record<string, Diagnostic[]>>
   /** Sends a request about a file to its language server. The document is added to the params. */
   readonly request: (method: string, file: string, params: Record<string, unknown>) => Effect.Effect<unknown, Error>
   /**
@@ -95,6 +101,8 @@ const layer = Layer.effect(
     const git = yield* Git.Service
     // One start attempt per server; a server that fails to start stays off until the Location reloads.
     const clients = new Map<string, Promise<LspClient.Client | undefined>>()
+    // The servers that finished starting, so a read of what they published never starts or waits for one.
+    const running = new Map<string, LspClient.Client>()
     yield* Effect.addFinalizer(() =>
       Effect.promise(() =>
         Promise.all(
@@ -128,8 +136,12 @@ const layer = Layer.effect(
       return [...custom, ...builtIn]
     })
 
+    const serverFor = Effect.fnUntraced(function* (file: string) {
+      return (yield* servers()).find((item) => item.extensions.includes(path.extname(file).toLowerCase()))
+    })
+
     const client = Effect.fn("Lsp.client")(function* (file: string) {
-      const server = (yield* servers()).find((item) => item.extensions.includes(path.extname(file).toLowerCase()))
+      const server = yield* serverFor(file)
       if (!server) return undefined
       const pending =
         clients.get(server.id) ??
@@ -145,10 +157,15 @@ const layer = Layer.effect(
           ),
           root: location.project.directory,
           spawner,
-        }).catch((error: unknown) => {
-          console.warn(`language server ${server.id} failed to start`, error)
-          return undefined
         })
+          .then((started) => {
+            running.set(server.id, started)
+            return started
+          })
+          .catch((error: unknown) => {
+            console.warn(`language server ${server.id} failed to start`, error)
+            return undefined
+          })
       clients.set(server.id, pending)
       return yield* Effect.promise(() => pending)
     })
@@ -172,8 +189,9 @@ const layer = Layer.effect(
         return yield* new Error({ message: "Language servers stay off until this folder is trusted." })
       if (!(yield* allowed(file)))
         return yield* new Error({ message: "Language servers stay off for a file whose folder is not trusted." })
-      const target = yield* client(file)
-      if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+      if (!(yield* serverFor(file)))
+        return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+      // The size and the read come before the server starts, so a file it would refuse never starts one.
       const size = yield* fs.stat(file).pipe(
         Effect.map((info) => Number(info.size)),
         Effect.orElseSucceed(() => 0),
@@ -184,16 +202,18 @@ const layer = Layer.effect(
         })
       const text = yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
       if (text === undefined) return yield* new Error({ message: `Cannot read ${file}.` })
+      const target = yield* client(file)
+      if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+      const failed = (cause: unknown) =>
+        new Error({
+          message: `${target.id} could not answer: ${String(cause)}`,
+          ...(isRecord(cause) && typeof cause.code === "number" ? { code: cause.code } : {}),
+        })
+      // The document is sent once. Only the request is retried, so a retry never sends the text again.
+      const uri = yield* Effect.tryPromise({ try: () => target.open(file, text), catch: failed })
       return yield* Effect.tryPromise({
-        try: () =>
-          document
-            ? target.request(method, file, text, params)
-            : target.open(file, text).then(() => target.send(method, params)),
-        catch: (cause) =>
-          new Error({
-            message: `${target.id} could not answer: ${String(cause)}`,
-            ...(isRecord(cause) && typeof cause.code === "number" ? { code: cause.code } : {}),
-          }),
+        try: () => target.send(method, document ? { textDocument: { uri }, ...params } : params),
+        catch: failed,
       }).pipe(Effect.retry({ schedule: retrySchedule, while: (error) => error.code === CONTENT_MODIFIED }))
     })
 
@@ -215,6 +235,20 @@ const layer = Layer.effect(
                 return [[file, items] as const]
               }),
             { concurrency: "unbounded" },
+          )
+          return Object.fromEntries(found.flat())
+        },
+        Effect.orElseSucceed(() => ({})),
+      ),
+      current: Effect.fn("Lsp.current")(
+        function* (files) {
+          if (!(yield* trust.trusted())) return {}
+          const found = yield* Effect.forEach(files, (file) =>
+            Effect.gen(function* () {
+              const server = yield* serverFor(file)
+              const items = server ? running.get(server.id)?.current(file) : undefined
+              return items === undefined ? [] : [[file, items] as const]
+            }),
           )
           return Object.fromEntries(found.flat())
         },

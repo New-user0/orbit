@@ -7,7 +7,7 @@ import { ChildProcess } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import path from "path"
 import { PassThrough } from "stream"
-import { pathToFileURL } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from "vscode-jsonrpc/node"
 
 /**
@@ -33,8 +33,17 @@ export interface Diagnostic {
   readonly code?: string | number
 }
 
+/** 1 error, 2 warning, 3 information, 4 hint. A missing or unknown number counts as an error, as servers differ on it. */
+export const severity = (diagnostic: Pick<Diagnostic, "severity">) =>
+  diagnostic.severity === 2 || diagnostic.severity === 3 || diagnostic.severity === 4 ? diagnostic.severity : 1
+
+/** The key a file is filed under: its absolute path, and on Windows without letter case. */
+export const keyOf = (file: string) => (process.platform === "win32" ? path.resolve(file).toLowerCase() : path.resolve(file))
+
 export interface Client {
   readonly id: string
+  /** The last diagnostics the server published for the file. Never syncs, sends or waits. */
+  readonly current: (file: string) => Diagnostic[] | undefined
   /**
    * Sends the file's current text and waits briefly for the diagnostics the server publishes for it. With `save`, the
    * server is then told the file was saved, which some servers wait for before running their deeper checks.
@@ -93,13 +102,20 @@ export async function start(input: {
     new StreamMessageWriter(toServer),
   )
 
+  // Filed by path, not by the address the server wrote: servers spell a Windows drive in lower case with an encoded colon.
   const published = new Map<string, Diagnostic[]>()
   const listeners = new Map<string, Set<() => void>>()
   const versions = new Map<string, number>()
 
-  connection.onNotification("textDocument/publishDiagnostics", (params: { uri: string; diagnostics: Diagnostic[] }) => {
-    published.set(params.uri, params.diagnostics)
-    listeners.get(params.uri)?.forEach((listener) => listener())
+  connection.onNotification("textDocument/publishDiagnostics", (params: unknown) => {
+    const publication = decodePublication(params)
+    if (!publication) {
+      console.warn(`language server ${input.id} sent a diagnostics publication that was dropped`)
+      return
+    }
+    const key = keyOf(publication.file)
+    published.set(key, publication.diagnostics)
+    listeners.get(key)?.forEach((listener) => listener())
   })
   // Servers ask for settings and capabilities; answer with what was configured and accept registrations.
   connection.onRequest("workspace/configuration", (params: { items: { section?: string }[] }) =>
@@ -160,8 +176,10 @@ export async function start(input: {
 
   return {
     id: input.id,
+    current: (file) => published.get(keyOf(file)),
     diagnostics: async (file, text, options) => {
       const uri = pathToFileURL(file).href
+      const key = keyOf(file)
       const settled = new Promise<void>((resolve) => {
         const timer = { current: undefined as ReturnType<typeof setTimeout> | undefined }
         const deadline = setTimeout(done, DIAGNOSTICS_TIMEOUT_MS)
@@ -169,9 +187,9 @@ export async function start(input: {
           clearTimeout(timer.current)
           timer.current = setTimeout(done, DIAGNOSTICS_SETTLE_MS)
         }
-        const set = listeners.get(uri) ?? new Set()
+        const set = listeners.get(key) ?? new Set()
         set.add(listener)
-        listeners.set(uri, set)
+        listeners.set(key, set)
         function done() {
           clearTimeout(deadline)
           clearTimeout(timer.current)
@@ -185,7 +203,7 @@ export async function start(input: {
           .sendNotification("textDocument/didSave", { textDocument: { uri }, ...(saveText ? { text } : {}) })
           .catch(() => undefined)
       await settled
-      return published.get(uri) ?? []
+      return published.get(key) ?? []
     },
     open: sync,
     send: (method, params) => connection.sendRequest(method, params),
@@ -203,6 +221,47 @@ export async function start(input: {
       await Promise.race([stop(), new Promise((resolve) => setTimeout(resolve, 3_000))])
     },
   }
+}
+
+/**
+ * The one place a publication is checked. A publication without an address or a list is dropped whole; a malformed entry
+ * is dropped alone with one log line, so one bad entry costs only itself.
+ */
+function decodePublication(params: unknown) {
+  if (!isRecord(params) || typeof params.uri !== "string" || !Array.isArray(params.diagnostics)) return undefined
+  const file = fileOf(params.uri)
+  if (file === undefined) return undefined
+  const diagnostics = params.diagnostics.flatMap((entry: unknown) => {
+    const decoded = decodeDiagnostic(entry)
+    if (decoded) return [decoded]
+    console.warn("language server sent a malformed diagnostic, which was dropped")
+    return []
+  })
+  return { file, diagnostics }
+}
+
+function decodeDiagnostic(entry: unknown): Diagnostic | undefined {
+  if (!isRecord(entry) || typeof entry.message !== "string") return undefined
+  const range = entry.range
+  if (!isRecord(range) || !position(range.start) || !position(range.end)) return undefined
+  return {
+    range: { start: range.start, end: range.end },
+    message: entry.message,
+    ...(typeof entry.severity === "number" ? { severity: entry.severity } : {}),
+    ...(typeof entry.source === "string" ? { source: entry.source } : {}),
+    ...(typeof entry.code === "string" || typeof entry.code === "number" ? { code: entry.code } : {}),
+  }
+}
+
+function position(value: unknown): value is Position {
+  return isRecord(value) && typeof value.line === "number" && typeof value.character === "number"
+}
+
+// A `file:` address as a path; anything else, or an address that does not convert, names no file.
+function fileOf(uri: string) {
+  if (!uri.startsWith("file:")) return undefined
+  const converted = Effect.runSync(Effect.try(() => fileURLToPath(uri)).pipe(Effect.option))
+  return converted._tag === "Some" ? converted.value : undefined
 }
 
 function saveIncludesText(initialized: unknown) {

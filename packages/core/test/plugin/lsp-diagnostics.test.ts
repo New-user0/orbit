@@ -10,6 +10,7 @@ import { SessionMessage } from "@orbit/schema/session-message"
 import { Agent } from "@orbit/core/agent"
 import { Location } from "@orbit/core/location"
 import { FileAccess } from "@orbit/core/file-access"
+import { LspDiagnostics } from "@orbit/core/lsp/collector"
 import { Lsp } from "@orbit/core/lsp/index"
 import { LspPlugin } from "@orbit/core/lsp/plugin"
 import { Plugin } from "@orbit/core/plugin"
@@ -47,7 +48,11 @@ const lspLayer = Layer.mock(Lsp.Service, {
       )
     }),
 })
-const it = testEffect(Layer.merge(PluginTestLayer, lspLayer))
+const touched: { sessionID: string; files: readonly string[] }[] = []
+const collectorLayer = Layer.mock(LspDiagnostics.Service, {
+  touch: (sessionID, files) => Effect.sync(() => void touched.push({ sessionID, files })),
+})
+const it = testEffect(Layer.mergeAll(PluginTestLayer, lspLayer, collectorLayer))
 
 const base = (tool: string, input: unknown, result: Tool.Result) => ({
   sessionID: Session.ID.make("ses_lsp_plugin"),

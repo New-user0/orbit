@@ -21,6 +21,7 @@ import { ConfigFormatterPlugin } from "../config/plugin/formatter.js"
 import { ConfigImagePlugin } from "../config/plugin/image.js"
 import { ConfigInstructionPlugin } from "../config/plugin/instruction.js"
 import { LifecycleHooksPlugin } from "../config/plugin/lifecycle-hooks.js"
+import { LspDiagnostics } from "../lsp/collector.js"
 import { Lsp } from "../lsp/index.js"
 import { LspPlugin } from "../lsp/plugin.js"
 import { ConfigLocationWatcherPlugin } from "../config/plugin/location-watcher.js"
@@ -138,6 +139,7 @@ const services = [
   FileMutation.Service,
   FileLedger.Service,
   Lsp.Service,
+  LspDiagnostics.Service,
   Formatter.Service,
   LocationWatcherPolicy.Service,
   FileSystem.Service,
@@ -197,6 +199,7 @@ export const requirements = LayerNode.group([
   FileMutation.node,
   FileLedger.node,
   Lsp.node,
+  LspDiagnostics.node,
   Formatter.node,
   LocationWatcherPolicy.node,
   FileSystem.node,
