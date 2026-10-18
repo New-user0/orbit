@@ -43,6 +43,10 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
     })
 
     return {
+      /** Where the server listens, when this client was given an address. */
+      get url() {
+        return url
+      },
       get api() {
         return api
       },

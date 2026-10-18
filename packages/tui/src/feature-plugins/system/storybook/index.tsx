@@ -11,6 +11,9 @@ import { trustIndicatorStory } from "./trust-indicator"
 import { historySearchStory } from "./history-search"
 import { costStory } from "./cost"
 import { assistantFooterStory } from "./assistant-footer"
+import { agentCreateStory } from "./agent-create"
+import { ideStory } from "./ide"
+import { todosStory } from "./todos"
 
 /**
  * A story is a full-screen, fixture-driven simulation of a real production component. Stories own
@@ -32,6 +35,9 @@ const stories: Story[] = [
   historySearchStory,
   costStory,
   assistantFooterStory,
+  ideStory,
+  todosStory,
+  agentCreateStory,
 ]
 
 function Commands(props: { context: Plugin.Context }) {

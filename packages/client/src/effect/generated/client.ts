@@ -276,6 +276,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  ConfigSourcesChangedInput,
+  ConfigSourcesChangedOutput,
 } from "../api/api.js"
 import { ClientError } from "./client-error.js"
 
@@ -1622,11 +1624,19 @@ const EndpointConfigUpdate = (raw: RawClient["server.config"]) => (input?: Confi
     ),
   )
 
+const EndpointConfigSourcesChanged = (raw: RawClient["server.config"]) => (input: ConfigSourcesChangedInput) =>
+  preserveEffect<ConfigSourcesChangedOutput>()(
+    raw["config.sources.changed"]({ query: { location: input["location"] }, payload: { paths: input["paths"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
+  )
+
 const adaptGroupConfig = (raw: RawClient["server.config"]) => ({
   get: EndpointConfigGet(raw),
   effective: EndpointConfigEffective(raw),
   shells: EndpointConfigShells(raw),
   update: EndpointConfigUpdate(raw),
+  sources: { changed: EndpointConfigSourcesChanged(raw) },
 })
 
 const adaptClient = (raw: RawClient) => ({

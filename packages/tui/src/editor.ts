@@ -58,6 +58,8 @@ export async function openFile(input: {
   renderer: CliRenderer
   /** Opens a path with the system's default program. */
   system?: (file: string) => Promise<unknown>
+  /** Waits until the file is closed when the editor is `code` or `subl`, which return at once otherwise. */
+  wait?: boolean
 }): Promise<"editor" | "system"> {
   const wanted = process.env.VISUAL || process.env.EDITOR
   const failure = wanted ? await edit(wanted, input).then(() => undefined, (error: unknown) => error) : undefined
@@ -70,13 +72,14 @@ export async function openFile(input: {
   return "system"
 }
 
-async function edit(editor: string, input: { file: string; renderer: CliRenderer }) {
+async function edit(editor: string, input: { file: string; renderer: CliRenderer; wait?: boolean }) {
   // Look the program up before the terminal is handed over, so that a missing editor leaves the screen alone.
   await program(editor)
   input.renderer.suspend()
   input.renderer.currentRenderBuffer.clear()
   try {
-    await launch(editor, input.file, { cwd: path.dirname(input.file) })
+    const exit = await launch(editor, input.file, { cwd: path.dirname(input.file), wait: input.wait })
+    if (input.wait && exit.code !== 0) throw new Error(`Editor exited with ${exit.signal ? `signal ${exit.signal}` : `code ${exit.code}`}`)
   } finally {
     input.renderer.currentRenderBuffer.clear()
     input.renderer.resume()
@@ -97,18 +100,44 @@ async function launch(
   options: { cwd: string; stdin?: EditorStdio; /** Adds the flag that makes `code` and `subl` stay until the file is closed. */ wait?: boolean },
 ) {
   const { command, args, found } = await program(editor)
-  const { default: crossSpawn } = await import("cross-spawn")
   // Without it `code` and `subl` return at once, and the prompt would come back as it was. Any other value is used as written.
   const wait = options.wait && args.length === 0 && (command === "code" || command === "subl") ? ["--wait"] : []
+  return run(found, [...args, ...wait, file], {
+    cwd: options.cwd,
+    stdio: [options.stdin ?? "inherit", "inherit", "inherit"],
+  })
+}
+
+/**
+ * Starts a program that was found on PATH, by the path that was found, and waits for it. cross-spawn runs a .cmd or .bat
+ * file the way Windows needs it to be run, and the program is never looked up again, so a program of the same name in the
+ * working folder is not the one that runs. No shell is involved.
+ */
+async function run(found: string, args: string[], options: { cwd: string; stdio: [EditorStdio, EditorStdio, EditorStdio] }) {
+  const { default: crossSpawn } = await import("cross-spawn")
   return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const child = crossSpawn(found, [...args, ...wait, file], {
+    const child = crossSpawn(found, args, {
       cwd: options.cwd,
       env: ProgramLookup.environment(undefined),
-      stdio: [options.stdin ?? "inherit", "inherit", "inherit"],
+      stdio: options.stdio,
     })
     child.once("error", reject)
     child.once("exit", (code, signal) => resolve({ code, signal }))
   })
+}
+
+/**
+ * Starts a program by name with arguments, in `cwd`, and says how it ended. The name is looked up on PATH alone; nothing is
+ * started when it is not there. The program's output is discarded.
+ */
+export async function runProgram(name: string, args: string[], cwd: string) {
+  const { which } = await import("@orbit/util/which")
+  const found = which(name)
+  if (!found) return { type: "missing" as const }
+  return run(found, args, { cwd, stdio: ["ignore", "ignore", "ignore"] }).then(
+    (exit) => ({ type: "exit" as const, code: exit.code }),
+    () => ({ type: "missing" as const }),
+  )
 }
 
 async function program(editor: string) {

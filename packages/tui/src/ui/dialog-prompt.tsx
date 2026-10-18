@@ -13,6 +13,10 @@ export type DialogPromptProps = {
   description?: () => JSX.Element
   placeholder?: string
   value?: string
+  /** Rows of the text box; one by default. More turns on word wrap, and Shift+Enter or Alt+Enter starts a new line. */
+  height?: number
+  /** Hands the text to the person's editor and takes back what they saved. Bound to `dialog.prompt.editor` (Ctrl+G by default). */
+  onEditor?: (value: string) => Promise<string | undefined>
   busy?: boolean
   busyText?: string
   onConfirm?: (value: string) => void
@@ -46,6 +50,28 @@ export function DialogPrompt(props: DialogPromptProps) {
         title: "Submit dialog prompt",
         group: "Dialog",
         run: confirm,
+      },
+    ],
+  }))
+
+  Keymap.createLayer(() => ({
+    context: "dialog",
+    mode: "modal",
+    target: textareaTarget,
+    enabled: textareaTarget() !== undefined && props.onEditor !== undefined && !props.busy,
+    priority: 1,
+    commands: [
+      {
+        id: "dialog.prompt.editor",
+        title: "Edit in your editor",
+        group: "Dialog",
+        run: async () => {
+          const next = await props.onEditor?.(textarea.plainText).catch(() => undefined)
+          if (next === undefined || textarea.isDestroyed) return
+          textarea.setText(next)
+          textarea.gotoBufferEnd()
+          textarea.focus()
+        },
       },
     ],
   }))
@@ -115,8 +141,8 @@ export function DialogPrompt(props: DialogPromptProps) {
       <box gap={1}>
         {props.description?.()}
         <textarea
-          height={1}
-          wrapMode="none"
+          height={props.height ?? 1}
+          wrapMode={(props.height ?? 1) > 1 ? "word" : "none"}
           ref={(val: TextareaRenderable) => {
             textarea = val
             setTextareaTarget(val)
@@ -138,6 +164,11 @@ export function DialogPrompt(props: DialogPromptProps) {
           <Show when={shortcuts.get("dialog.prompt.submit")}>
             <text fg={theme.text.base}>
               {shortcuts.get("dialog.prompt.submit")} <span style={{ fg: theme.text.muted }}>submit</span>
+            </text>
+          </Show>
+          <Show when={props.onEditor && shortcuts.get("dialog.prompt.editor")}>
+            <text fg={theme.text.base}>
+              {shortcuts.get("dialog.prompt.editor")} <span style={{ fg: theme.text.muted }}>editor</span>
             </text>
           </Show>
         </Show>

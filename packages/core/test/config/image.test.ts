@@ -60,6 +60,7 @@ describe("ConfigImagePlugin.Plugin", () => {
         changes: () => Stream.empty,
         fingerprints: () => Effect.succeed([]),
         pluginsChanged: () => Effect.succeed(false),
+        notify: () => Effect.void,
       })
       yield* ConfigImagePlugin.Plugin.effect(yield* PluginHost.make(plugins)).pipe(
         Effect.provideService(Config.Service, config),

@@ -3540,3 +3540,15 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 **Affects:** code that calls `InstructionState.initialize` or reads `session.forked` events.
 
 **What to do:** Pass `{ initial, current }` to `initialize`; treat a missing `baseline` as the same as `instructions`.
+
+## New built-in commands: /ide, /terminal-setup, /todos, /vim, and agents you can create
+
+- `/ide` lists the editor windows that have the session's folder open, links the session to the one you pick, and `/ide open` opens the folder in an editor (VS Code, the editors built on it and VSCodium, by their command-line programs, found on `PATH`). Choosing "No editor" closes the link and stops the search until you pick a window again. Outside an editor's own terminal nothing connects by itself; a setting for that is not built yet.
+- `/terminal-setup` adds one `shift+enter` binding to the keybindings file of VS Code, or of an editor built on it, after showing you the file and asking. It keeps your comments and other bindings, saves a backup beside the file first, and leaves a file it cannot read as a list exactly as it was. For other terminals it shows the setting to change and copies it to the clipboard. In a terminal where Shift+Enter already works it says so.
+- `/todos` shows the session's plan in full, as the plan above the prompt reads it. `/vim` turns `prompt.vim` in `cli.json` on and off.
+- `/model`, `/mcp`, `/config` and `/plugin` are aliases of `/models`, `/mcps`, `/settings` and `/plugins`. They open the same dialogs; the argument forms (`/model <name>`) are not built yet.
+- `/agents` has a "Create agent" row that writes `agents/<name>.md` under the project's `.orbit` folder or your own config folder, and an "Edit an agent file" row that opens the file in `$VISUAL` or `$EDITOR`. Both are offered only when the server runs on this machine. A new or edited file reaches the server through `POST /api/experimental/config/sources/changed`, which rebuilds the agents without a reload, so questions waiting in other sessions stay open. The text steps of Create can be edited in your editor with the rebindable key `dialog.prompt.editor` (Ctrl+G by default).
+
+**Affects:** people who use the terminal UI; clients of the generated API gain `config.sources.changed`; code that implements `Config.Interface` gains `notify`.
+
+**What to do:** Nothing. A server started with the file watcher off now picks up an agent file when the terminal UI reports it.

@@ -7237,3 +7237,10 @@ export type ConfigUpdateInput = {
 }
 
 export type ConfigUpdateOutput = void
+
+export type ConfigSourcesChangedInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+  readonly paths: { readonly paths: ReadonlyArray<string> }["paths"]
+}
+
+export type ConfigSourcesChangedOutput = void

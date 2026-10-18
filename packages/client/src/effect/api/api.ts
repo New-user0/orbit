@@ -2560,11 +2560,21 @@ export type ConfigUpdateInput = { readonly shell?: string | null; readonly outpu
 export type ConfigUpdateOutput = void
 export type ConfigUpdateOperation<E = never> = (input?: ConfigUpdateInput) => Effect.Effect<ConfigUpdateOutput, E>
 
+export type ConfigSourcesChangedInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+  readonly paths: ReadonlyArray<string>
+}
+export type ConfigSourcesChangedOutput = void
+export type ConfigSourcesChangedOperation<E = never> = (
+  input: ConfigSourcesChangedInput,
+) => Effect.Effect<ConfigSourcesChangedOutput, E>
+
 export interface ConfigApi<E = never> {
   readonly get: ConfigGetOperation<E>
   readonly effective: ConfigEffectiveOperation<E>
   readonly shells: ConfigShellsOperation<E>
   readonly update: ConfigUpdateOperation<E>
+  readonly sources: { readonly changed: ConfigSourcesChangedOperation<E> }
 }
 
 export interface AppApi<E = never> {

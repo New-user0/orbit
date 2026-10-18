@@ -11,7 +11,7 @@ import { useClient } from "./client"
 import { useLog } from "./log"
 import { createCompat } from "./compat"
 import { useData } from "./data"
-import { editorIntegration, editorPort, type Editor } from "../editor"
+import { discoverEditors, editorIntegration, editorPort, readLocks, type Editor } from "../editor"
 
 const PositionSchema = Schema.Struct({
   line: Schema.Number,
@@ -106,9 +106,21 @@ export type EditorIntegration = Readonly<{
 }>
 
 /** When to look for a window, how long, and how long to wait between the attempts to get back after a drop. */
-export type EditorTiming = { poll: number; window: number; delays: readonly number[] }
+export type EditorTiming = {
+  poll: number
+  window: number
+  delays: readonly number[]
+  /** How long `connect` waits for the editor to say hello before it gives up. */
+  connect: number
+}
 
-const defaultTiming: EditorTiming = { poll: 1_000, window: 30_000, delays: [1_000, 2_000, 4_000, 8_000, 16_000] }
+// The connect limit is just above the 30 s that a search for the window lasts.
+const defaultTiming: EditorTiming = {
+  poll: 1_000,
+  window: 30_000,
+  delays: [1_000, 2_000, 4_000, 8_000, 16_000],
+  connect: 35_000,
+}
 
 export const { use: useEditorContext, provider: EditorContextProvider } = createSimpleContext({
   name: "EditorContext",
@@ -138,7 +150,7 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       selection: EditorSelection | undefined
       selectionSent: boolean
       /** The display name of the editor, once it has said hello. */
-      server: { name?: string } | undefined
+      server: { name?: string; port?: number } | undefined
     }>({
       status: "disabled",
       selection: undefined,
@@ -155,6 +167,8 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
     let lastZedSelectionKey: string | undefined
     let directory = paths.cwd
     let preserveSelectionOnReconnect = false
+    // `/ide` chose no editor: nothing looks for one again until it picks one, or Orbit restarts.
+    let released = false
 
     // The window can be found by itself in an editor's terminal, which has the port or says what it is, and otherwise
     // only when something asked for it.
@@ -204,7 +218,13 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       if (zedTerminal && editor.selection) pollZed(current)
     }
 
-    const dial = (found: Editor, current: number, failures: number) => {
+    const dial = (
+      found: Editor,
+      current: number,
+      failures: number,
+      /** Asked for by `connect`, which wants to hear how the first attempt ended. */
+      settle?: (result: "connected" | "failed") => void,
+    ) => {
       setStore("status", "connecting")
       // The token goes in this header and nowhere else: not the address, not a log line, not the environment.
       const link = new WebSocketImpl(found.url, { headers: { [IdeLock.header]: found.token } } as never)
@@ -229,8 +249,9 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
           }
           ready = true
           // The editor chose its name, so it is escaped before it reaches a person.
-          setStore("server", { name: frame.editor === undefined ? found.name : plain(frame.editor) })
+          setStore("server", { name: frame.editor === undefined ? found.name : plain(frame.editor), port: found.port })
           setStore("status", "connected")
+          settle?.("connected")
           return
         }
         // Nothing before the bridge's hello counts.
@@ -270,7 +291,15 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
         setStore("server", undefined)
         clearLinkSelection()
         if (closed || current !== generation) return
-        if (stopped || (event as { code?: number }).code === IdeLock.closeVersion) return idle(current)
+        if (stopped || (event as { code?: number }).code === IdeLock.closeVersion) {
+          settle?.("failed")
+          return idle(current)
+        }
+        // A window the person picked is not retried when it never said hello: they are told it failed.
+        if (settle && !ready) {
+          settle("failed")
+          return idle(current)
+        }
         retry(current, ready ? 0 : failures)
       })
     }
@@ -333,6 +362,7 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       socket = undefined
       old?.close()
       if (closed) return
+      if (released) return setStore("status", "disabled")
       if (editor.discover && gated()) {
         setStore("status", "connecting")
         return search(current)
@@ -398,6 +428,65 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       },
       reconnect(directory?: string) {
         reconnectWithDirectory(directory)
+      },
+      /**
+       * The editor windows `/ide` can offer: those that hold the session's folder first, then the others, each newest first,
+       * and the port of the window this process is linked to, if any.
+       */
+      list() {
+        const found = discoverEditors({ directory, lockDirectory, env: process.env, log: (line) => log.info(line) })
+        return { matched: found.matched, unmatched: found.unmatched, current: store.server?.port }
+      },
+      /**
+       * Links to the window on `port`, replacing any link and any search that is under way. The lock is read again, because
+       * a window that was reloaded has a new token. It says how the attempt ended: the editor said hello, it refused or closed
+       * before it did, or it stayed silent for longer than `timing.connect`.
+       */
+      connect(port: number) {
+        generation += 1
+        const current = generation
+        released = false
+        if (timer) clearTimeout(timer)
+        timer = undefined
+        const old = socket
+        socket = undefined
+        old?.close()
+        setStore("server", undefined)
+        clearLinkSelection()
+        const found = readLocks(lockDirectory, (line) => log.info(line)).find((lock) => lock.port === port)
+        if (!found) {
+          setStore("status", "disabled")
+          return Promise.resolve<"connected" | "failed" | "timeout">("failed")
+        }
+        return new Promise<"connected" | "failed" | "timeout">((resolve) => {
+          const limit = setTimeout(() => {
+            // Whatever is still trying stops with it: the person was told it timed out.
+            if (current !== generation) return resolve("timeout")
+            generation += 1
+            const stale = socket
+            socket = undefined
+            stale?.close()
+            setStore("status", "disabled")
+            resolve("timeout")
+          }, timing.connect)
+          dial(found, current, 0, (result) => {
+            clearTimeout(limit)
+            resolve(result)
+          })
+        })
+      },
+      /** Closes the link and leaves the editor alone until `connect`, or until Orbit restarts: nothing searches or retries. */
+      disconnect() {
+        generation += 1
+        released = true
+        if (timer) clearTimeout(timer)
+        timer = undefined
+        const old = socket
+        socket = undefined
+        old?.close()
+        setStore("server", undefined)
+        clearLinkSelection()
+        setStore("status", "disabled")
       },
     }
   },

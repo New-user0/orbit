@@ -58,4 +58,22 @@ export const ConfigGroup = HttpApiGroup.make("server.config")
       }),
     ),
   )
+  .add(
+    HttpApiEndpoint.post("config.sources.changed", "/api/experimental/config/sources/changed", {
+      query: LocationQuery,
+      payload: Schema.Struct({
+        paths: Schema.Array(Schema.String.check(Schema.isMaxLength(4096))).check(Schema.isMaxLength(100)),
+      }),
+      success: HttpApiSchema.NoContent,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "experimental.config.sources.changed",
+          summary: "Report changed config files",
+          description:
+            "Tell the location that files under its configuration directories were written, so that the owners that read them rebuild without a full reload. Paths outside the directories of the location's configuration are ignored. Nothing is reloaded, so asks that are pending keep waiting.",
+        }),
+      ),
+  )
   .annotateMerge(OpenApi.annotations({ title: "config", description: "Location-scoped configuration routes." }))

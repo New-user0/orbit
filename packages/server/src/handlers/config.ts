@@ -2,6 +2,9 @@ import { Config } from "@orbit/core/config"
 import { HookSources } from "@orbit/core/config/hook-sources"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ShellSelect } from "@orbit/core/shell/select"
+import { realpath } from "node:fs/promises"
+import path from "node:path"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -42,6 +45,36 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
       }),
     )
     .handle(
+      "config.sources.changed",
+      Effect.fn(function* (ctx) {
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
+        // Only a user, project or local configuration directory counts, compared by real path. The paths are never read
+        // here: an owner reloads from the entries it already has, so a forged path costs at most one more reload.
+        const roots = yield* Effect.promise(() =>
+          Promise.all(
+            entries
+              .flatMap((entry) => (entry.type === "directory" && entry.scope && ["user", "project", "local"].includes(entry.scope) ? [entry.path] : []))
+              .map(realPath),
+          ),
+        )
+        const accepted = yield* Effect.promise(() =>
+          Promise.all(
+            ctx.payload.paths
+              .filter((file) => path.isAbsolute(file))
+              .map(async (file) => {
+                const real = await realPath(file)
+                if (real === undefined) return undefined
+                return roots.some((root) => root !== undefined && FSUtil.contains(root, real))
+                  ? file
+                  : undefined
+              }),
+          ),
+        )
+        yield* config.notify(accepted.filter((file): file is string => file !== undefined))
+      }),
+    )
+    .handle(
       "config.shells",
       Effect.fn(function* () {
         const shell = yield* ShellSelect.Service
@@ -50,3 +83,6 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
       }),
     ),
 )
+
+/** The real path, or nothing when the file is not there: a path that does not exist cannot have been written. */
+const realPath = (file: string) => realpath(file).then((real) => real, () => undefined)
