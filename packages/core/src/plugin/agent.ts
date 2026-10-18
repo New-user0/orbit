@@ -114,6 +114,9 @@ export const Plugin = define({
         item.mode = "subagent"
         // Its rules deny everything else; this is what the agent listing tells the model it can use.
         item.tools = { allow: ["Grep", "Glob", "Read", "WebFetch", "WebSearch"] }
+        // It only reads: the project's instruction files, the memory index and the start-of-session git snapshot are
+        // left out of its baseline to spare tokens. Set either key to true in `agents.explore.context` to bring it back.
+        item.context = { instructions: false, git_status: false }
         item.permissions.push(
           ...Permission.merge(
             [

@@ -510,7 +510,7 @@ describe("SubagentTool", () => {
             model: childModel,
           })
           expect((yield* sessions.inbox(child.id)).find((message) => message.type === "user")?.payload.text).toBe(
-            "You are a subagent spawned by another session.\nreview this",
+            "review this",
           )
 
           const fallback = yield* executeTool(registry, {
@@ -579,7 +579,7 @@ describe("SubagentTool", () => {
             (yield* sessions.inbox(childID)).flatMap((message) =>
               message.type === "user" ? [message.payload.text] : [],
             ),
-          ).toEqual(["You are a subagent spawned by another session.\nreview this", "continue this"])
+          ).toEqual(["review this", "continue this"])
           expect(second.content).toEqual([{ type: "text", text: completedOutput(childID) }])
         }),
       ),
@@ -1033,6 +1033,11 @@ describe("SubagentTool in Plan mode", () => {
           status: "completed",
           content: [{ type: "text", text: expect.stringContaining(childText) }],
         })
+        // The brief is the child's first message, with nothing in front of it.
+        const child = (yield* sessions.list({ parentID: parent.id })).data[0]
+        expect((yield* sessions.inbox(child!.id)).find((message) => message.type === "user")?.payload.text).toBe(
+          "scan it",
+        )
       }),
     ),
   )

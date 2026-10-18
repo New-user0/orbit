@@ -572,6 +572,39 @@ gain optional fields.
 **What to do:** Move the changes to a built-in into `agents.<id>` in `orbit.json`, or keep the file and copy the rules
 you still want into it. Rename an agent whose name is not plain.
 
+### Subagents get a task-worker prompt, and Explore leaves out the instruction files and the git snapshot
+
+A session that runs as a subagent (it has a parent and is not a fork of the main conversation) used to start from the
+main conversation's prompt when its agent had no prompt of its own, and was sent a fixed "you are a subagent" line
+before the task. It now starts from a shorter task-worker prompt that tells it to finish the brief, state its
+assumptions because nobody can answer, and end with a report. Every subagent, one with a prompt of its own included,
+also gets a few reporting notes (absolute paths, no emojis, no colon before a tool call). The model overlays, the output
+style, `system_prompt` and `append_system_prompt` do not apply to a subagent; the git section still does. A prompt of
+your own for an agent can now hold the `${ORBIT_TOOL_GUIDANCE}` placeholder, which is filled with the guidance for the
+tools the agent has. The task text is the child's first message, with nothing in front of it.
+
+The `agents.<id>.context` keys now work. Explore ships with `instructions: false` and `git_status: false`, so it no
+longer sees the project instruction files, the memory index or the git snapshot taken when the session began. Explore
+has no shell tool, so it cannot ask git for the branch or the status either. Files in a subfolder that it reads still
+bring their instruction file. A session that switches to such an agent is told once that the earlier instructions no
+longer apply.
+
+**Affects:** people whose Explore searches relied on conventions in `AGENTS.md` or on the branch name, and agents in `all`
+mode that run as children, which now get the task-worker prompt.
+
+**What to do:** Set `"agents": { "explore": { "context": { "instructions": true } } }` (or `"git_status": true`) in
+`orbit.json` to bring either back. Setting one key leaves the other at the built-in value.
+
+A folder that is not trusted cannot switch the instruction files off: `"instructions": false` in its `orbit.json` or
+agent files is dropped, because it would hide your own instruction files and memory index from the agent, as the
+withheld `instructions_exclude` does. `"git_status": false` and `"instructions": true` are kept. Trust the folder to
+use the switch.
+
+A prompt of your own for an agent has its `${ORBIT_TOOL_GUIDANCE}` placeholder filled from the tools the model is
+actually offered: on a PowerShell session the line reads PowerShell, and a model that loses Edit and Write gets no line
+for them. Your own words around the placeholder stay as written. Workflow subagents also get the brief alone as their
+first message.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -2689,6 +2722,20 @@ The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for 
 
 **What to do:** Nothing.
 
+### Plan mode, todo and verification reminders are derived from history
+
+The Plan mode text no longer arrives as a stored `session.synthetic` row. The model now gets it from three derived reminder producers, computed again whenever a request is built and never stored.
+
+- Plan mode: the first Plan step of a session (and the first after a compaction) gets the full instructions, which now tell the model to explore, design, check the plan against the request and present it through `ExitPlanMode`. After that a reminder comes back only once five prompts have passed since the last one; every fifth is the full text and the rest are one short paragraph. A child session running as the Plan agent gets a shorter subagent text. The first step that is not in Plan mode gets one note that Plan mode has ended. A person who returns to Plan mode within five prompts of the last reminder gets no new reminder until that point, because a leave resets the full and short cycle but not the five-prompt wait. When a plan was approved earlier in the session, the first reminder after a return starts with a note to read the saved plan and decide whether the task is the same. `ExitPlanMode` now also records `approved` and the saved plan's path in the call's metadata for that purpose, so a fork names the file its parent wrote. The leave and re-entry notes are worked out from the history the request carries, so a compaction drops a note that was still owed; the first step after one gets the ordinary plan reminder or none.
+- Todo: once ten assistant text and tool-call blocks (not reasoning) have passed since the last `TodoWrite`, `TaskCreate` or `TaskUpdate` call and since the last nudge, the next step gets a nudge to update or tidy the list, with the current items. It is skipped when neither `TodoWrite` nor `TaskUpdate` is offered.
+- Verification: when a call closes out a list of three or more (every call that leaves every item completed, including one that sends an all-completed list again) whose items are none about checking (`verif` in any letter case), the next step is asked to run the relevant checks before reporting and to say what it did not check.
+
+Sessions that already hold the old Plan mode rows keep working: an old enter row counts as the first reminder and an old leave row as the leave. A running session sees one prompt-cache miss when it first picks this build up.
+
+**Affects:** sessions that use Plan mode, `TodoWrite` or the task tools; clients that listed the Plan reminders as hidden `session.synthetic` rows will no longer see new ones.
+
+**What to do:** Nothing.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
@@ -3345,6 +3392,26 @@ the session runs in. The highest-priority config that sets a replacement decides
 **Affects:** people who edited `.git/orbit` or `.hg/orbit` by hand, and repositories that ship such a file or link.
 
 **What to do:** Nothing; trust the folder, or use a 40-character hash, to keep a hand-written ID.
+
+## A trusted project's instruction files can import files outside the project
+
+- An `@path` import in a project instruction file (`AGENTS.md` and the like) may now name a file outside the project's
+  folders, such as `@~/team/rules.md`, `@../shared.md` or an absolute path, once the folder that holds the importing
+  file is trusted. Until then the import is skipped and the file is not sent to the model; a warning names the folder
+  whose trust would load it. Granting or revoking trust rescans the files. Before this change such an import was always
+  skipped.
+- The project's own decision covers the files in the project. A file above the project, or one that a trusted file
+  imports from outside, needs the folder that owns it trusted before it imports anything from outside. When the
+  repository is the home folder itself (or a filesystem root), a session started below it imports only from the folder
+  it started in, even with home trusted for the session. A file above the project that the home folder or a root owns
+  (`~/AGENTS.md` for a project in `~/code/repo`) never imports from outside. A session started at home itself, with
+  home trusted for the session, does let home's own files import from outside.
+- Network paths are never read, trusted or not, and files that the model's reads load later never import from outside.
+
+**Affects:** people who trust a project whose instruction files import files outside it.
+
+**What to do:** Nothing for a project you trust; the outside files are sent with the first request. Run
+`orb trust --revoke` in a folder to stop its files importing from outside.
 
 ## Turn cost, token and step limits count every spend and every response
 

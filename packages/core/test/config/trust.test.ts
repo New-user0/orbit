@@ -58,7 +58,7 @@ describe("ConfigTrust.sanitize: the keys of an agent definition", () => {
     ["memory", "user", "permissions"],
     ["background", true, undefined],
     ["isolation", "worktree", "settings"],
-    ["context", { instructions: false, git_status: false }, undefined],
+    ["context", { instructions: false }, "settings"],
   ]
 
   test.each(keys)("treats agents.*.%s as the classification says", (key, value, kind) => {
@@ -69,6 +69,16 @@ describe("ConfigTrust.sanitize: the keys of an agent definition", () => {
     expect(key in (agent ?? {})).toBe(kind === undefined)
     // Control: the same document, unsanitized, carries the key.
     expect(key in (decode({ agents: { mine: { [key]: value } } }).agents?.mine ?? {})).toBe(true)
+  })
+
+  test("drops only the instruction switch of a context, and keeps the other keys of it", () => {
+    const both = sanitize({ agents: { mine: { context: { instructions: false, git_status: false } } } })
+    expect(both.info.agents?.mine?.context).toEqual({ git_status: false })
+    expect(both.withheld).toEqual(["settings"])
+    for (const context of [{ git_status: false }, { instructions: true }, { instructions: true, git_status: false }]) {
+      const kept = sanitize({ agents: { mine: { context } } })
+      expect([context, kept.info.agents?.mine?.context, kept.withheld]).toEqual([context, context, []])
+    }
   })
 
   test("keeps an initial prompt that is plain text", () => {

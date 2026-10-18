@@ -6,6 +6,7 @@ import { CompatNames } from "@orbit/compat/names"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
+import { ConfigInstructionFile } from "@orbit/core/config/instruction-file"
 import { ConfigInstructionPlugin } from "@orbit/core/config/plugin/instruction"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
@@ -59,6 +60,7 @@ const instructionLayer = (input: {
         Global.node,
         Location.node,
         ProjectTrust.node,
+        WorkspaceTrust.node,
         Watcher.node,
       ]),
       [
@@ -1587,12 +1589,12 @@ describe("ConfigInstructionPlugin.Plugin follows @imports", () => {
         for (const wanted of [path.join(where.repo, "missing.md"), path.join(where.repo, "docs"), outside])
           expect(subscribed).not.toContain(wanted.replaceAll("\\", "/"))
         expect(subscribed.some((item) => item.includes("server"))).toBe(false)
-      }).pipe(scoped(where))
+      }).pipe(scoped(where, false))
     }),
   )
 })
 
-describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the project", () => {
+describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the project until its holder is trusted", () => {
   const linked = canLinkFile
   // The folders above the project, the user's secret and the files a repository imports on its way out.
   const layout = Effect.gen(function* () {
@@ -1628,14 +1630,23 @@ describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the pr
         )
         yield* Effect.gen(function* () {
           const discovery = yield* start()
-          expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside, back])
           const warned = (yield* discovery.warnings()).filter((item) => item.kind === "import")
+          const text = (yield* readInitial(yield* discovery.load())).text
+          expect(text).toContain("INSIDE MARKER")
+          if (trusted) {
+            // The control: a trusted project's file reaches outside, depth first in token order, each file once.
+            expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside, above, secret, back])
+            expect(warned).toEqual([])
+            expect(text).toContain("ABOVE MARKER")
+            expect(text).toContain("TOP SECRET MARKER")
+            return
+          }
+          expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside, back])
           expect(warned.map((item) => [String(item.path), "target" in item ? String(item.target) : undefined])).toEqual([
             [where.rootFile, above],
             [where.rootFile, secret],
           ])
-          const text = (yield* readInitial(yield* discovery.load())).text
-          expect(text).toContain("INSIDE MARKER")
+          expect(warned.map((item) => ("directory" in item ? String(item.directory) : "none"))).toEqual([where.repo, where.repo])
           expect(text).not.toContain("ABOVE MARKER")
           expect(text).not.toContain("TOP SECRET MARKER")
         }).pipe(scoped(where, trusted))
@@ -1675,11 +1686,11 @@ describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the pr
               const text = (yield* readInitial(yield* discovery.load())).text
               // The control: the import inside the project is sent.
               expect(text).toContain("INSIDE MARKER")
-              expect(text).not.toContain("TOP SECRET MARKER")
-              expect(placesOf(yield* discovery.list())).not.toContain(secret)
-              const watcher = yield* Watcher.Test
-              expect((yield* watcher.subscriptions()).map((item) => item.path)).not.toContain(target)
-              expect((yield* discovery.warnings()).some((item) => item.kind === "import")).toBe(!mode.dangling)
+              // A trusted project may follow a link out; a dangling one still leads nowhere, in silence.
+              const followed = trusted && !mode.dangling
+              expect(text.includes("TOP SECRET MARKER")).toBe(followed)
+              expect((placesOf(yield* discovery.list()) as string[]).includes(secret)).toBe(followed)
+              expect((yield* discovery.warnings()).some((item) => item.kind === "import")).toBe(!trusted && !mode.dangling)
             }).pipe(Effect.provide(layerFor(where, { trusted, filesystemLayer })))
           }),
       )
@@ -1835,4 +1846,419 @@ describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from
       }),
     )
   }
+})
+
+// An instruction file may import from outside the project's folders once the folder that holds the importing file is
+// trusted (`ProjectTrust.outward`). These rows build the layers with implicit trust off and grant exactly the folder each
+// row names, since a layer that trusts everything would open every holder and let a positive row pass under the wrong one.
+describe("ConfigInstructionPlugin.Plugin lets a trusted holder import from outside the project", () => {
+  const layout = Effect.gen(function* () {
+    const where = yield* folders
+    const tmp = path.dirname(where.home)
+    const outside = path.join(where.home, "outside.md")
+    const tilde = path.join(where.home, "x.md")
+    const absolute = path.join(tmp, "absolute.md")
+    const inside = path.join(where.repo, "docs", "inside.md")
+    yield* write(outside, "OUTSIDE MARKER")
+    yield* write(tilde, "TILDE MARKER")
+    yield* write(absolute, "ABSOLUTE MARKER")
+    yield* write(inside, "INSIDE MARKER")
+    const tokens = ["@./docs/inside.md", "@~/x.md", "@../../outside.md", `@${slashed(absolute)}`]
+    yield* write(where.rootFile, tokens.join("\n"))
+    return { where, tmp, outside, tilde, absolute, inside }
+  })
+  const warned = (discovery: InstructionDiscovery.Interface) =>
+    discovery.warnings().pipe(
+      Effect.map((items) =>
+        items.flatMap((item) =>
+          item.kind === "import"
+            ? [{ path: String(item.path), target: String(item.target), directory: item.directory as string | undefined }]
+            : [],
+        ),
+      ),
+    )
+  const grantProject = Effect.gen(function* () {
+    const trust = yield* ProjectTrust.Service
+    return yield* trust.grant({ persist: false, via: "test" })
+  })
+  const revokeProject = Effect.gen(function* () {
+    const trust = yield* ProjectTrust.Service
+    return yield* trust.revoke()
+  })
+  const grantFolder = (folder: string) =>
+    Effect.gen(function* () {
+      const trust = yield* WorkspaceTrust.Service
+      return yield* trust.grant(folder, { persist: false, via: "test" })
+    })
+  const revokeFolder = (folder: string) =>
+    Effect.gen(function* () {
+      const trust = yield* WorkspaceTrust.Service
+      return yield* trust.revoke(folder)
+    })
+  const untrusted = (where: Folders, filesystemLayer?: Layer.Layer<FSUtil.Service>) =>
+    Effect.provide(layerFor(where, { trusted: false, ...(filesystemLayer ? { filesystemLayer } : {}) }))
+
+  it.live("skips an import outside the project in a project that is not trusted, and loads it once it is, depth first", () =>
+    Effect.gen(function* () {
+      const { where, outside, tilde, absolute, inside } = yield* layout
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const watcher = yield* Watcher.Test
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside])
+        expect((yield* warned(discovery)).map((item) => [item.target, item.directory])).toEqual([
+          [tilde, where.repo],
+          [outside, where.repo],
+          [absolute, where.repo],
+        ])
+        const before = (yield* readInitial(yield* discovery.load())).text
+        for (const marker of ["OUTSIDE MARKER", "TILDE MARKER", "ABSOLUTE MARKER"]) expect(before).not.toContain(marker)
+
+        // The control, and the rescan: the grant loads them all, in token order, and the warnings go.
+        yield* rescanAfter(grantProject)
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside, tilde, outside, absolute])
+        expect(yield* warned(discovery)).toEqual([])
+        const after = (yield* readInitial(yield* discovery.load())).text
+        for (const marker of ["OUTSIDE MARKER", "TILDE MARKER", "ABSOLUTE MARKER"]) expect(after).toContain(marker)
+        const subscribed = (yield* watcher.subscriptions()).map((item) => slashed(item.path))
+        for (const wanted of [tilde, outside, absolute]) expect(subscribed).toContain(slashed(wanted))
+        // The control for the check below: a change to a watched outside file does start a rescan.
+        yield* emitAndWait({ type: "update", path: tilde })
+
+        // A revoke takes them away again, with their watches, and brings the warnings back.
+        yield* rescanAfter(revokeProject)
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside])
+        expect((yield* warned(discovery)).map((item) => item.target)).toEqual([tilde, outside, absolute])
+        const bus = yield* Bus.Service
+        let rescans = 0
+        yield* bus.subscribe(InstructionDiscovery.Event.Updated).pipe(
+          Stream.runForEach(() => Effect.sync(() => void rescans++)),
+          Effect.forkScoped,
+        )
+        yield* Effect.yieldNow
+        yield* watcher.emit({ type: "update", path: tilde })
+        yield* Effect.sleep("500 millis")
+        expect(rescans).toBe(0)
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("holds the project, not the folder the session started in", () =>
+    Effect.gen(function* () {
+      const { where, outside } = yield* layout
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        // The folder the session started in is trusted, and the project root is not.
+        yield* rescanAfter(grantFolder(where.directory))
+        expect(placesOf(yield* discovery.list())).not.toContain(outside)
+        expect((yield* warned(discovery)).map((item) => item.directory)).toEqual([where.repo, where.repo, where.repo])
+        // The converse: the project root alone opens it.
+        yield* rescanAfter(grantFolder(where.repo))
+        expect(placesOf(yield* discovery.list())).toContain(outside)
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("holds a file above the project by its own folder, and does not load it at all while the project is not trusted", () =>
+    Effect.gen(function* () {
+      const { where } = yield* layout
+      const code = path.join(where.home, "code")
+      const above = path.join(code, "AGENTS.md")
+      const shared = path.join(code, "shared.md")
+      yield* write(above, "ABOVE FILE\n@./shared.md")
+      yield* write(shared, "SHARED MARKER")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        // With `code` trusted and the project not, the file above is not read at all.
+        yield* rescanAfter(grantFolder(code))
+        expect(placesOf(yield* discovery.list())).not.toContain(above)
+        yield* rescanAfter(revokeFolder(code))
+        yield* rescanAfter(grantProject)
+        expect(placesOf(yield* discovery.list())).toContain(above)
+        expect(placesOf(yield* discovery.list())).not.toContain(shared)
+        expect((yield* warned(discovery)).filter((item) => item.path === above)).toEqual([
+          { path: above, target: shared, directory: code },
+        ])
+        yield* rescanAfter(grantFolder(code))
+        expect(placesOf(yield* discovery.list())).toContain(shared)
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("does not let a file that a trusted project imports reach out for its own imports until its folder is trusted", () =>
+    Effect.gen(function* () {
+      const { where } = yield* layout
+      const team = path.join(where.home, "team")
+      const rules = path.join(team, "rules.md")
+      const style = path.join(team, "style.md")
+      const key = path.join(where.home, "key.txt")
+      yield* Effect.promise(() => fs.mkdir(path.join(team, ".git"), { recursive: true }))
+      yield* write(rules, "RULES MARKER\n@./style.md\n@~/key.txt")
+      yield* write(style, "STYLE MARKER")
+      yield* write(key, "KEY MARKER")
+      yield* write(where.rootFile, "@~/team/rules.md")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        yield* rescanAfter(grantProject)
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, rules])
+        expect((yield* warned(discovery)).map((item) => [item.path, item.target, item.directory])).toEqual([
+          [rules, style, team],
+          [rules, key, team],
+        ])
+        yield* rescanAfter(grantFolder(team))
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, rules, style, key])
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  for (const granted of [true, false])
+    it.live(`with the session at the home folder, its file imports a file outside home only in a project that is ${granted ? "trusted for the session" : "not trusted"}`, () =>
+      Effect.gen(function* () {
+        const base = yield* folders
+        const secret = path.join(path.dirname(base.home), "secret.txt")
+        yield* write(secret, "SECRET MARKER")
+        const atHome = { ...base, repo: base.home, directory: base.home, rootFile: path.join(base.home, "AGENTS.md") }
+        yield* write(atHome.rootFile, "@../secret.txt")
+        yield* Effect.gen(function* () {
+          if (granted) yield* grantProject
+          const discovery = yield* start()
+          expect((placesOf(yield* discovery.list()) as string[]).includes(secret)).toBe(granted)
+          expect((yield* warned(discovery)).length).toBe(granted ? 0 : 1)
+        }).pipe(untrusted(atHome))
+      }),
+    )
+
+  it.live("sends no file outside home from a session below the home folder, even when the home project is trusted for the session", () =>
+    Effect.gen(function* () {
+      const base = yield* folders
+      const directory = path.join(base.home, "Downloads", "x")
+      const key = path.join(base.home, ".ssh", "id_rsa")
+      yield* write(key, "PRIVATE KEY MARKER")
+      const below = { ...base, repo: base.home, directory, packageFile: path.join(directory, "AGENTS.md") }
+      yield* write(below.packageFile, "@~/.ssh/id_rsa")
+      yield* Effect.gen(function* () {
+        yield* grantProject
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toEqual([below.packageFile])
+        expect(yield* warned(discovery)).toEqual([{ path: below.packageFile, target: key, directory: undefined }])
+      }).pipe(untrusted(below))
+    }),
+  )
+
+  // A link in the instruction file names a file in a folder of its own, which imports a file beside it. The owner of the
+  // linked file is trusted for good, and home is trusted for the session. Only the project opening it counts, so a
+  // session below home opens nothing, and a session at home does.
+  for (const atHomeItself of [false, true])
+    (canLinkFile ? it.live : it.live.skip)(
+      `${atHomeItself ? "loads" : "never loads"} a file that an instruction file linked to a trusted outside folder imports, with the session ${atHomeItself ? "at" : "below"} the home folder`,
+      () =>
+        Effect.gen(function* () {
+          const base = yield* folders
+          const evil = path.join(path.dirname(base.home), "evil")
+          const payload = path.join(evil, "payload.md")
+          yield* write(path.join(evil, "AGENTS.md"), "EVIL FILE\n@./payload.md")
+          yield* write(payload, "PAYLOAD MARKER")
+          const directory = atHomeItself ? base.home : path.join(base.home, "Downloads", "x")
+          const session = {
+            ...base,
+            repo: base.home,
+            directory,
+            packageFile: path.join(directory, "AGENTS.md"),
+          }
+          yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+          yield* Effect.promise(() => fs.symlink(path.join(evil, "AGENTS.md"), session.packageFile))
+          yield* Effect.gen(function* () {
+            yield* grantProject
+            yield* grantFolder(evil)
+            const discovery = yield* start()
+            const text = (yield* readInitial(yield* discovery.load())).text
+            expect((placesOf(yield* discovery.list()) as string[]).includes(payload)).toBe(atHomeItself)
+            expect(text.includes("PAYLOAD MARKER")).toBe(atHomeItself)
+            expect(
+              (yield* warned(discovery)).filter((item) => item.target === payload).map((item) => item.directory),
+            ).toEqual(atHomeItself ? [] : [undefined])
+          }).pipe(untrusted(session))
+        }),
+    )
+
+  it.live("never lets a file in the home folder reach out for its own imports, whatever the project's trust", () =>
+    Effect.gen(function* () {
+      const { where } = yield* layout
+      const homeFile = path.join(where.home, "AGENTS.md")
+      const notes = path.join(where.home, "notes.md")
+      yield* write(homeFile, "HOME FILE\n@./notes.md")
+      yield* write(notes, "NOTES MARKER")
+      yield* Effect.gen(function* () {
+        yield* grantProject
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toContain(homeFile)
+        expect(placesOf(yield* discovery.list())).not.toContain(notes)
+        expect(yield* warned(discovery)).toEqual([{ path: homeFile, target: notes, directory: undefined }])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("still keeps a file in the home folder from reaching out when the home folder itself is trusted for the session", () =>
+    Effect.gen(function* () {
+      const { where } = yield* layout
+      const homeFile = path.join(where.home, "AGENTS.md")
+      const notes = path.join(where.home, "notes.md")
+      yield* write(homeFile, "HOME FILE\n@./notes.md")
+      yield* write(notes, "NOTES MARKER")
+      yield* Effect.gen(function* () {
+        // A grant of home lasts in a shared server until it restarts; it is the case the persistent rule is for.
+        yield* grantFolder(where.home)
+        yield* grantProject
+        const trust = yield* WorkspaceTrust.Service
+        expect((yield* trust.status(where.home)).trusted).toBe(true)
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toContain(homeFile)
+        expect(placesOf(yield* discovery.list())).not.toContain(notes)
+        expect(yield* warned(discovery)).toEqual([{ path: homeFile, target: notes, directory: undefined }])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("holds a file by the nearest folder with a repository marker above it, not by the folder it sits in", () =>
+    Effect.gen(function* () {
+      const { where } = yield* layout
+      const team = path.join(where.home, "team")
+      const docs = path.join(team, "docs")
+      const rules = path.join(docs, "rules.md")
+      const key = path.join(where.home, "key.txt")
+      yield* Effect.promise(() => fs.mkdir(path.join(team, ".git"), { recursive: true }))
+      yield* write(rules, "RULES MARKER\n@~/key.txt")
+      yield* write(key, "KEY MARKER")
+      yield* write(where.rootFile, "@~/team/docs/rules.md")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        yield* rescanAfter(grantProject)
+        // The control: the folder the file sits in is not its owner, so its own grant opens nothing.
+        yield* rescanAfter(grantFolder(docs))
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, rules])
+        expect(yield* warned(discovery)).toEqual([{ path: rules, target: key, directory: team }])
+        yield* rescanAfter(grantFolder(team))
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, rules, key])
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("lets a linked worktree follow its repository's decision and not its own folder's", () =>
+    Effect.gen(function* () {
+      const { where, tilde } = yield* layout
+      const worktree = path.join(where.home, "code", "wt")
+      yield* write(path.join(worktree, "AGENTS.md"), "@~/x.md")
+      const linked = Layer.succeed(
+        Location.Service,
+        Location.Service.of({
+          ...location({ directory: AbsolutePath.make(worktree) }),
+          project: {
+            id: location({ directory: AbsolutePath.make(worktree) }).project.id,
+            directory: AbsolutePath.make(worktree),
+            canonical: AbsolutePath.make(where.repo),
+          },
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        yield* rescanAfter(grantFolder(worktree))
+        expect(placesOf(yield* discovery.list())).not.toContain(tilde)
+        expect(yield* warned(discovery)).toEqual([
+          { path: path.join(worktree, "AGENTS.md"), target: tilde, directory: where.repo },
+        ])
+        yield* rescanAfter(grantProject)
+        expect(placesOf(yield* discovery.list())).toContain(tilde)
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(
+        Effect.provide(
+          instructionLayer({ config: where.global, home: where.home, locationServiceLayer: linked, trusted: false }),
+        ),
+      )
+    }),
+  )
+
+  it.live("refuses a network path in a trusted project without touching it, and still loads a plain outside import", () =>
+    Effect.gen(function* () {
+      const { where, outside } = yield* layout
+      const reads: string[] = []
+      yield* write(
+        where.rootFile,
+        [
+          "@//server/share/a.md",
+          "@\\\\server\\share\\b.md",
+          "@\\\\?\\UNC\\server\\share\\c.md",
+          "@//?/UNC/server/share/d.md",
+          "@../../outside.md",
+        ].join("\n"),
+      )
+      yield* Effect.gen(function* () {
+        yield* grantProject
+        const discovery = yield* start()
+        const watcher = yield* Watcher.Test
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, outside])
+        expect(reads.filter((item) => item.includes("server"))).toEqual([])
+        expect((yield* watcher.subscriptions()).filter((item) => item.path.includes("server"))).toEqual([])
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(untrusted(where, recordingFS(reads)))
+    }),
+  )
+
+  it.live("never opens an outside import that instructions_exclude names, in a trusted project", () =>
+    Effect.gen(function* () {
+      const { where, outside, tilde, absolute, inside } = yield* layout
+      const reads: string[] = []
+      yield* Effect.gen(function* () {
+        yield* grantProject
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, inside, tilde, absolute])
+        expect(reads).not.toContain(outside)
+      }).pipe(
+        Effect.provide(
+          layerFor(where, {
+            trusted: false,
+            filesystemLayer: recordingFS(reads),
+            configLayer: Config.testLayer([excluding([slashed(outside)])]),
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("loads an outside import over the size limit whole, with a size warning", () =>
+    Effect.gen(function* () {
+      const { where, outside } = yield* layout
+      const big = "B".repeat(ConfigInstructionFile.LIMIT + 10)
+      yield* write(outside, big)
+      yield* Effect.gen(function* () {
+        yield* grantProject
+        const discovery = yield* start()
+        const files = yield* discovery.list()
+        expect(Array.isArray(files) && files.find((item) => item.path === outside)?.content).toBe(big)
+        expect((yield* discovery.warnings()).filter((item) => item.kind === "size").map((item) => String(item.path))).toEqual([
+          outside,
+        ])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("decides an outside target spelled in another case once, on Windows", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+      const { where, outside } = yield* layout
+      const spelled = slashed(outside)
+        .replace(/^[A-Za-z]/, (drive) => drive.toLowerCase())
+        .replace("/home/", "/HOME/")
+      expect(spelled).not.toBe(slashed(outside))
+      yield* write(where.rootFile, `@${spelled}\n@${slashed(outside)}`)
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect((yield* warned(discovery)).length).toBe(1)
+        yield* rescanAfter(grantProject)
+        expect((placesOf(yield* discovery.list()) as string[]).map((item) => item.toLowerCase())).toEqual([where.rootFile, outside].map((item) => item.toLowerCase()))
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(untrusted(where))
+    }),
+  )
 })

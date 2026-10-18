@@ -297,6 +297,10 @@ describe("PromptConfigPlugin", () => {
         Bun.file(path.join(import.meta.dir, "../../src/plugin/internal.ts")).text(),
       )
       const at = (name: string) => source.indexOf(name, source.indexOf("const pre = ["))
+      // The patch plugin removes tools first, the subagent base is rendered from what is left, and the model prompts and
+      // this plugin follow it.
+      expect(at("PatchTool.Plugin")).toBeLessThan(at("SubagentPromptPlugin.Plugin"))
+      expect(at("SubagentPromptPlugin.Plugin")).toBeLessThan(at("...OptimizePlugin.Plugins"))
       expect(at("...OptimizePlugin.Plugins")).toBeLessThan(at("PromptConfigPlugin.Plugin"))
       expect(at("PromptConfigPlugin.Plugin")).toBeLessThan(at("OutputStylePlugin.Plugin"))
     }),

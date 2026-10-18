@@ -136,9 +136,11 @@ export const Plugin = define({
           home: global.home,
           fs,
           leads: trust.leads,
-          // A project file imports only what is inside the project, whatever the trust decision, and only what the trust
-          // decision lets the project supply: both are asked of the real path, which is the file that is read.
+          // A project file imports what is inside the project, whatever the trust decision, and only what the trust
+          // decision lets the project supply: both are asked of the real path, which is the file that is read. What is
+          // outside waits for the folder that holds the importing file to be trusted (`outward`).
           allow: (real, spelling) => trust.importable(spelling, real),
+          outward: trust.outward,
         })
         if (loaded === undefined) {
           yield* Effect.logDebug("instruction file skipped", { path, reason: "unavailable" })
@@ -167,6 +169,7 @@ export const Plugin = define({
                   path: AbsolutePath.make(item.importer),
                   kind: "import",
                   target: AbsolutePath.make(item.target),
+                  ...(item.directory === undefined ? {} : { directory: AbsolutePath.make(item.directory) }),
                 }),
             ),
           ],

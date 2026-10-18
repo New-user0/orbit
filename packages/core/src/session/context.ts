@@ -188,7 +188,7 @@ const layer = Layer.effect(
       const loaded = yield* Effect.all(
         {
           builtins: builtins.load(),
-          discovery: discovery.load(),
+          discovery: discovery.load({ removed: agent.info.context?.instructions === false }),
           skills: Effect.gen(function* () {
             // The skill listing is budgeted against the window of the model that runs this request.
             const pinned = session.model && (yield* model.get(session.model.providerID, session.model.id))
@@ -226,7 +226,7 @@ const layer = Layer.effect(
           loaded.agents,
           loaded.discovery,
           loaded.builtins,
-          vcsInstructions.source(session),
+          vcsInstructions.source(session, { enabled: agent.info.context?.git_status !== false }),
           scratchpad.source(session),
           loaded.entries,
         ]),

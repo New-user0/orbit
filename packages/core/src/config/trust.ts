@@ -36,7 +36,7 @@ import { LinkShare } from "@orbit/util/link-share"
 //   alone and without parsing it, and leave out what `instructions_exclude` names, a list that an untrusted folder does
 //   not supply. The files they import with `@path` (`ConfigInstructionFile.load`) are readers of the same list: a
 //   project file's import must lie inside the folder the session started in or a project folder that can be trusted
-//   for good (the started folder also counts once it is trusted, so home and filesystem roots count only then) and pass `reachable`, and a network path is refused;
+//   for good (the started folder also counts once it is trusted, so home and filesystem roots count only then) and pass `reachable`, and a network path is refused; an import that fails that is still read once the folder that holds the importing file is trusted (`ProjectTrust.outward`), except for the files that the model's reads load;
 // - `supplies`: a file of a config directory, or of another product's root, which is the agents of `ConfigAgentPlugin`,
 //   the commands of `ConfigCommandPlugin`, the skills of `ConfigSkillPlugin` and `ConfigCompatibilityPlugin`, and the
 //   output styles of `OutputStylePlugin`;
@@ -169,6 +169,13 @@ function toolExecution(value: ConfigToolExecution.Info): Outcome<ConfigToolExecu
 // A slash command in the text would run a command that nobody typed.
 function initialPrompt(value: string): Outcome<string> {
   return value.trimStart().startsWith("/") ? { value: undefined, withheld: ["commands"] } : { value, withheld: [] }
+}
+
+// `git_status: false` and `instructions: true` stay; `instructions: false` goes.
+function agentContext(value: NonNullable<ConfigAgent.Info["context"]>): Outcome<NonNullable<ConfigAgent.Info["context"]>> {
+  if (value.instructions !== false) return { value, withheld: [] }
+  const kept = value.git_status === undefined ? undefined : { git_status: value.git_status }
+  return { value: kept, withheld: ["settings"] }
 }
 
 function agents(
@@ -320,8 +327,10 @@ export const classification = {
     background: inert,
     // It starts a worktree in the folder, as the worktree setting does.
     isolation: withhold("settings"),
-    // It only removes context.
-    context: inert,
+    // Switching off the instruction files would hide the user's own, the global file and the memory index included, from
+    // the agent, as `instructions_exclude` does, so a repository cannot. Leaving out the git snapshot hides nothing of the
+    // user's.
+    context: filter(agentContext),
     // Removing an agent also removes the rules the user attached to it, and an agent defined afterwards starts from
     // allowing everything.
     disabled: withhold("permissions"),

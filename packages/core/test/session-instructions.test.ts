@@ -209,6 +209,31 @@ describe("SessionInstructions", () => {
     }),
   )
 
+  // A lean agent (`context.instructions: false`) leaves the start-of-session files out of its baseline only: a file it
+  // reads in a subfolder still brings that folder's instruction file.
+  it.live("injects a subfolder's instruction file on a read by a lean subagent", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = path.resolve(dir, "sub", "AGENTS.md")
+      yield* mkdir(path.dirname(subPath))
+      yield* writeAgents(subPath, "sub-instructions")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "file.txt"), "file content"))
+      const session = yield* Session.Service
+      const registry = yield* Tool.Service
+      const parent = yield* session.create({ location: Location.Ref.make({ directory: dir }) })
+      const child = yield* session.create({ parentID: parent.id, agent: Agent.ID.make("explore") })
+
+      yield* executeTool(registry, {
+        ...readCall(child.id, "call-lean", "sub/file.txt"),
+        agent: Agent.ID.make("explore"),
+      })
+
+      expect((yield* synthetics(child.id)).map((message) => message.text)).toEqual([
+        `Instructions from: ${subPath}\nsub-instructions`,
+      ])
+    }),
+  )
+
   it.live("injects AGENTS.md files above a read, excludes the Location root, and dedups across reads", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service
@@ -848,6 +873,28 @@ describe("SessionInstructions follows @imports in the files it injects", () => {
         `Loaded ${[subPath, morePath, deeperPath].map((file) => path.relative(dir, file)).join(", ")}`,
       )
       expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath, morePath, deeperPath] } })
+    }),
+  )
+
+  // A file that the model's read loads never imports from outside the project, even when the project is trusted: only the
+  // files found at the start do (`ProjectTrust.outward`).
+  it.live("does not inject an import from outside the project that a nested file names, in a project that is trusted", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const outside = path.join((yield* tmpdirScoped()).path, "outside.md")
+      yield* writeAgents(outside, "OUTSIDE MARKER")
+      const subPath = yield* nested(dir, "AGENTS.md", `sub rules @${slashed(outside)} @./more.md`)
+      const morePath = path.resolve(dir, "sub", "more.md")
+      yield* writeAgents(morePath, "more rules")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath, morePath] } })
+      expect(injected[0]!.text).not.toContain("OUTSIDE MARKER")
     }),
   )
 

@@ -10,6 +10,7 @@ import { Config } from "../config.js"
 import { ConfigMarkdown } from "../config/markdown.js"
 import { ProjectTrust } from "../project-trust.js"
 import { SessionSystemPrompt } from "../session/system-prompt.js"
+import { SubagentPromptPlugin } from "./subagent-prompt.js"
 import type { PluginInternal } from "./internal.js"
 
 /**
@@ -112,6 +113,8 @@ export const Plugin = define({
       Effect.gen(function* () {
         const name = Config.latest(yield* config.entries(), "output_style")
         if (!name || name === "default") return
+        // A style is for the conversation with the person; a subagent reports to another agent.
+        if (yield* SubagentPromptPlugin.subagent(ctx, event.sessionID)) return
         const system = event.system[0]
         if (!system) return
         const style = yield* load(name)

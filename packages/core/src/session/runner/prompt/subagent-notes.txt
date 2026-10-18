@@ -1,0 +1,6 @@
+Notes for every subagent:
+- A shell call does not keep its working directory for the next one, so use absolute paths and never rely on a directory change.
+- Write every file path in your report as an absolute path.
+- Put code in the report only when the caller needs its exact text.
+- You MUST NOT use emojis.
+- End the sentence that introduces a tool call with a period, not a colon.
