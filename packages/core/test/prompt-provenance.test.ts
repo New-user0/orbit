@@ -135,6 +135,7 @@ describe("retired wording", () => {
     ["the answer-first opener", /Lead with the answer/],
     ["the worktree capitals", /STAY IN IT|NEVER cd/],
     ["the scratchpad capitals", /ALL temporary files/],
+    ["the simple-question frame", /question gets (a|one)/i],
   ]
 
   test.each(retiredWording.flatMap(([cell, pattern]) => rows(everyText).map(([name, text]) => [`${cell}: ${name}`, pattern, text] as const)))(
@@ -143,6 +144,26 @@ describe("retired wording", () => {
       expect(text).not.toMatch(pattern)
     },
   )
+})
+
+describe("retired wording in the upgrade notes", () => {
+  // The notes are repository text too: the old length and address sentences must not come back there.
+  test("docs/upgrading.md carries none of the retired sentences", async () => {
+    const notes = await Bun.file(path.join(import.meta.dir, "../../../docs/upgrading.md")).text()
+    expect(notes).not.toMatch(/Never invent a web address|text between tool calls to at most|confident will help with the programming/)
+  })
+
+  test("the system prompt note lists the real sections and the real size", async () => {
+    const notes = await Bun.file(path.join(import.meta.dir, "../../../docs/upgrading.md")).text()
+    const start = notes.indexOf("### The base system prompt is rewritten")
+    const note = notes.slice(start, notes.indexOf("\n### ", start + 5)).replace(/\s+/g, " ")
+    const names = SessionSystemPrompt.SECTIONS
+    expect(note).toContain(`seven sections, always in this order: ${names.slice(0, -1).join(", ")} and ${names.at(-1)}`)
+    expect(SessionSystemPrompt.SECTIONS).toHaveLength(7)
+    const claimed = Number(/to about ([\d,]+) characters/.exec(note)?.[1].replace(",", ""))
+    const actual = SessionSystemPrompt.make([]).length
+    expect(Math.abs(claimed - actual) / actual).toBeLessThan(0.1)
+  })
 })
 
 describe("the new wording stays", () => {

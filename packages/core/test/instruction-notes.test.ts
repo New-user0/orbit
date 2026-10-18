@@ -50,6 +50,7 @@ type Setup = {
   readonly excludes?: readonly string[]
   readonly spelled?: string
   readonly vcs?: "git" | "hg"
+  readonly filesystem?: Layer.Layer<FSUtil.Service>
 }
 
 const layerFor = (input: Setup) => {
@@ -94,6 +95,7 @@ const layerFor = (input: Setup) => {
             ),
           ),
         ),
+        ...(input.filesystem ? [FSUtil.node.replace(input.filesystem)] : []),
         Watcher.node.replace(watcher),
         ManagedSettings.node.replace(emptyManagedNode),
         Environment.node.replace(Layer.mock(Environment.Service, { files: {} as never, spawner: {} as never })),
@@ -532,6 +534,59 @@ describe("InstructionNotes.add", () => {
         }).pipe(Effect.provide(layerFor({ ...where, trusted: false })))
       }),
     )
+  })
+
+  describe("a link to a network share", () => {
+    // The real file system, except that a call which would open the link (resolve, stat, read) is recorded and answered
+    // without touching it, so that a regression fails at once and never connects to a host.
+    const guarded = (opened: string[], link: (target: string) => boolean) =>
+      Layer.effect(
+        FSUtil.Service,
+        FSUtil.Service.pipe(
+          // Every call that names the link fails at once and is recorded, except reading the link itself, which opens nothing.
+          Effect.map((real) =>
+            FSUtil.Service.of(
+              Object.fromEntries(
+                Object.entries(real).map(([name, value]) => [
+                  name,
+                  typeof value !== "function" || name === "readLink" || name === "lstat"
+                    ? value
+                    : (...args: unknown[]) =>
+                        args.some((arg) => typeof arg === "string" && link(arg))
+                          ? (opened.push(name), Effect.die(`opened the link: ${name}`))
+                          : (value as (...input: unknown[]) => unknown)(...args),
+                ]),
+              ) as unknown as FSUtil.Interface,
+            ),
+          ),
+        ),
+      ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+
+    const cases = [
+      { scope: "project", name: "AGENTS.md", index: 1 },
+      { scope: "local", name: "ORBIT.local.md", index: 2 },
+    ] as const
+    for (const item of cases)
+      for (const trusted of [false, true])
+        it.live(`${item.scope} scope, ${trusted ? "trusted" : "untrusted"}: is listed as there and not enabled, refused as outside, and never opened`, () =>
+          Effect.gen(function* () {
+            if (!canLinkFile || process.platform !== "win32") return
+            const where = yield* scratch
+            const link = path.join(where.root, item.name)
+            yield* Effect.promise(() => fs.symlink("\\\\192.0.2.1\\share\\x.md", link, "file"))
+            const opened: string[] = []
+            yield* Effect.gen(function* () {
+              const { notes } = yield* start
+              expect((yield* notes.targets())[item.index]).toMatchObject({ path: link, exists: true, enabled: false, loaded: false })
+              expect(yield* outcome(notes.add({ scope: item.scope, text: "n" }))).toBe("outside")
+            }).pipe(
+              Effect.provide(
+                layerFor({ ...where, trusted, filesystem: guarded(opened, (target) => path.relative(link, target) === "") }),
+              ),
+            )
+            expect(opened).toEqual([])
+          }),
+        )
   })
 
   describe("a new local file", () => {

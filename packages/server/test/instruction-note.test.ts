@@ -37,7 +37,7 @@ const model = SessionRunnerModel.resolved(
 
 // A real server with the file watcher off, so that whatever the list holds after a note came from the explicit rescan.
 // HOME is not isolated for the whole process, so these tests post only the project scope and read the user target by GET.
-const server = (options: { readonly excludes?: (project: string) => string[] } = {}) =>
+const server = (options: { readonly excludes?: (project: string) => string[]; readonly untrusted?: boolean } = {}) =>
   Effect.gen(function* () {
     const root = (yield* tmpdirScoped("orbit-note-")).path
     const home = path.join(root, "home")
@@ -61,7 +61,7 @@ const server = (options: { readonly excludes?: (project: string) => string[] } =
       Bus.node.replace(Bus.node),
       ModelsDev.node.replace(ModelsDev.configured({ fetch: false })),
       Watcher.node.replace(Watcher.configured({ enabled: false })),
-      WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: true })),
+      WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: !options.untrusted })),
       llmClient.replace(Layer.succeed(LLMClient.Service, llm)),
       SessionRunnerModel.node.replace(Layer.succeed(SessionRunnerModel.Service, { resolve: () => Effect.succeed(model) })),
       ...(options.excludes
@@ -179,3 +179,23 @@ it.live("carries a refusal as field scope with the reason as kind", () =>
     expect(yield* Effect.promise(() => fs.readFile(path.join(s.project, "ORBIT.md"), "utf8"))).toBe("kept\n")
   }).pipe(Effect.scoped),
 )
+
+// A link to a share must never be opened: on Windows that connects to the host the repository named. The link is made as
+// a file link explicitly, because making it without a type already asks the host what the target is.
+for (const [name, scope, index] of [["AGENTS.md", "project", 1], ["ORBIT.local.md", "local", 2]] as const)
+  it.live(`lists a ${scope} file that links to a network share as there and not enabled, and refuses a note as outside`, () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+      const s = yield* server({ untrusted: true })
+      const link = path.join(s.project, name)
+      const made = yield* Effect.promise(() => fs.symlink("\\\\192.0.2.1\\share\\x.md", link, "file").then(() => true, () => false))
+      if (!made) return
+      const listed = yield* s.targets()
+      expect(listed.status).toBe(200)
+      const body = (yield* Effect.promise(() => listed.json())) as { data: { exists: boolean; enabled: boolean }[] }
+      expect(body.data[index]).toMatchObject({ path: link, exists: true, enabled: false })
+      const posted = yield* s.post({ scope, text: "x" })
+      expect(posted.status).toBe(400)
+      expect(yield* Effect.promise(() => posted.json())).toMatchObject({ _tag: "InvalidRequestError", field: "scope", kind: "outside" })
+    }).pipe(Effect.scoped),
+  )

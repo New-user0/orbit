@@ -82,7 +82,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 - `InstructionNotes.add` (`packages/core/src/instruction-notes.ts`, served at `POST /api/location/instructions/note`)
   appends a bullet to the project or local instruction file, so it writes into the folder a repository supplied. It reads
-  only the one file it is about to append to, and only after the checks. The target is the file the loader reads in that
+  only the one file it is about to append to, and only after the checks. A candidate that is a link to a network share (or
+  whose place cannot be read) is found by reading links only (`LinkShare.of`); it counts as there, is never resolved,
+  statted or read, is listed as not enabled and is refused as `outside`, trusted or not. The target is the file the loader reads in that
   scope (the loader's own exclusion and `ProjectTrust.reachable` filters, in the loader's order), asked of the spelling the
   walk builds, never of a real path alone. While the project is untrusted, `ProjectTrust.escapes` and `reachable` on that
   spelling refuse a file that leads outside (a link to a file, a dangling link) as
@@ -105,9 +107,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the spelling as written and as normalized), before any file system call, and a path that reaches a share through a
   link (`LinkShare.blocked`; pinned by the link test in `test/plugin/prompt-config.test.ts`). The same predicate answers
   for the trust fingerprint, `{file:}` reach and `ConfigTrust.inside`, and `test/link-share.test.ts` pins each NT
-  spelling against `of`, `ofSync`, `blocked` and `scan` with no file system call. `system_prompt` and `append_system_prompt`
-  are text and stay inert, like `agents.*.system`; the core rules follow a replacement. A drive letter mapped to a share
-  is not detected (follow-up). Proof: `test/plugin/prompt-config.test.ts`, `test/config/trust.test.ts`,
+  spelling against `of`, `ofSync`, `blocked` and `scan` with no file system call. `PromptConfigPlugin.promptKeys` reads
+  `system_prompt`, `append_system_prompt` and `system_prompt_file` only from documents of scope user (or no scope), flag
+  and managed, so a project, local or remote document never supplies them, trusted or not, and nothing ranks against
+  the person's value. `system_prompt` and `append_system_prompt` stay `inert` in `ConfigTrust` for that reason, as
+  `compatibility` does: withholding them would list `settings` in the trust prompt for keys a grant never applies. The
+  core rules follow a replacement. A drive letter mapped to a share is not detected (follow-up). Proof: the scope table
+  in `test/plugin/prompt-config.test.ts` ("system prompt keys by scope"), `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
 - `hg` in `Project.resolve` (`hg log`) and in the Mercurial VCS provider (`hg branch`, `status`, `diff`, which the
   terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
@@ -309,7 +315,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/plugin/output-style.test.ts` (six places a style can come from, three spellings of the key, before a grant, after
   one and after a revoke, the clone's claim of approval as the body), `test/project-trust.test.ts` (`trustedSource`),
   `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval).
-- A folder's `attribution` text (class 8, prompt form): it reaches `system[0]` in the git section as an indented literal
+- A folder's `attribution` text (class 8, prompt form): `ConfigTrust` withholds it whole (kind `settings`) from an
+  untrusted project or local document, because a project's field outranks the person's, `""` included; once the folder
+  is trusted `resolveAttribution` ranks the scopes as before. Proof: the attribution rows of
+  `test/config/config-trust.test.ts` and `test/config/trust.test.ts`. It reaches `system[0]` in the git section as an indented literal
   block, line for line, split on every line separator (`\n`, `\r\n`, `\r`, U+2028, U+2029), so no line can open a
   top-level section that an output style would cut at. Proof: `test/plugin/prompt-config.test.ts` (the separator table)
   and `test/session-system-prompt.test.ts`.
@@ -385,8 +394,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   could. A user-level file's import is gated by the network refusal alone, and the network refusal holds in every scope,
   trusted or not. Files the model's reads load later never import outside the project, even when it is trusted. `instructions_exclude` is asked before the file is opened, a name outside the text extensions and
   a NUL in the text are refused, and a missing target, a folder or a pipe is skipped silently. The watch set is the real
-  path of each import that was read, and nothing refused is ever subscribed. Managed and local files do not exist in
-  Orbit yet (prompts-context-10): when they arrive they take the project rule. Proof: the `imports` and `load` blocks of
+  path of each import that was read, and nothing refused is ever subscribed. The managed and local files have their own
+  rows above; the managed file's imports from outside wait for the project to be trusted. Proof: the `imports` and `load` blocks of
   `test/config/instruction-file.test.ts`, the "follows @imports", "keeps a project's imports inside the project until its holder is trusted" and "lets a trusted
   holder import from outside the project" blocks of `test/instruction-discovery.test.ts`, and `test/session-instructions.test.ts`, whose "home folder" blocks pin the repository-at-home row.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
@@ -2348,7 +2357,10 @@ The program-wide register of every follow-up, these gaps included, with each one
   with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
   `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
-  (branch, user, status and commit subjects), and a checkpoint's summary and recent text. Synthetic messages are
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text. The clients that send editor context as a hidden message escape it before
+  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat and the terminal UI write the path and
+  the selection into a fenced block after their envelope, and ACP escapes the assistant-audience text it submits.
+  Synthetic messages are
   recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
   Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`
   (most rows build each message through its real producer; the nested instruction file row writes the message by hand),

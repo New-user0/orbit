@@ -428,7 +428,7 @@ describe("the base system prompt", () => {
       expect(writing).toContain("about 100 words unless the task needs more")
       expect(writing).toContain("Code and tool inputs are exempt")
       expect(writing).toContain("never carries reasoning")
-      expect(writing).toContain("no headings")
+      expect(writing).toContain("a sentence or two of plain prose, without headings")
     })
   })
 

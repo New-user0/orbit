@@ -1,5 +1,6 @@
 export * as ReminderText from "./reminder-text.js"
 
+import { TAG, block, envelope, neutralize } from "@orbit/util/reminder-text"
 import type { SessionMessage } from "./message.js"
 
 /** Where a derived insertion lands: the run that follows one assistant message, the first run, or the newest run. */
@@ -17,14 +18,7 @@ export interface Rendered {
   readonly data?: Data
 }
 
-const TAG = /<(?=\s*\/?\s*system\s*-\s*(?:reminder|update))/gi
-
-/**
- * Rewrites every look-alike of an Orbit envelope tag (`system-reminder`, `system-update`; opening or closing, any
- * letter case, whitespace inside the brackets, attributes) by escaping its opening bracket. Every other byte is left
- * alone, and the same input always gives the same output, so lowering stays byte-stable.
- */
-export const neutralize = (text: string) => text.replace(TAG, "&lt;")
+export { neutralize }
 
 /**
  * Text from a repository file or a config that becomes one line of a listing: control characters and line or
@@ -58,16 +52,8 @@ export const neutralizeParts = (parts: ReadonlyArray<string>) => {
  * message as a labelled fenced block, because Orbit's base prompt promises that nothing inside an envelope came from a
  * file or a tool.
  */
-export const render = (input: Rendered) => {
-  const envelope = `<system-reminder>\n${input.text}\n</system-reminder>`
-  if (!input.data) return envelope
-  const longest = Math.max(0, ...(input.data.content.match(/`+/g) ?? []).map((run) => run.length))
-  const fence = "`".repeat(Math.max(3, longest + 1))
-  return `${envelope}\n\n${label(input.data.label)}:\n${fence}\n${neutralize(input.data.content)}\n${fence}`
-}
-
-// A label may hold a repository path or name, so line breaks and control characters go and look-alike tags are escaped.
-const label = (value: string) => neutralize(value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim())
+export const render = (input: Rendered) =>
+  input.data ? `${envelope(input.text)}\n\n${block(input.data.label, input.data.content)}` : envelope(input.text)
 
 /** True for a `synthetic` message that a reminder producer stored. */
 export const isReminder = (message: SessionMessage.Info) => {

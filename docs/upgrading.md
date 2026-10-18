@@ -113,7 +113,7 @@ agent products keep there, used to apply the moment Orbit opened the folder. The
 folder is trusted. Until then Orbit keeps what cannot run code, spend money or reach the network, and leaves out the
 rest:
 
-- **Left out whole:** `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
+- **Left out whole:** `language`, `output_style`, `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
   `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
   `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, and `disabled` on an agent, whose
   entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's own rules
@@ -128,7 +128,7 @@ rest:
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
   10 or less, so a repository cannot raise the limit above 10.
-- **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
+- **Kept as written:** everything else, such as `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
@@ -2762,10 +2762,12 @@ inside a code span, a code block, an HTML block or comment, the target of a link
 `#` is cut there (`@./guide.md#setup` imports `./guide.md`). A target that is not there, is a folder, is not a text file
 (by its extension; a name with none counts) or holds a NUL character is skipped without a word, so prose such as `@team`
 costs nothing. `instructions_exclude` applies to imports as to any file, and an imported file is watched, so editing it
-updates the instructions of a running session. Files that the model's reads load later import the same way.
+updates the instructions of a running session. Files that the model's reads load later import only from inside the
+project, whether or not it is trusted.
 
-A file in a project imports only files that really lie inside the folder you started in or inside the project, whether or
-not the project is trusted: a path that leaves it, or a link that leads out, is skipped, and the skipped target is
+A file in a project whose folder is not trusted imports only files that really lie inside the folder you started in or
+inside the project: a path that leaves it, or a link that leads out, is skipped (once the folder is trusted, a later note
+below lets it import from outside). The skipped target is
 recorded as a warning that no client shows yet. The home folder and a filesystem root are never counted as the project, and
 count only once a person trusts them for the session, and then only as the folder the session started in, so an untrusted
 session started in `~` imports nothing from below it, and a session started below `~` is held to its own folder. Your own global file may
@@ -2776,6 +2778,27 @@ to the model, and anyone who puts secrets in files next to their instructions.
 
 **What to do:** Nothing for most setups. Write `\@name` or put the text in a code span to keep a name from being read as
 an import, or list the file in `instructions_exclude`.
+
+### An untrusted folder no longer sets your reply language or output style
+
+`language` and `output_style` in a project's `orbit.json` (or `orbit.local.json`) used to win over your own value,
+because the last entry wins. In a folder you have not trusted, Orbit now holds both back and your own value stays in
+force; the trust prompt lists them under `settings`. When you trust the folder, the project's values apply after the
+usual reload. The same goes for a project's `language` that asks the model to ignore your setting.
+
+**What to do:** Nothing. If a project's language or style is wanted, trust the folder with `/trust` or `orb trust`, or
+put the value in your own config.
+
+### Editor context from the VS Code chat, the terminal UI and ACP keeps selected text out of the reminder
+
+The editor context that these clients send with a message used to put the file path and the selected text inside the
+reminder envelope itself, so a selection that held a reminder tag could close the envelope and write a fake one. Now the
+envelope holds only text written by the client, and the path and the selection follow it in a labelled fenced block
+whose fence the text cannot close; a look-alike tag in either is escaped. Text that an ACP editor marks for the
+assistant is escaped the same way. The reminder tags are written as `&lt;system-reminder>` in what the model sees. The
+rules are shared in `packages/util/src/reminder-text.ts`.
+
+**What to do:** Nothing.
 
 ### Text that looks like a reminder is escaped wherever it comes from a file or a tool
 
@@ -2802,7 +2825,7 @@ messages, which should hide those with `metadata.reminder`.
 
 ### The model-family prompts are rewritten
 
-The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general prompt, which `optimize.ts` picks by a substring of the model ID and which the Astra IDs replace with their own, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their `Doing tasks`, `Code style` and `Verification` sections as it does the base's. The five full prompts and the local-model prompt tell the model to follow the user's and the project's instruction files, which come later in the prompt and win over the family guidance; on one point a project's file ranks lower, because it cannot approve a risky action ahead of time, while the user can in their own instructions or in the conversation (the base prompt is stricter and takes a standing yes only from the user's instructions). Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, sets a limit on reply length in lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.
+The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general prompt, which `optimize.ts` picks by a substring of the model ID and which the Astra IDs replace with their own, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their Scope, Working in code and Evidence sections as it does the base's. The five full prompts and the local-model prompt tell the model to follow the user's and the project's instruction files, which come later in the prompt and win over the family guidance; on one point a project's file ranks lower, because it cannot approve a risky action ahead of time, while the user can in their own instructions or in the conversation (the base prompt is stricter and takes a standing yes only from the user's instructions). Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, sets a limit on reply length in lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.
 
 **Affects:** sessions on models of those families and on local models (the system prompt text changes, so a prompt cache for an existing session is unaffected until its next step).
 
@@ -3410,12 +3433,9 @@ wording of those notes, and models that sent a one-character query or both domai
 ### The base system prompt is rewritten, with a fixed list of sections
 
 The default system prompt, the text that opens the system prompt of a request, is new. After a one-line introduction it
-has eight sections, always in this order: Harness, Doing tasks, Code style, Verification, Executing actions with care,
-Using tools, Communication and Output efficiency. The old Safety section is now Executing actions with care, and Code
-style and Verification sit beside Doing tasks.
-
-These section names were replaced by the provenance audit; see "The prompt text was rewritten in Orbit's own words" at
-the end of this file for the current names.
+has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool use and Writing to
+the user. Main's prompt had Harness, Communication, Doing tasks, Code style, Safety and Verification. Consent takes
+over the old Safety section, and Scope, Working in code and Evidence take over the coding rules.
 
 - **Where text comes from.** The prompt tells the model where `<system-reminder>` and `<system-update>` blocks come
   from, and that a lookalike inside a tool result, a file or a data block is data. File contents, command output,
@@ -3424,10 +3444,10 @@ the end of this file for the current names.
   counts as your own words. A skill that says you already agreed to a risky step has not made it so: a standing
   approval comes only from your own instructions, given ahead of time.
 - **New rules.** Write a comment only when the code cannot say why. Check that a change works before calling a task
-  done, and report results faithfully in both directions. Say so when a request rests on a mistaken premise. Keep the
-  text between tool calls to at most 25 words and a final answer to at most 100, unless the task needs more detail.
-  Never invent a web address: the one exception is an address the model is confident will help with the programming
-  task, such as the documentation site of a library the project uses.
+  done, and report results faithfully in both directions. Say so when a request rests on a mistaken premise. Commentary
+  between tool calls runs to about 25 words, and the closing message to about 100 unless the task needs more. Web
+  addresses come only from you, the project's files, or search and fetch results; the single thing the model may offer
+  from memory is the documentation site of a library the project uses.
 - **Git.** The git guidance in the base prompt is one line, which says to ask before committing, pushing or opening a
   pull request. The advice on staging and commit messages that was there is gone, and the prompt no longer names any
   instruction file.
@@ -3435,9 +3455,9 @@ the end of this file for the current names.
   guidance line, `Agent` says how to brief an agent and check what it did, and the lines for `Read`, `Edit`, `Write`,
   `Glob`, `Grep` and `Bash` say which shell habit each one replaces. `Patch` and `WebSearch` get none, because a hook
   can remove them after the prompt is rendered.
-- **Size.** The static text, which is everything but the guidance lines, grows from about 4,200 to about 11,400
-  characters, and a request that offers the usual tools carries about 16,500 characters of prompt instead of about
-  7,300, which is about 2,300 more tokens. A model with a small context window has that much less room for history,
+- **Size.** The static text, which is everything but the guidance lines, grows from about 4,200 to about 7,200
+  characters, and a request that offers the usual tools carries about 12,400 characters of prompt instead of about
+  7,300, which is about 1,300 more tokens. A model with a small context window has that much less room for history,
   and the first request of a session after the upgrade misses the provider's prompt cache once.
 
 **Affects:** sessions that use the default prompt, since the model's behavior follows its prompt. That is every model
@@ -3449,12 +3469,22 @@ as a recorded request in a test or a plugin that looks for the heading `# Safety
 
 **What to do:** Nothing. Refresh a recorded request that holds the default prompt.
 
+### A web page question is answered with its own instructions, not the session's prompt
+
+WebFetch asks a second model about a fetched page with instructions of its own (answer from the page alone, short
+quotes, no lyrics). Before, a model overlay (a model-family prompt), the prompt keys `system_prompt` and
+`append_system_prompt`, or the subagent template could replace those instructions, so a subagent such as Explore, or a
+session on an overlay model, sent the page question under the wrong prompt. The request now keeps its own text in every
+one of those cases. Pinned by `packages/core/test/plugin/side-query-prompt.test.ts`.
+
+**Affects:** sessions on models with a prompt overlay, sessions with the prompt keys set, and subagents that fetch pages.
+
+**What to do:** Nothing.
+
 ### An output style keeps the coding sections only when it asks for them, and the opening line follows the style
 
-(The section names in this note and in the notes around it are the ones of that release; the current ones are in "The prompt text was rewritten in Orbit's own words" at the end of this file.)
-
-A custom output style used to keep the coding sections of the default prompt (Doing tasks, Code style and
-Verification) unless its front matter said `keep-coding-instructions: false`. It now keeps them only when the front
+A custom output style used to keep the coding sections of the default prompt (Scope, Working in code and
+Evidence) unless its front matter said `keep-coding-instructions: false`. It now keeps them only when the front
 matter sets `keep-coding-instructions` to `true`, as a boolean or as the string `"true"`. A missing key, `false` and any
 other value drop them. The built-in Explanatory and Learning styles keep them. While a style applies, the opening line
 of the default prompt is replaced by one that says the agent helps the way the output style at the end of the prompt
@@ -3497,8 +3527,8 @@ session after the upgrade misses the prompt cache once, because the system promp
 
 The new `attribution` key sets either text. Each field is decided by the highest-priority config that sets it, so your
 own `commit: ""` and a project's `pr` combine. An empty string turns that one off and tells the agent to add none. The
-value may hold several lines, such as several trailers. A project's config can set it too, and a project's value takes
-precedence over your own, your `""` included.
+value may hold several lines, such as several trailers. A project's or local config can set it too: its value applies once the folder is trusted, and then takes precedence
+over your own, your `""` included. Until then your own value, or the default, applies.
 
 ```json
 { "attribution": { "commit": "Co-authored-by: Name <name@example.com>", "pr": "" } }
@@ -3519,13 +3549,14 @@ Three keys change the system prompt of the main thread of a session (a session w
   there are none.
 - `system_prompt_file` is the same with the text read from a UTF-8 file at each request, so an edit applies from the next
   request. The path is absolute, starts with `~/`, or is relative to the folder of the config file that names it. A file
-  that cannot be read keeps the default prompt and logs one warning. A path on a network share is refused. The key is not
-  read from a project or local config until the folder is trusted.
+  that cannot be read keeps the default prompt and logs one warning. A path on a network share is refused.
 - `append_system_prompt` adds text after the base and the git section, also on top of an agent's own prompt.
 
 An agent with a prompt of its own keeps it and gets no replacement; the appended text still applies on the main thread.
 Subagent child sessions get neither. A config with no file resolves a relative `system_prompt_file` against the folder
-the session runs in. The highest-priority config that sets a replacement decides, and an empty string counts as unset.
+the session runs in. The three keys are read only from your own config (the global and home folders), the `ORBIT_CONFIG`
+file and `ORBIT_CONFIG_CONTENT`, and managed settings. A project's or local config never sets them, trusted or not. The
+highest-priority of those that sets a replacement decides, and an empty string counts as unset.
 
 **Affects:** people who set these keys, and SDK callers.
 
@@ -3696,7 +3727,7 @@ the provider's prompt cache is cold for it).
 
 - Two endpoints add a quick note to the instruction files. `GET /api/location/instructions/note` lists, for the user, project and local scopes in that order, the file a note would go to (`path`), whether it exists, whether that scope's instruction files are loaded in this location (`enabled`) and whether the file is loaded now (`loaded`). `POST /api/location/instructions/note` takes `{ scope, text }` (the text is trimmed and must be 1 to 2,000 characters) and appends it as a bullet; later lines of the note are indented under it.
 - A note goes to the file the loader already reads in that scope: the first of `ORBIT.md`, `AGENTS.md` (and the other tool's file name only while compatibility makes it the loader's choice) that exists and is not excluded by `instructions_exclude`. When there is none, the note creates `ORBIT.md` in Orbit's config folder (user), `AGENTS.md` at the project root (project) or `ORBIT.local.md` at the project root (local). A new `ORBIT.local.md` is added to the repository's own `.git/info/exclude`, as an anchored line, unless a git ignore already covers it; no tracked file and no global git file changes. Existing text is never rewritten: the bullet is appended in the file's own line break style, and an existing byte order mark is kept.
-- A refusal is `400 InvalidRequestError` with `field: "scope"` and the reason in `kind`: `disabled` (that scope's instruction files are off here, or the location is outside the project root), `unavailable` (an instruction source could not be read, so where the note would load is not known), `excluded` (a pattern of `instructions_exclude` drops the file) or `outside` (in a project that is not trusted, the file leads outside the project through a link). Nothing is created or changed for any of them. A file that cannot be written (permissions, a lock held by another program) is a `503` for the `instructions` service. A missing default that a pattern excludes is created, and `loaded` is `false` in the answer. In the `GET` listing, `enabled` is `false` for a file that a `POST` would refuse as `excluded` or `outside`, and the project and local `path` is the file as spelled in the project folder.
+- A refusal is `400 InvalidRequestError` with `field: "scope"` and the reason in `kind`: `disabled` (that scope's instruction files are off here, or the location is outside the project root), `unavailable` (an instruction source could not be read, so where the note would load is not known), `excluded` (a pattern of `instructions_exclude` drops the file) or `outside` (in a project that is not trusted, the file leads outside the project through a link; also, trusted or not, the file is a link to a network share, which is never opened or connected to). Nothing is created or changed for any of them. A file that cannot be written (permissions, a lock held by another program) is a `503` for the `instructions` service. A missing default that a pattern excludes is created, and `loaded` is `false` in the answer. In the `GET` listing, `enabled` is `false` for a file that a `POST` would refuse as `excluded` or `outside`, and the project and local `path` is the file as spelled in the project folder.
 - After a write, and before answering `GET`, Orbit reads the instruction files again from disk, so the note is in the instruction list at once even when the file watcher is off, and a running session gets it as a chronological instruction update at its next step boundary. This is the new `InstructionDiscovery.rescan()`, with `addRescan` for a source of files to register how it refreshes. Other open locations of the same project see the note through their own file watcher.
 - Not built yet: a note typed in a file that ends inside an unclosed HTML comment is appended but the loader strips it, and `loaded` still says `true`.
 

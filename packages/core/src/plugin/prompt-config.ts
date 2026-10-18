@@ -91,7 +91,7 @@ export const Plugin = define({
     const hook = (event: SessionHooks["context"]) =>
       Effect.gen(function* () {
         const system = event.system[0]
-        if (!system) return
+        if (!system || sideQuery(event)) return
         const entries = yield* config.entries().pipe(
           // Without the settings, keep the guidance and write nothing the person may have switched off into history.
           Effect.catchCause((cause) =>
@@ -152,6 +152,13 @@ export const Plugin = define({
  * Whether a session is the main thread (`mainThread`), or none when it cannot be read, so each caller picks its own
  * answer: the prompt keys then do not apply, and the session is not taken for a subagent.
  */
+/**
+ * Whether a request is a side query (`SideQuery`): a one-shot request whose caller wrote the whole system text, such as
+ * WebFetch's extraction instructions. The prompt plugins leave it exactly as written, whichever session, key or model
+ * it comes from.
+ */
+export const sideQuery = (event: { agent: string }) => event.agent === "side"
+
 export const mainThreadOf = Effect.fn("PromptConfigPlugin.mainThreadOf")(function* (
   ctx: Pick<Context, "session">,
   sessionID: Session.ID,
@@ -198,9 +205,17 @@ function field(entries: readonly Entry[], key: "commit" | "pr") {
   return document?.info.attribution?.[key] ?? DEFAULT_ATTRIBUTION[key]
 }
 
-/** The replacement and appended text the config asks for: the highest-priority document that sets each decides. */
+/**
+ * The replacement and appended text the config asks for. Only the person's own documents supply them: user (the
+ * global and home config; a document with no scope counts as user), flag (`ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT`)
+ * and managed. A project, local or remote document never does, trusted or not. The highest-priority one of those that
+ * sets each key decides. Attribution is the other way round: every scope counts, and trust has already removed an
+ * untrusted folder's value before it gets here.
+ */
 export function promptKeys(entries: readonly Entry[]) {
-  const documents = entries.filter((entry): entry is Document => entry.type === "document")
+  const documents = entries.filter(
+    (entry): entry is Document => entry.type === "document" && ["user", "flag", "managed"].includes(entry.scope ?? "user"),
+  )
   const replacing = documents.findLast((document) => document.info.system_prompt || document.info.system_prompt_file)
   const replacement = !replacing
     ? undefined

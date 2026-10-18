@@ -4,6 +4,7 @@ import { Instruction } from "@orbit/schema/instruction"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bom } from "@orbit/util/bom"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import { Global } from "@orbit/util/global"
 import { Context, Effect, Layer, Schema } from "effect"
 import { basename, dirname, join, relative } from "path"
@@ -63,6 +64,8 @@ type Target = {
   readonly path: string
   readonly exists: boolean
   readonly enabled: boolean
+  /** The file is a link that leads to a network share, or its place could not be read: it is never opened, and a note is refused. */
+  readonly blocked: boolean
   /** The file is there, no candidate of the loader survives, and a pattern of `instructions_exclude` drops this one. */
   readonly excluded: boolean
 }
@@ -94,12 +97,25 @@ export const layer = Layer.effect(
       const globalFiles = yield* Effect.forEach(ConfigInstructionFile.names(compat), (name) =>
         fs.resolve(join(global.config, name)),
       )
+      // A link to a share is found by reading links only: resolving or statting it would connect to the host the
+      // repository named. Such a file counts as there, and is never opened.
       const spelled = yield* Effect.forEach(
         names.map((name) => join(folder, name)),
-        (file) => fs.resolve(file).pipe(Effect.map((real) => ({ file, real }))),
+        (file) =>
+          Effect.gen(function* () {
+            if (scope === "user") return { file, real: yield* fs.resolve(file), blocked: false }
+            if ((yield* LinkShare.of(fs, file)) !== undefined) return { file, real: file, blocked: true }
+            // A defect from the file system (a link that cannot be followed) is a refusal, not a failure of the request.
+            const real = yield* fs.resolve(file).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+            return real === undefined ? { file, real: file, blocked: true } : { file, real, blocked: false }
+          }),
       )
-      const present = yield* Effect.filter(spelled, (item) => fs.isFile(item.real))
-      const kept = yield* ConfigInstructionFile.included(patterns, present.map((item) => item.file), fs.resolve)
+      const present = yield* Effect.filter(spelled, (item) => (item.blocked ? Effect.succeed(true) : fs.isFile(item.real)))
+      const kept = yield* ConfigInstructionFile.included(
+        patterns,
+        present.filter((item) => !item.blocked).map((item) => item.file),
+        fs.resolve,
+      )
       // The project's files meet the same gate as the loader's, which asks it of the spelling the walk built.
       const survivors =
         scope === "user" ? kept : yield* Effect.filter(kept, (item) => trust.reachable(item.file))
@@ -113,6 +129,7 @@ export const layer = Layer.effect(
           file: chosen.file,
           path: chosen.real,
           exists: true,
+          blocked: false,
           enabled: base && (scope === "user" || discovery.global || !isGlobal(chosen.real)),
           excluded: false,
         } satisfies Target
@@ -125,11 +142,12 @@ export const layer = Layer.effect(
           file: first.file,
           path: first.real,
           exists: true,
+          blocked: first.blocked,
           enabled: base,
-          excluded: !kept.some((item) => item.file === first.file),
+          excluded: !first.blocked && !kept.some((item) => item.file === first.file),
         } satisfies Target
       const file = join(folder, defaults[scope])
-      return { scope, file, path: file, exists: false, enabled: base, excluded: false } satisfies Target
+      return { scope, file, path: file, exists: false, blocked: false, enabled: base, excluded: false } satisfies Target
     })
 
     // Compared by relative(), which ignores case where the file system does, so a drive letter's case does not matter.
@@ -155,7 +173,7 @@ export const layer = Layer.effect(
             path: scope === "user" ? item.path : item.file,
             exists: item.exists,
             enabled: item.enabled && !refused,
-            loaded: item.exists && (yield* loaded(item.path)),
+            loaded: item.exists && !item.blocked && (yield* loaded(item.path)),
           })
         }),
       )
@@ -165,6 +183,7 @@ export const layer = Layer.effect(
     // and a path that is not there yet counts by where it would be.
     const outside = Effect.fnUntraced(function* (item: Target) {
       if (item.scope === "user") return false
+      if (item.blocked) return true
       if ((yield* trust.escapes(item.file)) !== undefined) return true
       return !(yield* trust.reachable(item.file))
     })

@@ -28,7 +28,7 @@ export const Plugin = define({
     const hook = (event: SessionHooks["context"]) =>
       Effect.gen(function* () {
         const system = event.system[0]
-        if (!system) return
+        if (!system || PromptConfigPlugin.sideQuery(event)) return
         const agent = yield* ctx.agent.get({ agentID: event.agent })
         const child = yield* subagent(ctx, event.sessionID)
         const own = agent.data.system !== undefined && agent.data.system !== ""
