@@ -21,6 +21,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onWebviewPanel:orbit.chat"
   ],
   "capabilities": {
@@ -156,6 +157,11 @@
         "title": "Watch Run in Terminal",
         "category": "Orbit",
         "icon": "$(eye)"
+      },
+      {
+        "command": "orbit.mentionSelection",
+        "title": "Mention Selection in Terminal",
+        "category": "Orbit"
       }
     ],
     "menus": {
@@ -303,6 +309,12 @@
           "type": "boolean",
           "default": true,
           "description": "Show a notice in the editor when Orbit needs your review or finishes while the Orbit chat is hidden or the window is in the background. These are notices inside VS Code, not operating system notifications."
+        },
+        "orbit.ideBridge.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Let the Orbit terminal UI in this window see the file and selection you are working in, and receive file mentions from the **Orbit: Mention Selection in Terminal** command. The extension listens on the loopback interface only, on a random port, and accepts a connection only with a token that it keeps in a private file in your Orbit state folder. Only your user settings count: a workspace cannot set this, because it opens a listener."
         }
       }
     },
@@ -328,12 +340,15 @@
     "@orbit/client": "workspace:*",
     "@orbit/flow": "workspace:*",
     "@orbit/schema": "workspace:*",
-    "diff": "catalog:"
+    "@orbit/util": "workspace:*",
+    "diff": "catalog:",
+    "ws": "8.21.0"
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
     "@types/vscode": "1.94.0",
+    "@types/ws": "8.18.1",
     "@typescript/native-preview": "catalog:",
     "@vscode/vsce": "4.0.0"
   }

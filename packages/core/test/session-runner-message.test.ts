@@ -169,6 +169,10 @@ describe("toLLMMessages", () => {
         id: id("user"),
         role: "user",
         content: [
+          {
+            type: "text",
+            text: "<system-reminder>\nThe person would like the agent named below to be used. Launch it with the Agent tool and give it the context it needs.\n</system-reminder>\n\nrequested agent:\n```\nbuild\n```",
+          },
           { type: "text", text: "Inspect this image" },
           { type: "media", media: Media.base64("aGVsbG8=", "image/png"), filename: "hello.png" },
         ],

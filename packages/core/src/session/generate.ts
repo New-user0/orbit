@@ -12,6 +12,7 @@ import type { AgentNotFoundError } from "./error.js"
 import { SessionHistory } from "./history.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionModelRequest } from "./model-request.js"
+import { SessionReminders } from "./reminders.js"
 import type { SessionRunnerModel } from "./runner/model.js"
 import { SessionEvent } from "./event.js"
 import type { SessionSchema } from "./schema.js"
@@ -28,6 +29,7 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
   model: SessionRunnerModel.Resolved,
 ) {
   const database = yield* Database.Service
+  const reminders = yield* SessionReminders.Service
   const history = yield* SessionHistory.preview(
     database.db,
     selection.session.id,
@@ -40,6 +42,7 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
     tools: selection.tools,
     initial: history.initial,
     messages: history.messages,
+    minimal: reminders.minimal,
   })
   return {
     system: base.system,

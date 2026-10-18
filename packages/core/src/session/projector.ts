@@ -54,6 +54,14 @@ type Usage = {
 
 const ForkBatchSize = 500
 
+// Terminal events for active projections stay on the parent, so forks copy only settled rows. Session.fork asks the
+// same question for its exact-fork tail check, so the copy rule lives in one place.
+export const settledRows = [
+  sql`${SessionMessageTable.type} != 'assistant' or json_extract(${SessionMessageTable.data}, '$.time.completed') is not null`,
+  sql`${SessionMessageTable.type} != 'shell' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
+  sql`${SessionMessageTable.type} != 'compaction' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
+]
+
 const forkTitle = (value?: string) => {
   if (value === undefined) return
   const match = value.match(/^(.+) \(fork #(\d+)\)$/)
@@ -234,10 +242,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
           eq(SessionMessageTable.session_id, event.data.parentID),
           gt(SessionMessageTable.seq, cursor),
           lt(SessionMessageTable.seq, copiedSeq + 1),
-          // Terminal events for active projections stay on the parent, so forks copy only settled history.
-          sql`${SessionMessageTable.type} != 'assistant' or json_extract(${SessionMessageTable.data}, '$.time.completed') is not null`,
-          sql`${SessionMessageTable.type} != 'shell' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
-          sql`${SessionMessageTable.type} != 'compaction' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
+          ...settledRows,
         ),
       )
       .orderBy(asc(SessionMessageTable.seq))
@@ -271,7 +276,10 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
   }
   if (copiedSeq !== undefined) yield* Bus.reserveSequence(db, event.data.sessionID, copiedSeq)
   if (event.data.instructions)
-    yield* InstructionState.initialize(db, event.data.sessionID, event.durable.seq, event.data.instructions)
+    yield* InstructionState.initialize(db, event.data.sessionID, event.durable.seq, {
+      initial: event.data.baseline ?? event.data.instructions,
+      current: event.data.instructions,
+    })
 })
 
 /** An output-escalation notice keeps naming the parent's attempt unless it is remapped to that attempt's copy. */
@@ -698,6 +706,7 @@ const layer = Layer.effectDiscard(
                 files: input.payload.files,
                 agents: input.payload.agents,
                 skills: input.payload.skills,
+                editor: input.payload.editor,
                 turn: input.payload.turn,
                 delivery: input.delivery,
                 time: { created: DateTime.makeUnsafe(event.created) },

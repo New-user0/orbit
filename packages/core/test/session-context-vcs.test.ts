@@ -298,7 +298,8 @@ describe("the git snapshot in the baseline of a session", () => {
       yield* grant
       yield* stepped(ids.main)
       yield* Effect.promise(() => Bun.write(path.join(found.root, "c.txt"), "later\n"))
-      yield* InstructionState.initialize(db, ids.fork, 0, (yield* InstructionState.current(db, ids.main)) ?? {})
+      const v = (yield* InstructionState.current(db, ids.main)) ?? {}
+      yield* InstructionState.initialize(db, ids.fork, 0, { initial: v, current: v })
 
       const fork = yield* stepped(ids.fork)
 
@@ -381,7 +382,7 @@ describe("the git snapshot in the baseline of a session", () => {
       const theirs = { branch: "theirs", main: "theirs", user: "", status: "", truncated: false, commits: [], late: false }
       const hash = Instructions.hash(theirs)
       yield* db.insert(InstructionBlobTable).values({ hash, value: theirs }).onConflictDoNothing().run()
-      yield* InstructionState.initialize(db, ids.other, 0, { [key]: hash })
+      yield* InstructionState.initialize(db, ids.other, 0, { initial: { [key]: hash }, current: { [key]: hash } })
 
       const run = yield* traced(Instructions.read(vcs.source({ id: ids.child, parentID: ids.other })))
 
@@ -416,7 +417,7 @@ describe("the git snapshot in the baseline of a session", () => {
       const old = { branch: "main" }
       const hash = Instructions.hash(old)
       yield* db.insert(InstructionBlobTable).values({ hash, value: old }).onConflictDoNothing().run()
-      yield* InstructionState.initialize(db, ids.main, 0, { [key]: hash })
+      yield* InstructionState.initialize(db, ids.main, 0, { initial: { [key]: hash }, current: { [key]: hash } })
 
       const child = yield* stepped(ids.child)
 

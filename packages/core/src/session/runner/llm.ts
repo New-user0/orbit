@@ -461,6 +461,7 @@ const layer = Layer.effect(
           initial: loaded.initial,
           messages: loaded.messages,
           insertions: yield* reminders.derive(loaded, step),
+          minimal: reminders.minimal,
         })
         const prepared = yield* context.request.primary({
           session: loaded.session,
@@ -476,7 +477,7 @@ const layer = Layer.effect(
           toolChoice: handInOnly ? { type: "tool", name: SessionOutput.NAME } : stepLimitReached ? "none" : undefined,
           output: output && { validator: output.validator, schema: output.schema, only: handInOnly },
           webSocket: "session",
-          inputTokens: SessionCompaction.estimatePrompt(loaded),
+          inputTokens: SessionCompaction.estimatePrompt(loaded, reminders.minimal),
           outputTokenCap: loaded.outputTokenCap,
           outputEscalated: recovery.escalated,
         })

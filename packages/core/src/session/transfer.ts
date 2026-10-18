@@ -243,6 +243,17 @@ function sanitizeMessage(message: SessionMessage.Info): SessionMessage.Info {
           ? { ...agent.mention, text: redact("agent-mention", String(index), agent.mention.text) }
           : undefined,
       })),
+      editor: message.editor
+        ? {
+            path: redact("editor-path", message.id, message.editor.path),
+            selection: message.editor.selection
+              ? {
+                  ...message.editor.selection,
+                  text: redact("editor-selection", message.id, message.editor.selection.text),
+                }
+              : undefined,
+          }
+        : undefined,
       skills: message.skills?.map((skill, index) => ({
         ...skill,
         name: Skill.Name.make(redact("skill-name", String(index), skill.name)),

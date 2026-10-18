@@ -137,6 +137,8 @@ export const baseTranscript = (input: {
   readonly messages: ReadonlyArray<SessionMessage.Info>
   /** Derived reminders for the primary request only; compaction, generate and title pass none. */
   readonly insertions?: ReadonlyArray<LoweredInsertion>
+  /** The minimal instances keep a prompt's queued-input note and drop its agent hints and editor note. */
+  readonly minimal?: boolean
 }) => {
   const providerMetadataKey = input.model.model.route.providerMetadataKey ?? input.model.model.provider
   return {
@@ -151,7 +153,9 @@ export const baseTranscript = (input: {
     ]
       .filter((part) => part.length > 0)
       .map(SystemPart.make),
-    messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey, input.insertions),
+    messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey, input.insertions, {
+      minimal: input.minimal,
+    }),
   }
 }
 

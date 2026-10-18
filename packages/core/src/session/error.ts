@@ -24,6 +24,16 @@ export class ForkEmptyError extends Schema.TaggedError<ForkEmptyError>()("Sessio
   }
 }
 
+/** An exact fork repeats the source's latest request, so it can only start at the source's settled tail. */
+export class ForkBoundaryError extends Schema.TaggedError<ForkBoundaryError>()("Session.ForkBoundaryError", {
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+}) {
+  override get message() {
+    return `An exact fork must start at the settled tail of ${this.sessionID}, not at ${this.messageID}`
+  }
+}
+
 export class MessageDecodeError extends Schema.TaggedError<MessageDecodeError>()("Session.MessageDecodeError", {
   sessionID: SessionSchema.ID,
   messageID: SessionMessage.ID,

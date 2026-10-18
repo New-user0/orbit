@@ -33,6 +33,7 @@ import { ReferenceInstructions } from "@orbit/core/reference/instructions"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionContext } from "@orbit/core/session/context"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionGenerate } from "@orbit/core/session/generate"
 import { InstructionState } from "@orbit/core/session/instruction-state"
 import { SessionMessage } from "@orbit/core/session/message"
@@ -157,6 +158,7 @@ const it = testEffect(
       Agent.node,
       InstructionBuiltIns.node,
       SessionContext.node,
+      SessionReminders.node,
       PluginHooks.node,
       llmClient,
     ]),
@@ -385,6 +387,42 @@ it.effect(
       ).toBe(10)
     }),
   { timeout: 15_000 },
+)
+
+it.effect("a generation lowers a prompt's hint and editor note like the main request, except on a minimal instance", () =>
+  Effect.gen(function* () {
+    instruction = "Initial context"
+    const { db, bus, instructions, session, instances } = yield* setup
+    yield* InstructionState.prepare(db, bus, instructions, sessionID)
+    const id = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.InboxEnqueued, {
+      sessionID,
+      inboxID: id,
+      item: {
+        type: "user",
+        payload: { text: "Original prompt", agents: [{ name: "helper" }], editor: { path: "/project/open-file.ts" } },
+        delivery: "steer",
+      },
+    })
+    yield* bus.publish(SessionEvent.InboxDelivered, { sessionID, inboxID: id })
+    const texts = Effect.gen(function* () {
+      requests.length = 0
+      yield* SessionGenerate.generate({ session, prompt: "Side question" }).pipe(Effect.provideService(Instance.Service, instances))
+      return userTexts(requests[0])
+    })
+
+    const normal = yield* texts
+    expect(normal).toHaveLength(4)
+    expect(normal.join("\n")).toContain("helper")
+    expect(normal.join("\n")).toContain("open-file.ts")
+    expect(normal.at(-2)).toBe("Original prompt")
+
+    const reminders = yield* SessionReminders.Service
+    const lean = yield* texts.pipe(
+      Effect.provideService(SessionReminders.Service, SessionReminders.Service.of({ ...reminders, minimal: true })),
+    )
+    expect(lean).toEqual(["Original prompt", "Side question"])
+  }),
 )
 
 it.effect(

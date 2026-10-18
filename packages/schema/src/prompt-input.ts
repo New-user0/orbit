@@ -1,7 +1,7 @@
 export * as PromptInput from "./prompt-input.js"
 
 import { Schema } from "effect"
-import { AgentAttachment, PromptMention } from "./prompt.js"
+import { AgentAttachment, EditorContext, PromptMention } from "./prompt.js"
 import { optional, statics } from "./schema.js"
 import { Skill } from "./skill.js"
 
@@ -31,4 +31,5 @@ export const Prompt = Schema.Struct({
   files: Schema.Array(FileAttachment).pipe(optional),
   agents: Schema.Array(AgentAttachment).pipe(optional),
   skills: Schema.Array(SkillAttachment).pipe(optional),
+  editor: EditorContext.pipe(optional),
 }).annotate({ identifier: "PromptInput" })

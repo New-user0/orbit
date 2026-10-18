@@ -245,4 +245,19 @@ describe("public event manifest", () => {
     expect(SessionEvent.Deleted.data.make({ sessionID })).toEqual({ sessionID })
     expect(SessionEvent.Deleted.durable?.version).toBe(2)
   })
+
+  test("accepts an optional epoch baseline on a fork and stays on version 2", () => {
+    const base = {
+      sessionID: "ses_fork",
+      parentID: "ses_parent",
+      boundary: { type: "through", messageID: "msg_boundary" },
+    }
+    const hash = "0".repeat(64)
+    const decode = Schema.decodeUnknownSync(SessionEvent.Forked.data)
+    expect(decode(base)).not.toHaveProperty("baseline")
+    expect(decode({ ...base, instructions: { "test/context": hash }, baseline: { "test/context": hash } })).toMatchObject({
+      baseline: { "test/context": hash },
+    })
+    expect(SessionEvent.Forked.durable?.version).toBe(2)
+  })
 })

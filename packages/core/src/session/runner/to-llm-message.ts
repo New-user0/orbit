@@ -320,7 +320,65 @@ const syntheticText = (message: Extract<SessionMessage.Info, { type: "synthetic"
     ? ReminderText.neutralize(message.text)
     : message.text
 
-function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMetadataKey: string): Message[] {
+/** The most of a selection that reaches the model; the rest is counted in the note, not sent. */
+const EDITOR_SELECTION_LIMIT = 2000
+
+// Three notes come from a prompt's durable fields while it is lowered. Each envelope holds harness text only: a name, a
+// path or a selection is outside text and goes in the data block that follows.
+const queuedNote = (origin: unknown) =>
+  ReminderText.render({
+    text:
+      origin === "agent"
+        ? "The agent that started you added the message below partway through. It must not be dropped, and your current task is not finished until you have handled it."
+        : "After you began your current task the person added the message below. It MUST NOT be ignored; handle it once that task is done.",
+  })
+
+const agentHints = (agents: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["agents"]>) =>
+  [...new Set(agents.map((agent) => agent.name))].map((name) =>
+    ReminderText.render({
+      text: `The person would like the agent named below to be used. Launch it with the ${ToolNames.tools.subagent} tool and give it the context it needs.`,
+      data: { label: "requested agent", content: name },
+    }),
+  )
+
+const editorNote = (editor: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["editor"]>) => {
+  const caveat = "This may be unrelated to your task."
+  const selection = editor.selection
+  if (selection === undefined || selection.text === "")
+    return ReminderText.render({
+      text: `The file named below is the one open in the person's editor right now. ${caveat}`,
+      data: { label: "open file", content: editor.path },
+    })
+  // Line endings are normalized first, so a file cuts at the same place on every platform.
+  const text = selection.text.replace(/\r\n/g, "\n")
+  const split = text.length > EDITOR_SELECTION_LIMIT
+  // Never inside a surrogate pair.
+  const end =
+    split && /[\uD800-\uDBFF]/.test(text[EDITOR_SELECTION_LIMIT - 1]) ? EDITOR_SELECTION_LIMIT - 1 : EDITOR_SELECTION_LIMIT
+  const kept = split ? text.slice(0, end) : text
+  const range = selection.start === selection.end ? `line ${selection.start}` : `lines ${selection.start} to ${selection.end}`
+  const left = text.length - kept.length
+  return ReminderText.render({
+    text: [
+      `The person has highlighted ${range} in the file named below; the highlighted text follows. ${caveat}`,
+      ...(split ? [`The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at its end ${left === 1 ? "is" : "are"} not shown.`] : []),
+    ].join(" "),
+    data: { label: editor.path, content: kept },
+  })
+}
+
+interface Lowering {
+  /** The user messages that arrived while work was in progress, decided from history up to each of them. */
+  readonly queued: ReadonlySet<SessionMessage.ID>
+  readonly minimal: boolean
+}
+
+function toLLMMessage(
+  message: SessionMessage.Info,
+  model: Model.Ref,
+  providerMetadataKey: string,
+  lowering: Lowering = { queued: new Set(), minimal: false },
+): Message[] {
   switch (message.type) {
     case "agent-switched":
     case "idle":
@@ -337,7 +395,13 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
         }),
       ]
     case "user":
+      const queued = lowering.queued.has(message.id)
+      // Input delivered mid-turn gets only the note; hints and the editor note belong to a prompt sent while idle.
+      const context = !lowering.minimal && !queued
       const content = [
+        ...(queued ? [Message.text(queuedNote(message.metadata?.origin))] : []),
+        ...(context && message.agents?.length ? agentHints(message.agents).map((hint) => Message.text(hint)) : []),
+        ...(context && message.editor ? [Message.text(editorNote(message.editor))] : []),
         ...(message.skills ?? []).flatMap((skill) => (skill.text === undefined ? [] : [Message.text(skill.text)])),
         ...(message.text === "" ? [] : [Message.text(message.text)]),
         ...userAttachmentContent(message.files ?? []),
@@ -411,6 +475,40 @@ export const withoutReplaced = (messages: readonly SessionMessage.Info[]) => {
   return messages.filter((message) => !notices.includes(message) && !replaced.has(message.id))
 }
 
+/**
+ * The user messages that arrived while work was in progress: a steer that follows a round of tool calls the client ran,
+ * with nothing between that ends the busy period. A first prompt, one after idle, an interruption, a checkpoint or a
+ * move, queued input (it waited for the work to end) and a steer after a final text-only step are all fresh prompts and
+ * get no note. Decided from history up to each message, so an earlier request never changes when history grows.
+ */
+const queuedInput = (history: readonly SessionMessage.Info[]) => {
+  const queued = new Set<SessionMessage.ID>()
+  let open = false
+  history.forEach((message) => {
+    switch (message.type) {
+      case "assistant":
+        // A hosted tool ran inside the provider, so a step that used only those was a final step.
+        open = message.content.some((item) => item.type === "tool" && item.executed !== true)
+        return
+      case "user":
+        if (message.delivery === "queue") open = false
+        else if (open) queued.add(message.id)
+        return
+      case "idle":
+      case "shell":
+      case "location-switched":
+        open = false
+        return
+      case "compaction":
+        if (message.status === "completed") open = false
+        return
+      default:
+        return
+    }
+  })
+  return queued
+}
+
 /** A rendered derived reminder and the run it belongs to: the one after an assistant message, or the first. */
 export interface LoweredInsertion {
   readonly after: "start" | SessionMessage.ID
@@ -430,10 +528,12 @@ export const toLLMMessages = (
   model: Model.Ref,
   providerMetadataKey: string = model.providerID,
   insertions: readonly LoweredInsertion[] = [],
+  options: { readonly minimal?: boolean } = {},
 ) => {
   const history = withoutReplaced(messages)
+  const lowering = { queued: queuedInput(history), minimal: options.minimal === true }
   if (insertions.length === 0 && !history.some(ReminderText.isReminder))
-    return history.flatMap((message) => toLLMMessage(message, model, providerMetadataKey))
+    return history.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, lowering))
 
   const byRun = Map.groupBy(insertions, (insertion) => insertion.after)
   const checkpoint = history.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
@@ -448,7 +548,7 @@ export const toLLMMessages = (
     others = []
   }
   history.forEach((message, index) => {
-    const lowered = toLLMMessage(message, model, providerMetadataKey)
+    const lowered = toLLMMessage(message, model, providerMetadataKey, lowering)
     if (message.type === "assistant" || (message.type === "compaction" && message.status === "completed")) {
       flush()
       out.push(...lowered)

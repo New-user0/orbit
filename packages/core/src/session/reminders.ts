@@ -105,6 +105,8 @@ export interface Derived {
 export interface Lists {
   readonly durable: ReadonlyArray<Durable>
   readonly derived: ReadonlyArray<Derived>
+  /** Set by `minimal`. The lowering of a prompt reads it: the minimal instance keeps only queued-input notes. */
+  readonly minimal?: boolean
 }
 
 export const DEFAULT_TIMEOUT = Duration.seconds(1)
@@ -117,6 +119,8 @@ export interface Interface {
   readonly collect: (input: { readonly loaded: SessionContext.Loaded; readonly step: number }) => Effect.Effect<boolean>
   /** Runs the derived producers; the insertions merge in list order. */
   readonly derive: (loaded: SessionContext.Loaded, step: number) => Effect.Effect<ReadonlyArray<LoweredInsertion>>
+  /** True on the minimal instances (`--bare`, vanilla): a prompt's agent hints and editor notes are not rendered. */
+  readonly minimal: boolean
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/SessionReminders") {}
@@ -131,6 +135,7 @@ export const production: Lists = {
 export const minimal = (lists: Lists): Lists => ({
   durable: lists.durable.filter((producer) => producer.minimal),
   derived: lists.derived.filter((producer) => producer.minimal),
+  minimal: true,
 })
 
 /** A node over explicit lists; tests and the minimal instances replace the node with their own. */
@@ -221,7 +226,14 @@ const make = (bus: Bus.Interface, lists: Lists) => {
       }))
   })
 
-  return Service.of({ collect, derive })
+  // Read on use, like the lists: a test sets the lists after the node is built.
+  return Service.of({
+    collect,
+    derive,
+    get minimal() {
+      return lists.minimal === true
+    },
+  })
 }
 
 /** The run a "tail" insertion belongs to: the one after the newest assistant message in this epoch. */

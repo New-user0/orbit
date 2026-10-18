@@ -16,7 +16,8 @@ const builds = await Promise.all([
     naming: "extension.js",
     target: "node",
     format: "cjs",
-    external: ["vscode"],
+    // ws probes for these optional native add-ons; the bundle leaves them out and ws falls back to plain JavaScript.
+    external: ["vscode", "bufferutil", "utf-8-validate"],
     minify: true,
   }),
   Bun.build({

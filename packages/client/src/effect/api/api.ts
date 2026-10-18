@@ -403,6 +403,12 @@ export type SessionPromptInput = {
   readonly files?: ReadonlyArray<PromptInput.FileAttachment> | undefined
   readonly agents?: ReadonlyArray<AgentAttachment> | undefined
   readonly skills?: ReadonlyArray<PromptInput.SkillAttachment> | undefined
+  readonly editor?:
+    | {
+        readonly path: string
+        readonly selection?: { readonly start: number; readonly end: number; readonly text: string } | undefined
+      }
+    | undefined
   readonly metadata?: { readonly [x: string]: unknown } | undefined
   readonly turn?: SessionTurn.Options | undefined
   readonly delivery?: SessionInbox.Delivery | undefined
@@ -418,6 +424,12 @@ export type SessionCommandInput = {
   readonly files?: ReadonlyArray<PromptInput.FileAttachment> | undefined
   readonly agents?: ReadonlyArray<AgentAttachment> | undefined
   readonly skills?: ReadonlyArray<PromptInput.SkillAttachment> | undefined
+  readonly editor?:
+    | {
+        readonly path: string
+        readonly selection?: { readonly start: number; readonly end: number; readonly text: string } | undefined
+      }
+    | undefined
   readonly delivery?: SessionInbox.Delivery | undefined
 }
 export type SessionCommandOutput = void
@@ -731,6 +743,9 @@ export type SessionLogOutput =
             readonly sessionID: Session.ID
             readonly parentID: Session.ID
             readonly boundary: Session.ForkBoundary
+            readonly baseline?:
+              | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
+              | undefined
             readonly instructions?:
               | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
               | undefined
