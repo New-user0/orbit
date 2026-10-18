@@ -10,7 +10,7 @@ export * as Vim from "./vim-state"
  * instead, so the adapter converts at its edge.
  */
 
-export type Mode = "insert" | "normal"
+export type Mode = "insert" | "normal" | "visual" | "visual_line"
 export type Operator = "d" | "c" | "y"
 
 /** A prompt part (mention, pasted-text summary, image chip) that edits and motions treat as one atomic unit. */
@@ -38,6 +38,31 @@ export type Pending =
   | { readonly kind: "shift"; readonly shift: ">" | "<"; readonly count: number }
   /** After a double quote: waiting for the register name. */
   | { readonly kind: "register" }
+  /** After `f`, `F`, `t` or `T`: the next key is the character to look for, whatever it is. */
+  | { readonly kind: "find"; readonly find: Find; readonly count: number }
+  | { readonly kind: "operatorFind"; readonly operator: Operator; readonly find: Find; readonly count: number }
+
+export type Find = "f" | "F" | "t" | "T"
+
+/** What `.` replays. Nothing here is persisted. */
+export type Change =
+  /** The keys of a normal-mode command, replayed through the engine as they ran the first time. */
+  | { readonly kind: "keys"; readonly keys: readonly string[] }
+  /** Text typed in insert mode, put back at the cursor. */
+  | { readonly kind: "text"; readonly text: string }
+  /** A visual operator, replayed over the same amount of text from the cursor. */
+  | {
+      readonly kind: "visual"
+      readonly operator: Operator | ">" | "<"
+      readonly linewise: boolean
+      /** Lines the selection touched. */
+      readonly lines: number
+      /** Characterwise on one line: the graphemes selected. */
+      readonly width: number
+      /** Characterwise over several lines: the column of the last selected character. */
+      readonly column: number
+      readonly levels: number
+    }
 
 export interface State {
   readonly mode: Mode
@@ -46,9 +71,34 @@ export interface State {
   readonly clipboard: boolean
   /** The unnamed register. Text that ends with a line break is linewise. Never persisted. */
   readonly register: string
+  /** The other end of the selection in visual mode; the cursor is the head. */
+  readonly anchor?: number
+  /** The last change `.` repeats. Memory only. */
+  readonly lastChange?: Change
+  /** The last `f F t T`, for `;` and `,`. Memory only. */
+  readonly lastFind?: { readonly kind: Find; readonly char: string }
+  /** Text typed since insert mode began. It replaces the last change when Escape ends the insert. */
+  readonly typed: string
+  /** The keys of the command in progress. */
+  readonly keys: readonly string[]
 }
 
-export const initial: State = { mode: "insert", pending: { kind: "idle" }, clipboard: false, register: "" }
+export const initial: State = {
+  mode: "insert",
+  pending: { kind: "idle" },
+  clipboard: false,
+  register: "",
+  typed: "",
+  keys: [],
+}
+
+export const isVisual = (mode: Mode) => mode === "visual" || mode === "visual_line"
+
+/** Ends a selection without any key: the text was replaced, sent or clicked, or vim was switched off. */
+export const endVisual = (state: State): State =>
+  isVisual(state.mode)
+    ? { ...state, mode: "normal", anchor: undefined, pending: { kind: "idle" }, clipboard: false, keys: [] }
+    : state
 
 export interface Snapshot {
   readonly text: string
@@ -66,12 +116,13 @@ export interface Key {
   readonly sequence?: string
 }
 
-/** What a completed command was, so that a later task can replay it. Nothing records these yet. */
+/** What a completed command was. `.` replays the keys that made it, so this is for callers that want to know. */
 export interface Command {
   readonly command: string
   readonly operator?: Operator
   readonly motion?: string
   readonly object?: string
+  readonly find?: { readonly kind: Find; readonly char: string }
   readonly count: number
 }
 
@@ -88,6 +139,8 @@ export interface Result {
     | { readonly write: string }
     | { readonly read: { readonly before: boolean; readonly count: number } }
   readonly record?: Command
+  /** UTF-16 range to draw as selected, end exclusive. Present exactly while the resulting state is in visual mode. */
+  readonly selection?: { readonly start: number; readonly end: number }
 }
 
 export const COUNT_LIMIT = 10000
@@ -139,9 +192,41 @@ export function paste(state: State, snap: Snapshot, text: string, before: boolea
  * Handles one key in normal mode. `pass` marks a key that is not a vim command and goes to the ordinary editor.
  */
 export function step(state: State, key: Key, snap: Snapshot): Result {
+  if (!isVisual(state.mode)) return withSelection(normalStep(state, key, snap), snap)
+  return withSelection(visualStep(state, key, snap), snap)
+}
+
+/** Escape from insert mode: a non-empty record of what was typed becomes the last change. */
+export function leave(state: State): State {
+  return {
+    ...state,
+    mode: "normal",
+    pending: { kind: "idle" },
+    clipboard: false,
+    anchor: undefined,
+    keys: [],
+    typed: "",
+    lastChange: state.typed ? { kind: "text", text: state.typed } : state.lastChange,
+  }
+}
+
+/** Records one insert-mode key before the editor handles it. Backspace and Delete trim what was typed, nothing else is kept. */
+export function insertKey(state: State, key: Key): State {
+  if (key.ctrl || key.meta) return state
+  const text = key.sequence && !/\p{Cc}/u.test(key.sequence) ? key.sequence : typed(key)
+  if (text) return { ...state, typed: state.typed + text }
+  if ((key.name === "backspace" || key.name === "delete") && state.typed)
+    return { ...state, typed: state.typed.slice(0, [...segmenter.segment(state.typed)].at(-1)!.index) }
+  return state
+}
+
+/** Forgets what was typed, for text that is sent or replaced from outside the editor. */
+export const restartTyped = (state: State): State => (state.typed ? { ...state, typed: "" } : state)
+
+function normalStep(state: State, key: Key, snap: Snapshot): Result {
   const ctx = context(snap)
   const cursor = ctx.snap(snap.cursor)
-  if (key.ctrl || key.meta) return { state, edits: [], cursor, pass: true }
+  if (key.ctrl || key.meta) return { state: reset(state), edits: [], cursor, pass: true }
   const char = typed(key)
   const pending = state.pending
   if (!char && (key.name === "escape" || key.name === "return" || key.name === "enter"))
@@ -162,6 +247,11 @@ export function step(state: State, key: Key, snap: Snapshot): Result {
   if (!ch) return stay(reset(state), cursor)
 
   const run = { state, ctx, cursor, snap }
+  return track(state, ch, dispatch(run, pending, ch))
+}
+
+function dispatch(run: Run, pending: Pending, ch: string): Result {
+  const { state, cursor } = run
   switch (pending.kind) {
     case "register":
       if (ch === "+") return stay({ ...state, pending: { kind: "idle" }, clipboard: true }, cursor)
@@ -169,6 +259,10 @@ export function step(state: State, key: Key, snap: Snapshot): Result {
       return stay(reset(state), cursor)
     case "replace":
       return replace(run, pending.count || 1, ch)
+    case "find":
+      return findMotion(run, pending.find, pending.count || 1, ch)
+    case "operatorFind":
+      return operatorFind(run, pending.operator, pending.find, pending.count || 1, ch)
     case "shift":
       if (ch !== pending.shift) return stay(reset(state), cursor)
       return shift(run, pending.shift, pending.count || 1)
@@ -189,6 +283,187 @@ export function step(state: State, key: Key, snap: Snapshot): Result {
   }
 }
 
+/**
+ * Remembers the keys of a command while it is in progress and, once it completes and changed something, makes them
+ * the last change. Register prefixes are left out, and `p`, `P` and `.` itself are never recorded.
+ */
+function track(before: State, ch: string, out: Result): Result {
+  const prefix = ch === '"' && before.pending.kind === "idle"
+  const keys = prefix || before.pending.kind === "register" ? before.keys : [...before.keys, ch]
+  if (out.state.pending.kind !== "idle") return { ...out, state: { ...out.state, keys } }
+  const recorded = out.record && out.record.command !== "p" && out.record.command !== "P"
+  return {
+    ...out,
+    state: { ...out.state, keys: [], lastChange: recorded ? { kind: "keys", keys } : out.state.lastChange },
+  }
+}
+
+/** `.`: runs the last change again from the cursor. It never replaces the last change itself. */
+function repeatChange(run: Run): Result {
+  const { state, cursor, snap } = run
+  const change = state.lastChange
+  if (!change) return stay(reset(state), cursor)
+  const from: State = { ...reset(state), mode: "normal" }
+  const done = (out: Result): Result => ({
+    ...out,
+    record: undefined,
+    state: { ...out.state, keys: [], lastChange: change },
+  })
+  if (change.kind === "text")
+    return done(
+      result(from, {
+        edits: [{ start: cursor, end: cursor, insert: change.text }],
+        cursor: cursor + change.text.length,
+      }),
+    )
+  if (change.kind === "visual") return done(repeatVisual({ ...run, state: from }, change))
+  const last = change.keys.reduce<Result>((previous, k) => normalStep(previous.state, { name: k, sequence: k }, snap), {
+    state: from,
+    edits: [],
+    cursor,
+  })
+  return done(last)
+}
+
+function withSelection(out: Result, snap: Snapshot): Result {
+  if (!isVisual(out.state.mode)) return out
+  return { ...out, selection: visualRange(context(snap), out.state, out.cursor, true) }
+}
+
+/** What a visual selection covers. `display` also takes the line break after a linewise selection, so empty lines show. */
+function visualRange(ctx: Context, state: State, head: number, display = false) {
+  const anchor = state.anchor ?? head
+  const lo = Math.min(anchor, head)
+  const hi = Math.max(anchor, head)
+  if (state.mode === "visual_line") {
+    const end = ctx.lineEnd(hi)
+    return { start: ctx.lineStart(lo), end: display && end < ctx.len ? end + 1 : end }
+  }
+  return ctx.widen({ start: lo, end: hi >= ctx.len ? ctx.len : ctx.next(hi) })
+}
+
+function visualStep(state: State, key: Key, snap: Snapshot): Result {
+  const ctx = context(snap)
+  const cursor = ctx.snap(snap.cursor)
+  const normal: State = { ...reset(state), mode: "normal", anchor: undefined }
+  if (key.ctrl || key.meta) return { state: normal, edits: [], cursor, pass: true }
+  const char = typed(key)
+  // Escape is consumed here: it ends the selection and does not reach a running session's interrupt.
+  if (!char && key.name === "escape") return stay(normal, cursor)
+  if (!char && (key.name === "return" || key.name === "enter")) return { state: normal, edits: [], cursor, pass: true }
+
+  const pending = state.pending
+  const moving = pending.kind === "idle" || pending.kind === "count"
+  // Arrows (shifted or not) move the head even with nothing pending, and Backspace is h.
+  const ch = char ?? (moving ? (ARROWS[key.name] ?? (key.name === "backspace" ? "h" : undefined)) : undefined)
+  if (!ch) return stay(reset(state), cursor)
+
+  const run = { state, ctx, cursor, snap }
+  if (pending.kind === "g") {
+    if (ch === "g") return motion(run, "gg", pending.count)
+    if (ch === "j" || ch === "k") return motion(run, "g" + ch, pending.count)
+    return stay(reset(state), cursor)
+  }
+  if (pending.kind === "find") return findMotion(run, pending.find, pending.count || 1, ch)
+  if (pending.kind === "register") {
+    if (ch === "+") return stay({ ...state, pending: { kind: "idle" }, clipboard: true }, cursor)
+    if (ch === '"') return stay({ ...state, pending: { kind: "idle" }, clipboard: false }, cursor)
+    return stay(reset(state), cursor)
+  }
+  return visualKey(run, pending.kind === "count" ? pending.count : 0, ch)
+}
+
+function visualKey(run: Run, count: number, ch: string): Result {
+  const { state, ctx, cursor } = run
+  const n = count || 1
+  const pend = (pending: Pending): Result => stay({ ...state, pending }, cursor)
+  if (isDigit(ch) && (ch !== "0" || count > 0)) return pend({ kind: "count", count: extend(count, Number(ch)) })
+  if (ch === '"' && count === 0) return pend({ kind: "register" })
+  if (ch === "g") return pend({ kind: "g", count })
+  if (isFind(ch)) return pend({ kind: "find", find: ch, count })
+  if (ch === ";" || ch === ",") return repeatFind(run, ch === ",", n)
+  if (MOTIONS.has(ch)) return motion(run, ch, count)
+  const line = state.mode === "visual_line"
+  switch (ch) {
+    case "v":
+    case "V": {
+      if (ch === (line ? "V" : "v")) return result({ ...state, anchor: undefined }, { cursor, mode: "normal" })
+      return result(state, { cursor, mode: ch === "v" ? "visual" : "visual_line" })
+    }
+    case "o":
+      return result(state, { cursor: state.anchor ?? cursor, anchor: cursor })
+    case "d":
+    case "c":
+    case "y":
+      return visualOperator(run, ch)
+    case ">":
+    case "<":
+      return visualOperator(run, ch, n)
+  }
+  return stay(reset(state), cursor)
+}
+
+/** The visual operators. The selection ends; `.` later applies the same operator to the same amount of text. */
+function visualOperator(run: Run, operator: Operator | ">" | "<", levels = 1): Result {
+  const { ctx, cursor, snap } = run
+  const state: State = { ...run.state, mode: "normal", anchor: undefined, pending: { kind: "idle" } }
+  const base = { ...run, state }
+  const head = cursor
+  const anchor = run.state.anchor ?? head
+  const first = ctx.lineIndex(Math.min(anchor, head))
+  const last = ctx.lineIndex(Math.max(anchor, head))
+  const linewise = run.state.mode === "visual_line"
+  const range = visualRange(ctx, run.state, head)
+  const change: Change = {
+    kind: "visual",
+    operator,
+    linewise,
+    lines: last - first + 1,
+    width: ctx.cells(range.start, range.end, Infinity).length,
+    column: Math.max(anchor, head) - ctx.lineStart(Math.max(anchor, head)),
+    levels,
+  }
+  const record = { command: operator, count: change.lines }
+  const out =
+    operator === ">" || operator === "<"
+      ? shiftLines(base, operator, first, last - first + 1, levels)
+      : linewise
+        ? lines(base, operator, first, last, operator, change.lines, { ...record, operator })
+        : operate(base, operator, range, { ...record, operator }, true)
+  // An empty selection (an empty prompt) changed nothing and so is not a change to repeat.
+  return { ...out, state: { ...out.state, lastChange: out.record ? change : out.state.lastChange } }
+}
+
+/** Replays a visual operator from the cursor over as much text as it covered the first time. */
+function repeatVisual(run: Run, change: Extract<Change, { kind: "visual" }>): Result {
+  const { ctx, cursor } = run
+  const first = ctx.lineIndex(cursor)
+  const last = Math.min(ctx.lineStarts.length - 1, first + change.lines - 1)
+  const record = { command: change.operator, count: change.lines }
+  if (change.operator === ">" || change.operator === "<")
+    return shiftLines(run, change.operator, first, last - first + 1, change.levels)
+  if (change.linewise)
+    return lines(run, change.operator, first, last, change.operator, change.lines, {
+      ...record,
+      operator: change.operator,
+    })
+  const end =
+    change.lines === 1
+      ? (ctx.cells(cursor, ctx.lineEnd(cursor), change.width).at(-1)?.end ?? cursor)
+      : (() => {
+          const start = ctx.lineStarts[last]!
+          const column = Math.min(start + change.column, ctx.lineEnd(start))
+          return column >= ctx.len ? ctx.len : ctx.next(ctx.snap(column))
+        })()
+  return operate(
+    run,
+    change.operator,
+    ctx.widen({ start: cursor, end }),
+    { ...record, operator: change.operator },
+    true,
+  )
+}
+
 interface Run {
   readonly state: State
   readonly ctx: Context
@@ -207,7 +482,7 @@ function typed(key: Key) {
   if (key.name.length === 1) return key.shift ? key.name.toUpperCase() : key.name
 }
 
-const reset = (state: State): State => ({ ...state, pending: { kind: "idle" }, clipboard: false })
+const reset = (state: State): State => ({ ...state, pending: { kind: "idle" }, clipboard: false, keys: [] })
 const stay = (state: State, cursor: number): Result => ({ state, edits: [], cursor })
 const extend = (count: number, digit: number) => Math.min(COUNT_LIMIT, count * 10 + digit)
 const isDigit = (ch: string) => ch.length === 1 && ch >= "0" && ch <= "9"
@@ -219,19 +494,26 @@ function result(
     edits?: readonly Edit[]
     cursor: number
     mode?: Mode
+    anchor?: number
     register?: string
+    find?: { kind: Find; char: string }
     record?: Command
     undo?: boolean
     clipboard?: Result["clipboard"]
   },
 ): Result {
   const write = input.register !== undefined && state.clipboard ? { write: input.register } : undefined
+  const mode = input.mode ?? state.mode
   return {
     state: {
-      mode: input.mode ?? state.mode,
+      ...state,
+      mode,
       pending: { kind: "idle" },
       clipboard: false,
       register: input.register ?? state.register,
+      anchor: isVisual(mode) ? (input.anchor ?? state.anchor) : undefined,
+      lastFind: input.find ?? state.lastFind,
+      typed: mode === "insert" && state.mode !== "insert" ? "" : state.typed,
     },
     edits: input.edits ?? [],
     cursor: input.cursor,
@@ -256,6 +538,12 @@ function normalKey(run: Run, count: number, ch: string): Result {
   if (ch === '"' && count === 0) return pend({ kind: "register" })
   if (ch === "d" || ch === "c" || ch === "y") return pend({ kind: "operator", operator: ch, count, inner: 0 })
   if (ch === "g") return pend({ kind: "g", count })
+  if (isFind(ch)) return pend({ kind: "find", find: ch, count })
+  if (ch === ";" || ch === ",") return repeatFind(run, ch === ",", n)
+  if (ch === ".") return repeatChange(run)
+  // A count or a register prefix typed before v or V is dropped.
+  if (ch === "v" || ch === "V")
+    return result(state, { cursor, mode: ch === "v" ? "visual" : "visual_line", anchor: cursor })
   if (ch === "r") return pend({ kind: "replace", count })
   if (ch === ">" || ch === "<") return pend({ kind: "shift", shift: ch, count })
   if (MOTIONS.has(ch)) return motion(run, ch, count)
@@ -312,10 +600,15 @@ function normalKey(run: Run, count: number, ch: string): Result {
   return stay(reset(state), cursor)
 }
 
-const MOTIONS = new Set(["h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "0", "^", "$", "G"])
+const MOTIONS = new Set(["h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "0", "^", "$", "G", "%"])
+
+const isFind = (ch: string): ch is Find => ch === "f" || ch === "F" || ch === "t" || ch === "T"
+const OPPOSITE: Record<Find, Find> = { f: "F", F: "f", t: "T", T: "t" }
 
 /** A motion with no operator: only the cursor moves. */
 function motion(run: Run, name: string, count: number): Result {
+  // A count before % would be a percentage jump, which the prompt does not have.
+  if (name === "%" && count > 0) return stay(reset(run.state), run.cursor)
   const target = run.ctx.target(name, count || 1, run.cursor, run.snap)
   return result(run.state, { cursor: target ?? run.cursor })
 }
@@ -345,8 +638,38 @@ function operatorKey(run: Run, pending: Extract<Pending, { kind: "operator" }>, 
       { ...state, pending: { kind: "object", operator: pending.operator, count: total, around: ch === "a" } },
       cursor,
     )
+  if (isFind(ch))
+    return stay(
+      { ...state, pending: { kind: "operatorFind", operator: pending.operator, find: ch, count: total } },
+      cursor,
+    )
+  if (ch === "%" && (pending.count > 0 || pending.inner > 0)) return stay(reset(state), cursor)
   if (MOTIONS.has(ch)) return operatorMotion(run, pending.operator, ch, total)
   return stay(reset(state), cursor)
+}
+
+/** `f F t T` with its character: the cursor moves, and the find is remembered. A miss changes nothing. */
+function findMotion(run: Run, kind: Find, count: number, char: string): Result {
+  const to = run.ctx.find(kind, char, count, run.cursor)
+  if (to === undefined) return stay(reset(run.state), run.cursor)
+  return result(run.state, { cursor: to, find: { kind, char } })
+}
+
+/** `;` repeats the last find, `,` runs it the other way. The remembered find stays as it was. */
+function repeatFind(run: Run, reverse: boolean, count: number): Result {
+  const last = run.state.lastFind
+  const to = last ? run.ctx.find(reverse ? OPPOSITE[last.kind] : last.kind, last.char, count, run.cursor) : undefined
+  if (to === undefined) return stay(reset(run.state), run.cursor)
+  return result(run.state, { cursor: to })
+}
+
+/** `d`, `c` or `y` with a find: the span runs from the cursor's grapheme to the target's, both included. */
+function operatorFind(run: Run, operator: Operator, kind: Find, count: number, char: string): Result {
+  const range = run.ctx.findSpan(kind, char, count, run.cursor)
+  if (!range) return stay(reset(run.state), run.cursor)
+  const find = { kind, char }
+  const out = operate(run, operator, run.ctx.widen(range), { command: operator, operator, motion: kind, find, count })
+  return { ...out, state: { ...out.state, lastFind: find } }
 }
 
 function operatorMotion(run: Run, operator: Operator, name: string, count: number, command?: string): Result {
@@ -546,13 +869,22 @@ function join(run: Run, n: number): Result {
 
 /** `>>` and `<<`: shift n lines from the cursor's line by two columns. */
 function shift(run: Run, direction: ">" | "<", n: number): Result {
-  const { state, ctx, cursor, snap } = run
-  const line = ctx.lineIndex(cursor)
+  return shiftLines(run, direction, run.ctx.lineIndex(run.cursor), n, 1)
+}
+
+/** Shifts `n` lines from line `line` by `levels` levels of two columns each. */
+function shiftLines(run: Run, direction: ">" | "<", line: number, n: number, levels: number): Result {
+  const { state, ctx, snap } = run
   const edits = ctx.lineStarts.slice(line, line + n).flatMap((start): Edit[] => {
     const end = ctx.lineEnd(start)
     const body = snap.text.slice(start, end)
-    if (direction === ">") return [{ start, end: start, insert: "  " }]
-    const width = body.startsWith("  ") ? 2 : body.startsWith("\t") ? 1 : (/^\s{1,2}/.exec(body)?.[0].length ?? 0)
+    if (direction === ">") return [{ start, end: start, insert: "  ".repeat(levels) }]
+    const width = Array.from({ length: levels }).reduce<number>((removed) => {
+      const rest = body.slice(removed)
+      return (
+        removed + (rest.startsWith("  ") ? 2 : rest.startsWith("\t") ? 1 : (/^\s{1,2}/.exec(rest)?.[0].length ?? 0))
+      )
+    }, 0)
     return width ? [{ start, end: start + width, insert: "" }] : []
   })
   const next = apply(snap.text, edits)
@@ -715,6 +1047,8 @@ function context(snap: Snapshot) {
         return firstNonBlank(from)
       case "$":
         return lineEnd(from)
+      case "%":
+        return match(from)
       case "G":
         return lineAt(n > 1 ? n - 1 : lineStarts.length - 1)
       case "gg":
@@ -761,6 +1095,11 @@ function context(snap: Snapshot) {
       if (lineBreak >= 0 && lineBreak < end) end = lineBreak
       return { start: from, end }
     }
+    if (name === "%") {
+      const to = match(from)
+      if (to === undefined) return
+      return to > from ? { start: from, end: next(to) } : { start: to, end: next(from) }
+    }
     const to = target(name, n, from, snapshot)
     if (to === undefined || to === from) return
     if (name === "e" || name === "E") return { start: from, end: to >= len ? len : next(to) }
@@ -783,6 +1122,56 @@ function context(snap: Snapshot) {
       p = q
     }
     return out
+  }
+
+  /** Whether a code unit sits inside a prompt part, for scans that go code unit by code unit. */
+  const inPart = (() => {
+    const mask = new Uint8Array(len)
+    parts.forEach((part) => mask.fill(1, Math.max(0, part.start), Math.min(len, part.end)))
+    return mask
+  })()
+
+  /** `%`: from the cursor to the end of its line, the first bracket, then its partner (nesting of that pair only). */
+  const match = (from: number) => {
+    const end = lineEnd(from)
+    let at = from
+    while (at < end && (inPart[at] === 1 || !PAIRS[text[at]!])) at++
+    if (at >= end) return
+    const pair = PAIRS[text[at]!]!
+    const direction = pair.forward ? 1 : -1
+    let depth = 0
+    for (let i = at; i >= 0 && i < len; i += direction) {
+      if (inPart[i] === 1) continue
+      if (text[i] === pair.self) depth++
+      if (text[i] !== pair.other) continue
+      depth--
+      if (depth === 0) return i
+    }
+  }
+
+  /** The Nth grapheme equal to `char` after (or before) `from`; a prompt part never matches. */
+  const occurrence = (kind: Find, char: string, n: number, from: number) => {
+    const forward = kind === "f" || kind === "t"
+    if (forward ? from >= len : from <= 0) return
+    let seen = 0
+    for (let q = forward ? next(from) : prev(from); ; q = forward ? next(q) : prev(q)) {
+      if (!partAt(q) && text.slice(q, next(q)) === char && ++seen >= n) return q
+      if (forward ? q >= len : q <= 0) return
+    }
+  }
+  /** Where `f F t T` leave the cursor. `t` and `T` stop short of the target but never behind where they started. */
+  const find = (kind: Find, char: string, n: number, from: number) => {
+    const q = occurrence(kind, char, n, from)
+    if (q === undefined) return
+    return kind === "t" ? prev(q) : kind === "T" ? next(q) : q
+  }
+  /** What an operator covers for a find: the cursor's grapheme and the target (or the one before it), both included. */
+  const findSpan = (kind: Find, char: string, n: number, from: number) => {
+    const q = occurrence(kind, char, n, from)
+    if (q === undefined) return
+    if (kind === "f") return { start: from, end: next(q) }
+    if (kind === "t") return { start: from, end: q }
+    return { start: kind === "F" ? q : next(q), end: next(from) }
   }
 
   const object = (kind: string, around: boolean, cursor: number) => {
@@ -853,11 +1242,22 @@ function context(snap: Snapshot) {
     lineIndex,
     firstNonBlank,
     target,
+    find,
+    findSpan,
     motionRange,
     widen,
     cells,
     object,
   }
+}
+
+const PAIRS: Partial<Record<string, { self: string; other: string; forward: boolean }>> = {
+  "(": { self: "(", other: ")", forward: true },
+  ")": { self: ")", other: "(", forward: false },
+  "[": { self: "[", other: "]", forward: true },
+  "]": { self: "]", other: "[", forward: false },
+  "{": { self: "{", other: "}", forward: true },
+  "}": { self: "}", other: "{", forward: false },
 }
 
 const BRACKETS: Partial<Record<string, readonly [string, string]>> = {

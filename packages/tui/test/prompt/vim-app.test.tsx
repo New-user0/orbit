@@ -364,3 +364,246 @@ test("Enter submits from normal mode and normal mode stays for the next prompt",
   expect(prompts).toEqual(["ship it"])
   expect(setup.captureCharFrame()).not.toContain(label)
 })
+
+// --- visual mode, dot-repeat and finds ---
+
+const visual = "-- VISUAL --"
+const visualLine = "-- VISUAL LINE --"
+
+async function arrow(app: Awaited<ReturnType<typeof mount>>, direction: "left" | "right", shift = false) {
+  app.setup.mockInput.pressArrow(direction, shift ? { shift: true } : undefined)
+  await app.setup.renderOnce()
+  await Bun.sleep(30)
+  await app.setup.renderOnce()
+}
+
+test.each([40, 120])(
+  "v and V show their labels at %d columns, Escape removes them, and the cursor is a block",
+  async (width) => {
+    await using app = await mount({ width })
+    await app.type("abc")
+    await app.normal()
+    await app.press("v")
+    let frame = app.setup.captureCharFrame()
+    expect(frame).toContain(visual)
+    expect(frame).not.toContain(visualLine)
+    expect(app.textarea().cursorStyle.style).toBe("block")
+    const row = frame.split("\n").find((line) => line.includes(visual)) ?? ""
+    expect(row.trimEnd().length).toBeLessThanOrEqual(width)
+
+    await app.press("V", { shift: true })
+    frame = app.setup.captureCharFrame()
+    expect(frame).toContain(visualLine)
+    expect(app.textarea().cursorStyle.style).toBe("block")
+    const lineRow = frame.split("\n").find((line) => line.includes(visualLine)) ?? ""
+    expect(lineRow.trimEnd().length).toBeLessThanOrEqual(width)
+    if (width === 40) expect(lineRow).toContain("…")
+
+    await app.normal()
+    frame = app.setup.captureCharFrame()
+    expect(frame).not.toContain("-- VISUAL")
+    expect(frame).not.toContain(label)
+    await app.press("i")
+    expect(app.setup.captureCharFrame()).toContain(label)
+  },
+)
+
+test("the drawn selection is the textarea's own, follows o, covers whole wide characters and ends with Escape", async () => {
+  await using app = await mount()
+  await app.type("日本a👍b")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  const text = app.textarea()
+  expect(text.getSelectedText()).toBe("日本")
+  const before = text.getSelection()
+  const head = text.cursorOffset
+  await app.press("o")
+  expect(text.getSelection()).toEqual(before)
+  expect(text.getSelectedText()).toBe("日本")
+  // The head is now the other end of the selection, and the drawn cursor is there.
+  expect(text.cursorOffset).toBe(0)
+  expect(text.cursorOffset).not.toBe(head)
+  await app.press("o")
+  await app.press("l")
+  await app.press("l")
+  expect(text.getSelectedText()).toBe("日本a👍")
+  await app.normal()
+  expect(text.hasSelection()).toBe(false)
+  expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+})
+
+test("Shift+Left moves the head in visual mode only; elsewhere it selects through the textarea as before", async () => {
+  {
+    await using app = await mount()
+    await app.type("abcd")
+    await app.normal()
+    await app.press("v")
+    await arrow(app, "left", true)
+    expect(app.textarea().plainText).toBe("abcd")
+    expect(app.textarea().getSelectedText()).toBe("cd")
+    await arrow(app, "left", true)
+    expect(app.textarea().getSelectedText()).toBe("bcd")
+    expect(app.setup.captureCharFrame()).toContain(visual)
+  }
+  {
+    await using app = await mount({ vim: false })
+    await app.type("abcd")
+    await arrow(app, "left", true)
+    expect(app.textarea().getSelectedText()).toBe("d")
+  }
+  {
+    await using app = await mount()
+    await app.type("abcd")
+    await arrow(app, "left", true)
+    expect(app.textarea().getSelectedText()).toBe("d")
+  }
+  {
+    await using app = await mount()
+    await app.type("abcd")
+    await app.normal()
+    await arrow(app, "left", true)
+    expect(app.textarea().getSelectedText()).toBe("cd")
+    expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+  }
+})
+
+test("Escape in visual mode does not interrupt a running session; the next Escape does", async () => {
+  await using app = await mount({ width: 220 })
+  app.setup.events.emit({
+    id: "evt_running_visual",
+    created: 1,
+    type: "session.execution.started",
+    durable: { aggregateID: sessionID, seq: 1, version: 1 },
+    data: { sessionID },
+  } as never)
+  await app.setup.waitForFrame((frame) => frame.includes("interrupt"))
+  await app.type("abc")
+  await app.normal()
+  await app.press("v")
+  await app.normal()
+  expect(app.setup.captureCharFrame()).not.toContain("again to interrupt")
+  expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+  expect(app.textarea().hasSelection()).toBe(false)
+  await app.normal()
+  await app.setup.waitForFrame((frame) => frame.includes("again to interrupt"))
+})
+
+test("Enter in visual mode submits and leaves no selection", async () => {
+  const prompts: string[] = []
+  await using app = await mount({
+    fetch: async (url, request) => {
+      if (url.pathname === `/api/session/${sessionID}/prompt`) {
+        prompts.push(((await request.json()) as { text?: string }).text ?? "")
+        return json({ data: { id: "msg_x" } })
+      }
+      return server(url, request)
+    },
+  })
+  await app.type("send me")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  app.setup.mockInput.pressEnter()
+  await Bun.sleep(300)
+  await app.setup.renderOnce()
+  expect(prompts).toEqual(["send me"])
+  expect(app.textarea().hasSelection()).toBe(false)
+  expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+})
+
+test("a bracketed paste in visual mode ends the selection and pastes as in normal mode", async () => {
+  await using app = await mount()
+  await app.type("abcd")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  expect(app.textarea().getSelectedText()).toBe("ab")
+  await app.setup.mockInput.pasteBracketedText("XY")
+  await Bun.sleep(100)
+  await app.setup.renderOnce()
+  // Nothing is deleted: the selected "ab" survives, and the paste lands at the cursor.
+  expect(app.textarea().plainText).toBe("aXYbcd")
+  expect(app.textarea().hasSelection()).toBe(false)
+  expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+})
+
+test("Vjd is one undo step", async () => {
+  await using app = await mount()
+  for (const [index, text] of ["one", "two", "three"].entries()) {
+    if (index > 0) await app.press("j", { ctrl: true })
+    await app.type(text)
+  }
+  await app.normal()
+  await app.press("g")
+  await app.press("g")
+  await app.press("V", { shift: true })
+  await app.press("j")
+  await app.press("d")
+  expect(app.textarea().plainText).toBe("three")
+  await app.press("u")
+  expect(app.textarea().plainText).toBe("one\ntwo\nthree")
+})
+
+test("2dd then . deletes two more lines and one u brings them back", async () => {
+  await using app = await mount()
+  for (const [index, text] of ["a", "b", "c", "d", "e"].entries()) {
+    if (index > 0) await app.press("j", { ctrl: true })
+    await app.type(text)
+  }
+  await app.normal()
+  await app.press("g")
+  await app.press("g")
+  await app.type("2dd")
+  expect(app.textarea().plainText).toBe("c\nd\ne")
+  await app.press(".")
+  expect(app.textarea().plainText).toBe("e")
+  await app.press("u")
+  expect(app.textarea().plainText).toBe("c\nd\ne")
+})
+
+test("% jumps to the partner and f with ; repeats, typed with Shift as a terminal reports them", async () => {
+  await using app = await mount()
+  await app.type("(a-b-c)")
+  await app.normal()
+  await app.press("0")
+  await app.press("%", { shift: true })
+  expect(app.textarea().cursorOffset).toBe(6)
+  await app.press("0")
+  await app.press("f")
+  await app.press("-")
+  expect(app.textarea().cursorOffset).toBe(2)
+  await app.press(";")
+  expect(app.textarea().cursorOffset).toBe(4)
+})
+
+test("what was typed is repeated by . and a submit restarts the record; the last change is never written to disk", async () => {
+  const prompts: string[] = []
+  await using app = await mount({
+    fetch: async (url, request) => {
+      if (url.pathname === `/api/session/${sessionID}/prompt`) {
+        prompts.push(((await request.json()) as { text?: string }).text ?? "")
+        return json({ data: { id: "msg_x" } })
+      }
+      return server(url, request)
+    },
+  })
+  await app.type("quokkasent")
+  app.setup.mockInput.pressEnter()
+  await Bun.sleep(300)
+  await app.setup.renderOnce()
+  expect(prompts).toEqual(["quokkasent"])
+  await app.type("x")
+  await app.normal()
+  expect(app.textarea().plainText).toBe("x")
+  await app.press(".")
+  expect(app.textarea().plainText).toBe("xx")
+  const files = await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: app.state, onlyFiles: true, dot: true }))
+  const holders = await Promise.all(
+    files.map(async (file) => ((await Bun.file(`${app.state}/${file}`).text()).includes("quokka") ? file : undefined)),
+  )
+  expect(holders.filter((file) => file !== undefined && !file.includes("history"))).toEqual([])
+}, 20_000)

@@ -223,7 +223,16 @@ console.log("n=" + n + " " + JSON.stringify({
     data: { sessionID: session.id },
   } as never)
   await line((row) => row.includes('"status":"running"'))
-}, 40_000)
+  await settle()
+
+  // Visual mode reports `visual`, its linewise form `visual_line`, and each switch asks for a new run.
+  setup.mockInput.pressEscape()
+  await line((row) => row.includes('"vim":"normal"'))
+  setup.mockInput.pressKey("v")
+  await line((row) => row.includes('"vim":"visual"'))
+  setup.mockInput.pressKey("V", { shift: true })
+  await line((row) => row.includes('"vim":"visual_line"'))
+}, 60_000)
 
 // With no model list the location is the only thing the line waits for, so only the watch on it can bring the project
 // directory in: the interval is a minute and no event arrives.

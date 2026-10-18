@@ -1591,6 +1591,37 @@ end of a line, `cw` on the last letter of a word, and `a` at the end of a line.
 
 **What to do:** Nothing.
 
+### Vim keys in the prompt: visual mode, `.`, finds and `%`
+
+With `prompt.vim` on, normal mode gains four things.
+
+- **Visual mode.** `v` starts a characterwise selection and `V` a linewise one; the same letter leaves, the other letter
+  switches. Move the head with the normal motions, the finds, `%`, the arrow keys (also with Shift) and Backspace; `o`
+  swaps the ends. `d`, `c` and `y` act on the selection, and `>` and `<` shift every line it touches (a count before
+  them is the number of levels). `"+` before an operator uses the system clipboard. Escape leaves and is not passed on,
+  so it does not interrupt a running session; the next Escape does. Enter submits and ends the selection. Other keys
+  (`p x s r ~ J u i a`, text objects, `gv`, Ctrl+V) do nothing in visual mode yet. The row under the prompt shows
+  `-- VISUAL --` or `-- VISUAL LINE --`. The selection is drawn with the editor's own selection colour.
+- **Finds.** `f`, `F`, `t` and `T` take the next key as the character to look for (a digit, a space and an emoji
+  included), with a count for the Nth one; `;` repeats the last find and `,` runs it the other way. `df-`, `ct,` and `yF.`
+  work as operators. Parts such as file mentions never match and are never split.
+- **`%`** jumps to the partner of the first `( ) [ ] { }` from the cursor to the end of its line, and `d%`, `c%` and
+  `y%` act on the span. A count before `%` does nothing.
+- **`.`** repeats the last change: an operator with a motion, object or find, `dd`, `x`, `r`, `~`, `>>`, `J`, `o`, a
+  visual operator, or the text you typed in insert mode. It is kept in memory only. `2dd` then `.` deletes two more lines.
+
+In these places Orbit follows the behaviour of the editor it mirrors and not Vim: text typed after `cw` or `o` replaces
+that command for `.` (so `.` inserts the text and does not change a word), a yank is repeated too, a count typed before
+`.` is dropped, `;` after a `t` whose target is next to the cursor stays put, `dF-` and `dT-` include the character under
+the cursor, and finds cross line breaks. The record of typed text starts again when a prompt is sent or its text is
+replaced, so `.` never re-types a sent prompt.
+
+The status line command's `vim_mode` is now also `visual` and `visual_line`.
+
+**Affects:** people who set `prompt.vim` to `true`, and status line commands that read `vim_mode`.
+
+**What to do:** Nothing. A status line script that expects only `insert` and `normal` should accept the two new values.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -2638,7 +2669,7 @@ from the reply (a fenced or bare JSON answer in prose is not an answer). Other c
   JSON, so pass a file there.
 - `ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES` (1 to 20) sets `attempts` for the prompts of a run; any other value is a usage error.
 - A failed run reports the new subtype `error_max_structured_output_retries` for the attempt limit, and `reason:
-  "invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
+"invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
   attempts and its own result line.
 - An older server refuses a request that carries `turn.output`, and a server that drops it fails the run; neither falls
   back to parsing text.

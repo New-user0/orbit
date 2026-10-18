@@ -5,13 +5,17 @@ import { useTheme } from "../../context/theme"
 import { Locale } from "../../util/locale"
 import { stringWidth } from "../../util/string-width"
 
-// Vim's own wording for its insert-mode indicator. Normal mode shows nothing: the block cursor is its cue.
+// Vim's own wording for its mode indicators. Normal mode shows nothing: the block cursor is its cue.
 export const VIM_INSERT_LABEL = "-- INSERT --"
+export const VIM_VISUAL_LABEL = "-- VISUAL --"
+export const VIM_VISUAL_LINE_LABEL = "-- VISUAL LINE --"
+
+const VIM_LABELS = { insert: VIM_INSERT_LABEL, visual: VIM_VISUAL_LABEL, visual_line: VIM_VISUAL_LINE_LABEL }
 
 export function PromptMetadataRow(props: {
   mode: "normal" | "shell"
-  /** Show the insert-mode label first in the row. */
-  vimInsert?: boolean
+  /** Show this vim mode's label first in the row. */
+  vimMode?: "insert" | "visual" | "visual_line"
   agent?: string
   auto: boolean
   model: string
@@ -33,7 +37,7 @@ export function PromptMetadataRow(props: {
         0,
         dimensions().width -
           (dimensions().width < 44 ? 9 : 13) -
-          (props.vimInsert ? stringWidth(VIM_INSERT_LABEL) + 1 : 0),
+          (props.vimMode ? stringWidth(VIM_LABELS[props.vimMode]) + 1 : 0),
       ),
       terminalWidth: dimensions().width,
       agent: props.agent ?? "",
@@ -46,9 +50,9 @@ export function PromptMetadataRow(props: {
 
   return (
     <box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} minWidth={0}>
-      <Show when={props.vimInsert && props.mode !== "shell"}>
+      <Show when={props.vimMode && props.mode !== "shell"}>
         <text flexShrink={0} fg={theme.text.muted}>
-          {VIM_INSERT_LABEL}
+          {props.vimMode ? VIM_LABELS[props.vimMode] : ""}
         </text>
       </Show>
       <Show
