@@ -2836,6 +2836,18 @@ A nested instruction file that is a link leading out of the project is no longer
 
 **What to do:** Nothing. Copy a linked instruction file into the project if you want it loaded.
 
+### Rule folders: `.orbit/rules`, and rules that wait for a matching read
+
+A folder named `rules` now holds instruction files too. Orbit reads `<folder>/.orbit/rules` in every folder of the instruction walk, `rules` in your own config folder, and `rules` in the managed folder beside the managed `ORBIT.md`. With compatibility on, the `rules` folder inside another product's dot-directory is read as well, before Orbit's own, so Orbit's rules take precedence. Every file whose name ends in `.md` (lower case) is a rule, in subfolders too, loaded by name order.
+
+A rule with no `paths` in its front matter is an ordinary instruction file: it joins the first request right after the instruction file of its folder (the managed rules after the managed file, your own after your global file) and before that folder's local file. A rule with `paths` (a YAML list, or a comma-separated string, with `{a,b}` groups expanded) is not in the first request. It is added to the conversation, once, the first time the model reads a file that matches. The patterns follow the rules of a `.gitignore`, from the folder that holds the `.orbit` folder (your own and the managed rules: from the folder the session started in), on the real path of the file: `*.ts` matches at any depth, `src/api/**` and `/src/*.ts` are anchored, case is ignored, `*.md` matches `.notes.md`, and `!` takes a match back. Only a read triggers a rule, not an edit, a folder listing or a PDF. A rule is added again after compaction drops it. A `paths` that cannot be read as YAML makes the rule apply from the start, and a front matter whose first line names a language (`---js`) is text, not front matter.
+
+An unconditional rule counts toward the 40,000-character size warning; a rule that waits does not. `instructions_exclude` applies to your own and the project's rules, never to the managed ones. A rule in a project that is not trusted must be inside the project: a rule that is a link out of it, or a `rules` folder that is a link out of it, is skipped and logged once.
+
+**Affects:** people who keep a `rules` folder in `.orbit`, in their config folder or, with compatibility on, in another product's dot-directory, and administrators who deploy policy.
+
+**What to do:** Nothing. Move text you want only for some files into a rule with `paths`.
+
 ### A reply language setting and the `ultrathink` keyword
 
 The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. The key is allowed in a project's config, because it is only text in the prompt.

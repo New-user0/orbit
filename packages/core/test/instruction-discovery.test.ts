@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer, Logger, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Logger, References, Stream } from "effect"
 import fs from "fs/promises"
 import path from "path"
 import { CompatNames } from "@orbit/compat/names"
@@ -2985,4 +2985,517 @@ describe("InstructionDiscovery.section", () => {
       }).pipe(scoped(where))
     }),
   )
+})
+
+// A folder named `rules` in a config folder, or in a folder of the walk, holds rule files. One with no `paths` in its front
+// matter is read like an instruction file, in the slot of its folder. One with `paths` waits for a read of a matching file.
+describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
+  const managedOf = (where: Folders) => path.join(path.dirname(where.home), "managed")
+  const rulesOf = (folder: string) => path.join(folder, ".orbit", "rules")
+  const baseline = Effect.fnUntraced(function* () {
+    const discovery = yield* start()
+    return { discovery, text: (yield* readBody(yield* discovery.load())).text }
+  })
+  // The paths of the blocks of a baseline, in order, without the label a block may carry.
+  const heads = (text: string) =>
+    text
+      .split("\n\n")
+      .map((block) => block.split("\n")[0]!.replace(/^Instructions from: /, "").replace(/ \(.*\)$/, ""))
+  const names = (rules: readonly InstructionDiscovery.ConditionalRule[]) => rules.map((rule) => path.basename(rule.path))
+  const listing = (patterns: string) => `---\npaths: ${patterns}\n---\nRule text.`
+  const rule = (path: string, content: string) =>
+    new InstructionDiscovery.File({ path: AbsolutePath.make(path), content, kind: "rule" })
+  const vendorRoot = (folder: string, scope: "project" | "user") => ({
+    path: AbsolutePath.make(path.join(folder, CompatNames.vendor.directory)),
+    kind: "vendor" as const,
+    scope,
+  })
+
+  it.live("renders a rule in the slot of its folder, between the shared file and the local one, and labels it", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.rootFile, "project")
+      yield* write(path.join(rulesOf(where.repo), "style.md"), "Use tabs.")
+      yield* write(path.join(where.repo, "ORBIT.local.md"), "private")
+      yield* write(where.packageFile, "package")
+      yield* write(path.join(rulesOf(where.directory), "deep.md"), "Package rule.")
+      yield* Effect.gen(function* () {
+        const { text } = yield* baseline()
+        expect(heads(text)).toEqual([
+          where.rootFile,
+          path.join(rulesOf(where.repo), "style.md"),
+          path.join(where.repo, "ORBIT.local.md"),
+          where.packageFile,
+          path.join(rulesOf(where.directory), "deep.md"),
+        ])
+        expect(text).toContain(
+          `Instructions from: ${path.join(rulesOf(where.repo), "style.md")} (a rule file from a rules folder)\nUse tabs.`,
+        )
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("renders the administrator's rules after the administrator's file and the person's after the person's", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const managed = managedOf(where)
+      yield* write(path.join(managed, "ORBIT.md"), "policy")
+      yield* write(path.join(managed, "rules", "y.md"), "managed rule")
+      yield* write(where.globalFile, "global")
+      yield* write(path.join(where.global, "rules", "x.md"), "user rule")
+      yield* write(where.rootFile, "project")
+      yield* Effect.gen(function* () {
+        const { text } = yield* baseline()
+        expect(heads(text)).toEqual([
+          path.join(managed, "ORBIT.md"),
+          path.join(managed, "rules", "y.md"),
+          where.globalFile,
+          path.join(where.global, "rules", "x.md"),
+          where.rootFile,
+        ])
+      }).pipe(Effect.provide(layerFor(where, { managed })))
+    }),
+  )
+
+  it.live("loads rules in subfolders, sorted by name, and skips other names, ending a loop of links", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const dir = rulesOf(where.repo)
+      const contents: Record<string, string> = {
+        ".hidden.md": "hidden",
+        "a.md": "a",
+        [path.join("b", "x.md")]: "b x",
+        "c.md": "c",
+        [path.join("d", "e", "deep.md")]: "deep",
+      }
+      for (const [name, text] of Object.entries(contents)) yield* write(path.join(dir, name), text)
+      yield* write(path.join(dir, "notes.txt"), "text")
+      yield* write(path.join(dir, "upper.MD"), "upper")
+      yield* Effect.promise(() => fs.symlink(dir, path.join(dir, "d", "loop"), "junction"))
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        expect(yield* discovery.list()).toEqual(
+          Object.entries(contents).map(([name, text]) => rule(path.join(dir, name), text)),
+        )
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  // The shapes of `paths`, as a person writes them in YAML. `undefined` is a rule that applies from the start.
+  const shapes: ReadonlyArray<readonly [string, string, readonly string[] | undefined]> = [
+    ["a list", "\n  - src/**/*.ts\n  - lib/*.js", ["src/**/*.ts", "lib/*.js"]],
+    ["a comma string", '"src/*.ts, lib/*.js"', ["src/*.ts", "lib/*.js"]],
+    ["braces", '"src/*.{ts,tsx}"', ["src/*.ts", "src/*.tsx"]],
+    ["two brace groups", '"{a,b}/{c,d}"', ["a/c", "a/d", "b/c", "b/d"]],
+    ["a comma inside braces", '"{a,b}, c"', ["a", "b", "c"]],
+    ["an unquoted value that starts with an asterisk", "**/*.ts", ["**/*.ts"]],
+    ["a trailing double asterisk", '"src/**"', ["src"]],
+    ["only a double asterisk, in a list", '\n  - "**"', undefined],
+    ["only a trailing double asterisk after a slash", '"/**"', undefined],
+    ["an empty list", "[]", undefined],
+    ["no value", "", undefined],
+    ["a number", "3", undefined],
+    ["a mapping, which is what braces without a quote read as", "{a,b}", undefined],
+    ["a list with an item that is not text", "\n  - 3\n  - src/*.ts", ["src/*.ts"]],
+    ["an unquoted list item that starts with an asterisk, which does not read", "\n  - **/*.ts", undefined],
+  ]
+  for (const [name, written, patterns] of shapes)
+    it.live(`reads paths given as ${name}`, () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const file = path.join(rulesOf(where.repo), "shape.md")
+        yield* write(file, listing(written))
+        yield* Effect.gen(function* () {
+          const { discovery, text } = yield* baseline()
+          const waiting = yield* discovery.conditionalRules()
+          if (patterns === undefined) {
+            expect(waiting).toEqual([])
+            expect(heads(text)).toEqual([file])
+            return
+          }
+          expect(waiting.map((item) => item.patterns)).toEqual([patterns])
+          expect(yield* discovery.list()).toEqual([])
+        }).pipe(Effect.provide(layerFor(where)))
+      }),
+    )
+
+  it.live("keeps a rule with patterns out of the baseline and lists it, with its folder as the base and the project as its scope", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const file = path.join(rulesOf(where.repo), "api.md")
+      yield* write(file, "---\npaths:\n  - src/api/**\n---\nAPI rule.")
+      yield* write(where.rootFile, "project")
+      yield* Effect.gen(function* () {
+        const { discovery, text } = yield* baseline()
+        expect(heads(text)).toEqual([where.rootFile])
+        expect(yield* discovery.conditionalRules()).toEqual([
+          new InstructionDiscovery.ConditionalRule({
+            path: AbsolutePath.make(file),
+            patterns: ["src/api"],
+            base: AbsolutePath.make(where.repo),
+            scope: "project",
+          }),
+        ])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("matches the rules of the person and the administrator from the folder the session started in", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const managed = managedOf(where)
+      yield* write(path.join(managed, "rules", "m.md"), listing("src/**"))
+      yield* write(path.join(where.global, "rules", "u.md"), listing("src/**"))
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        const waiting = yield* discovery.conditionalRules()
+        expect(waiting.map((item) => [path.basename(item.path), item.scope, item.base])).toEqual([
+          ["m.md", "managed", where.directory],
+          ["u.md", "user", where.directory],
+        ])
+      }).pipe(Effect.provide(layerFor(where, { managed })))
+    }),
+  )
+
+  it.live("reads a rule whose front matter does not parse as one that applies from the start, strips it and logs it once", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const file = path.join(rulesOf(where.repo), "bad.md")
+      // A quote that is never closed fails the read and the retry, which leaves a value that starts with a quote as it is.
+      yield* write(file, '---\npaths: "src/**\n---\nStill a rule.')
+      const lines: unknown[] = []
+      const logger = Logger.layer([
+        Logger.map(Logger.formatStructured, (entry) => {
+          if (Array.isArray(entry.message) && String(entry.message[0]).startsWith("rule front matter")) lines.push(entry)
+        }),
+      ])
+      yield* Effect.gen(function* () {
+        const { discovery, text } = yield* baseline()
+        expect(yield* discovery.conditionalRules()).toEqual([])
+        expect(text).toBe(`Instructions from: ${file} (a rule file from a rules folder)\nStill a rule.`)
+      }).pipe(
+        Effect.provide(layerFor(where)),
+        Effect.provide(logger),
+        Effect.provideService(References.MinimumLogLevel, "Debug"),
+      )
+      expect(lines).toHaveLength(1)
+      expect(JSON.stringify(lines[0])).toContain(JSON.stringify(file).slice(1, -1))
+    }),
+  )
+
+  // Front matter is found from its delimiter lines and read only as YAML, so a language named after the dashes is text.
+  for (const language of ["js", "javascript", " js", "JS", "JavaScript", "coffee"])
+    it.live(`reads a rule whose front matter opens with ---${language} as text, and runs nothing`, () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const marker = path.join(where.home, "ran")
+        const file = path.join(rulesOf(where.repo), "script.md")
+        const text = scriptedMarkdown(marker, language)
+        yield* write(file, text)
+        yield* Effect.gen(function* () {
+          const { discovery } = yield* baseline()
+          expect(yield* discovery.list()).toEqual([rule(file, text)])
+          expect(yield* discovery.conditionalRules()).toEqual([])
+          expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        }).pipe(Effect.provide(layerFor(where)))
+      }),
+    )
+
+  // A YAML tag that names code is refused by the parser, and the retry reads the value as text. Either way nothing runs.
+  for (const key of ["paths", "other"])
+    it.live(`runs nothing for a script tag in the ${key} key of a rule`, () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const marker = path.join(where.home, "ran")
+        const file = path.join(rulesOf(where.repo), "tag.md")
+        const script = `!!js/function "function () { require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran') }"`
+        yield* write(file, `---\n${key === "paths" ? "paths" : "paths: src/**\nother"}: ${script}\n---\nTagged.`)
+        yield* Effect.gen(function* () {
+          const { discovery } = yield* baseline()
+          // The rule is in exactly one place: the baseline, or the list of the rules that wait.
+          const listed = placesOf(yield* discovery.list())
+          expect((Array.isArray(listed) ? listed.length : 0) + (yield* discovery.conditionalRules()).length).toBe(1)
+          expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        }).pipe(Effect.provide(layerFor(where)))
+      }),
+    )
+
+  it.live("starts an update for an edited rule and a new one, and for one that changes between unconditional and conditional", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const dir = rulesOf(where.repo)
+      const file = path.join(dir, "a.md")
+      yield* write(file, "first")
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        const initial = yield* readBody(yield* discovery.load())
+        yield* Effect.promise(() => fs.writeFile(file, "second"))
+        yield* emitAndWait({ type: "update", path: file })
+        const edited = yield* readUpdate(yield* discovery.load(), initial)
+        expect(edited.text).toContain("second")
+        expect(edited.text).not.toContain("first")
+        const added = path.join(dir, "b.md")
+        yield* write(added, "new rule")
+        yield* emitAndWait({ type: "update", path: added })
+        const grown = yield* readUpdate(yield* discovery.load(), edited)
+        expect(grown.text).toBe(`New instructions apply from:\nInstructions from: ${added} (a rule file from a rules folder)\nnew rule`)
+        yield* write(added, listing("src/**"))
+        yield* emitAndWait({ type: "update", path: added })
+        const narrowed = yield* readUpdate(yield* discovery.load(), grown)
+        expect(narrowed.text).toBe(`The instructions from ${added} no longer apply.`)
+        expect(names(yield* discovery.conditionalRules())).toEqual(["b.md"])
+        yield* write(added, "---\npaths: lib/**\n---\nNew text of a rule that waits.")
+        yield* emitAndWait({ type: "update", path: added })
+        // A rule that waits is no part of the value, so editing it changes no hash and starts no update.
+        expect((yield* readUpdate(yield* discovery.load(), narrowed)).changed).toBe(false)
+        yield* write(added, "unconditional again")
+        yield* emitAndWait({ type: "update", path: added })
+        expect((yield* readUpdate(yield* discovery.load(), narrowed)).text).toContain("unconditional again")
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("sees a rule under a rules folder that did not exist when the session started, through the config's own feed", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const added = path.join(rulesOf(where.repo), "late.md")
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        expect(yield* discovery.list()).toEqual([])
+        yield* write(added, "late rule")
+        const config = yield* Config.Service
+        yield* rescanAfter(config.notify([added]))
+        expect(placesOf(yield* discovery.list())).toEqual([added])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("loads another product's rules and local file only while compatibility is on, its rules before Orbit's own", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const vendor = path.join(where.repo, CompatNames.vendor.directory)
+      const userVendor = path.join(where.home, CompatNames.vendor.directory)
+      yield* write(path.join(vendor, "rules", "v.md"), "vendor rule")
+      yield* write(path.join(rulesOf(where.repo), "o.md"), "orbit rule")
+      yield* write(path.join(userVendor, "rules", "uv.md"), "vendor user rule")
+      yield* write(path.join(where.global, "rules", "uo.md"), "orbit user rule")
+      yield* write(path.join(where.repo, CompatNames.vendor.localInstructions), "vendor local")
+      const roots = [vendorRoot(where.repo, "project"), vendorRoot(where.home, "user")]
+      const on = yield* baseline().pipe(
+        Effect.provide(layerFor(where, { configLayer: Config.testLayer([], { enabled: true, roots }) })),
+      )
+      expect(heads(on.text)).toEqual([
+        path.join(userVendor, "rules", "uv.md"),
+        path.join(where.global, "rules", "uo.md"),
+        path.join(vendor, "rules", "v.md"),
+        path.join(rulesOf(where.repo), "o.md"),
+        path.join(where.repo, CompatNames.vendor.localInstructions),
+      ])
+      const off = yield* baseline().pipe(
+        Effect.provide(layerFor(where, { configLayer: Config.testLayer([], { enabled: false, roots: [] }) })),
+      )
+      expect(heads(off.text)).toEqual([path.join(where.global, "rules", "uo.md"), path.join(rulesOf(where.repo), "o.md")])
+    }),
+  )
+
+  it.live("keeps a rule that an instruction file imported where it was first handled", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const dir = rulesOf(where.repo)
+      const waiting = path.join(dir, "waiting.md")
+      yield* write(waiting, listing("src/**"))
+      yield* write(path.join(dir, "one.md"), "shared text")
+      yield* write(where.rootFile, `project @${slashed(waiting)}`)
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        // The project file handled the rule first, as an ordinary import, so it is in the baseline there and the pass over
+        // the rules folder does not list it as one that waits.
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, waiting, path.join(dir, "one.md")])
+        expect(yield* discovery.conditionalRules()).toEqual([])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("classifies an import of a rule by its own front matter", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const dir = rulesOf(where.repo)
+      yield* write(path.join(dir, "gate.md"), `---\npaths: src/**\n---\nWaits. @./plain.md`)
+      yield* write(path.join(dir, "plain.md"), "Plain, imported by a rule that waits.")
+      yield* write(path.join(dir, "root.md"), "An unconditional rule. @./scoped.md")
+      yield* write(path.join(dir, "scoped.md"), `---\npaths: lib/**\n---\nImported, and waiting.`)
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        expect(placesOf(yield* discovery.list())).toEqual([path.join(dir, "plain.md"), path.join(dir, "root.md")])
+        const waiting = yield* discovery.conditionalRules()
+        expect(waiting.map((item) => [path.basename(item.path), item.base])).toEqual([
+          ["gate.md", where.repo],
+          ["scoped.md", where.repo],
+        ])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("flags an unconditional rule over 40,000 characters, and a rule that waits is never flagged", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const dir = rulesOf(where.repo)
+      yield* write(path.join(dir, "big.md"), "x".repeat(40_001))
+      yield* write(path.join(dir, "waits.md"), `---\npaths: src/**\n---\n${"y".repeat(40_001)}`)
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        expect((yield* discovery.warnings()).map((warning) => path.basename(warning.path))).toEqual(["big.md"])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("excludes the rules of the person and the project with instructions_exclude, and never the administrator's", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const managed = managedOf(where)
+      const user = path.join(where.global, "rules", "u.md")
+      const project = path.join(rulesOf(where.repo), "p.md")
+      const policy = path.join(managed, "rules", "m.md")
+      yield* write(user, "user")
+      yield* write(project, "project")
+      yield* write(policy, "policy")
+      yield* Effect.gen(function* () {
+        const { discovery } = yield* baseline()
+        expect(placesOf(yield* discovery.list())).toEqual([policy])
+      }).pipe(
+        Effect.provide(
+          layerFor(where, {
+            managed,
+            configLayer: Config.testLayer([excluding([slashed(user), "**/p.md", slashed(policy)])]),
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("loads the project's rules with the project switch on and the person's with the global switch on, and each alone", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const user = path.join(where.global, "rules", "u.md")
+      const project = path.join(rulesOf(where.repo), "p.md")
+      yield* write(user, "user")
+      yield* write(project, "project")
+      const places = (flags: { project?: boolean; global?: boolean }) =>
+        Effect.gen(function* () {
+          return placesOf(yield* (yield* start()).list())
+        }).pipe(Effect.provide(layerFor(where, flags)))
+      expect(yield* places({})).toEqual([user, project])
+      expect(yield* places({ project: false })).toEqual([user])
+      expect(yield* places({ global: false })).toEqual([project])
+    }),
+  )
+
+  it.live("skips the rules of the main checkout above a worktree inside it", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const main = path.join(where.home, "code", "main")
+      const worktree = path.join(main, "wt")
+      yield* write(path.join(rulesOf(main), "main.md"), "main rule")
+      yield* write(path.join(main, "ORBIT.local.md"), "main local")
+      yield* write(path.join(rulesOf(worktree), "wt.md"), "worktree rule")
+      const checkout = (canonical: string) =>
+        Layer.succeed(
+          Location.Service,
+          Location.Service.of({
+            ...location({ directory: AbsolutePath.make(worktree) }, { projectDirectory: AbsolutePath.make(worktree) }),
+            project: {
+              id: Project.ID.global,
+              directory: AbsolutePath.make(worktree),
+              canonical: AbsolutePath.make(canonical),
+            },
+          }),
+        )
+      const run = (canonical: string) =>
+        baseline().pipe(
+          Effect.provide(instructionLayer({ config: where.global, home: where.home, locationServiceLayer: checkout(canonical) })),
+        )
+      expect(heads((yield* run(main)).text)).toEqual([path.join(main, "ORBIT.local.md"), path.join(rulesOf(worktree), "wt.md")])
+      // The control: a plain clone loads the rules of the folder above it too.
+      expect(heads((yield* run(worktree)).text)).toEqual([
+        path.join(rulesOf(main), "main.md"),
+        path.join(main, "ORBIT.local.md"),
+        path.join(rulesOf(worktree), "wt.md"),
+      ])
+    }),
+  )
+
+  it.live("watches a rules folder that is there", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(path.join(rulesOf(where.repo), "a.md"), "a")
+      yield* Effect.gen(function* () {
+        yield* baseline()
+        const watcher = yield* Watcher.Test
+        const watched = (yield* watcher.subscriptions()).filter((item) => item.type === "directory").map((item) => item.path)
+        expect(watched).toEqual([rulesOf(where.repo)])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  // A repository chooses every link in its rules folder. Until the folder is trusted, a rule is what is inside the project.
+  describe("in a project that is not trusted", () => {
+    const outside = (where: Folders) => path.join(path.dirname(where.home), "secret-rules")
+    const modes = [
+      { name: "a rule file that is a link to a file outside the project", file: true },
+      { name: "a rules folder that is a link to a folder outside the project", file: false },
+    ] as const
+    for (const mode of modes)
+      (mode.file && !canLinkFile ? it.live.skip : it.live)(`skips ${mode.name}, and loads it once the project is trusted`, () =>
+        Effect.gen(function* () {
+          const where = yield* folders
+          const secret = path.join(outside(where), "secret.md")
+          yield* write(secret, "SECRET MARKER")
+          if (mode.file) {
+            yield* write(path.join(rulesOf(where.repo), "kept.md"), "kept")
+            yield* Effect.promise(() => fs.symlink(secret, path.join(rulesOf(where.repo), "link.md")))
+          } else {
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.dirname(rulesOf(where.repo)), { recursive: true })
+              await fs.symlink(outside(where), rulesOf(where.repo), "junction")
+            })
+          }
+          const run = (trusted: boolean) =>
+            Effect.gen(function* () {
+              return (yield* baseline()).text
+            }).pipe(Effect.provide(layerFor(where, { trusted })))
+          const closed = yield* run(false)
+          expect(closed).not.toContain("SECRET MARKER")
+          expect(yield* run(true)).toContain("SECRET MARKER")
+          if (mode.file) expect(closed).toContain("kept")
+        }),
+      )
+
+    ;(canLinkFile ? it.live : it.live.skip)("skips a link out of the project in a subfolder of the rules, and a dangling link, alone", () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const dir = rulesOf(where.repo)
+        yield* write(path.join(outside(where), "secret.md"), "SECRET MARKER")
+        yield* write(path.join(dir, "kept.md"), "kept")
+        yield* Effect.promise(() => fs.symlink(outside(where), path.join(dir, "sub"), "junction"))
+        yield* Effect.promise(() => fs.symlink(path.join(dir, "gone.md"), path.join(dir, "dangling.md")))
+        yield* Effect.gen(function* () {
+          const { text } = yield* baseline()
+          expect(heads(text)).toEqual([path.join(dir, "kept.md")])
+        }).pipe(Effect.provide(layerFor(where, { trusted: false })))
+      }),
+    )
+
+    it.live("still loads the person's rules and the administrator's", () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const managed = managedOf(where)
+        yield* write(path.join(managed, "rules", "m.md"), "policy")
+        yield* write(path.join(where.global, "rules", "u.md"), "user")
+        yield* Effect.gen(function* () {
+          const { text } = yield* baseline()
+          expect(heads(text)).toEqual([path.join(managed, "rules", "m.md"), path.join(where.global, "rules", "u.md")])
+        }).pipe(Effect.provide(layerFor(where, { trusted: false, managed })))
+      }),
+    )
+  })
 })

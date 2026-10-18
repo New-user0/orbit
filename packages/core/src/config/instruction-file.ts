@@ -6,7 +6,8 @@ import { Glob } from "@orbit/util/glob"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
 import { Effect } from "effect"
-import { basename, dirname, extname, posix, win32 } from "path"
+import ignore from "ignore"
+import { basename, dirname, extname, posix, relative, win32 } from "path"
 import { ConfigMarkdown } from "./markdown.js"
 
 /** The most characters an instruction file may hold before it is flagged. A flagged file is still sent whole. */
@@ -840,7 +841,13 @@ const TEXT = new Set(
 )
 
 /** A file that an instruction file imported, or the file itself when `importedBy` is not set. `path` is the real path. */
-export type Loaded = { readonly path: string; readonly content: string; readonly importedBy?: string }
+export type Loaded = {
+  readonly path: string
+  readonly content: string
+  readonly importedBy?: string
+  /** Set only for a file loaded as a rule (`rules`) whose own front matter has patterns: it waits for a matching read. */
+  readonly patterns?: readonly string[]
+}
 
 /**
  * An import that a project file made and that was left out because it leads outside the project and the folder that holds
@@ -872,6 +879,10 @@ type LoadInput = {
   /** Asked before an import is read, to leave out one that something else already has. */
   readonly claim?: (real: string) => Effect.Effect<boolean>
   readonly platform?: NodeJS.Platform
+  /** The file is a rule: every file loaded carries the patterns of its own front matter (`rulePatterns`). */
+  readonly rules?: boolean
+  /** False loads the file alone, without following its imports. */
+  readonly imports?: boolean
 }
 
 /**
@@ -962,11 +973,17 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
         yield* Effect.logDebug("instruction file left out", { path: real, reason: "nothing left once processed" })
         return true
       }
-      files.push(
-        importer === undefined
-          ? { path: real, content: processed.content }
-          : { path: real, content: processed.content, importedBy: importer },
-      )
+      // A rule file is classified by its own front matter, an imported file by its own too and not by its importer's.
+      const rule = input.rules ? rulePatterns(ConfigMarkdown.split(text).frontmatter) : undefined
+      if (rule?.malformed)
+        yield* Effect.logDebug("rule front matter not read, so the rule applies from the start", { path: real })
+      files.push({
+        path: real,
+        content: processed.content,
+        ...(importer === undefined ? {} : { importedBy: importer }),
+        ...(rule?.patterns === undefined ? {} : { patterns: rule.patterns }),
+      })
+      if (input.imports === false) return true
       for (const token of imports(processed.content)) {
         const target = resolveToken(token, dirname(real), input.home, platform)
         if (target !== undefined) yield* handle(target, real, depth + 1)
@@ -991,4 +1008,121 @@ function resolveToken(token: string, folder: string, home: string, platform: Nod
   if (/^[\\/]{2}/.test(spelled)) return undefined
   const flavor = platform === "win32" ? win32 : posix
   return (spelled.startsWith("~/") ? flavor.join(home, spelled.slice(2)) : flavor.resolve(folder, spelled)).normalize("NFC")
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Rule files
+//
+// A file in a `rules` folder may name, in a `paths` key of its front matter, the files it is about. Without the key it is
+// read like any instruction file, at the start of the session. With it, it waits for the model to read a file that
+// matches. The key only chooses when text the folder already supplies is shown: a pattern never names a file to read.
+
+/** The most patterns one rule keeps, after its braces are expanded. A file cannot make Orbit build a longer list. */
+export const RULE_PATTERNS = 256
+
+/** The longest pattern a rule keeps, in characters. A longer one is dropped. */
+const RULE_PATTERN_LENGTH = 1024
+
+/** Whether a name in a rules folder is a rule file. The test is on the name as it is written, in lower case on every platform. */
+export function isRuleName(name: string) {
+  return name.endsWith(".md")
+}
+
+/**
+ * The patterns of the `paths` key in the front matter block that `ConfigMarkdown.split` found, or `undefined` when the
+ * rule has none and so applies from the start: no front matter, no key, a key that is not a string or a list of strings,
+ * nothing left once the patterns are cleaned up, or only patterns that match everything. Braces are expanded
+ * (`src/*.{ts,tsx}` is two patterns) because the matcher has none, and a trailing `/**` goes because a folder pattern already
+ * covers what is below it. The block is parsed by `ConfigMarkdown.parseOption` and nothing else, so no front matter language
+ * is evaluated. `malformed` is set when the block does not parse, which also makes the rule apply from the start: the text is
+ * the folder's own, and the only thing lost is the condition.
+ */
+export function rulePatterns(frontmatter: string | undefined): {
+  readonly patterns: readonly string[] | undefined
+  readonly malformed: boolean
+} {
+  if (frontmatter === undefined) return { patterns: undefined, malformed: false }
+  // The block is read with plain delimiters, whatever spaces followed the dashes on the file's own lines.
+  const lines = frontmatter.replaceAll("\r\n", "\n").split("\n")
+  const end = lines.findLastIndex((line) => /^---[ \t]*$/.test(line))
+  const parsed = ConfigMarkdown.parseOption(`---\n${lines.slice(1, end).join("\n")}\n---\n`, true)
+  if (parsed === undefined) return { patterns: undefined, malformed: true }
+  const value: unknown = parsed.data["paths"]
+  const strings =
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : []
+  const patterns = strings
+    .flatMap(splitCommas)
+    .flatMap((part) => expandBraces(part))
+    .map((pattern) => pattern.replace(/\/\*\*$/, "").trim())
+    .filter((pattern) => pattern !== "" && pattern.length <= RULE_PATTERN_LENGTH)
+    .slice(0, RULE_PATTERNS)
+  if (patterns.every((pattern) => pattern === "**")) return { patterns: undefined, malformed: false }
+  return { patterns, malformed: false }
+}
+
+// The parts of a string between the commas that are outside braces, trimmed, without the empty ones. A closing brace with
+// no opener takes the depth below zero, and then no later comma splits.
+function splitCommas(value: string) {
+  const parts: string[] = []
+  let depth = 0
+  let from = 0
+  for (let at = 0; at < value.length; at++) {
+    const char = value[at]
+    if (char === "{") depth++
+    else if (char === "}") depth--
+    else if (char === "," && depth === 0) {
+      parts.push(value.slice(from, at))
+      from = at + 1
+    }
+  }
+  parts.push(value.slice(from))
+  return parts.map((part) => part.trim()).filter((part) => part !== "")
+}
+
+// Every spelling of a pattern once its first brace group is replaced by each alternative, then the next, depth first. A
+// group with no closing brace is left as written. The list stops growing at `RULE_PATTERNS`.
+function expandBraces(pattern: string): string[] {
+  const open = pattern.indexOf("{")
+  if (open === -1) return [pattern]
+  let depth = 0
+  let close = -1
+  const commas: number[] = []
+  for (let at = open; at < pattern.length && close === -1; at++) {
+    const char = pattern[at]
+    if (char === "{") depth++
+    else if (char === "}") {
+      depth--
+      if (depth === 0) close = at
+    } else if (char === "," && depth === 1) commas.push(at)
+  }
+  if (close === -1) return [pattern]
+  const edges = [open, ...commas, close]
+  const alternatives = edges.slice(0, -1).map((edge, index) => pattern.slice(edge + 1, edges[index + 1]).trim())
+  const result: string[] = []
+  for (const alternative of alternatives) {
+    for (const spelling of expandBraces(pattern.slice(0, open) + alternative + pattern.slice(close + 1))) {
+      result.push(spelling)
+      if (result.length >= RULE_PATTERNS) return result
+    }
+  }
+  return result
+}
+
+/**
+ * Whether a rule applies to a file. Both paths are real, which is the one way `FSUtil.contains` may decide containment:
+ * a file outside the base, or the base itself, matches nothing. What is left is the path from the base, written with
+ * forward slashes, which the patterns meet under the rules of a `.gitignore`: a pattern with no slash matches a name at any
+ * depth, one with a slash is anchored to the base, a folder that matches covers what is below it, wildcards match names that
+ * start with a dot, `!` takes a match back unless a folder above it matched, and case is ignored.
+ */
+export function ruleMatches(patterns: readonly string[], base: string, target: string) {
+  const from = relative(base, target)
+  if (from === "" || !FSUtil.contains(base, target)) return false
+  return ignore()
+    .add([...patterns])
+    .ignores(from.replaceAll("\\", "/"))
 }

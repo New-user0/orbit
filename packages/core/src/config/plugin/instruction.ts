@@ -1,9 +1,11 @@
 export * as ConfigInstructionPlugin from "./instruction.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
+import { CompatInstructions } from "@orbit/compat/instructions"
 import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { LinkShare } from "@orbit/util/link-share"
 import { basename, dirname, join, relative } from "path"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Bus } from "../../bus.js"
@@ -16,6 +18,7 @@ import { ManagedSettings } from "../../managed-settings.js"
 import { ProjectTrust } from "../../project-trust.js"
 import { AbsolutePath } from "../../schema.js"
 import { ConfigInstructionFile } from "../instruction-file.js"
+import { ConfigInstructionRules } from "../instruction-rules.js"
 
 // What the files of a source add: the instruction files, and the warnings about them, which are not part of any file. The
 // imports say which of the files another one imported, and `read` the real path of every import that was read.
@@ -23,17 +26,19 @@ type Contribution = {
   readonly files: InstructionDiscovery.File[]
   readonly warnings: (InstructionDiscovery.Warning | InstructionDiscovery.ImportWarning)[]
   readonly imports: InstructionDiscovery.Import[]
+  readonly conditional: InstructionDiscovery.ConditionalRule[]
   readonly read: string[]
 }
 
 type Loaded = ({ readonly type: "available" } & Contribution) | { readonly type: "unavailable" }
 
-const nothing: Contribution = { files: [], warnings: [], imports: [], read: [] }
+const nothing: Contribution = { files: [], warnings: [], imports: [], conditional: [], read: [] }
 
 const merge = (contributions: readonly Contribution[]): Contribution => ({
   files: contributions.flatMap((item) => item.files),
   warnings: contributions.flatMap((item) => item.warnings),
   imports: contributions.flatMap((item) => item.imports),
+  conditional: contributions.flatMap((item) => item.conditional),
   read: contributions.flatMap((item) => item.read),
 })
 
@@ -77,11 +82,29 @@ export const Plugin = define({
       const watches = yield* FiberMap.make<string>()
       const watched = new Set<string>()
       const watchedImports = new Set<string>()
+      const watchedDirectories = new Set<string>()
+      // Where the rules folders of this pass are, as written and as they really are, even those that are not there yet, so
+      // that a change of config under one of them is told from one that has nothing to do with rules. And the places the
+      // pass reads them from, which each refresh sets again: the roots other products keep config in, and the person's
+      // config folders.
+      const ruleRoots = new Set<string>()
+      const places: { roots: readonly Config.CompatRoot[]; user: readonly string[] } = { roots: [], user: [] }
 
       const publish = (update: Watcher.Update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)
       const subscribe = Effect.fnUntraced(function* (path: string) {
         const updates = yield* watcher.subscribe({ path, type: "file" })
         yield* FiberMap.run(watches, path, updates.pipe(Stream.runForEach(publish)), {
+          onlyIfMissing: true,
+          startImmediately: true,
+        })
+      })
+      // A rules folder that is there and may be read is watched as a folder, once: a rule that is edited, added or removed
+      // under it, at any depth, starts a new pass.
+      const watchDirectory = Effect.fnUntraced(function* (path: string) {
+        if (watchedDirectories.has(path)) return
+        watchedDirectories.add(path)
+        const updates = yield* watcher.subscribe({ path, type: "directory" })
+        yield* FiberMap.run(watches, `directory:${path}`, updates.pipe(Stream.runForEach(publish)), {
           onlyIfMissing: true,
           startImmediately: true,
         })
@@ -140,7 +163,11 @@ export const Plugin = define({
         patterns: readonly string[],
         // What the file is, and so what every file it imports is: an import takes its importer's kind.
         kind?: InstructionDiscovery.Kind,
+        // Set for a rule file: where it comes from, and the folder its patterns are matched from. Each file it loads is then
+        // told apart by its own front matter, and the ones with patterns wait for a read instead of joining the baseline.
+        rule?: { readonly origin: "managed" | "user" | "project"; readonly base: string },
       ) {
+        const fromManaged = kind === "managed" || rule?.origin === "managed"
         const loaded = yield* ConfigInstructionFile.load({
           path,
           scope,
@@ -148,6 +175,7 @@ export const Plugin = define({
           patterns,
           home: global.home,
           fs,
+          rules: rule !== undefined,
           leads: trust.leads,
           // A project file imports what is inside the project, whatever the trust decision, and only what the trust
           // decision lets the project supply: both are asked of the real path, which is the file that is read. What is
@@ -156,7 +184,7 @@ export const Plugin = define({
           // The managed file is held by an administrator's folder, which says nothing about the project it is read for:
           // what it imports from outside the project waits for the project itself to be trusted.
           outward:
-            kind === "managed"
+            fromManaged
               ? () =>
                   trust.trusted().pipe(
                     Effect.map((open) => ({ open, directory: location.project.canonical })),
@@ -167,8 +195,13 @@ export const Plugin = define({
           yield* Effect.logDebug("instruction file skipped", { path, reason: "unavailable" })
           return undefined
         }
+        // A rule's imports are classified by their own front matter, so the file that waits for a read, and the ones that
+        // only it names, stay out of the baseline. A plain file that a waiting rule imports does not: it loads where its
+        // importer would have.
+        const immediate = loaded.files.filter((item) => item.patterns === undefined)
+        const listed = new Set(immediate.map((item) => item.path))
         return {
-          files: loaded.files.map(
+          files: immediate.map(
             (item) =>
               new InstructionDiscovery.File({
                 path: AbsolutePath.make(item.path),
@@ -176,8 +209,20 @@ export const Plugin = define({
                 ...(kind === undefined ? {} : { kind }),
               }),
           ),
+          conditional: loaded.files.flatMap((item) =>
+            rule === undefined || item.patterns === undefined
+              ? []
+              : [
+                  new InstructionDiscovery.ConditionalRule({
+                    path: AbsolutePath.make(item.path),
+                    patterns: item.patterns,
+                    base: AbsolutePath.make(rule.base),
+                    scope: rule.origin,
+                  }),
+                ],
+          ),
           warnings: [
-            ...loaded.files.flatMap((item) =>
+            ...immediate.flatMap((item) =>
               ConfigInstructionFile.oversized(item.content)
                 ? [
                     new InstructionDiscovery.Warning({
@@ -199,8 +244,8 @@ export const Plugin = define({
                 }),
             ),
           ],
-          imports: loaded.files.flatMap((item) =>
-            item.importedBy === undefined
+          imports: immediate.flatMap((item) =>
+            item.importedBy === undefined || !listed.has(item.importedBy)
               ? []
               : [
                   new InstructionDiscovery.Import({
@@ -226,8 +271,64 @@ export const Plugin = define({
           fs.resolve,
         )
         const existing = yield* Effect.filter(candidates, (candidate) => fs.isFile(candidate.real))
-        if (!existing[0]) return nothing
-        return (yield* read(existing[0].real, "user", visited, patterns)) ?? nothing
+        const file = existing[0] ? ((yield* read(existing[0].real, "user", visited, patterns)) ?? nothing) : nothing
+        // The person's own rules follow the person's file. Their patterns are matched from the folder the session started
+        // in. Another product's folder comes first, so that Orbit's own, which come later, take precedence.
+        const userRules = yield* rules({
+          origin: "user",
+          base: start,
+          directories: [
+            ...places.roots
+              .filter((root) => root.kind === "vendor" && root.scope === "user")
+              .map((root) => join(root.path, CompatInstructions.ruleFolder)),
+            ...places.user.map((directory) => join(directory, "rules")),
+          ],
+          allow: () => Effect.succeed(true),
+          patterns,
+          visited,
+        })
+        return available(userRules) ? merge([file, userRules]) : file
+      })
+
+      // The rule files of the folders `directories` names, in order. Each is told apart by its own front matter: a rule with
+      // no patterns joins the baseline where it is, and one with patterns waits for a matching read (`conditionalRules`).
+      // The folders are scanned in the order given and the files of each by name, so what is loaded does not depend on the
+      // file system. `allow` is asked of every real path before it is listed or read. A rule that cannot be read makes the
+      // source unavailable for the administrator's and the project's, as an instruction file there does, and costs only itself
+      // for the person's. Exclusion comes first, and never applies to the administrator's.
+      const rules = Effect.fn("ConfigInstructionPlugin.rules")(function* (input: {
+        readonly origin: "managed" | "user" | "project"
+        readonly base: string
+        readonly directories: readonly string[]
+        readonly allow: (real: string) => Effect.Effect<boolean>
+        readonly patterns: readonly string[]
+        readonly visited: Set<string>
+      }) {
+        const scanned = yield* Effect.forEach(input.directories, (directory) =>
+          Effect.gen(function* () {
+            ruleRoots.add(directory)
+            const found = yield* ConfigInstructionRules.scan({ directory, fs, leads: trust.leads, allow: input.allow })
+            // A folder that is there and may be read is watched, once, so that an edit or a new rule is seen.
+            const real = yield* trust.leads(directory)
+            if (!/^[\\/]{2}/.test(real) && !LinkShare.isUnresolved(real) && (yield* fs.isDir(real)) && (yield* input.allow(real))) {
+              ruleRoots.add(real)
+              yield* watchDirectory(real)
+            }
+            return found
+          }),
+        )
+        const wanted = scanned
+          .flat()
+          .filter((item) => input.origin === "managed" || !ConfigInstructionFile.excluded(input.patterns, [item.file, item.real]))
+        const results = yield* Effect.forEach(wanted, (item) =>
+          read(item.real, input.origin === "user" ? "user" : "project", input.visited, input.patterns, "rule", {
+            origin: input.origin,
+            base: input.base,
+          }),
+        )
+        const contributions = results.filter((item): item is Contribution => item !== undefined)
+        if (contributions.length < results.length && input.origin !== "user") return Instructions.unavailable
+        return merge(contributions)
       })
 
       // The administrator's file. It is read whatever the project's trust decision is and whichever scopes are on, because the
@@ -238,11 +339,25 @@ export const Plugin = define({
         file: string | undefined,
         visited: Set<string>,
       ) {
-        if (file === undefined || !(yield* fs.isFile(file))) return nothing
-        const loaded = yield* read(yield* fs.resolve(file), "project", visited, [], "managed")
-        if (loaded !== undefined) return loaded
-        yield* Effect.logWarning("managed instruction file could not be read", { path: file })
-        return Instructions.unavailable
+        const loaded =
+          file === undefined || !(yield* fs.isFile(file))
+            ? nothing
+            : yield* read(yield* fs.resolve(file), "project", visited, [], "managed")
+        if (loaded === undefined) {
+          yield* Effect.logWarning("managed instruction file could not be read", { path: file })
+          return Instructions.unavailable
+        }
+        if (managedDirectory === "") return loaded
+        // The administrator's rules follow the administrator's file, from a folder of their own beside it.
+        const managedRules = yield* rules({
+          origin: "managed",
+          base: start,
+          directories: [join(managedDirectory, "rules")],
+          allow: () => Effect.succeed(true),
+          patterns: [],
+          visited,
+        })
+        return available(managedRules) ? merge([loaded, managedRules]) : managedRules
       })
 
       const projectSource = Effect.fn("ConfigInstructionPlugin.projectSource")(function* (
@@ -283,18 +398,47 @@ export const Plugin = define({
           file: (candidate) => candidate.file,
           skipShared: inherited,
         }).filter((candidate) => discovery.global || !globalFiles.includes(candidate.real))
-        // One at a time, in render order: a file that two of them import is loaded after the first and not again.
-        const results = yield* Effect.forEach(discovered, (candidate) =>
-          read(
-            candidate.real,
-            "project",
-            visited,
-            patterns,
-            locals.includes(basename(candidate.file)) ? "local" : undefined,
-          ),
+        // One at a time, in render order: a file that two of them import is loaded after the first and not again. In each
+        // folder the rules sit between the shared file and the local one. A folder of the main checkout that a worktree
+        // inside it passes through gives up its shared file and its rules, which the worktree has its own copy of, and keeps
+        // its local file.
+        const contributions: Contribution[] = []
+        const walked = ancestorDirectories(start, stop).toReversed()
+        const spelled = [...new Set(discovered.map((candidate) => dirname(candidate.file)))].filter(
+          (folder) => !walked.includes(folder),
         )
-        const contributions = results.filter((item): item is Contribution => item !== undefined)
-        if (contributions.length < results.length) return Instructions.unavailable
+        for (const folder of [...spelled, ...walked]) {
+          const inside = discovered.filter((candidate) => dirname(candidate.file) === folder)
+          const slot = (local: boolean) => inside.filter((candidate) => locals.includes(basename(candidate.file)) === local)
+          for (const candidate of slot(false)) {
+            const result = yield* read(candidate.real, "project", visited, patterns)
+            if (result === undefined) return Instructions.unavailable
+            contributions.push(result)
+          }
+          if (!inherited(folder)) {
+            const folderRules = yield* rules({
+              origin: "project",
+              base: folder,
+              directories: [
+                ...places.roots
+                  .filter((root) => root.kind === "vendor" && root.scope === "project" && relative(dirname(root.path), folder) === "")
+                  .map((root) => join(root.path, CompatInstructions.ruleFolder)),
+                join(folder, ".orbit", "rules"),
+              ],
+              // Until the folder is trusted its rules are only what is inside it, as for every file of the project.
+              allow: (real) => trust.supplies({ path: join(folder, ".orbit"), scope: "project", trusted: false }, real),
+              patterns,
+              visited,
+            })
+            if (!available(folderRules)) return Instructions.unavailable
+            contributions.push(folderRules)
+          }
+          for (const candidate of slot(true)) {
+            const result = yield* read(candidate.real, "project", visited, patterns, "local")
+            if (result === undefined) return Instructions.unavailable
+            contributions.push(result)
+          }
+        }
         return merge(contributions)
       })
 
@@ -313,12 +457,18 @@ export const Plugin = define({
           const names = ConfigInstructionFile.names(compat)
           const globalFiles = yield* Effect.forEach(names, (name) => fs.resolve(join(global.config, name)))
           yield* watch(ConfigInstructionFile.walkNames(compat), globalFiles)
+          const entries = yield* config.entries()
+          places.roots = (yield* config.compat()).roots
+          places.user = [
+            ...new Set([
+              global.config,
+              ...entries.flatMap((entry) => (entry.type === "directory" && entry.scope === "user" ? [entry.path] : [])),
+            ]),
+          ]
+          ruleRoots.clear()
           // What the settings of every scope exclude as of now. The documents are the stamped ones, so a project that is
           // not trusted has lost its list, which could otherwise hide the user's own instruction files.
-          const patterns = yield* ConfigInstructionFile.prepare(
-            ConfigInstructionFile.excludes(yield* config.entries()),
-            fs.resolve,
-          )
+          const patterns = yield* ConfigInstructionFile.prepare(ConfigInstructionFile.excludes(entries), fs.resolve)
           // The files handled so far in this pass, which the global file and the project's share, so that a file that is
           // imported and also found by the walk is loaded once, where it comes first. The sources load one after the other.
           const visited = new Set<string>()
@@ -350,6 +500,12 @@ export const Plugin = define({
         Stream.runForEach((file) => refresh(file).pipe(Effect.andThen(discovery.reload()))),
         Effect.forkScoped({ startImmediately: true }),
       )
+      // A change under a rules folder that config already watches, such as a new folder of rules in a `.orbit` directory.
+      yield* config.changes().pipe(
+        Stream.filter((update) => [...ruleRoots].some((root) => FSUtil.contains(root, update.path))),
+        Stream.runForEach(publish),
+        Effect.forkScoped({ startImmediately: true }),
+      )
       // Turning compatibility on or off arrives as a config update, not as a file change.
       yield* ctx.event.subscribe().pipe(
         Stream.filter((event) => event.type === "config.updated"),
@@ -371,6 +527,7 @@ export const Plugin = define({
         for (const file of loaded.current.files) editor.add(file)
         for (const warning of loaded.current.warnings) editor.warn(warning)
         for (const item of loaded.current.imports) editor.imported(item.path, item.importedBy)
+        for (const rule of loaded.current.conditional) editor.conditional(rule)
       })
     }).pipe(
       Effect.catchCause((cause) =>

@@ -12,7 +12,7 @@ import { ReminderText } from "./session/reminder-text.js"
 
 /**
  * What an instruction file is, when it is not a plain shared file: the administrator's (`managed`), a person's private
- * notes for a folder (`local`), or a rule file (`rule`, reserved). It is left unset for a plain file, so that the values
+ * notes for a folder (`local`), or a rule file from a `rules` folder (`rule`). It is left unset for a plain file, so that the values
  * already stored keep their hashes. A file that another imports takes its importer's kind and not one of its own, so
  * that becoming an import, or ceasing to be one, with the same text changes no hash.
  */
@@ -61,6 +61,19 @@ export class Import extends Schema.Class<Import>("InstructionDiscovery.Import")(
   importedBy: AbsolutePath,
 }) {}
 
+/**
+ * A rule file that waits for a read. `patterns` are the cleaned patterns of its `paths` front matter (`ConfigInstructionFile.rulePatterns`)
+ * and `base` is the real folder they are matched from: the folder that holds the `.orbit` folder the rule came from, or the
+ * folder the session started in for a rule of the person or of an administrator. A conditional rule is no part of the
+ * baseline: it adds nothing to the stored instruction value, and so changing one starts no instruction update.
+ */
+export class ConditionalRule extends Schema.Class<ConditionalRule>("InstructionDiscovery.ConditionalRule")({
+  path: AbsolutePath,
+  patterns: Schema.Array(Schema.String),
+  base: AbsolutePath,
+  scope: Schema.Literals(["managed", "user", "project"]),
+}) {}
+
 const Files = Schema.Array(File)
 const key = Instructions.Key.make("core/instructions")
 
@@ -72,6 +85,7 @@ export type Data = {
   files: Map<AbsolutePath, Types.DeepMutable<File>>
   warnings: (Types.DeepMutable<Warning> | Types.DeepMutable<ImportWarning>)[]
   imports: Types.DeepMutable<Import>[]
+  conditional: Types.DeepMutable<ConditionalRule>[]
   available: boolean
 }
 
@@ -84,6 +98,8 @@ export type Editor = {
   warn: (warning: Warning | ImportWarning) => void
   /** Records that `path`, which is also added as a file, was imported by `importedBy`. */
   imported: (path: string, importedBy: string) => void
+  /** Adds a rule that waits for a read. Insertion order is render order, the order `conditionalRules` lists them in. */
+  conditional: (rule: ConditionalRule) => void
   update: (path: string, update: (file: Types.DeepMutable<File>) => void) => void
   remove: (path: string) => void
   unavailable: () => void
@@ -99,6 +115,12 @@ export interface Interface extends State.Transformable<Editor> {
   readonly warnings: () => Effect.Effect<readonly (Warning | ImportWarning)[]>
   /** Which of the files that `list` returns an instruction file imported, and which file imported it. Nothing here reaches the model. */
   readonly imports: () => Effect.Effect<readonly Import[]>
+  /**
+   * The rule files that apply only to some files, with the patterns and the folder they are matched from, in the order the
+   * rules load: the administrator's, the person's, then the project's from the farthest folder to the nearest. Nothing
+   * here is in `list` or reaches the model until a read matches (`InstructionTriggers`).
+   */
+  readonly conditionalRules: () => Effect.Effect<readonly ConditionalRule[]>
   /**
    * The text under each heading named `names` in the files that `list` returns, in the order of `list` and, within a file, of
    * the file. A file's path is the one `list` reports, so an imported file has its own. The text is a file's, so a caller
@@ -127,7 +149,7 @@ export const layer = (options?: Options) =>
       const bus = yield* Bus.Service
       const state = State.create<Data, Editor>({
         name: "instruction-discovery",
-        initial: () => ({ files: new Map(), warnings: [], imports: [], available: true }),
+        initial: () => ({ files: new Map(), warnings: [], imports: [], conditional: [], available: true }),
         editor: (editor) => ({
           list: () => Array.from(editor.files.values()),
           add: (file) => editor.files.set(file.path, new File(file) as Types.DeepMutable<File>),
@@ -139,6 +161,8 @@ export const layer = (options?: Options) =>
             ),
           imported: (path, importedBy) =>
             editor.imports.push(new Import({ path: AbsolutePath.make(path), importedBy: AbsolutePath.make(importedBy) })),
+          conditional: (rule) =>
+            editor.conditional.push(new ConditionalRule(rule) as Types.DeepMutable<ConditionalRule>),
           update: (path, update) => {
             const current = editor.files.get(AbsolutePath.make(path))
             if (!current) return
@@ -188,6 +212,9 @@ export const layer = (options?: Options) =>
         imports: Effect.fn("InstructionDiscovery.imports")(function* () {
           return Array.from(state.get().imports)
         }),
+        conditionalRules: Effect.fn("InstructionDiscovery.conditionalRules")(function* () {
+          return Array.from(state.get().conditional)
+        }),
         section: Effect.fn("InstructionDiscovery.section")(function* (names) {
           const files = yield* list()
           if (!Array.isArray(files)) return []
@@ -229,7 +256,7 @@ export const HEADER =
 const labels: Record<Kind, string> = {
   managed: "organisation policy installed by an administrator, which a project cannot switch off",
   local: "private notes for this folder, kept out of the repository",
-  rule: "a rule file",
+  rule: "a rule file from a rules folder",
 }
 
 function renderInitial(files: ReadonlyArray<File>) {

@@ -326,6 +326,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   project waits for the project itself to be trusted, and a refused one is an import warning for the project root
   (class 1, 3, 7). A file that is there and cannot be read makes the source unavailable, so policy text already admitted
   stays. Proof: the "loads the managed instruction file" block of `test/instruction-discovery.test.ts`.
+- Rule files (`rules` folders: `<folder>/.orbit/rules` in each folder of the walk, the vendor's `rules` folder in a root of
+  another product while compatibility is on, `rules` in the config folder, and `rules` beside the managed file; read by
+  `ConfigInstructionRules.scan` and loaded by `ConfigInstructionPlugin` and, for the folders a read passes through, by
+  `InstructionTriggers` and `SessionInstructions`; classes 1, 4, 6, 7, 11 and 14). The scan opens nothing before the gate:
+  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), a folder is
+  entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
+  `ProjectTrust.supplies` on its real path at start and of `ProjectTrust.importable` when a read passes through, so a
+  rules folder, a subfolder or a file that is a link out of the project is skipped alone, trusted or not at injection.
+  The person's and the administrator's rules are theirs: only the network refusal applies. The `paths` key is read only
+  from the block `ConfigMarkdown.split` finds, only by `ConfigMarkdown.parseOption` (YAML, never evaluated; a block that
+  does not parse makes the rule unconditional, with one debug line), and a pattern only chooses when text the folder
+  already supplies is shown: it never names a file to read. Patterns match the path from the base, both real, with
+  `FSUtil.contains` on the two real paths deciding containment (`ConfigInstructionFile.ruleMatches`); the number and
+  the length of patterns are capped. The file is looked at again, by where it leads now, when it is injected. Proof: the
+  "loads rule files" block of `test/instruction-discovery.test.ts`, `test/config/instruction-rules.test.ts`
+  and the "rules that wait for a matching read" block of `test/session-instructions.test.ts` (the swapped-link rows,
+  trusted and not, and the network decoy).
 - `@path` imports in instruction files (`ConfigInstructionFile.imports` and `load`, called by `ConfigInstructionPlugin`
   and `SessionInstructions`; class 1, 4, 5, 6 and 7). A token is hostile input: it is found by one linear pass over the
   lines (no Markdown library), and a token with a control character is dropped alone, never joined into a path. For each

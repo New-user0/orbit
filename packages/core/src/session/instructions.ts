@@ -6,10 +6,12 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { LinkShare } from "@orbit/util/link-share"
 import { Config } from "../config.js"
 import { ConfigInstructionFile } from "../config/instruction-file.js"
 import { Location } from "../location.js"
 import { ProjectTrust } from "../project-trust.js"
+import { ReminderText } from "./reminder-text.js"
 import { SessionEvent } from "./event.js"
 import { MessageDecodeError } from "./error.js"
 import { SessionMessage } from "./message.js"
@@ -20,10 +22,27 @@ const InjectedMetadata = Schema.Struct({
   instruction: Schema.Struct({ paths: Schema.Array(Schema.String) }),
 })
 
+/**
+ * A file to hand to the model, as a real path, and where it comes from. The scope picks the gate it passes just before it is
+ * read: a project's file must lead inside the folders the session may load instruction files from, trusted or not, while a
+ * file of the person's or of an administrator's is their own and is refused only when it names a network share.
+ */
+export interface Entry {
+  readonly path: string
+  readonly scope: "managed" | "user" | "project"
+  /**
+   * Set for a rule that waits for a matching read: the model is told which files it is about, and the files it imports are
+   * not sent, because the ones without patterns of their own are already part of the baseline.
+   */
+  readonly patterns?: readonly string[]
+  /** The file is in a rules folder, so a file it imports that has patterns of its own waits for a read of its own. */
+  readonly rule?: boolean
+}
+
 export interface Interface {
   readonly load: (input: {
     readonly sessionID: SessionSchema.ID
-    readonly paths: ReadonlyArray<string>
+    readonly entries: ReadonlyArray<Entry>
   }) => Effect.Effect<void, MessageDecodeError | FSUtil.Error>
 }
 
@@ -58,7 +77,8 @@ const layer = Layer.effect(
     // trusted project as in one that is not. A session at the home folder or a filesystem root has no root until that
     // folder is trusted.
     const reachable = Effect.fnUntraced(function* (path: string) {
-      if (yield* trust.importable(path, path)) return true
+      // A file that was found as a real path may have been replaced by a link since, so the guard is asked of where it leads now.
+      if (yield* trust.importable(path, yield* trust.leads(path))) return true
       if (skipped.has(path)) return false
       skipped.add(path)
       yield* Effect.logWarning("instruction file skipped", {
@@ -68,10 +88,22 @@ const layer = Layer.effect(
       return false
     })
 
+    // A file of the person's or of an administrator's is theirs, so the project's guard says nothing about it. What it
+    // must not do is reach a network share, or links that were never followed to their end: that is refused before any disk
+    // access, and a link that leads to one is named as the share without being opened.
+    const owned = Effect.fnUntraced(function* (path: string) {
+      const real = yield* trust.leads(path)
+      if (!/^[\\/]{2}/.test(real) && !LinkShare.isUnresolved(real)) return true
+      yield* Effect.logWarning("instruction file skipped", { path, reason: "a network path" })
+      return false
+    })
+
     const load = Effect.fn("SessionInstructions.load")(function* (input: Parameters<Interface["load"]>[0]) {
+      const entries = new Map<string, Entry>()
+      for (const entry of input.entries) if (!entries.has(entry.path)) entries.set(entry.path, entry)
       const claimed = yield* Ref.modify(inFlight, (map) => {
         const existing = map.get(input.sessionID) ?? new Set<string>()
-        const newlyClaimed = input.paths.filter((path) => !existing.has(path))
+        const newlyClaimed = [...entries.keys()].filter((path) => !existing.has(path))
         if (newlyClaimed.length === 0) return [newlyClaimed, map]
         const next = new Map(map)
         next.set(input.sessionID, new Set([...existing, ...newlyClaimed]))
@@ -90,10 +122,13 @@ const layer = Layer.effect(
         )
         const toInject = yield* Effect.filter(
           claimed.filter((path) => !alreadyInjected.has(path)),
-          (path) =>
-            ConfigInstructionFile.excluded(patterns, [path])
-              ? Effect.logDebug("instruction file excluded", { path }).pipe(Effect.as(false))
-              : reachable(path),
+          (path) => {
+            const scope = entries.get(path)!.scope
+            // No pattern of `instructions_exclude` applies to the administrator's files.
+            if (scope !== "managed" && ConfigInstructionFile.excluded(patterns, [path]))
+              return Effect.logDebug("instruction file excluded", { path }).pipe(Effect.as(false))
+            return scope === "project" ? reachable(path) : owned(path)
+          },
         )
         if (toInject.length === 0) return
         // The model reads each file as the session start does (`ConfigInstructionFile`), and the files it imports after it,
@@ -104,17 +139,28 @@ const layer = Layer.effect(
         // set of handled files for each call, and the files one after the other, so that an import two of them share is
         // loaded once.
         const visited = new Set<string>()
-        const readable: Array<{ path: string; content: string }> = []
+        const readable: Array<{ path: string; content: string; patterns?: readonly string[] }> = []
         for (const path of toInject) {
+          const entry = entries.get(path)!
           const loaded = yield* ConfigInstructionFile.load({
-            path,
-            scope: "project",
+            path: yield* trust.leads(path),
+            scope: entry.scope === "user" ? "user" : "project",
             visited,
-            patterns,
+            patterns: entry.scope === "managed" ? [] : patterns,
             home,
             fs,
             leads: trust.leads,
+            // A rule that waits for a read brings no imports: the plain ones are in the baseline already.
+            imports: entry.patterns === undefined,
+            rules: entry.rule === true || entry.patterns !== undefined,
             allow: (real, spelling) => trust.importable(spelling, real),
+            // What an administrator's file imports from outside the project waits for the project to be trusted.
+            ...(entry.scope === "managed"
+              ? {
+                  outward: () =>
+                    trust.trusted().pipe(Effect.map((open) => ({ open, directory: location.project.canonical }))),
+                }
+              : {}),
             // An import that is already in the conversation, or that a read in flight is loading, is not loaded again.
             claim: Effect.fnUntraced(function* (real: string) {
               const taken = yield* Ref.modify(inFlight, (map) => {
@@ -142,7 +188,20 @@ const layer = Layer.effect(
               target: item.target,
               reason: "outside the project",
             })
-          readable.push(...loaded.files)
+          // A file that waits for a read of its own is not part of this one: its imports with patterns are left to it.
+          readable.push(
+            ...loaded.files.flatMap((file) =>
+              file.importedBy !== undefined && file.patterns !== undefined
+                ? []
+                : [
+                    {
+                      path: file.path,
+                      content: file.content,
+                      ...(file.importedBy === undefined && entry.patterns !== undefined ? { patterns: entry.patterns } : {}),
+                    },
+                  ],
+            ),
+          )
         }
         if (readable.length === 0) return
         // Publish directly rather than through Session.synthetic: a Location-scoped layer
@@ -151,7 +210,7 @@ const layer = Layer.effect(
         // ledger atomically, so releasing the claim afterwards cannot readmit the paths.
         yield* bus.publish(SessionEvent.Synthetic, {
           sessionID: input.sessionID,
-          text: readable.map((file) => `Instructions from: ${file.path}\n${file.content}`).join("\n\n"),
+          text: readable.map((file) => `${heading(file)}\n${file.content}`).join("\n\n"),
           description: `Loaded ${readable.map((file) => describePath(root, file.path)).join(", ")}`,
           metadata: { instruction: { paths: readable.map((file) => file.path) } },
         })
@@ -173,6 +232,13 @@ const layer = Layer.effect(
     return Service.of({ load })
   }),
 )
+
+// The line above a file. A rule that waited for a read says which files it is about and why it arrived now. The patterns are
+// the repository's, so they are flattened to one line and an envelope look-alike in them is escaped.
+function heading(file: { readonly path: string; readonly patterns?: readonly string[] }) {
+  if (file.patterns === undefined) return `Instructions from: ${file.path}`
+  return `Instructions from: ${file.path} (a rule for files matching ${ReminderText.oneLine(file.patterns.join(", "))}, loaded because a file it covers was read)`
+}
 
 function previouslyInjected(store: SessionStore.Interface, sessionID: SessionSchema.ID) {
   return Effect.gen(function* () {

@@ -18,6 +18,8 @@ export const vendor = {
   /** The private variant of the instruction file, which is kept out of version control. */
   localInstructions: "CLAUDE.local.md",
   projectDirVariable: "CLAUDE_PROJECT_DIR",
+  /** The folder inside the dot-directory that holds rule files, some of which name the files they are about. */
+  rules: "rules",
 } as const
 
 /**
