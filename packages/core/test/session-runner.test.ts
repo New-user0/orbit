@@ -9895,6 +9895,22 @@ describe("SessionRunnerLLM", () => {
     expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
   })
 
+  // FU-M1-081: the resume allowance counts the notices the runner recorded, not a message a client admits.
+  scenario("keeps the three resumes when a client admits an output-limit notice", function* (s) {
+    yield* s.admit("Never finishes")
+    yield* s.session.synthetic({
+      sessionID,
+      text: "From a client",
+      metadata: { notice: "output-limit" },
+      resume: false,
+    })
+    yield* s.llm.push(...Array.from({ length: 8 }, (_, index) => lengthStop(`client-${index + 1}`, String(index + 1))))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(4)
+  })
+
   scenario("never runs a tool call that was cut off by the output limit", function* (s) {
     yield* s.admit("Truncated call")
     yield* s.llm.push(

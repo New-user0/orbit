@@ -82,6 +82,9 @@ export const current: (
     until?.time === undefined ? undefined : lte(SessionMessageTable.time_created, until.time),
   )
   const notice = sql<string>`json_extract(${SessionMessageTable.data}, '$.metadata.notice')`
+  // A client's synthetic message is projected with a delivery; only the runner's own notices carry none, so a client
+  // cannot set the turn's fallback or use up its continuations.
+  const runnerRecorded = sql`json_extract(${SessionMessageTable.data}, '$.delivery') IS NULL`
   const read = yield* db
     .transaction(() =>
       Effect.gen(function* () {
@@ -135,6 +138,7 @@ export const current: (
               eq(SessionMessageTable.type, "synthetic"),
               gt(SessionMessageTable.seq, floor),
               sql`${notice} = 'fallback'`,
+              runnerRecorded,
             ),
           )
           .orderBy(desc(SessionMessageTable.seq))
@@ -163,6 +167,7 @@ export const current: (
               eq(SessionMessageTable.type, "synthetic"),
               gt(SessionMessageTable.seq, floor),
               sql`json_type(${SessionMessageTable.data}, '$.metadata.notice') = 'text'`,
+              runnerRecorded,
             ),
           )
           .groupBy(notice)
@@ -337,6 +342,7 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
       SELECT 1 FROM session_message AS n
       WHERE n.session_id = m.session_id AND n.type = 'synthetic'
         AND json_extract(n.data, '$.metadata.notice') IN ('output-limit', 'output-escalation')
+        AND json_extract(n.data, '$.delivery') IS NULL
         AND n.seq > m.seq
         AND n.seq < coalesce(
           (SELECT min(a.seq) FROM session_message AS a WHERE a.session_id = m.session_id AND a.type = 'assistant' AND a.seq > m.seq),

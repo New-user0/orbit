@@ -227,41 +227,38 @@ describe("SessionTurn.current after a history was cut short of an idle marker", 
 })
 
 // POST /api/session/:sessionID/synthetic and a plugin's ctx.session.synthetic both reach Session.synthetic, which takes
-// the whole metadata of the message from the caller, and SessionTurn.current reads the notice kind and the fallback
-// model from the metadata of any synthetic message. So a caller can name the turn's fallback model and use up its notice
-// counts, as the runner does for its own notices. Known limitation, and an open question for loop-robustness-10, -11 and
-// -17: whether only the notices that carry no delivery should count. That changes the rule of the spec, so this pins the
-// rule until they decide, and it changes with them.
+// the whole metadata of the message from the caller. Such a message is projected with a delivery, and
+// SessionTurn.current reads the notice kind and the fallback model only from synthetic messages that carry none, as the
+// runner's own notices do, so a caller cannot name the turn's fallback model or use up its notice counts.
 describe("SessionTurn.current and a synthetic message that a caller admits", () => {
-  it.effect("reads the fallback model and counts the notice kinds that the caller's metadata names", () =>
-    Effect.gen(function* () {
-      const session = yield* Session.Service
-      const bus = yield* Bus.Service
-      const { db } = yield* Database.Service
-      const created = yield* session.create({ location })
-      yield* session.prompt({ sessionID: created.id, text: "A", resume: false })
-      yield* SessionInbox.promote(db, bus, created.id, "input")
+  for (const delivery of ["steer", "queue"] as const)
+    it.effect(`reads no fallback model and counts no notice from a message admitted with ${delivery}`, () =>
+      Effect.gen(function* () {
+        const session = yield* Session.Service
+        const bus = yield* Bus.Service
+        const { db } = yield* Database.Service
+        const created = yield* session.create({ location })
+        yield* session.prompt({ sessionID: created.id, text: "A", resume: false })
+        yield* SessionInbox.promote(db, bus, created.id, "input")
 
-      const fallback = yield* session.synthetic({
-        sessionID: created.id,
-        text: "Use the backup model",
-        metadata: { notice: "fallback", model: backup },
-        resume: false,
-      })
-      yield* session.synthetic({
-        sessionID: created.id,
-        text: "Keep going",
-        metadata: { notice: "stop-hook" },
-        resume: false,
-      })
-      expect(fallback.delivery).toBe("steer")
-      expect(yield* SessionInbox.promote(db, bus, created.id, "steer")).toBe(2)
+        const fallback = yield* session.synthetic({
+          sessionID: created.id,
+          text: "Use the backup model",
+          metadata: { notice: "fallback", model: backup },
+          delivery,
+          resume: false,
+        })
+        yield* session.synthetic({
+          sessionID: created.id,
+          text: "Keep going",
+          metadata: { notice: "stop-hook" },
+          delivery,
+          resume: false,
+        })
+        expect(fallback.delivery).toBe(delivery)
+        expect(yield* SessionInbox.promote(db, bus, created.id, delivery === "steer" ? "steer" : "input")).toBeGreaterThan(0)
 
-      expect(yield* SessionTurn.current(db, created.id)).toMatchObject({
-        boundary: undefined,
-        fallback: backup,
-        notices: { fallback: 1, "stop-hook": 1 },
-      })
-    }),
-  )
+        expect(yield* SessionTurn.current(db, created.id)).toMatchObject({ fallback: undefined, notices: {} })
+      }),
+    )
 })

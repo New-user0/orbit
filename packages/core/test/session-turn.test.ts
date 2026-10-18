@@ -80,11 +80,11 @@ const harness = Effect.gen(function* () {
           delivery: input.delivery ?? "steer",
         },
       }),
-    admitSynthetic: (text: string, delivery: SessionInbox.Delivery) =>
+    admitSynthetic: (text: string, delivery: SessionInbox.Delivery, metadata?: Record<string, unknown>) =>
       inbox.admit({
         id: SessionMessage.ID.create(),
         sessionID: id,
-        item: { type: "synthetic", payload: SessionInbox.SyntheticPayload.make({ text }), delivery },
+        item: { type: "synthetic", payload: SessionInbox.SyntheticPayload.make({ text, metadata }), delivery },
       }),
     promote: (scope: SessionInbox.Promotable) => SessionInbox.promote(db, bus, id, scope),
     // A notice the runner records directly: it carries no delivery.
@@ -353,6 +353,35 @@ for (const { persist, it } of modes) {
         expect((yield* s.current).notices).toEqual({ "stop-hook": 1 })
       }),
     )
+
+    // FU-M1-081: a message a client admits (Session.synthetic, the HTTP endpoint or a plugin) is projected with a delivery;
+    // only the runner's own notices carry none, and only those set the turn's fallback or use up its counts.
+    const clientNotices: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+      ["fallback", { model: backup }],
+      ["stop-hook", {}],
+      ["output-limit", {}],
+      ["output-escalation", {}],
+    ]
+    for (const [kind, extra] of clientNotices)
+      for (const delivery of ["steer", "queue"] as const)
+        it.effect(`ignores a ${kind} notice that a client admits with ${delivery}, and counts the runner's`, () =>
+          Effect.gen(function* () {
+            const s = yield* harness
+            yield* s.admit("A")
+            yield* s.promote("input")
+            yield* s.admitSynthetic("From a client", delivery, { notice: kind, ...extra })
+            expect(yield* s.promote("input")).toBe(1)
+
+            expect(yield* s.current).toMatchObject({ fallback: undefined, notices: {} })
+
+            // Control: the same notice, recorded the way the runner records it.
+            yield* s.notice(kind, extra)
+            expect(yield* s.current).toMatchObject({
+              fallback: kind === "fallback" ? backup : undefined,
+              notices: { [kind]: 1 },
+            })
+          }),
+        )
 
     it.effect("keeps kinds named like prototype members as plain counts", () =>
       Effect.gen(function* () {
@@ -920,6 +949,34 @@ for (const { persist, it } of modes) {
           expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).steps).toBe(steps)
         }),
       )
+
+    // FU-M1-081: only a notice the runner recorded continues a cut-off reply into the same step.
+    for (const kind of ["output-limit", "output-escalation"])
+      for (const delivery of ["steer", "queue"] as const)
+        it.effect(`does not merge the next response into a cut-off step for a ${kind} notice a client admits with ${delivery}`, () =>
+          Effect.gen(function* () {
+            const s = yield* harness
+            yield* s.admit("Now", { turn: { maxSteps: 9 } })
+            yield* s.promote("input")
+            const turn = yield* s.current
+            yield* respond(sessionID, 1_000, { finish: "length" })
+            yield* s.admitSynthetic("From a client", delivery, { notice: kind })
+            yield* s.promote("input")
+            yield* respond(sessionID, 2_000)
+
+            expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).steps).toBe(2)
+
+            // Control: the same notice, recorded by the runner, makes the two responses one step.
+            yield* s.idle
+            yield* s.admit("Again", { delivery: "queue", turn: { maxSteps: 9 } })
+            yield* s.promote("input")
+            const again = yield* s.current
+            yield* respond(sessionID, 3_000, { finish: "length" })
+            yield* s.notice(kind)
+            yield* respond(sessionID, 4_000)
+            expect((yield* SessionTurn.usage(s.db, sessionID, since(again))).steps).toBe(1)
+          }),
+        )
 
     it.effect("leaves the response the runner is about to continue out of the steps", () =>
       Effect.gen(function* () {

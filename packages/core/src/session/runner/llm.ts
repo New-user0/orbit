@@ -86,6 +86,8 @@ const outputRecovery = Effect.fnUntraced(function* (db: Database.Interface["db"]
         eq(SessionMessageTable.session_id, sessionID),
         eq(SessionMessageTable.type, "synthetic"),
         gt(SessionMessageTable.seq, sql`(${normalEnd})`),
+        // Only the runner's own notices count; a client's synthetic message carries a delivery.
+        sql`json_extract(${SessionMessageTable.data}, '$.delivery') IS NULL`,
       ),
     )
     .get()
