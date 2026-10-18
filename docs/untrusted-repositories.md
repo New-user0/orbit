@@ -82,7 +82,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 - `InstructionNotes.add` (`packages/core/src/instruction-notes.ts`, served at `POST /api/location/instructions/note`)
   appends a bullet to the project or local instruction file, so it writes into the folder a repository supplied. It reads
-  only the one file it is about to append to, and only after the checks. The target is the file the loader reads in that
+  only the one file it is about to append to, and only after the checks. A candidate that is a link to a network share (or
+  whose place cannot be read) is found by reading links only (`LinkShare.of`); it counts as there, is never resolved,
+  statted or read, is listed as not enabled and is refused as `outside`, trusted or not. The target is the file the loader reads in that
   scope (the loader's own exclusion and `ProjectTrust.reachable` filters, in the loader's order), asked of the spelling the
   walk builds, never of a real path alone. While the project is untrusted, `ProjectTrust.escapes` and `reachable` on that
   spelling refuse a file that leads outside (a link to a file, a dangling link) as
@@ -385,8 +387,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   could. A user-level file's import is gated by the network refusal alone, and the network refusal holds in every scope,
   trusted or not. Files the model's reads load later never import outside the project, even when it is trusted. `instructions_exclude` is asked before the file is opened, a name outside the text extensions and
   a NUL in the text are refused, and a missing target, a folder or a pipe is skipped silently. The watch set is the real
-  path of each import that was read, and nothing refused is ever subscribed. Managed and local files do not exist in
-  Orbit yet (prompts-context-10): when they arrive they take the project rule. Proof: the `imports` and `load` blocks of
+  path of each import that was read, and nothing refused is ever subscribed. The managed and local files have their own
+  rows above; the managed file's imports from outside wait for the project to be trusted. Proof: the `imports` and `load` blocks of
   `test/config/instruction-file.test.ts`, the "follows @imports", "keeps a project's imports inside the project until its holder is trusted" and "lets a trusted
   holder import from outside the project" blocks of `test/instruction-discovery.test.ts`, and `test/session-instructions.test.ts`, whose "home folder" blocks pin the repository-at-home row.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
