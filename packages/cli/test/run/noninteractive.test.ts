@@ -463,6 +463,7 @@ async function run(input: {
   spyOn(sdk.permission, "list").mockImplementation(() => ok([]) as never)
   spyOn(sdk.permission, "reply").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.session, "interrupt").mockImplementation(() => ok(undefined) as never)
+  spyOn(sdk.session.inbox, "cancel").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.session.form, "list").mockImplementation(
     (request) => ok(input.pendingForms?.filter((item) => item.sessionID === request.sessionID) ?? []) as never,
   )
@@ -2153,6 +2154,25 @@ describe("runNonInteractivePrompt limits and results", () => {
     const output = await record({ turn: twoSteps, options, admit: false })
     expect(output.sdk?.session.interrupt).toHaveBeenCalledTimes(1)
     expect(output.exitCode).toBe(1)
+  })
+
+  // FU-M2-043: the prompt is admitted before the echo is checked and the interrupt does nothing for a drain that has
+  // not started, so the prompt itself is withdrawn first.
+  test("a server that does not echo the limits has the prompt withdrawn before the interrupt", async () => {
+    const output = await record({ turn: twoSteps, options, admit: false })
+    const sdk = output.sdk!
+    const prompt = (sdk.session.prompt as Mock<typeof sdk.session.prompt>).mock.calls[0][0]
+    const cancel = sdk.session.inbox.cancel as Mock<typeof sdk.session.inbox.cancel>
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel.mock.calls[0][0]).toEqual({ sessionID: prompt.sessionID as string, inboxID: prompt.id as string })
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(
+      (sdk.session.interrupt as Mock<typeof sdk.session.interrupt>).mock.invocationCallOrder[0],
+    )
+  })
+
+  test("a server that echoes the limits has nothing withdrawn", async () => {
+    const output = await record({ turn: twoSteps, options })
+    expect(output.sdk?.session.inbox.cancel).not.toHaveBeenCalled()
   })
 
   // The two responses of `twoSteps` as the server projects them, which is where the result takes its usage from.

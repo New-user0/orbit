@@ -1071,8 +1071,12 @@ export async function runNonInteractivePrompt(input: Input) {
       process.exitCode = 1
       failure =
         "The server did not accept the limits, fallback model or output schema for this run, so it may be an older version than this client. Update the server, or run without --max-steps, --max-cost, --max-tokens, --fallback-model and --json-schema."
-      await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
+      // Stop reading the stream first, so no event of the withdrawn run is printed before the error.
       controller.abort()
+      // The prompt is admitted and its drain may not have started, where an interrupt is a no-op: withdraw it first. An
+      // item that was already delivered is left alone by the cancel, and the interrupt then stops its drain.
+      await input.client.session.inbox.cancel({ sessionID: input.sessionID, inboxID: messageID }).catch(() => {})
+      await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
       await completed?.catch(() => {})
       if (!emit("error", Date.now(), { subtype: "error", error: { type: "version-mismatch", message: failure } }))
         UI.error(failure)

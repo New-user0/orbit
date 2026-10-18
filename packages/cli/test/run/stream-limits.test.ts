@@ -51,6 +51,8 @@ test("each message gets what the earlier ones left of the cost limit, and none r
   expect(h.state.prompts[0].turn).toEqual({ maxCost: 1, maxSteps: 5 })
   expect(h.state.prompts[1].turn?.maxCost).toBeCloseTo(0.4, 10)
   expect(h.state.prompts[1].turn?.maxSteps).toBe(5)
+  // Control: a server that echoes the limits has nothing withdrawn.
+  expect(h.state.calls.filter((call) => call.startsWith("cancel"))).toEqual([])
   const results = h.lines.filter((line) => line.type === "result")
   expect(results.map((line) => line.cost)).toEqual([0.6, 0.5, 0])
   expect(results[2]).toMatchObject({ is_error: true, subtype: "error_max_cost", outcome: "failed" })
@@ -65,6 +67,8 @@ test("a server that drops the limits it was sent stops the run with a version er
   await h.until((line) => line.type === "error")
 
   expect(h.lines.find((line) => line.type === "error")?.error).toMatchObject({ type: "version-mismatch" })
+  // The admitted prompt is withdrawn before the interrupt, which does nothing for a drain that has not started.
+  expect(h.state.calls.slice(0, 2)).toEqual([`cancel:${h.state.admitted[0]}`, "interrupt"])
   expect(await h.settle()).toBe(1)
   expect(h.lines.filter((line) => line.type === "result")).toEqual([
     expect.objectContaining({ is_error: true, outcome: "failed" }),

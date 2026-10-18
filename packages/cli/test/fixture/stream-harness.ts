@@ -37,6 +37,8 @@ export function harness(
     replies: [] as Array<{ requestID: string; decision: string; message?: string }>,
     subscriptions: 0,
     interrupts: 0,
+    // The inbox items the client withdrew and the interrupts it sent, in the order they went out.
+    calls: [] as string[],
     // How the next subscription behaves: it connects, or fails with this error.
     refuse: undefined as unknown,
     promptError: undefined as Error | undefined,
@@ -76,10 +78,16 @@ export function harness(
       get: async () => ({ id: sessionID }),
       interrupt: async () => {
         state.interrupts += 1
+        state.calls.push("interrupt")
         return {}
       },
       wait: () => idle.promise,
-      inbox: { list: async () => [] },
+      inbox: {
+        list: async () => [],
+        cancel: async (request: { inboxID: string }) => {
+          state.calls.push(`cancel:${request.inboxID}`)
+        },
+      },
       form: { list: async () => [], cancel: async () => {}, reply: async () => {} },
       prompt: async (input: { id: string; turn?: SessionTurnOptions }) => {
         if (state.promptError) throw state.promptError

@@ -2588,8 +2588,10 @@ output envelope, which count failed steps and subagents' steps, so `steps` can e
 `limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
 turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags
 of a printed run. If the server does not echo the limits back, because it is an older version that drops fields it does
-not know, the run asks the server to interrupt its session and fails with a version error. That interruption does
-nothing for a session that is idle or not yet running, so on such a server the prompt can still run without its limits.
+not know, the run first withdraws the prompt it sent from the server's inbox, then asks the server to interrupt the
+session, and fails with a version error. Withdrawing the prompt is what stops it on a session whose run has not
+started, where an interruption alone does nothing. A prompt that the server already delivered is not withdrawn, and
+only the interruption stops it (pinned by `test/run/noninteractive.test.ts` and `test/run/stream-limits.test.ts`).
 
 Any message that the runner marks with `metadata.notice` and a description, such as the switch to the fallback model,
 now prints a warning line, or a `{"type":"notice","notice":...,"message":...}` line with `--format json` and
