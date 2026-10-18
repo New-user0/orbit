@@ -106,7 +106,7 @@ describe("ConfigInstructionFile.rulePatterns", () => {
       "anchoredStars",
       "control",
     ])
-    // Mutation: matching with a backtracking engine (a regular expression per pattern) takes seconds to minutes on these rows.
+    // Mutation: putting the old `ignore` matcher back (behind its star-run filter) fails these rows at seconds each, because the target file is `b`, which no hostile pattern matches early; Bun.Glob passes.
     for (const item of report) expect(item.ms).toBeLessThan(100)
     expect(report.find((item) => item.name === "control")?.matched).toBe(true)
     expect(report.find((item) => item.name === "twentyStarAThenB")?.matched).toBe(false)

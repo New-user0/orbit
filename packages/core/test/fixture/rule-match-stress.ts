@@ -1,6 +1,6 @@
 /**
  * Runs `ConfigInstructionFile.ruleMatches` over the worst shapes a cloned repository could write as patterns, against a path of
- * four 254-character folders and a file (1,021 characters, the most a read keeps), and prints how long each took and whether
+ * four 254-character folders and a file named `b` (1,021 characters, the most a read keeps), and prints how long each took and whether
  * it matched as JSON. It is a script of its own because the work is synchronous: the test starts it with a deadline.
  *
  * The matcher is Bun's, which does not backtrack, so each row costs time that grows with the path and the patterns and no more.
@@ -10,7 +10,7 @@ import { ConfigInstructionFile } from "@orbit/core/config/instruction-file"
 
 const base = path.resolve("rule-stress-base")
 const folder = "a".repeat(254)
-const target = path.join(base, folder, folder, folder, folder, "a")
+const target = path.join(base, folder, folder, folder, folder, "b")
 
 const repeated = (pattern: string) => Array.from({ length: 255 }, () => pattern)
 const rows: Record<string, string[]> = {
