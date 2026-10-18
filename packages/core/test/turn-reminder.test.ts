@@ -197,6 +197,55 @@ describe("the budget reminder of a turn with limits", () => {
     expect(budgets(s.requests[1])[0]).not.toContain("last one")
   })
 
+  scenario("does not call 85 percent of a limit nearly used up", function* (s) {
+    withProducer(s)
+    s.modelCost = [price]
+    yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(10) }, resume: false })
+    yield* s.llm.push(toolStep({ nonCachedInputTokens: 9, outputTokens: 8 }), answer())
+    yield* s.resume
+
+    expect(budgets(s.requests[1])[0]).toContain("$8.5000")
+    expect(budgets(s.requests[1])[0]).not.toContain("Do not start new work")
+  })
+
+  scenario("asks for the structured hand-in one step early, so the accepted answer can close the turn", function* (s) {
+    withProducer(s)
+    s.turnEnd = SessionTurnEnd.structuredOutput(s.db).run
+    yield* s.session.prompt({
+      sessionID,
+      text: "Work",
+      turn: { maxSteps: 3, output: { schema: { type: "object" } } },
+      resume: false,
+    })
+    yield* s.llm.push(
+      toolStep(),
+      TestLLM.toolCalls(LLMEvent.toolCall({ id: "early-out", name: SessionOutput.NAME, input: {} })),
+      TestLLM.stop(),
+    )
+    yield* s.resume
+
+    expect(budgets(s.requests[0])[0]).not.toContain("Do not start new work")
+    expect(budgets(s.requests[0])[0]).not.toContain("Make that hand-in in this response")
+    expect(budgets(s.requests[1])[0]).toContain("Do not start new work")
+    expect(budgets(s.requests[1])[0]).toContain("Make that hand-in in this response")
+    expect(budgets(s.requests[1])[0]).not.toContain("last one")
+  })
+
+  scenario("asks for the hand-in at once when the structured turn has two steps", function* (s) {
+    withProducer(s)
+    s.turnEnd = SessionTurnEnd.structuredOutput(s.db).run
+    yield* s.session.prompt({
+      sessionID,
+      text: "Work",
+      turn: { maxSteps: 2, output: { schema: { type: "object" } } },
+      resume: false,
+    })
+    yield* s.llm.push(TestLLM.stop())
+    yield* s.resume.pipe(Effect.ignore)
+
+    expect(budgets(s.requests[0])[0]).toContain("Make that hand-in in this response")
+  })
+
   scenario("calls the only step of a one-step turn the last one", function* (s) {
     withProducer(s)
     yield* s.session.prompt({ sessionID, text: "Work", turn: { maxSteps: 1 }, resume: false })

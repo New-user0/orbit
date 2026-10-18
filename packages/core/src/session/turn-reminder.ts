@@ -52,10 +52,13 @@ export const durable = (db: Database.Interface["db"]): Durable => ({
           : [{ name: "Tokens", used: spent.tokens, max: options.maxTokens, show: whole }]),
       ]
       const lastStep = options.maxSteps !== undefined && options.maxSteps - spent.steps <= 1
-      const wrapUp = lastStep || limits.some((limit) => limit.used >= limit.max * WRAP_UP)
       const answered = options.output
         ? (yield* SessionOutput.progress(db, input.session.id, options.seq)).latest === "accepted"
         : true
+      // A hand-in is a tool call, and an accepted one still needs a further request to close the turn. With a step
+      // limit, the hand-in therefore has to arrive one step earlier than a plain written answer.
+      const handInDue = !answered && options.maxSteps !== undefined && options.maxSteps - spent.steps <= 2
+      const wrapUp = lastStep || handInDue || limits.some((limit) => limit.used >= limit.max * WRAP_UP)
       const answer = "your final answer"
       const handIn = answered
         ? []
@@ -77,10 +80,15 @@ export const durable = (db: Database.Interface["db"]): Durable => ({
               `so ${answer} has to come before that.`,
             ...(wrapUp ? [`A limit is nearly used up. Do not start new work; give ${answer} now.`] : []),
             ...handIn,
+            ...(handInDue && !lastStep
+              ? [
+                  "Make that hand-in in this response: once it is accepted, one more request is needed to close the turn.",
+                ]
+              : []),
             ...(lastStep
               ? [
-                  "This response is the last one of the turn. Tool calls made in it get no follow-up request, " +
-                    `so the response itself must carry ${answer}.`,
+                  "This response is the last one of the turn. Tool calls made in it get no follow-up request" +
+                    (answered ? `, so the response itself must carry ${answer}.` : "."),
                 ]
               : []),
           ].join("\n"),
