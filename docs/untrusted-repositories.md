@@ -1381,7 +1381,9 @@ runs" is a permission.
   step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
   receives a migrated `small_model`, and `side`, and in every command) and an agent's `steps` are
   `withhold("providers")`.
-  `fallback_model`, `output_token_cap` and `shell_tool` (its timeouts are a budget; `test/config/shell-tool.test.ts` pins it)
+  `fallback_model`, `output_token_cap`, `shell_tool` (its timeouts are a budget; `test/config/shell-tool.test.ts` pins it),
+  `media`, `tool_output` and `compaction` (they set how much each paid request carries; the "keeps an untrusted folder
+  from setting" rows in `test/config/trust.test.ts` pin them)
   are withheld the same way (`test/config/trust.test.ts` pins each of the others). Never
   classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets

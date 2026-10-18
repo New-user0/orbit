@@ -253,7 +253,10 @@ While a folder is untrusted, `ConfigTrust` takes these out of its config documen
 files, keeps the rest of each entry, and reports the `providers` kind as withheld: the top-level `model`, the `model`
 and `steps` of every agent (so also `agents.title.model`, which `small_model` migrates to, and `agents.side.model`,
 which pins the model of side queries), and the `model` of every command. Orbit uses your own settings instead.
-Trusting the folder restores them. The config has no other field that picks a model, a provider or a budget today.
+Trusting the folder restores them. The top-level `fallback_model`, `output_token_cap`, `shell_tool`, `media`,
+`tool_output` and `compaction` are withheld the same way: the last three set how much each paid request carries (image
+size, the length of tool output, and when and how a conversation is compacted), so a repository no longer sets them
+until its folder is trusted. Your own values for them stand meanwhile.
 
 A workflow or suite file in an untrusted folder can no longer pick a model either. `orb flow run`, `flow resume` and
 `eval` stop, with the usual untrusted-folder message and exit 1, before any model is asked, when a YAML or JSON file sets
@@ -268,7 +271,7 @@ A folder whose only config is one of these now counts as holding config back. Th
 the others) stop in it with the usual untrusted-folder message and exit 1, and the terminal UI and VS Code show the
 trust prompt, which lists the `providers` kind.
 
-**Affects:** a repository that sets `model`, an agent's `model` or `steps`, or a command's `model` in its own
+**Affects:** a repository that sets `model`, an agent's `model` or `steps`, a command's `model`, `media`, `tool_output` or `compaction` in its own
 `orbit.json` or in a file of its `.orbit` directory, until its folder is trusted.
 
 **What to do:** Nothing for your own config. To use a repository's model settings, run `orb trust` in it, or set them in

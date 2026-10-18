@@ -108,6 +108,10 @@ describe("ConfigTrust.sanitize", () => {
     ["fallback_model", "acme/backup", "providers"],
     ["model_aliases", { small: "acme/cheap", large: "acme/big" }, "providers"],
     ["output_token_cap", 8000, "providers"],
+    // Budgets: how much each paid request carries.
+    ["media", { image: { auto_resize: false } }, "providers"],
+    ["tool_output", { max_lines: 100 }, "providers"],
+    ["compaction", { auto: false, buffer: 100 }, "providers"],
     ["update", "auto", "network"],
     ["share", "auto", "network"],
     ["enterprise", { url: "https://share.example.com" }, "network"],
@@ -176,9 +180,6 @@ describe("ConfigTrust.sanitize", () => {
       username: "dev",
       snapshots: false,
       watcher: { ignore: ["dist"] },
-      media: { image: { auto_resize: false } },
-      tool_output: { max_lines: 100 },
-      compaction: { auto: false, buffer: 100 },
       compatibility: { enabled: true },
       warming: false,
       git_status: false,
@@ -664,6 +665,24 @@ describe("ConfigTrust.stamp", () => {
         expect(partial.info.instructions_exclude).toEqual(["**/third_party/**/AGENTS.md"])
       }
     })
+  })
+
+  // FU-M2-021: these set how much each paid request carries, so an untrusted folder cannot set them, and the user's own
+  // value stands. A trusted folder's value outranks the user's, as it does for every other field.
+  test.each([
+    ["media", { image: { auto_resize: false } }, { image: { auto_resize: true } }],
+    ["tool_output", { max_lines: 100 }, { max_lines: 5000 }],
+    ["compaction", { auto: false, buffer: 100 }, { auto: true, buffer: 20000 }],
+  ] as const)("keeps an untrusted folder from setting %s", (field, projectValue, userValue) => {
+    const user = document("user", { [field]: userValue })
+    const project = document("project", { [field]: projectValue })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info[field]).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["providers"])
+    expect(Config.latest([user, ConfigTrust.stamp(project, place)], field)).toEqual(userValue)
+    // Control: trusted, the project's value stands.
+    expect(Config.latest([user, project], field)).toEqual(projectValue)
   })
 
   test("keeps a repository from masking the values the user set", () => {

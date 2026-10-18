@@ -271,17 +271,19 @@ export const classification = {
     hooks: withhold("hooks"),
     formatter: withhold("formatter"),
     lsp: withhold("lsp"),
-    media: inert,
+    // How much each paid request carries (image sizes, tool output length, when and how a conversation is compacted): a
+    // budget, withheld like the output cap.
+    media: withhold("providers"),
     // A project's value outranks the person's own, an empty one included, so it waits until the folder is trusted.
     attribution: withhold("settings"),
     sandbox: withhold("sandbox"),
     // A budget: a tiny timeout turns every command into a background job whose completion wakes the session for a paid
     // request, and the atomic value would replace the user's own.
     shell_tool: withhold("providers"),
-    tool_output: inert,
+    tool_output: withhold("providers"),
     tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
-    compaction: inert,
+    compaction: withhold("providers"),
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.
     compatibility: inert,
     skills: withhold("skills"),
