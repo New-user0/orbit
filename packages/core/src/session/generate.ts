@@ -2,6 +2,7 @@ export * as SessionGenerate from "./generate.js"
 
 import { LLMClient, Message, type AIError } from "@orbit/ai"
 import { Effect } from "effect"
+import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
 import { Instance } from "../instance/service.js"
 import { Plugin } from "../plugin/service.js"
@@ -12,7 +13,9 @@ import { SessionHistory } from "./history.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionModelRequest } from "./model-request.js"
 import type { SessionRunnerModel } from "./runner/model.js"
+import { SessionEvent } from "./event.js"
 import type { SessionSchema } from "./schema.js"
+import { SessionUsage } from "./usage.js"
 
 export type Error = AgentNotFoundError | Instructions.InitializationBlocked | SessionRunnerModel.Error | AIError
 
@@ -49,6 +52,7 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
   session: SessionSchema.Info
   prompt: string
 }) {
+  const bus = yield* Bus.Service
   const instances = yield* Instance.Service
   const llm = yield* LLMClient.Service
 
@@ -73,6 +77,15 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
     })
     const response = yield* llm.generate(prepared.request, prepared.options)
     yield* Effect.logInfo("session generation usage diagnostic", { usage: response.usage })
+    // The provider billed the call, so it lands on the Session before the text is returned and counts toward the
+    // limits of the turn it runs in.
+    yield* bus
+      .publish(SessionEvent.SideQueryRecorded, {
+        sessionID: selection.session.id,
+        purpose: "session.generate",
+        ...SessionUsage.record(response.usage, model.cost),
+      })
+      .pipe(Effect.uninterruptible)
     return response.text
   }).pipe(instances.provide(input.session))
 })

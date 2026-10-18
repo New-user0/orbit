@@ -10,6 +10,7 @@ import { Bus } from "../bus.js"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { isExactRootFallback } from "@orbit/util/session-title-fallback"
 import { llmClient } from "../effect/app-node-platform.js"
+import { SessionCompaction } from "./compaction.js"
 import { SessionContext } from "./context.js"
 import { SessionEvent } from "./event.js"
 import { SessionHistory } from "./history.js"
@@ -17,6 +18,7 @@ import type { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
 import { SessionUsage } from "./usage.js"
 import { SessionStore } from "./store.js"
+import { Token } from "../util/token.js"
 
 const MAX_LENGTH = 100
 const MAX_CONTEXT_LENGTH = 8_000
@@ -55,15 +57,8 @@ export const layer = Layer.effect(
       const chunks: string[] = []
       let failed = false
       let usage: SessionUsage.Recorded | undefined
-      const recordUsage = Effect.suspend(() =>
-        usage
-          ? bus.publish(SessionEvent.UsageRecorded, {
-              sessionID: input.session.id,
-              source: "title",
-              ...usage,
-            })
-          : Effect.void,
-      )
+      let observed = false
+      let streamedLength = 0
       const prepared = yield* context.request.title({
         session: input.session,
         agent: input.agent.id,
@@ -72,10 +67,30 @@ export const layer = Layer.effect(
         messages: [Message.user(input.text)],
       })
       if (prepared.event.result !== undefined) return prepared.event.result
+      // A call that failed or was interrupted after the response began was probably billed, though its usage never
+      // arrived: an estimate keeps it from reading as free. A request the provider refused outright billed nothing.
+      const recordUsage = (unfinished: boolean) =>
+        Effect.suspend(() => {
+          const spent =
+            usage ??
+            (unfinished && observed
+              ? SessionUsage.estimate(input.model.cost, {
+                  input: SessionCompaction.estimateRequest(prepared.request),
+                  output: Token.estimateLength(streamedLength),
+                })
+              : undefined)
+          return spent
+            ? bus.publish(SessionEvent.UsageRecorded, { sessionID: input.session.id, source: "title", ...spent })
+            : Effect.void
+        })
       yield* llm.stream(prepared.request, prepared.options).pipe(
         Stream.runForEach((event) => {
           if (LLMEvent.is.providerError(event)) failed = true
-          if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
+          else observed = true
+          if (LLMEvent.is.textDelta(event)) {
+            chunks.push(event.text)
+            streamedLength += event.text.length
+          }
           if (LLMEvent.is.stepFinish(event)) {
             const step = SessionUsage.record(event.usage, input.model.cost)
             usage = usage ? SessionUsage.add(usage, step) : step
@@ -87,9 +102,9 @@ export const layer = Layer.effect(
             failed = true
           }),
         ),
-        Effect.onInterrupt(() => recordUsage.pipe(Effect.asVoid)),
+        Effect.onInterrupt(() => recordUsage(true)),
       )
-      yield* recordUsage
+      yield* recordUsage(failed)
       if (failed) return
       return chunks
         .join("")

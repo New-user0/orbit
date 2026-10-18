@@ -580,6 +580,7 @@ for (const { persist, it } of modes) {
           cost: Money.USD.make(spend.cost ?? 1),
           tokens: spend.tokens ?? { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
         })
+        return assistantMessageID
       })
     // A response that failed mid-stream: started, then failed with no usage, so the row carries no cost.
     const respondFailed = (id: Session.ID, at: number) =>
@@ -660,6 +661,7 @@ for (const { persist, it } of modes) {
           cost: 1 + 2 + 4 + 8 + 16 + 32 + 64,
           tokens: 5 * 24 + 2 * 11,
           unknown: 0,
+          unknownTokens: 0,
         })
       }),
     )
@@ -686,6 +688,7 @@ for (const { persist, it } of modes) {
           cost: 1 + 2 + 4 + 8,
           tokens: 24 * 3 + 11,
           unknown: 0,
+          unknownTokens: 0,
         })
       }),
     )
@@ -703,6 +706,298 @@ for (const { persist, it } of modes) {
         // A subagent whose response carried no usage at all.
         yield* respond(childID, 1_100, { cost: 0, tokens: noTokens })
         expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).unknown).toBe(1)
+      }),
+    )
+
+    // What a side query, a retried attempt or a generation records: the same tokens as a usage record.
+    const sideQuery = (id: Session.ID, cost: number, tokens = { input: 5, output: 3, reasoning: 1, cache: { read: 50, write: 2 } }) =>
+      Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        yield* bus.publish(SessionEvent.SideQueryRecorded, {
+          sessionID: id,
+          purpose: "webfetch.summarize",
+          cost: Money.USD.make(cost),
+          tokens,
+        })
+      })
+    // A response that called a tool, so it is a step whatever else follows it.
+    const respondWithTool = (id: Session.ID, at: number, finish: "length" | "tool-calls", cost = 1) =>
+      Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* bus.publish(SessionEvent.Step.Started, {
+          sessionID: id,
+          assistantMessageID,
+          agent: Agent.ID.make("build"),
+          model: primary,
+          started: at,
+        })
+        yield* bus.publish(SessionEvent.Tool.Input.Started, {
+          sessionID: id,
+          assistantMessageID,
+          id: `call-${at}`,
+          name: "echo",
+        })
+        yield* bus.publish(SessionEvent.Step.Ended, {
+          sessionID: id,
+          assistantMessageID,
+          finish,
+          cost: Money.USD.make(cost),
+          tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
+        })
+      })
+
+    // FU-M2-018: side-query spend counts toward the turn, in the Session and in its subagents.
+    it.effect("counts a side query's spend and leaves out one from before the prompt", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* children
+        yield* sideQuery(sessionID, 100)
+        yield* sideQuery(childID, 100)
+        yield* TestClock.adjust("1 second")
+        yield* s.admit("Now", { turn: { maxCost: Money.USD.make(0.01), maxTokens: 10 } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        yield* TestClock.adjust("1 second")
+        yield* sideQuery(sessionID, 0.02)
+        yield* sideQuery(childID, 0.04)
+        yield* sideQuery(strangerID, 1_000)
+
+        const spent = yield* SessionTurn.usage(s.db, sessionID, since(turn))
+        expect(spent.cost).toBeCloseTo(0.06)
+        expect(spent.tokens).toBe(22)
+        expect(spent.unknown).toBe(0)
+        expect(SessionTurn.exceeded({ maxCost: Money.USD.make(0.05) }, spent, true)?.type).toBe("limit.cost")
+        expect(SessionTurn.exceeded({ maxTokens: 22 }, spent, true)?.type).toBe("limit.tokens")
+        expect(SessionTurn.exceeded({ maxCost: Money.USD.make(0.07), maxTokens: 23 }, spent, true)).toBeUndefined()
+      }),
+    )
+
+    it.effect("counts a side query that carried tokens and no cost as unknown", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxCost: Money.USD.make(5) } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        yield* sideQuery(sessionID, 0)
+
+        const spent = yield* SessionTurn.usage(s.db, sessionID, since(turn))
+        expect(spent).toMatchObject({ unknown: 1, unknownTokens: 0 })
+        expect(SessionTurn.exceeded({ maxCost: Money.USD.make(5) }, spent, true)?.type).toBe("limit.cost-unknown")
+      }),
+    )
+
+    // FU-M2-055: a record with no tokens at all is spend the provider did not report, not free spend.
+    it.effect("counts a usage record with no tokens and no cost as unknown for cost and for tokens", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxCost: Money.USD.make(5), maxTokens: 500 } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        const bus = yield* Bus.Service
+        yield* bus.publish(SessionEvent.UsageRecorded, {
+          sessionID,
+          source: "title",
+          cost: Money.USD.make(0),
+          tokens: noTokens,
+        })
+
+        const spent = yield* SessionTurn.usage(s.db, sessionID, since(turn))
+        expect(spent).toMatchObject({ unknown: 1, unknownTokens: 1 })
+        expect(SessionTurn.exceeded({ maxCost: Money.USD.make(5) }, spent, true)?.type).toBe("limit.cost-unknown")
+      }),
+    )
+
+    // FU-M2-056: a token limit does not read a response that reported no usage as zero tokens.
+    it.effect("refuses a token limit when a finished response reported no tokens, and not when it reported some", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxTokens: 500 } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        yield* respond(sessionID, 1_000)
+        const control = yield* SessionTurn.usage(s.db, sessionID, since(turn))
+        expect(control.unknownTokens).toBe(0)
+        expect(SessionTurn.exceeded({ maxTokens: 500 }, control, true)).toBeUndefined()
+
+        yield* respond(sessionID, 1_100, { cost: 0, tokens: noTokens })
+        const spent = yield* SessionTurn.usage(s.db, sessionID, since(turn))
+        expect(spent.unknownTokens).toBe(1)
+        expect(SessionTurn.exceeded({ maxTokens: 500 }, spent, true)?.type).toBe("limit.tokens-unknown")
+      }),
+    )
+
+    it.effect("keeps the unknown counts of cost and of tokens apart", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxTokens: 500 } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        // A response with tokens and a cost of zero: its price is unknown, its size is not.
+        yield* respond(sessionID, 1_000, { cost: 0 })
+        const spent = yield* SessionTurn.usage(s.db, sessionID, since(turn))
+        expect(spent).toMatchObject({ unknown: 1, unknownTokens: 0 })
+        expect(SessionTurn.exceeded({ maxTokens: 500 }, spent, true)).toBeUndefined()
+      }),
+    )
+
+    // FU-M2-078: a cut-off that its escalation or a resume continues is part of one logical step.
+    it.effect("counts an escalated cut-off as part of its step and still counts what it cost", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxSteps: 1 } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        const cutOff = yield* respond(sessionID, 1_000, { cost: 1, finish: "length" })
+        yield* s.notice("output-escalation", { replaces: cutOff })
+        yield* respond(sessionID, 2_000, { cost: 2 })
+
+        expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toMatchObject({ steps: 1, cost: 3 })
+      }),
+    )
+
+    const logicalSteps: ReadonlyArray<
+      readonly [string, (s: Effect.Success<typeof harness>) => Effect.Effect<void, unknown, Bus.Service>, number]
+    > = [
+      [
+        "a text-only cut-off and its resume",
+        (s) =>
+          Effect.gen(function* () {
+            yield* respond(sessionID, 1_000, { finish: "length" })
+            yield* s.notice("output-limit")
+            yield* respond(sessionID, 2_000)
+          }),
+        1,
+      ],
+      [
+        "three resumes in a row",
+        (s) =>
+          Effect.gen(function* () {
+            yield* respond(sessionID, 1_000, { finish: "length" })
+            yield* s.notice("output-limit")
+            yield* respond(sessionID, 2_000, { finish: "length" })
+            yield* s.notice("output-limit")
+            yield* respond(sessionID, 3_000, { finish: "length" })
+            yield* s.notice("output-limit")
+            yield* respond(sessionID, 4_000)
+          }),
+        1,
+      ],
+      [
+        "a cut-off that called a tool",
+        (s) =>
+          Effect.gen(function* () {
+            yield* respondWithTool(sessionID, 1_000, "length")
+            yield* s.notice("output-limit")
+            yield* respond(sessionID, 2_000)
+          }),
+        2,
+      ],
+      [
+        "a cut-off at the cap, which nothing continues",
+        () => respond(sessionID, 1_000, { finish: "length" }),
+        1,
+      ],
+      [
+        "an overload retry that left a failed response",
+        () =>
+          Effect.gen(function* () {
+            yield* respondFailed(sessionID, 1_000)
+            yield* respond(sessionID, 2_000)
+          }),
+        1,
+      ],
+    ]
+    for (const [name, spend, steps] of logicalSteps)
+      it.effect(`counts ${name} as ${steps} ${steps === 1 ? "step" : "steps"}`, () =>
+        Effect.gen(function* () {
+          const s = yield* harness
+          yield* s.admit("Now", { turn: { maxSteps: 9 } })
+          yield* s.promote("input")
+          const turn = yield* s.current
+          yield* spend(s)
+
+          expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).steps).toBe(steps)
+        }),
+      )
+
+    it.effect("leaves the response the runner is about to continue out of the steps", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxSteps: 9 } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        const cutOff = yield* respond(sessionID, 1_000, { finish: "length" })
+
+        expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).steps).toBe(1)
+        expect((yield* SessionTurn.usage(s.db, sessionID, since(turn), cutOff)).steps).toBe(0)
+      }),
+    )
+
+    // FU-M2-113: a response counts from the moment the provider reported it, once.
+    it.effect("counts a reported response whose step has not ended, and not again once it has", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxCost: Money.USD.make(100) } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        const bus = yield* Bus.Service
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* bus.publish(SessionEvent.Step.Started, {
+          sessionID,
+          assistantMessageID,
+          agent: Agent.ID.make("build"),
+          model: primary,
+          started: 1_000,
+        })
+        SessionTurn.reportStep(sessionID, assistantMessageID, {
+          cost: Money.USD.make(7),
+          tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
+        })
+        yield* Effect.gen(function* () {
+          expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toMatchObject({ cost: 7, tokens: 24, unknown: 0 })
+
+          yield* bus.publish(SessionEvent.Step.Ended, {
+            sessionID,
+            assistantMessageID,
+            finish: "tool-calls",
+            cost: Money.USD.make(7),
+            tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
+          })
+          // The step has ended but the table has not been cleared yet: the row now carries it.
+          expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toMatchObject({ cost: 7, tokens: 24 })
+        }).pipe(Effect.ensuring(Effect.sync(() => SessionTurn.settleStep(sessionID, assistantMessageID))))
+        expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toMatchObject({ cost: 7, tokens: 24 })
+      }),
+    )
+
+    it.effect("counts a subagent's check against the parent's reported but unended step", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxCost: Money.USD.make(5) } })
+        yield* s.promote("input")
+        yield* children
+        const bus = yield* Bus.Service
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* bus.publish(SessionEvent.Step.Started, {
+          sessionID,
+          assistantMessageID,
+          agent: Agent.ID.make("build"),
+          model: primary,
+          started: 1_000,
+        })
+        // The child has no turn of its own; its parent's turn limits it.
+        expect(yield* SessionTurn.ancestorLimit(s.db, childID, true)).toBeUndefined()
+        SessionTurn.reportStep(sessionID, assistantMessageID, {
+          cost: Money.USD.make(7),
+          tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
+        })
+        const limit = yield* SessionTurn.ancestorLimit(s.db, childID, true).pipe(
+          Effect.ensuring(Effect.sync(() => SessionTurn.settleStep(sessionID, assistantMessageID))),
+        )
+
+        expect(limit?.type).toBe("limit.cost")
+        expect(yield* SessionTurn.ancestorLimit(s.db, childID, true)).toBeUndefined()
       }),
     )
 
@@ -730,6 +1025,85 @@ for (const { persist, it } of modes) {
           }),
         )
 
+    // FU-M2-088: a wake-up finds the turn it continues in a bounded number of reads, however many wake-ups came between.
+    const counted = (db: Database.Interface["db"]) => {
+      const calls = { reads: 0 }
+      const proxy = new Proxy(db, {
+        get(target, key) {
+          const value: unknown = target[key as keyof typeof target]
+          if (typeof value !== "function") return value
+          return (...args: unknown[]) => {
+            calls.reads += 1
+            return (value as (...inner: unknown[]) => unknown).apply(target, args)
+          }
+        },
+      })
+      return { db: proxy, calls }
+    }
+    for (const delivery of ["steer", "queue"] as const)
+      it.effect(`reads the options of a ${delivery} wake-up in the same reads after 5 or 60 wake-up turns`, () =>
+        Effect.gen(function* () {
+          const s = yield* harness
+          yield* s.admit("A", { turn: { maxSteps: 3 } })
+          yield* s.promote("input")
+          yield* s.idle
+          const reads: number[] = []
+          let done = 0
+          for (const total of [5, 60]) {
+            for (; done < total; done++) {
+              yield* s.admitSynthetic(`Background ${done}`, delivery)
+              yield* s.promote("input")
+              yield* s.idle
+            }
+            yield* s.admitSynthetic("Last", delivery)
+            yield* s.promote("input")
+            const probe = counted(s.db)
+            const turn = yield* SessionTurn.current(probe.db, sessionID)
+            expect(turn.options).toMatchObject({ maxSteps: 3 })
+            reads.push(probe.calls.reads)
+            yield* s.idle
+            done += 1
+          }
+          expect(reads[1]).toBe(reads[0]!)
+        }),
+        { timeout: 60_000 },
+      )
+
+    // FU-M2-098: a fresh prompt never inherits the spent limit of the turn before it, whatever waited beside it.
+    for (const delivery of ["steer", "queue"] as const)
+      it.effect(`gives a fresh prompt no options when a background notice waits ahead of it (${delivery})`, () =>
+        Effect.gen(function* () {
+          const s = yield* harness
+          yield* s.admit("A", { turn: { maxSteps: 1 } })
+          yield* s.promote("input")
+          yield* respond(sessionID, 1_000)
+          yield* s.idle
+          yield* s.admitSynthetic("Background work finished", delivery)
+          const fresh = yield* s.admit("Fresh", { delivery })
+          yield* s.promote("input")
+          if (delivery === "queue") yield* s.promote("input")
+
+          const turn = yield* s.current
+          expect(turn.options).toBeUndefined()
+          expect(yield* s.seq(fresh.id)).toBeGreaterThanOrEqual(turn.boundary ?? Number.MAX_SAFE_INTEGER)
+        }),
+      )
+
+    // The wake-up of a turn that ended at an idle marker continues that turn's limits, steered or queued alike.
+    for (const delivery of ["steer", "queue"] as const)
+      it.effect(`continues the limits of the turn before the idle marker for a ${delivery} wake-up`, () =>
+        Effect.gen(function* () {
+          const s = yield* harness
+          yield* s.admit("A", { turn: { maxSteps: 3 } })
+          yield* s.promote("input")
+          yield* s.idle
+          yield* s.admitSynthetic("Background work finished", delivery)
+          yield* s.promote("input")
+
+          expect((yield* s.current).options).toMatchObject({ maxSteps: 3 })
+        }),
+      )
+
     if (persist)
     it.effect("is the same after the session's events are replayed", () =>
       Effect.gen(function* () {
@@ -755,7 +1129,7 @@ for (const { persist, it } of modes) {
 }
 
 describe("SessionTurn.exceeded", () => {
-  const spent = { steps: 2, cost: 3, tokens: 100, unknown: 0 }
+  const spent = { steps: 2, cost: 3, tokens: 100, unknown: 0, unknownTokens: 0 }
   const table: ReadonlyArray<readonly [string, SessionTurn.Options, SessionTurn.Usage, boolean, string | undefined]> = [
     ["no limit", {}, spent, true, undefined],
     ["under every limit", { maxSteps: 3, maxCost: Money.USD.make(4), maxTokens: 101 }, spent, true, undefined],

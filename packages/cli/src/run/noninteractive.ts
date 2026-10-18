@@ -19,7 +19,7 @@ import { Option, Schema } from "effect"
 import {
   GLOBAL_FORM_SESSION_ID,
   contentKey,
-  countedFinishes,
+  stepIDs,
   decodeEscalation,
   decodeNotice,
   echoes,
@@ -867,6 +867,7 @@ export async function runNonInteractivePrompt(input: Input) {
     const projected = await projectedMessages()
     structured = structuredAnswer(projected.messages)
     Object.assign(spent, { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
+    const steps = stepIDs(projected.messages)
     for (const message of projected.messages) {
       if (message.type === "synthetic") {
         replace(message.id, message.metadata, message.description, message.time.created)
@@ -875,7 +876,7 @@ export async function runNonInteractivePrompt(input: Input) {
       if (message.type !== "assistant") continue
       // Only a response that finished one of these ways is a step, though what any response spent counts, as the
       // server counts them (a failed or unknown finish is not a step).
-      if (message.finish && countedFinishes.has(message.finish)) spent.steps += 1
+      if (steps.has(message.id)) spent.steps += 1
       spent.cost += message.cost ?? 0
       spent.input += message.tokens?.input ?? 0
       spent.output += message.tokens?.output ?? 0

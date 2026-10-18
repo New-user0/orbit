@@ -13,6 +13,7 @@ import { SessionContext } from "./session/context.js"
 import { SessionEvent } from "./session/event.js"
 import { SessionGenerate } from "./session/generate.js"
 import type { SessionSchema } from "./session/schema.js"
+import { SessionCompaction } from "./session/compaction.js"
 import { SessionStore } from "./session/store.js"
 import { SessionUsage } from "./session/usage.js"
 import { llmClient } from "./effect/app-node-platform.js"
@@ -110,6 +111,9 @@ export const layer = Layer.effect(
       const session = yield* store.get(input.sessionID)
       if (!session) return yield* new UnavailableError({ message: `Session not found: ${input.sessionID}` })
       const timeout = input.timeout ?? DEFAULT_TIMEOUT
+      // Set once the request is about to leave, so a deadline that fires before that records nothing, and cleared once
+      // the provider's own figures are recorded.
+      let sent: SessionUsage.Recorded | undefined
       return yield* Effect.gen(function* () {
         yield* Plugin.awaitActivation
         const context = yield* SessionContext.Service
@@ -136,14 +140,19 @@ export const layer = Layer.effect(
           : prepared.request.tools.length > 0
             ? LLMRequest.update(prepared.request, { toolChoice: ToolChoice.make("none") })
             : prepared.request
+        // A call the deadline cuts off was probably billed, and its usage never arrives: the whole prompt and, with no
+        // reply to measure, the largest reply the request allows.
+        sent = SessionUsage.estimate(model.cost, {
+          input: SessionCompaction.estimateRequest(request),
+          output: request.generation?.maxTokens ?? model.limit.output,
+        })
         const response = yield* llm.generate(request, prepared.options)
         // Recorded before the output is decoded: the provider billed the call whether or not it is usable.
         const usage = SessionUsage.record(response.usage, model.cost)
-        yield* bus.publish(SessionEvent.SideQueryRecorded, {
-          sessionID: session.id,
-          purpose: input.purpose,
-          ...usage,
-        })
+        sent = undefined
+        yield* bus
+          .publish(SessionEvent.SideQueryRecorded, { sessionID: session.id, purpose: input.purpose, ...usage })
+          .pipe(Effect.uninterruptible)
         return { response, model: model.ref }
       }).pipe(
         instances.provide(session),
@@ -152,14 +161,30 @@ export const layer = Layer.effect(
         Effect.timeoutOrElse({
           duration: timeout,
           orElse: () =>
-            Effect.fail(
-              new TimeoutError({ message: `Side query ${input.purpose} timed out after ${Duration.format(timeout)}` }),
+            Effect.suspend(() =>
+              sent
+                ? bus.publish(SessionEvent.SideQueryRecorded, {
+                    sessionID: session.id,
+                    purpose: input.purpose,
+                    ...sent,
+                  })
+                : Effect.void,
+            ).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new TimeoutError({
+                    message: `Side query ${input.purpose} timed out after ${Duration.format(timeout)}`,
+                  }),
+                ),
+              ),
             ),
         }),
         // A throwing plugin hook or an incompatible provider context is a defect, and still only costs the caller its answer.
         Effect.catchDefect((defect) =>
           Effect.logWarning("side query failed", { purpose: input.purpose, defect }).pipe(
-            Effect.andThen(Effect.fail(new UnavailableError({ message: "The side query could not run", cause: defect }))),
+            Effect.andThen(
+              Effect.fail(new UnavailableError({ message: "The side query could not run", cause: defect })),
+            ),
           ),
         ),
         // A provider failure (401, 429, 5xx) reaches the caller only as "could not run", so this is the one place that

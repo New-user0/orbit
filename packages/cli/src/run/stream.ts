@@ -18,7 +18,7 @@ import { waitForBackground } from "@orbit/flow/background"
 import {
   GLOBAL_FORM_SESSION_ID,
   contentKey,
-  countedFinishes,
+  stepIDs,
   decodeEscalation,
   decodeNotice,
   echoes,
@@ -1135,7 +1135,7 @@ function tally(
 function spentFromHistory(messages: SessionMessageInfo[]) {
   const assistants = messages.filter((message) => message.type === "assistant")
   return {
-    steps: assistants.filter((message) => message.finish && countedFinishes.has(message.finish)).length,
+    steps: stepIDs(messages).size,
     cost: assistants.reduce((total, message) => total + (message.cost ?? 0), 0),
     tokens: assistants.reduce(
       (total, message) => ({

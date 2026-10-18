@@ -10,6 +10,7 @@ import { MessageDecodeError } from "./error.js"
 import { SessionHistory } from "./history.js"
 import { SessionSchema } from "./schema.js"
 import { SessionMessageTable, SessionTable } from "./sql.js"
+import { SessionUsage } from "./usage.js"
 
 export { Options }
 
@@ -226,35 +227,88 @@ const wakeUpOptions = Effect.fnUntraced(function* (
     .all()
     .pipe(Effect.orDie)
   if (kinds.some((row) => row.type === "user") || !kinds.some((row) => row.type === "synthetic")) return undefined
-  // The turn that ended before the boundary: the idle marker (or the queued input) itself is not part of it.
-  return (yield* current(db, sessionID, { seq: boundary })).options
+  // The nearest user prompt before the boundary began the turn this wake-up continues: every turn between them holds
+  // synthetic input only, so one lookup replaces a walk through them. That turn is read as it stood right after the
+  // prompt. A steered wake-up and a queued one find the same prompt, whatever idle markers lie between.
+  const prompt = yield* db
+    .select({ seq: SessionMessageTable.seq })
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        eq(SessionMessageTable.type, "user"),
+        visible,
+        lt(SessionMessageTable.seq, boundary),
+      ),
+    )
+    .orderBy(desc(SessionMessageTable.seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  if (!prompt) return undefined
+  return (yield* current(db, sessionID, { seq: prompt.seq + 1 })).options
 })
 
 export interface Usage {
-  /** Responses in the Session that ended with finish `stop`, `length`, `tool-calls` or `content-filter`. */
+  /**
+   * Responses in the Session that ended with finish `stop`, `length`, `tool-calls` or `content-filter`. A text-only
+   * reply that was cut off at the output limit and then escalated or resumed is one logical step with what continues
+   * it, so the cut-off attempt is not counted again.
+   */
   readonly steps: number
   readonly cost: number
   /** Input, cache write, output and reasoning tokens. */
   readonly tokens: number
   /**
-   * Responses and usage records, the Session's own or a subagent's, whose price is unknown: a finished response with
-   * no recorded cost or no tokens at all, any response or record with tokens and a cost of zero, a response that failed
-   * with no recorded cost. They add nothing (or nothing real) to `cost`, so a
-   * cost limit must not read them as free.
+   * Responses and usage records, the Session's own or a subagent's, whose price is unknown: a finished response or
+   * record with no recorded cost or no tokens at all, any response or record with tokens and a cost of zero, a
+   * response that failed with no recorded cost. They add nothing (or nothing real) to `cost`, so a cost limit must not
+   * read them as free.
    */
   readonly unknown: number
+  /**
+   * Finished responses and usage records that reported no tokens at all (a provider that omits usage), and responses
+   * that failed with no token record. They add nothing to `tokens`, so a token limit must not read them as free. A
+   * priced response with tokens and a zero cost is unknown for cost only.
+   */
+  readonly unknownTokens: number
+}
+
+/**
+ * The usage a response has reported but `Step.Ended` has not yet recorded, by Session and assistant message. The event
+ * waits for every tool of the response to finish, and a foreground subagent runs inside that window, so a limit check
+ * made by the subagent would miss the step that started it. A Session and its subagents run in one process, and after
+ * a crash the step reruns and is read from its rows again.
+ */
+const open = new Map<
+  string,
+  { readonly sessionID: SessionSchema.ID; readonly messageID: string; readonly spent: SessionUsage.Recorded }
+>()
+
+/** Holds the usage the provider reported for a response until the event that records it is published. */
+export const reportStep = (sessionID: SessionSchema.ID, messageID: string, spent: SessionUsage.Recorded) => {
+  open.set(`${sessionID}/${messageID}`, { sessionID, messageID, spent })
+}
+
+/** Drops what `reportStep` held, once the row carries the usage or the response is abandoned. */
+export const settleStep = (sessionID: SessionSchema.ID, messageID: string) => {
+  open.delete(`${sessionID}/${messageID}`)
 }
 
 /**
  * What the turn spent since `since`: the Session's own responses and usage records after `since.seq`, plus those of
  * every descendant Session (a subagent, however deep) written at or after `since.time`. Pre-output retries leave no
- * response, and a response that failed mid-stream (finish `error`) is not a step, though its spend still counts. Usage
- * records carry the compaction and title spend, which a crash can leave without a row on the message.
+ * response (what they billed is a usage record), and a response that failed mid-stream (finish `error`) is not a step,
+ * though its spend still counts. Usage records carry the compaction, title, side-query and generation spend, which a
+ * crash can leave without a row on the message. A response that reported its usage but is not yet recorded counts
+ * through `reportStep`, until its row carries a cost.
  */
 export const usage = Effect.fn("SessionTurn.usage")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   since: { readonly seq: number; readonly time: DateTime.Utc },
+  /** A response the runner is about to continue in the same logical step, which is not a step yet. */
+  continuing?: string,
 ) {
   const time = DateTime.toEpochMillis(since.time)
   const descendants = sql`WITH RECURSIVE descendants(id) AS (
@@ -262,55 +316,112 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
     UNION
     SELECT child.id FROM session_v2 AS child JOIN descendants ON child.parent_id = descendants.id
   )`
-  const ended = sql`json_extract(data, '$.finish') IN ('stop', 'length', 'tool-calls', 'content-filter')`
-  const tokens = sql`coalesce(json_extract(data, '$.tokens.input'), 0) + coalesce(json_extract(data, '$.tokens.cache.write'), 0) + coalesce(json_extract(data, '$.tokens.output'), 0) + coalesce(json_extract(data, '$.tokens.reasoning'), 0)`
-  const read = sql`${tokens} + coalesce(json_extract(data, '$.tokens.cache.read'), 0)`
+  const ended = sql`json_extract(m.data, '$.finish') IN ('stop', 'length', 'tool-calls', 'content-filter')`
+  const tokens = sql`coalesce(json_extract(m.data, '$.tokens.input'), 0) + coalesce(json_extract(m.data, '$.tokens.cache.write'), 0) + coalesce(json_extract(m.data, '$.tokens.output'), 0) + coalesce(json_extract(m.data, '$.tokens.reasoning'), 0)`
+  const read = sql`${tokens} + coalesce(json_extract(m.data, '$.tokens.cache.read'), 0)`
   // Spend whose price is unknown: a finished response with no cost or no tokens, any response with tokens and a zero
   // cost (a model with no price, or a free one), and a failed one that recorded no cost.
-  const unpriced = sql`(${ended} AND (json_extract(data, '$.cost') IS NULL OR ${read} = 0))
-    OR (${read} > 0 AND coalesce(json_extract(data, '$.cost'), 0) = 0)
-    OR (json_extract(data, '$.finish') = 'error' AND json_extract(data, '$.cost') IS NULL)`
+  const unpriced = sql`(${ended} AND (json_extract(m.data, '$.cost') IS NULL OR ${read} = 0))
+    OR (${read} > 0 AND coalesce(json_extract(m.data, '$.cost'), 0) = 0)
+    OR (json_extract(m.data, '$.finish') = 'error' AND json_extract(m.data, '$.cost') IS NULL)`
+  // Spend whose size is unknown: a finished response that reported no tokens, and a failed one with no token record.
+  const untokened = sql`(${ended} AND ${read} = 0)
+    OR (json_extract(m.data, '$.finish') = 'error' AND json_extract(m.data, '$.tokens') IS NULL)`
+  // A text-only reply that was cut off is continued, in the same logical step, by the escalation or resume notice
+  // recorded after it and before the Session's next response. A cut-off that holds a tool part (a call, an input the cap
+  // cut off, or a hosted call) is a step of its own.
+  const textOnly = sql`NOT EXISTS (SELECT 1 FROM json_each(m.data, '$.content') WHERE json_extract(value, '$.type') = 'tool')`
+  const continued = sql`json_extract(m.data, '$.finish') = 'length'
+    AND ${textOnly}
+    AND EXISTS (
+      SELECT 1 FROM session_message AS n
+      WHERE n.session_id = m.session_id AND n.type = 'synthetic'
+        AND json_extract(n.data, '$.metadata.notice') IN ('output-limit', 'output-escalation')
+        AND n.seq > m.seq
+        AND n.seq < coalesce(
+          (SELECT min(a.seq) FROM session_message AS a WHERE a.session_id = m.session_id AND a.type = 'assistant' AND a.seq > m.seq),
+          9223372036854775807))`
   const messages = yield* db
-    .get<{ steps: number | null; cost: number | null; tokens: number | null; unknown: number | null }>(
+    .get<{
+      steps: number | null
+      cost: number | null
+      tokens: number | null
+      unknown: number | null
+      unknown_tokens: number | null
+    }>(
       sql`${descendants}
         SELECT
-          sum(CASE WHEN session_id = ${sessionID} AND ${ended} THEN 1 ELSE 0 END) AS steps,
-          sum(coalesce(json_extract(data, '$.cost'), 0)) AS cost,
+          sum(CASE WHEN m.session_id = ${sessionID} AND ${ended} AND NOT (${continued}) AND NOT (m.id IS ${continuing ?? null} AND ${textOnly}) THEN 1 ELSE 0 END) AS steps,
+          sum(coalesce(json_extract(m.data, '$.cost'), 0)) AS cost,
           sum(${tokens}) AS tokens,
-          sum(CASE WHEN ${unpriced} THEN 1 ELSE 0 END) AS unknown
-        FROM session_message
-        WHERE type = 'assistant'
-          AND ((session_id = ${sessionID} AND seq > ${since.seq})
-            OR (session_id IN (SELECT id FROM descendants) AND time_created >= ${time}))`,
+          sum(CASE WHEN ${unpriced} THEN 1 ELSE 0 END) AS unknown,
+          sum(CASE WHEN ${untokened} THEN 1 ELSE 0 END) AS unknown_tokens
+        FROM session_message AS m
+        WHERE m.type = 'assistant'
+          AND ((m.session_id = ${sessionID} AND m.seq > ${since.seq})
+            OR (m.session_id IN (SELECT id FROM descendants) AND m.time_created >= ${time}))`,
     )
     .pipe(Effect.orDie)
-  // Read from the projected table: the event log is empty unless the Bus persists, which CLI servers do not.
+  // Read from the projected table: the event log is empty unless the Bus persists, which CLI servers do not. Every
+  // kind counts: the retried attempts, side queries and generations that billed this Session are recorded beside the
+  // compaction and title spend, and a record that carries no cost or no tokens is as unknown as a response is.
   const recorded = yield* db
-    .get<{ cost: number | null; tokens: number | null; unknown: number | null }>(
+    .get<{ cost: number | null; tokens: number | null; unknown: number | null; unknown_tokens: number | null }>(
       sql`${descendants}
         SELECT
           sum(cost) AS cost,
           sum(tokens_input + tokens_cache_write + tokens_output + tokens_reasoning) AS tokens,
-          sum(CASE WHEN cost = 0 AND tokens_input + tokens_cache_read + tokens_cache_write + tokens_output + tokens_reasoning > 0 THEN 1 ELSE 0 END) AS unknown
+          sum(CASE WHEN cost = 0 THEN 1 ELSE 0 END) AS unknown,
+          sum(CASE WHEN tokens_input + tokens_cache_read + tokens_cache_write + tokens_output + tokens_reasoning = 0 THEN 1 ELSE 0 END) AS unknown_tokens
         FROM session_usage
-        WHERE kind = 'usage'
-          AND ((session_id = ${sessionID} AND seq > ${since.seq})
-            OR (session_id IN (SELECT id FROM descendants) AND time_created >= ${time}))`,
+        WHERE (session_id = ${sessionID} AND seq > ${since.seq})
+          OR (session_id IN (SELECT id FROM descendants) AND time_created >= ${time})`,
     )
     .pipe(Effect.orDie)
+  const pending = yield* openUsage(db, sessionID, descendants)
   return {
     steps: messages?.steps ?? 0,
-    cost: (messages?.cost ?? 0) + (recorded?.cost ?? 0),
-    tokens: (messages?.tokens ?? 0) + (recorded?.tokens ?? 0),
-    unknown: (messages?.unknown ?? 0) + (recorded?.unknown ?? 0),
+    cost: (messages?.cost ?? 0) + (recorded?.cost ?? 0) + pending.cost,
+    tokens: (messages?.tokens ?? 0) + (recorded?.tokens ?? 0) + pending.tokens,
+    unknown: (messages?.unknown ?? 0) + (recorded?.unknown ?? 0) + pending.unknown,
+    unknownTokens: (messages?.unknown_tokens ?? 0) + (recorded?.unknown_tokens ?? 0) + pending.unknownTokens,
   } satisfies Usage
 })
 
+/** The reported-but-unrecorded responses of the Session and its descendants whose row carries no cost yet. */
+const openUsage = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID, descendants: SQL) {
+  const sum = { cost: 0, tokens: 0, unknown: 0, unknownTokens: 0 }
+  if (open.size === 0) return sum
+  const family = new Set<string>([
+    sessionID,
+    ...(yield* db.all<{ id: string }>(sql`${descendants} SELECT id FROM descendants`).pipe(Effect.orDie)).map(
+      (row) => row.id,
+    ),
+  ])
+  for (const entry of [...open.values()].filter((entry) => family.has(entry.sessionID))) {
+    const row = yield* db
+      .get<{ cost: number | null }>(
+        sql`SELECT json_extract(data, '$.cost') AS cost FROM session_message WHERE session_id = ${entry.sessionID} AND id = ${entry.messageID}`,
+      )
+      .pipe(Effect.orDie)
+    // Once the step has ended the row holds the usage, and counting it here as well would count it twice.
+    if (row && row.cost !== null) continue
+    const tokens = entry.spent.tokens
+    const total = tokens.input + tokens.cache.write + tokens.output + tokens.reasoning
+    sum.cost += entry.spent.cost
+    sum.tokens += total
+    if (entry.spent.cost === 0 || total + tokens.cache.read === 0) sum.unknown += 1
+    if (total + tokens.cache.read === 0) sum.unknownTokens += 1
+  }
+  return sum
+})
+
 /**
- * The limit the turn has reached, as the error that ends it (`limit.cost-unknown` when a cost limit cannot be checked,
- * which is a refusal rather than a limit that was reached), or undefined when it may go on. A cost limit that cannot
- * be checked against a price fails here instead of reading missing spend as free: `priced` says whether the model about
- * to run has a price, and `spent.unknown` whether anything already spent lacks one.
+ * The limit the turn has reached, as the error that ends it (`limit.cost-unknown` or `limit.tokens-unknown` when a limit
+ * cannot be checked, which is a refusal rather than a limit that was reached), or undefined when it may go on. A limit
+ * that cannot be checked fails here instead of reading missing spend as free: `priced` says whether the model about to
+ * run has a price, and `spent.unknown` and `spent.unknownTokens` whether anything already spent lacks a cost or a
+ * token count.
  */
 export function exceeded(options: Options, spent: Usage, priced: boolean) {
   if (options.maxSteps !== undefined && spent.steps >= options.maxSteps)
@@ -337,6 +448,11 @@ export function exceeded(options: Options, spent: Usage, priced: boolean) {
     return {
       type: "limit.tokens",
       message: `The turn reached its limit of ${options.maxTokens} tokens after using ${spent.tokens}.`,
+    }
+  if (options.maxTokens !== undefined && spent.unknownTokens > 0)
+    return {
+      type: "limit.tokens-unknown",
+      message: `The turn has a limit of ${options.maxTokens} tokens, but ${spent.unknownTokens} of its responses or usage records reported no tokens, so its usage cannot be counted.`,
     }
   return undefined
 }

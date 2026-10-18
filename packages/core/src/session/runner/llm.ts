@@ -365,13 +365,14 @@ const layer = Layer.effect(
     const turnLimit = Effect.fnUntraced(function* (
       loaded: SessionContext.Loaded,
       turn: SessionTurn.Current["options"],
+      continuing?: SessionMessage.ID,
     ) {
       // A catalog entry with no price is a tier-less $0, which would let the turn spend without bound.
       const priced = loaded.model.cost.some((cost) => cost.tier === undefined && (cost.input > 0 || cost.output > 0))
       const own =
         !turn || (turn.maxSteps === undefined && turn.maxCost === undefined && turn.maxTokens === undefined)
           ? undefined
-          : SessionTurn.exceeded(turn, yield* SessionTurn.usage(db, loaded.session.id, turn), priced)
+          : SessionTurn.exceeded(turn, yield* SessionTurn.usage(db, loaded.session.id, turn, continuing), priced)
       // A subagent carries no turn options of its own, so the turn it works for limits it too.
       return own ?? (yield* SessionTurn.ancestorLimit(db, loaded.session.id, priced))
     })
@@ -517,7 +518,13 @@ const layer = Layer.effect(
             // A finished response is not an overload, so it restarts the count of overloads in a row.
             overloads = 0
             // Fail with the limit now, also at the cap; a note left behind would reach the next prompt's request.
-            const limit = yield* turnLimit(loaded, current.options)
+            // A text-only cut-off that the escalation or a resume continues is one logical step with what follows, so it
+            // is not a step yet; a cut-off that holds a tool part, or one at the cap, is.
+            const limit = yield* turnLimit(
+              loaded,
+              current.options,
+              outcome.needsContinuation || recovery.streak >= MAX_OUTPUT_RECOVERIES ? undefined : assistantMessageID,
+            )
             if (limit) return yield* new StepFailedError({ error: limit })
             // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
             if (recovery.streak >= MAX_OUTPUT_RECOVERIES) return "limited" as const
@@ -551,6 +558,9 @@ const layer = Layer.effect(
             assistantMessageID = SessionMessage.ID.create()
           }),
           Retry: Effect.fnUntraced(function* (outcome) {
+            // Spend recorded for the failed attempt can pass a limit; fail now, before a fallback or continuation notice.
+            const limit = yield* turnLimit(loaded, current.options)
+            if (limit) return yield* new StepFailedError({ error: limit })
             if (yield* switchToFallback(outcome, loaded, current)) {
               // The draft from the failed attempt sits before the notice; a new one keeps the notice ahead of the fallback's answer.
               assistantMessageID = SessionMessage.ID.create()
@@ -559,6 +569,9 @@ const layer = Layer.effect(
             yield* retry.wait({ decision: outcome.decision, error: outcome.error, assistantMessageID })
           }),
           Continue: Effect.fnUntraced(function* (outcome) {
+            // Spend recorded for the failed attempt can pass a limit; fail now, before a fallback or continuation notice.
+            const limit = yield* turnLimit(loaded, current.options)
+            if (limit) return yield* new StepFailedError({ error: limit })
             if (!(yield* switchToFallback(outcome, loaded, current)))
               yield* retry.wait({ decision: outcome.decision, error: outcome.error, assistantMessageID })
             yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: CONTINUE_AFTER_INCOMPLETE_STREAM })
