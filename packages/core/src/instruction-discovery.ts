@@ -87,7 +87,8 @@ export interface Interface extends State.Transformable<Editor> {
   readonly warnings: () => Effect.Effect<readonly (Warning | ImportWarning)[]>
   /** Which of the files that `list` returns an instruction file imported, and which file imported it. Nothing here reaches the model. */
   readonly imports: () => Effect.Effect<readonly Import[]>
-  readonly load: () => Effect.Effect<Instructions.List>
+  /** `removed` reads nothing: the session's agent leaves the instruction files out of its context (`context.instructions`). */
+  readonly load: (options?: { readonly removed?: boolean }) => Effect.Effect<Instructions.List>
 }
 
 export const Options = Schema.Struct({
@@ -165,7 +166,8 @@ export const layer = (options?: Options) =>
         imports: Effect.fn("InstructionDiscovery.imports")(function* () {
           return Array.from(state.get().imports)
         }),
-        load: Effect.fn("InstructionDiscovery.load")(function* () {
+        load: Effect.fn("InstructionDiscovery.load")(function* (loadOptions) {
+          if (loadOptions?.removed) return source(Instructions.removed)
           const files = yield* list()
           if (!Array.isArray(files)) return source(files)
           return source(files.length === 0 ? Instructions.removed : files)

@@ -3,6 +3,7 @@ export * as PromptConfigPlugin from "./prompt-config.js"
 import os from "os"
 import path from "path"
 import { define } from "@orbit/plugin/effect/plugin"
+import type { Context } from "@orbit/plugin/effect/plugin"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import type { Document, Entry } from "@orbit/schema/config"
 import type { Session } from "@orbit/schema/session"
@@ -18,7 +19,7 @@ import CORE_RULES from "./system-prompt/core-rules.txt"
 
 export const DEFAULT_ATTRIBUTION = { commit: "Assisted-by: Orbit", pr: "Created with Orbit" } as const
 
-const GUIDANCE_SLOT = "${ORBIT_TOOL_GUIDANCE}"
+export const GUIDANCE_SLOT = "${ORBIT_TOOL_GUIDANCE}"
 
 /**
  * Builds `system[0]` after the model prompts, for `context`, `compaction` and `generate` alike, so every request of a
@@ -84,13 +85,8 @@ export const Plugin = define({
       return text
     })
 
-    const mainOf = Effect.fn("PromptConfigPlugin.mainOf")(function* (sessionID: Session.ID) {
-      const session = yield* ctx.session.get({ sessionID }).pipe(Effect.option)
-      if (Option.isNone(session)) return false
-      if (!session.value.fork) return mainThread(session.value)
-      const source = yield* ctx.session.get({ sessionID: session.value.fork.sessionID }).pipe(Effect.option)
-      return mainThread(session.value, Option.getOrUndefined(source))
-    })
+    const mainOf = (sessionID: Session.ID) =>
+      mainThreadOf(ctx, sessionID).pipe(Effect.map((main) => Option.getOrElse(main, () => false)))
 
     const hook = (event: SessionHooks["context"]) =>
       Effect.gen(function* () {
@@ -127,16 +123,7 @@ export const Plugin = define({
                 : yield* readFile(keys.replacement.document, keys.replacement.value)
             if (value) {
               const rendered = SessionSystemPrompt.render(value, Object.keys(event.tools))
-              const slot = value.indexOf(GUIDANCE_SLOT)
-              // The guidance lines are Orbit's text; the words around them are the person's.
-              pieces.push(
-                ...(slot < 0
-                  ? [rendered]
-                  : [
-                      rendered.slice(0, slot),
-                      rendered.slice(rendered.length - (value.length - slot - GUIDANCE_SLOT.length)),
-                    ]),
-              )
+              pieces.push(...authorText(value, rendered))
               text = `${rendered}\n\n${CORE_RULES}`
             }
           }
@@ -150,8 +137,9 @@ export const Plugin = define({
         }
 
         const personal = pieces.filter((piece) => piece !== "")
-        if (personal.length) SessionSystemPrompt.personal.set(event, personal)
-        else SessionSystemPrompt.personal.delete(event)
+        // The prompt of an agent registers its author's text first (`SubagentPromptPlugin`): add to it.
+        if (personal.length)
+          SessionSystemPrompt.personal.set(event, [...(SessionSystemPrompt.personal.get(event) ?? []), ...personal])
         if (text !== system.text) event.system[0] = { ...system, text }
       })
     yield* ctx.session.hook("context", hook)
@@ -159,6 +147,31 @@ export const Plugin = define({
     yield* ctx.session.hook("generate", hook)
   }),
 } satisfies PluginInternal.InternalPlugin)
+
+/**
+ * Whether a session is the main thread (`mainThread`), or none when it cannot be read, so each caller picks its own
+ * answer: the prompt keys then do not apply, and the session is not taken for a subagent.
+ */
+export const mainThreadOf = Effect.fn("PromptConfigPlugin.mainThreadOf")(function* (
+  ctx: Pick<Context, "session">,
+  sessionID: Session.ID,
+) {
+  const session = yield* ctx.session.get({ sessionID }).pipe(Effect.option)
+  if (Option.isNone(session)) return Option.none<boolean>()
+  if (!session.value.fork) return Option.some(mainThread(session.value))
+  const source = yield* ctx.session.get({ sessionID: session.value.fork.sessionID }).pipe(Effect.option)
+  return Option.some(mainThread(session.value, Option.getOrUndefined(source)))
+})
+
+/**
+ * The words of a prompt that are its author's and not Orbit's: the text on each side of the guidance slot, or all of
+ * it when there is no slot. `rendered` is `value` with the slot filled; the lines it added are Orbit's.
+ */
+export function authorText(value: string, rendered: string) {
+  const slot = value.indexOf(GUIDANCE_SLOT)
+  if (slot < 0) return [rendered]
+  return [rendered.slice(0, slot), rendered.slice(rendered.length - (value.length - slot - GUIDANCE_SLOT.length))]
+}
 
 /**
  * Whether the config's system prompt keys apply to a session: it has no parent, or it is a fork whose source has no

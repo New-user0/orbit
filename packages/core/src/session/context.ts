@@ -183,7 +183,7 @@ const layer = Layer.effect(
         {
           tools: registry.snapshot(permissions),
           builtins: builtins.load(),
-          discovery: discovery.load(),
+          discovery: discovery.load({ removed: agent.info.context?.instructions === false }),
           skills: skillInstructions.load(permissions),
           references: referenceInstructions.load(),
           mcp: mcpInstructions.load(permissions),
@@ -206,7 +206,7 @@ const layer = Layer.effect(
           loaded.skills,
           loaded.discovery,
           loaded.builtins,
-          vcsInstructions.source(session),
+          vcsInstructions.source(session, { enabled: agent.info.context?.git_status !== false }),
           scratchpad.source(session),
           loaded.entries,
         ]),
