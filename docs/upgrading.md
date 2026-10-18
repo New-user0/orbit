@@ -3734,3 +3734,11 @@ the provider's prompt cache is cold for it).
 **Affects:** clients of the generated API gain `instruction.note.targets` and `instruction.note.add`; code that implements `InstructionDiscovery.Interface` gains `addRescan` and `rescan`.
 
 **What to do:** Nothing. A client that offers a `#` note asks the targets first and shows `loaded: false` and the refusal reasons.
+
+## An untrusted folder cannot change the prompt of an agent that exists
+
+A project or local config in a folder that is not trusted can no longer set `agents.<id>.system` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged.
+
+**Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
+
+**What to do:** Trust the folder if you want its prompt to apply.

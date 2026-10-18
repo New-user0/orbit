@@ -114,7 +114,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `compatibility` does: withholding them would list `settings` in the trust prompt for keys a grant never applies. The
   core rules follow a replacement. A drive letter mapped to a share is not detected (follow-up). Proof: the scope table
   in `test/plugin/prompt-config.test.ts` ("system prompt keys by scope"), `test/config/trust.test.ts`,
-  `test/config/config-trust.test.ts`.
+  `test/config/config-trust.test.ts`. The same text can arrive as `agents.<id>.system`, because an agent with a prompt
+  of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system` from
+  a document of a folder that is not trusted when the agent already exists; an agent the folder defines itself keeps
+  its prompt. Proof: `test/config/agent-untrusted-system.test.ts`.
 - `hg` in `Project.resolve` (`hg log`) and in the Mercurial VCS provider (`hg branch`, `status`, `diff`, which the
   terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
   each command, so none is started while the folder is untrusted. The provider answers an empty branch, status and

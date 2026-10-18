@@ -160,7 +160,9 @@ export const Plugin = define({
               Object.assign(agent.request.headers, item.request.headers ?? {})
               Object.assign(agent.request.body, item.request.body ?? {})
             }
-            if (item.system !== undefined) agent.system = item.system
+            // An agent's own prompt makes a session skip the person's `system_prompt`, so a folder that is not trusted
+            // may write it only for an agent it defines itself.
+            if (item.system !== undefined && !(document.trusted === false && exists)) agent.system = item.system
             if (item.description !== undefined) agent.description = item.description
             if (item.mode !== undefined) agent.mode = item.mode
             if (item.hidden !== undefined) agent.hidden = item.hidden
