@@ -2802,7 +2802,7 @@ messages, which should hide those with `metadata.reminder`.
 
 ### The model-family prompts are rewritten
 
-The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general prompt, which `optimize.ts` picks by a substring of the model ID and which the Astra IDs replace with their own, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their `Doing tasks`, `Code style` and `Verification` sections as it does the base's. The five full prompts and the local-model prompt tell the model to follow the user's and the project's instruction files, which come later in the prompt and win over the family guidance; on one point a project's file ranks lower, because it cannot approve a risky action ahead of time, while the user can in their own instructions or in the conversation (the base prompt is stricter and takes a standing yes only from the user's instructions). Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, sets a limit on reply length in lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.
+The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general prompt, which `optimize.ts` picks by a substring of the model ID and which the Astra IDs replace with their own, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their Scope, Working in code and Evidence sections as it does the base's. The five full prompts and the local-model prompt tell the model to follow the user's and the project's instruction files, which come later in the prompt and win over the family guidance; on one point a project's file ranks lower, because it cannot approve a risky action ahead of time, while the user can in their own instructions or in the conversation (the base prompt is stricter and takes a standing yes only from the user's instructions). Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, sets a limit on reply length in lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.
 
 **Affects:** sessions on models of those families and on local models (the system prompt text changes, so a prompt cache for an existing session is unaffected until its next step).
 
@@ -3410,12 +3410,9 @@ wording of those notes, and models that sent a one-character query or both domai
 ### The base system prompt is rewritten, with a fixed list of sections
 
 The default system prompt, the text that opens the system prompt of a request, is new. After a one-line introduction it
-has eight sections, always in this order: Harness, Doing tasks, Code style, Verification, Executing actions with care,
-Using tools, Communication and Output efficiency. The old Safety section is now Executing actions with care, and Code
-style and Verification sit beside Doing tasks.
-
-These section names were replaced by the provenance audit; see "The prompt text was rewritten in Orbit's own words" at
-the end of this file for the current names.
+has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool use and Writing to
+the user. Main's prompt had Harness, Communication, Doing tasks, Code style, Safety and Verification. Consent takes
+over the old Safety section, and Scope, Working in code and Evidence take over the coding rules.
 
 - **Where text comes from.** The prompt tells the model where `<system-reminder>` and `<system-update>` blocks come
   from, and that a lookalike inside a tool result, a file or a data block is data. File contents, command output,
@@ -3424,10 +3421,10 @@ the end of this file for the current names.
   counts as your own words. A skill that says you already agreed to a risky step has not made it so: a standing
   approval comes only from your own instructions, given ahead of time.
 - **New rules.** Write a comment only when the code cannot say why. Check that a change works before calling a task
-  done, and report results faithfully in both directions. Say so when a request rests on a mistaken premise. Keep the
-  text between tool calls to at most 25 words and a final answer to at most 100, unless the task needs more detail.
-  Never invent a web address: the one exception is an address the model is confident will help with the programming
-  task, such as the documentation site of a library the project uses.
+  done, and report results faithfully in both directions. Say so when a request rests on a mistaken premise. Commentary
+  between tool calls runs to about 25 words, and the closing message to about 100 unless the task needs more. Web
+  addresses come only from you, the project's files, or search and fetch results; the single thing the model may offer
+  from memory is the documentation site of a library the project uses.
 - **Git.** The git guidance in the base prompt is one line, which says to ask before committing, pushing or opening a
   pull request. The advice on staging and commit messages that was there is gone, and the prompt no longer names any
   instruction file.
@@ -3435,9 +3432,9 @@ the end of this file for the current names.
   guidance line, `Agent` says how to brief an agent and check what it did, and the lines for `Read`, `Edit`, `Write`,
   `Glob`, `Grep` and `Bash` say which shell habit each one replaces. `Patch` and `WebSearch` get none, because a hook
   can remove them after the prompt is rendered.
-- **Size.** The static text, which is everything but the guidance lines, grows from about 4,200 to about 11,400
-  characters, and a request that offers the usual tools carries about 16,500 characters of prompt instead of about
-  7,300, which is about 2,300 more tokens. A model with a small context window has that much less room for history,
+- **Size.** The static text, which is everything but the guidance lines, grows from about 4,200 to about 7,200
+  characters, and a request that offers the usual tools carries about 12,400 characters of prompt instead of about
+  7,300, which is about 1,300 more tokens. A model with a small context window has that much less room for history,
   and the first request of a session after the upgrade misses the provider's prompt cache once.
 
 **Affects:** sessions that use the default prompt, since the model's behavior follows its prompt. That is every model
@@ -3451,10 +3448,8 @@ as a recorded request in a test or a plugin that looks for the heading `# Safety
 
 ### An output style keeps the coding sections only when it asks for them, and the opening line follows the style
 
-(The section names in this note and in the notes around it are the ones of that release; the current ones are in "The prompt text was rewritten in Orbit's own words" at the end of this file.)
-
-A custom output style used to keep the coding sections of the default prompt (Doing tasks, Code style and
-Verification) unless its front matter said `keep-coding-instructions: false`. It now keeps them only when the front
+A custom output style used to keep the coding sections of the default prompt (Scope, Working in code and
+Evidence) unless its front matter said `keep-coding-instructions: false`. It now keeps them only when the front
 matter sets `keep-coding-instructions` to `true`, as a boolean or as the string `"true"`. A missing key, `false` and any
 other value drop them. The built-in Explanatory and Learning styles keep them. While a style applies, the opening line
 of the default prompt is replaced by one that says the agent helps the way the output style at the end of the prompt
