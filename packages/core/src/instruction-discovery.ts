@@ -125,6 +125,7 @@ export interface Interface extends State.Transformable<Editor> {
    * already read: it opens no file and asks no trust question, and it changes no hash.
    */
   readonly status: () => Effect.Effect<Instruction.Status>
+  /**
    * The rule files that apply only to some files, with the patterns and the folder they are matched from, in the order the
    * rules load: the administrator's, the person's, then the project's from the farthest folder to the nearest. Nothing
    * here is in `list` or reaches the model until a read matches (`InstructionTriggers`).
