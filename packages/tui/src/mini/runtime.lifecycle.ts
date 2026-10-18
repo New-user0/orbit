@@ -214,6 +214,8 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     // Mini follows one session tree: the root, and the subagents it started.
     session: (sessionID) =>
       sessionID === (input.getSessionID?.() ?? input.sessionID) ? { title: sessionTitle } : { parentID: "root" },
+    // The footer shows the open request, and keeps those of the subagents it follows.
+    pending: () => footer.hasPending(),
   })
   renderer.keyInput.on("keypress", attentionEvents.keypress)
   let closed = false

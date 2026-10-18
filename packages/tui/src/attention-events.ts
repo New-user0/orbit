@@ -35,6 +35,12 @@ export function createAttentionEvents(input: {
   attention: Pick<Attention, "notify" | "idleReminder">
   /** What is known of a session: a subagent has a parent, and a title names the session in the notification. */
   session: (sessionID: string) => { title?: string; parentID?: string } | undefined
+  /**
+   * Whether a permission request or a form is open for this session's tree, read from the live state of the dialogs. The
+   * idle reminder asks it when it is scheduled and again when it fires, so a request whose answer was never seen (a
+   * dropped connection) does not hold the reminder back for good.
+   */
+  pending: (sessionID: string) => boolean
   /** Mini has no toasts. */
   toast?: (toast: { sessionID: string; title: string; message: string; variant: "error" }) => void
 }) {
@@ -63,16 +69,18 @@ export function createAttentionEvents(input: {
     })
   }
 
-  // One reminder per idle period: a keypress, a new execution or a pending request ends the period.
+  // One reminder per idle period: a keypress or a new execution of a root session ends the period, and a request that is
+  // open when the reminder is due holds it back. The sets above only stop a notice from showing twice.
   const scheduleReminder = (sessionID: string) => {
     // A subagent finishing says nothing about whether the person is idle, so it leaves a root's reminder alone.
     if (input.session(sessionID)?.parentID !== undefined) return
     cancelReminder()
     const seconds = input.attention.idleReminder ?? 0
     if (seconds <= 0) return
-    if (forms.size + permissions.size > 0) return
+    if (input.pending(sessionID)) return
     reminder = setTimeout(() => {
       reminder = undefined
+      if (input.pending(sessionID)) return
       void input.attention.notify({
         title: "Orbit",
         message: "The session has stopped and the next step is yours",
@@ -86,7 +94,8 @@ export function createAttentionEvents(input: {
   const started = (sessionID: string) => {
     errored.delete(sessionID)
     terminal.delete(sessionID)
-    cancelReminder()
+    // A subagent starting says nothing about whether the person is idle, so only a root session's start ends the period.
+    if (input.session(sessionID)?.parentID === undefined) cancelReminder()
   }
   const ended = (sessionID: string) => {
     if (terminal.has(sessionID)) return
@@ -105,7 +114,6 @@ export function createAttentionEvents(input: {
         case "form.created": {
           if (forms.has(event.data.form.id)) return
           forms.add(event.data.form.id)
-          cancelReminder()
           notify(
             event.data.form.sessionID,
             "Input needs response",
@@ -121,7 +129,6 @@ export function createAttentionEvents(input: {
         case "permission.asked": {
           if (permissions.has(event.data.id)) return
           permissions.add(event.data.id)
-          cancelReminder()
           notify(event.data.sessionID, "Permission needs input", "permission")
           return
         }
