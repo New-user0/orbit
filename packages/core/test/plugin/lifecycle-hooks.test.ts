@@ -124,6 +124,32 @@ describe("LifecycleHooksPlugin", () => {
     }),
   )
 
+  // FU-M3-304: a hook sees the WebSearch input under the names the tool declares, allowed_domains and blocked_domains.
+  it.live("gives a hook the WebSearch domain lists under their snake_case names", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      const directory = (yield* tmpdirScoped()).path
+      const payload = path.join(directory, "payload.json")
+      yield* config.setEntries([hooks({ PostToolUse: [{ matcher: "websearch", ...command(`cat > '${payload}'`) }] })])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const input = { query: "python", allowed_domains: ["python.org"] }
+
+      yield* registry.trigger("tool", "execute.after", {
+        ...base,
+        tool: "WebSearch",
+        input,
+        status: "completed" as const,
+        result: { output: "r", content: "Searched" } as Tool.Result,
+      })
+
+      expect(JSON.parse(yield* Effect.promise(() => fs.readFile(payload, "utf8")))).toMatchObject({
+        tool_name: "websearch",
+        tool_input: input,
+      })
+    }),
+  )
+
   it.live("starts a hook with the settings' env under Orbit's own variables, and a removed name stops applying", () =>
     Effect.gen(function* () {
       const registry = yield* PluginHooks.Service

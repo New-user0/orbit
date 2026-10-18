@@ -49,7 +49,7 @@ const declared: Record<string, readonly string[]> = {
   Bash: shell,
   PowerShell: shell,
   WebFetch: ["url", "format", "timeout", "prompt"],
-  WebSearch: ["query", "allowedDomains", "blockedDomains"],
+  WebSearch: ["query", "allowed_domains", "blocked_domains"],
   Agent: ["agent", "description", "prompt", "model", "sessionID", "background"],
   Patch: ["patchText"],
   Skill: ["id"],

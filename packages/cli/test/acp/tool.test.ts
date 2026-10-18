@@ -19,6 +19,18 @@ describe("acp tools", () => {
     })
   })
 
+  test("keeps the domain lists of a WebSearch under their snake_case names and drops keys a model added", () => {
+    expect(
+      declaredFields("WebSearch", {
+        query: "q",
+        allowed_domains: ["a.test"],
+        blocked_domains: ["b.test"],
+        allowedDomains: ["c.test"],
+        sneaky: "x",
+      }),
+    ).toEqual({ query: "q", allowed_domains: ["a.test"], blocked_domains: ["b.test"] })
+  })
+
   test("maps Orbit tool ids to ACP tool kinds", () => {
     expect(toToolKind("bash")).toBe("execute")
     expect(toToolKind("shell")).toBe("execute")

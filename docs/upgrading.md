@@ -3010,7 +3010,7 @@ picks.
 
 Before, the `WebSearch` tool returned only the results and its description did not mention how to cite them. Its
 description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown
-links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page
+links to the pages it used, and explains `allowed_domains` and `blocked_domains`. Results that contain at least one page
 also begin with a one-line reminder of that rule, ahead of the first result so that a result the session bounds (it
 keeps the head) still carries it; an empty result does not. Domain filtering and the query sent to providers are
 unchanged.
@@ -3434,10 +3434,23 @@ A read through a wildcard (`cat secr*.txt`, `head *`) is still checked against y
 
 **What to do:** Nothing; a command that your rules now stop is refused with the rule that matched.
 
+### The WebSearch domain lists are `allowed_domains` and `blocked_domains`
+
+The two optional inputs of `WebSearch` that filter results by site are now named `allowed_domains` and `blocked_domains`.
+Before, they were `allowedDomains` and `blockedDomains`, and a call that used the new names got no filtering, since the
+keys were dropped. The old names are no longer read: a call that sends them is searched without a filter. The names show
+in the tool description, in the permission request's `metadata`, in the input that a foreign hook receives as
+`tool_input`, and in the fields that the ACP client is shown (pinned by `test/tool-websearch.test.ts`,
+`test/plugin/lifecycle-hooks.test.ts` and `packages/cli/test/acp/tool.test.ts`).
+
+**Affects:** plugins, hooks and prompts that name the old keys of a `WebSearch` call.
+
+**What to do:** Use the snake_case names.
+
 ### Web tools refuse bad searches with a type, send no trace headers, and Read keeps folders and long lines in bounds
 
 - `WebSearch` refuses a query shorter than 2 characters (type `tool.input-invalid`) and a call that gives both
-  `allowedDomains` and `blockedDomains` (type `websearch.invalid`). Both are refused before the permission request, the
+  `allowed_domains` and `blocked_domains` (type `websearch.invalid`). Both are refused before the permission request, the
   consent form or any provider call, so nothing is asked or sent. Before, a one-character query was sent to the provider
   and the blocked list silently won over the allowed one.
 - `WebFetch` refusals now carry a type: `webfetch.refused` for a URL that cannot be fetched (not http or https,

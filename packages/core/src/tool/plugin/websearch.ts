@@ -32,7 +32,7 @@ export const description = `Searches the web through the integration the user ch
 
 A reply built on the results ends with a "Sources:" list of the pages used, each as a Markdown link, [Title](URL).
 
-allowedDomains limits results to the sites named (subdomains included) and blockedDomains removes sites. Each is optional and filters after the search; a call may carry one of them but not both, and a call with both is refused.
+allowed_domains limits results to the sites named (subdomains included) and blocked_domains removes sites. Each is optional and filters after the search; a call may carry one of them but not both, and a call with both is refused.
 
 It is ${new Date().getFullYear()} now, so queries about recent events should use that year.`
 
@@ -40,10 +40,10 @@ export const Input = Schema.Struct({
   query: Schema.String.check(Schema.isMinLength(2, { message: "Query must be at least 2 characters" })).annotate({
     description: "Websearch query",
   }),
-  allowedDomains: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
+  allowed_domains: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
     description: 'Only return results from these domains and their subdomains, such as ["docs.python.org"]',
   }),
-  blockedDomains: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
+  blocked_domains: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
     description: "Never return results from these domains or their subdomains",
   }),
 })
@@ -55,13 +55,13 @@ const Output = Schema.Struct({
 // Filters apply to the results, since search providers differ in whether and how they accept site restrictions.
 function allowed(url: string, input: typeof Input.Type) {
   const host = URL.parse(url)?.hostname.toLowerCase()
-  if (!host) return !input.allowedDomains?.length
+  if (!host) return !input.allowed_domains?.length
   const matches = (domain: string) => {
     const bare = domain.toLowerCase().replace(/^\*?\./, "")
     return host === bare || host.endsWith(`.${bare}`)
   }
-  if (input.blockedDomains?.some(matches)) return false
-  return !input.allowedDomains?.length || input.allowedDomains.some(matches)
+  if (input.blocked_domains?.some(matches)) return false
+  return !input.allowed_domains?.length || input.allowed_domains.some(matches)
 }
 
 export const Plugin = {
@@ -83,9 +83,9 @@ export const Plugin = {
           execute: (input, context) =>
             Effect.gen(function* () {
               // Refused before anything is asked or sent. The two lists cannot both apply, so which one wins is not guessed.
-              if (input.allowedDomains?.length && input.blockedDomains?.length)
+              if (input.allowed_domains?.length && input.blocked_domains?.length)
                 return yield* new ToolFailure({
-                  message: "Give allowedDomains or blockedDomains, not both.",
+                  message: "Give allowed_domains or blocked_domains, not both.",
                   code: Tool.ErrorCode.WebSearchInvalid,
                 })
               yield* permission.assert({
