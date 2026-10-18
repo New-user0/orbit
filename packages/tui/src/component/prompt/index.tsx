@@ -1124,28 +1124,6 @@ export function Prompt(props: PromptProps) {
     ],
   }))
 
-  // Escape ends a visual selection here, ahead of the layers that would take it (such as a running session's
-  // interrupt), because it must be consumed.
-  Keymap.createLayer(() => ({
-    context: "prompt",
-    priority: 1,
-    target: inputTarget,
-    enabled:
-      inputTarget() !== undefined &&
-      !disabled() &&
-      config.prompt?.vim === true &&
-      Vim.isVisual(vim().mode) &&
-      store.mode !== "shell",
-    commands: [
-      {
-        bind: "escape",
-        title: "Vim leave visual mode",
-        group: "Prompt",
-        run: () => endVimSelection(false),
-      },
-    ],
-  }))
-
   // Every key goes to the engine first while a selection is up. Layers that bind keys (the text area's own commands,
   // prompt history, the session's) would otherwise move or edit the text under the drawn selection. The engine moves
   // the head or swallows the key; for a chord or Enter it ends the selection and leaves the key to run as it would

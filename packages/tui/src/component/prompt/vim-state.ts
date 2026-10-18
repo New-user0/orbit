@@ -112,6 +112,7 @@ export interface Key {
   readonly name: string
   readonly ctrl?: boolean
   readonly meta?: boolean
+  readonly super?: boolean
   readonly shift?: boolean
   readonly sequence?: string
 }
@@ -345,7 +346,7 @@ function visualStep(state: State, key: Key, snap: Snapshot): Result {
   const ctx = context(snap)
   const cursor = ctx.snap(snap.cursor)
   const normal: State = { ...reset(state), mode: "normal", anchor: undefined }
-  if (key.ctrl || key.meta) return { state: normal, edits: [], cursor, pass: true }
+  if (key.ctrl || key.meta || key.super) return { state: normal, edits: [], cursor, pass: true }
   const char = typed(key)
   // Escape is consumed here: it ends the selection and does not reach a running session's interrupt.
   if (!char && key.name === "escape") return stay(normal, cursor)

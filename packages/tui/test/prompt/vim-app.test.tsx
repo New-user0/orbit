@@ -823,11 +823,50 @@ const inputKeys: Array<[string, string, Modifiers?]> = [
   ["super+z", "z", { super: true }],
 ]
 
+// What each key does in visual mode: the engine moves the head (`move`), swallows the key (`swallow`), or ends visual
+// mode and leaves the key to run as it would from a plain cursor (`pass`).
+const swallowed = new Set([
+  "home",
+  "end",
+  "shift+home",
+  "shift+end",
+  "delete",
+  "shift+delete",
+])
+const outcome = (name: string, modifiers?: Modifiers) =>
+  modifiers?.ctrl || modifiers?.meta || modifiers?.super ? "pass" : swallowed.has(name) ? "swallow" : "move"
+
 test.each(inputKeys)(
-  "in visual mode %s keeps the label, the drawn selection and d in step",
+  "in visual mode %s does what its row says, and d acts on exactly what is drawn",
   // Rest parameters: a third named parameter would be taken for a done callback in the rows that have two entries.
   async (...row) => {
-    const [, keyName, modifiers] = row
+    const [name, keyName, modifiers] = row
+    const expected = outcome(name, modifiers)
+    if (expected === "pass") {
+      // The same key from the same plain cursor in normal mode: visual mode must end and then match it.
+      const want = await (async () => {
+        await using plain = await mount()
+        await plain.type("abcdef")
+        await plain.normal()
+        await plain.press("0")
+        await plain.press("l")
+        await key(plain, () => plain.setup.mockInput.pressKey(keyName, modifiers))
+        return { text: plain.textarea().plainText, cursor: plain.textarea().cursorOffset, selected: plain.textarea().getSelectedText() }
+      })()
+      await using app = await mount()
+      await app.type("abcdef")
+      await app.normal()
+      await app.press("0")
+      await app.press("v")
+      await app.press("l")
+      expect(app.textarea().getSelectedText()).toBe("ab")
+      await key(app, () => app.setup.mockInput.pressKey(keyName, modifiers))
+      expect(app.setup.captureCharFrame()).not.toContain(visual)
+      expect(app.textarea().getSelectedText()).toBe(want.selected)
+      expect(app.textarea().plainText).toBe(want.text)
+      expect(app.textarea().cursorOffset).toBe(want.cursor)
+      return
+    }
     await using app = await mount()
     await app.type("abcdef")
     await app.normal()
@@ -837,15 +876,46 @@ test.each(inputKeys)(
     expect(app.textarea().getSelectedText()).toBe("ab")
     await key(app, () => app.setup.mockInput.pressKey(keyName, modifiers))
     const text = app.textarea()
-    if (!app.setup.captureCharFrame().includes(visual)) {
-      expect(text.hasSelection()).toBe(false)
-      return
-    }
-    // Still in visual mode: nothing was edited behind the selection, and d acts on exactly what is drawn.
+    expect(app.setup.captureCharFrame()).toContain(visual)
     expect(text.plainText).toBe("abcdef")
+    if (expected === "swallow") expect(text.getSelectedText()).toBe("ab")
     const drawn = text.getSelectedText()
     expect(drawn).not.toBe("")
     await app.press("d")
     expect(text.plainText).toBe("abcdef".replace(drawn, ""))
   },
 )
+
+test("in visual mode Ctrl+V ends the selection and pastes at the head", async () => {
+  const board = fakeClipboard("XY")
+  await using app = await mount({ clipboard: board.service })
+  await app.type("abcdef")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  await key(app, () => app.setup.mockInput.pressKey("v", { ctrl: true }))
+  await Bun.sleep(80)
+  await app.setup.renderOnce()
+  expect(app.setup.captureCharFrame()).not.toContain(visual)
+  expect(app.textarea().hasSelection()).toBe(false)
+  expect(app.textarea().plainText).toContain("XY")
+})
+
+test("in visual mode a key meant for something else that holds focus does not reach vim", async () => {
+  await using app = await mount()
+  await app.type("abcdef")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  expect(app.textarea().getSelectedText()).toBe("ab")
+  // A dialog (such as the working directory menu) blurs the text area; its keys belong to the dialog.
+  app.textarea().blur()
+  await app.setup.renderOnce()
+  await key(app, () => app.setup.mockInput.pressEscape())
+  await Bun.sleep(80)
+  await app.setup.renderOnce()
+  expect(app.setup.captureCharFrame()).toContain(visual)
+  expect(app.textarea().getSelectedText()).toBe("ab")
+})
