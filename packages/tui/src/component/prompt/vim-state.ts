@@ -122,7 +122,6 @@ export interface Command {
   readonly operator?: Operator
   readonly motion?: string
   readonly object?: string
-  readonly find?: { readonly kind: Find; readonly char: string }
   readonly count: number
 }
 
@@ -374,7 +373,7 @@ function visualStep(state: State, key: Key, snap: Snapshot): Result {
 }
 
 function visualKey(run: Run, count: number, ch: string): Result {
-  const { state, ctx, cursor } = run
+  const { state, cursor } = run
   const n = count || 1
   const pend = (pending: Pending): Result => stay({ ...state, pending }, cursor)
   if (isDigit(ch) && (ch !== "0" || count > 0)) return pend({ kind: "count", count: extend(count, Number(ch)) })
@@ -405,7 +404,7 @@ function visualKey(run: Run, count: number, ch: string): Result {
 
 /** The visual operators. The selection ends; `.` later applies the same operator to the same amount of text. */
 function visualOperator(run: Run, operator: Operator | ">" | "<", levels = 1): Result {
-  const { ctx, cursor, snap } = run
+  const { ctx, cursor } = run
   const state: State = { ...run.state, mode: "normal", anchor: undefined, pending: { kind: "idle" } }
   const base = { ...run, state }
   const head = cursor
@@ -668,7 +667,7 @@ function operatorFind(run: Run, operator: Operator, kind: Find, count: number, c
   const range = run.ctx.findSpan(kind, char, count, run.cursor)
   if (!range) return stay(reset(run.state), run.cursor)
   const find = { kind, char }
-  const out = operate(run, operator, run.ctx.widen(range), { command: operator, operator, motion: kind, find, count })
+  const out = operate(run, operator, run.ctx.widen(range), { command: operator, operator, motion: kind, count })
   return { ...out, state: { ...out.state, lastFind: find } }
 }
 

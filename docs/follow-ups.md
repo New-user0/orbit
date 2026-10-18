@@ -362,7 +362,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 | FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | agents-extensibility-43 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
 
-### Sweep (153)
+### Sweep (154)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -521,6 +521,7 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M4-47 | Parallel reads in one step can publish a deeper folder file before its parent one | behaviour | Claims settle in completion order; the reference handles triggers one at a time, in order. | low | S-M: serialise touched per session | sweep | prompts-context-12 review (follow-up) | packages/core/src/instruction-triggers.ts (touched) |
 | FU-M4-49 | No recording-FSUtil test for network share links in the nested walk (spec row 23) | 14 | Behaviour is correct (fs.up skips share links through LinkShare.blocked), but no test counts the connections. | low | S | sweep | prompts-context-12 review (follow-up) | packages/core/test/session-instructions.test.ts |
 | FU-M4-50 | Spec rows not built: a Linux FIFO as instruction file, Windows drive-letter case, child and fork sessions, and a revoke between two reads | 14 | Each is covered by the shared guard but has no row of its own here. | low | S per row | sweep | prompts-context-12 review (minor) | packages/core/test/session-instructions.test.ts |
+| FU-M4-52 | Vim keys the prompt does not have yet: visual text objects, visual p/x/s/r/~/J/I/A/u/U, gv, a count before v, N%, Ctrl+V blockwise; and normal mode still lets the text area take Backspace and arrows | behaviour | Each key does nothing in visual mode (swallowed) or, in normal mode, Backspace deletes a character, where the spec says it acts as h, and `d` then Left moves the cursor and leaves d pending. A characterwise register that ends with a line break pastes linewise, and `.` of a one-line v$d stops at the line end instead of joining lines. | low | M: one visual key at a time; for normal mode, a prompt layer like the visual one | sweep | clients-ux-9 review (follow-up) | packages/tui/src/component/prompt/vim-state.ts (visualKey); packages/tui/src/context/keymap.tsx (registerManagedTextareaLayer, priority -1) |
 
 ### Owner (97)
 
@@ -851,11 +852,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) = 725.
-- Output: 643 rows plus 83 listed duplicates = 726. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 643 register rows have a table entry.
-- Open minors by carrier: M4: 7, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 153, Owner: 95.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) plus 1 row that the M4 task clients-ux-9 raised (FU-M4-52) = 726.
+- Output: 644 rows plus 83 listed duplicates = 727. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 644 register rows have a table entry.
+- Open minors by carrier: M4: 7, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 154, Owner: 95.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
 - Fixed: 129.
 - Duplicates: 83.
-- Check: 420 open + 86 owner + 129 fixed + 83 duplicates = 718, the 718 inputs.
+- Check: 421 open + 86 owner + 129 fixed + 83 duplicates = 719, the 719 inputs.

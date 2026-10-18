@@ -239,8 +239,6 @@ export function Prompt(props: PromptProps) {
     const mode = vim().mode
     return config.prompt?.vim === true && mode !== "normal" ? mode : undefined
   }
-  // Set while the engine's own edits go through the textarea, which must not count as the text being replaced.
-  let vimApplying = false
   // Visual mode ends before any text is put in from outside, or the textarea would delete the selection first.
   // A replaced or sent prompt also restarts the record of typed text that `.` repeats.
   function endVimSelection(replaced: boolean) {
@@ -895,9 +893,7 @@ export function Prompt(props: PromptProps) {
       input.undo()
       return
     }
-    vimApplying = true
     const steps = VimAdapter.apply(input, snap, result)
-    vimApplying = false
     if (steps > 0) vimUndo.push({ steps, text: input.plainText })
     const clip = result.clipboard
     if (!clip) return
@@ -1145,6 +1141,33 @@ export function Prompt(props: PromptProps) {
         title: "Vim leave visual mode",
         group: "Prompt",
         run: () => endVimSelection(false),
+      },
+    ],
+  }))
+
+  // The managed text-area layer ranks below every app layer and would take these keys before the prompt's key handler
+  // sees them (moving or deleting through the textarea under the drawn selection), so visual mode claims them here and
+  // hands each to the engine, which moves the head or swallows the key.
+  Keymap.createLayer(() => ({
+    context: "prompt",
+    priority: 1,
+    target: inputTarget,
+    enabled:
+      inputTarget() !== undefined &&
+      !disabled() &&
+      config.prompt?.vim === true &&
+      Vim.isVisual(vim().mode) &&
+      store.mode !== "shell",
+    commands: [
+      {
+        id: "prompt.vim.visual.move",
+        palette: undefined,
+        bind: "left,right,up,down,shift+left,shift+right,shift+up,shift+down,backspace,shift+backspace,delete,home,end,shift+home,shift+end",
+        title: "Vim move the visual selection",
+        group: "Prompt",
+        run: (_input: string | undefined, event?: KeyEvent) => {
+          if (event) runVim(event)
+        },
       },
     ],
   }))
@@ -2114,7 +2137,7 @@ export function Prompt(props: PromptProps) {
                     clear()
                   },
                   insertText: (text: string) => {
-                    if (!vimApplying) endVimSelection(false)
+                    endVimSelection(false)
                     insertText(text)
                   },
                 })

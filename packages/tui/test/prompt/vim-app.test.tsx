@@ -64,21 +64,28 @@ async function mount(
     style?: "line" | "block"
     clipboard?: ReturnType<typeof fakeClipboard>["service"]
     fetch?: FetchHandler
+    /** Watch a cli.json beside the state folder so that a test can switch prompt.vim off by a reload. */
+    reload?: boolean
+    /** Lines of the prompt history file to start with. */
+    history?: string[]
   } = {},
 ) {
   clearDrafts()
   const state = await tmpdir()
+  if (input.history) await Bun.write(`${state.path}/prompt-history.jsonl`, input.history.join(""))
+  const config = {
+    animations: false,
+    cursor: { style: input.style ?? "line", blinking: false },
+    prompt: { vim: input.vim ?? true },
+  }
   const setup = await createAppFixture({
     state: state.path,
+    configPath: input.reload ? `${state.path}/cli.json` : undefined,
     clipboard: input.clipboard,
     width: input.width ?? 120,
     fetch: input.fetch ?? server,
     args: input.session === false ? undefined : { sessionID },
-    config: {
-      animations: false,
-      cursor: { style: input.style ?? "line", blinking: false },
-      prompt: { vim: input.vim ?? true },
-    },
+    config,
   })
   await setup.ready
   // A narrow terminal drops the commands hint that promptReady looks for.
@@ -97,6 +104,7 @@ async function mount(
   }
   return {
     setup,
+    config,
     state: state.path,
     textarea,
     async press(key: string, modifiers?: { ctrl?: boolean; shift?: boolean }) {
@@ -370,7 +378,7 @@ test("Enter submits from normal mode and normal mode stays for the next prompt",
 const visual = "-- VISUAL --"
 const visualLine = "-- VISUAL LINE --"
 
-async function arrow(app: Awaited<ReturnType<typeof mount>>, direction: "left" | "right", shift = false) {
+async function arrow(app: Awaited<ReturnType<typeof mount>>, direction: "left" | "right" | "up", shift = false) {
   app.setup.mockInput.pressArrow(direction, shift ? { shift: true } : undefined)
   await app.setup.renderOnce()
   await Bun.sleep(30)
@@ -596,14 +604,140 @@ test("what was typed is repeated by . and a submit restarts the record; the last
   await Bun.sleep(300)
   await app.setup.renderOnce()
   expect(prompts).toEqual(["quokkasent"])
-  await app.type("x")
+  await app.type("zebrafish")
   await app.normal()
-  expect(app.textarea().plainText).toBe("x")
+  expect(app.textarea().plainText).toBe("zebrafish")
   await app.press(".")
-  expect(app.textarea().plainText).toBe("xx")
+  expect(app.textarea().plainText).toBe("zebrafiszebrafishh")
   const files = await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: app.state, onlyFiles: true, dot: true }))
   const holders = await Promise.all(
-    files.map(async (file) => ((await Bun.file(`${app.state}/${file}`).text()).includes("quokka") ? file : undefined)),
+    files.map(async (file) => ((await Bun.file(`${app.state}/${file}`).text()).includes("zebrafish") ? file : undefined)),
   )
-  expect(holders.filter((file) => file !== undefined && !file.includes("history"))).toEqual([])
+  // The last change is in memory only, and the sent prompt is in the history file at most.
+  expect(holders).toEqual([])
+}, 20_000)
+
+// --- visual routing: the keys the managed text-area layer would take ---
+
+async function key(app: Awaited<ReturnType<typeof mount>>, send: () => void) {
+  send()
+  await app.setup.renderOnce()
+  await Bun.sleep(30)
+  await app.setup.renderOnce()
+}
+
+test("in visual mode Right moves the head through the engine and d deletes exactly the drawn selection", async () => {
+  await using app = await mount()
+  await app.type("abcdef")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  await app.press("l")
+  expect(app.textarea().getSelectedText()).toBe("abc")
+  await arrow(app, "right")
+  expect(app.textarea().getSelectedText()).toBe("abcd")
+  expect(app.setup.captureCharFrame()).toContain(visual)
+  await app.press("d")
+  expect(app.textarea().plainText).toBe("ef")
+})
+
+test("in visual mode Shift+Left under V keeps the whole line selected", async () => {
+  await using app = await mount()
+  await app.type("two")
+  await app.normal()
+  await app.press("V", { shift: true })
+  await arrow(app, "left", true)
+  expect(app.textarea().getSelectedText()).toBe("two")
+  expect(app.setup.captureCharFrame()).toContain(visualLine)
+  await app.press("d")
+  expect(app.textarea().plainText).toBe("")
+})
+
+test("in visual mode Backspace moves the head left and deletes nothing, and Delete is swallowed", async () => {
+  await using app = await mount()
+  await app.type("abcdef")
+  await app.normal()
+  await app.press("v")
+  await app.press("h")
+  await app.press("h")
+  expect(app.textarea().getSelectedText()).toBe("def")
+  await key(app, () => app.setup.mockInput.pressBackspace())
+  expect(app.textarea().plainText).toBe("abcdef")
+  expect(app.textarea().getSelectedText()).toBe("cdef")
+  expect(app.setup.captureCharFrame()).toContain(visual)
+  await key(app, () => app.setup.mockInput.pressKey("DELETE"))
+  expect(app.textarea().plainText).toBe("abcdef")
+  expect(app.textarea().getSelectedText()).toBe("cdef")
+  expect(app.setup.captureCharFrame()).toContain(visual)
+  await app.press("u")
+  expect(app.textarea().plainText).toBe("abcdef")
+})
+
+// --- ends of visual mode and the typed record that the first round left unpinned ---
+
+test("a mouse press in the prompt ends visual mode and the drawn selection", async () => {
+  await using app = await mount()
+  await app.type("abcdef")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  expect(app.textarea().hasSelection()).toBe(true)
+  const lines = app.setup.captureCharFrame().split("\n")
+  const row = lines.findIndex((line) => line.includes("abcdef"))
+  await app.setup.mockMouse.click(lines[row].indexOf("abcdef") + 4, row)
+  await app.setup.renderOnce()
+  expect(app.textarea().hasSelection()).toBe(false)
+  expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+})
+
+test("switching prompt.vim off by a config reload ends visual mode", async () => {
+  await using app = await mount({ reload: true })
+  await app.type("abcdef")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  expect(app.textarea().hasSelection()).toBe(true)
+  app.config.prompt = { vim: false }
+  await Bun.write(`${app.state}/cli.json`, "{}")
+  const deadline = Date.now() + 5000
+  while (app.textarea().hasSelection() && Date.now() < deadline) {
+    await Bun.sleep(50)
+    await app.setup.renderOnce()
+  }
+  expect(app.textarea().hasSelection()).toBe(false)
+  await app.setup.renderOnce()
+  expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+})
+
+test("a Ctrl chord in visual mode ends the selection", async () => {
+  await using app = await mount()
+  await app.type("abcdef")
+  await app.normal()
+  await app.press("0")
+  await app.press("v")
+  await app.press("l")
+  expect(app.textarea().hasSelection()).toBe(true)
+  await app.press("q", { ctrl: true })
+  expect(app.textarea().hasSelection()).toBe(false)
+  expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
+})
+
+test("recalling a history entry restarts the typed record, so . does not re-type what came before it", async () => {
+  await using app = await mount({
+    history: [JSON.stringify({ text: "deploy it", files: [], agents: [], skills: [], pasted: [], time: 1000 }) + "\n"],
+  })
+  await app.type("qq")
+  app.setup.mockInput.pressKey("r", { ctrl: true })
+  await app.setup.waitForFrame((frame) => frame.includes("Search prompt history"))
+  await Bun.sleep(50)
+  await app.setup.mockInput.typeText("deploy")
+  await app.setup.waitForFrame((frame) => frame.includes("deploy it"))
+  app.setup.mockInput.pressEnter()
+  await app.setup.waitForFrame((frame) => frame.includes("› deploy it"))
+  await app.normal()
+  await app.press(".")
+  expect(app.textarea().plainText).toBe("deploy it")
 }, 20_000)
