@@ -10,6 +10,7 @@ import { SessionMessage } from "@orbit/schema/session-message"
 import { Agent } from "@orbit/core/agent"
 import { Location } from "@orbit/core/location"
 import { FileAccess } from "@orbit/core/file-access"
+import { LspDiagnostics } from "@orbit/core/lsp/collector"
 import { Lsp } from "@orbit/core/lsp/index"
 import { LspPlugin } from "@orbit/core/lsp/plugin"
 import { Plugin } from "@orbit/core/plugin"
@@ -47,7 +48,11 @@ const lspLayer = Layer.mock(Lsp.Service, {
       )
     }),
 })
-const it = testEffect(Layer.merge(PluginTestLayer, lspLayer))
+const touched: { sessionID: string; files: readonly string[] }[] = []
+const collectorLayer = Layer.mock(LspDiagnostics.Service, {
+  touch: (sessionID, files) => Effect.sync(() => void touched.push({ sessionID, files })),
+})
+const it = testEffect(Layer.mergeAll(PluginTestLayer, lspLayer, collectorLayer))
 
 const base = (tool: string, input: unknown, result: Tool.Result) => ({
   sessionID: Session.ID.make("ses_lsp_plugin"),
@@ -98,12 +103,15 @@ describe("LspPlugin", () => {
       ] as const
       for (const [given, expected] of rows) {
         asked.length = 0
+        touched.length = 0
         yield* hooks.trigger(
           "tool",
           "execute.after",
           base("Write", { file_path: given, content: "x" }, { content: "Wrote it" } as Tool.Result),
         )
         expect({ given, asked }).toEqual({ given, asked: [{ files: [expected], options: { save: true } }] })
+        // The collector is told the same file, under the session that made the edit.
+        expect({ given, touched }).toEqual({ given, touched: [{ sessionID: "ses_lsp_plugin", files: [expected] }] })
       }
       // The older field name, as a plugin hook may leave it.
       asked.length = 0

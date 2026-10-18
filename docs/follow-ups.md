@@ -153,13 +153,11 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (9)
+### M4 (7)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
 | FU-M1-023 | Dormant instructions config key needs a real-path guard when wired | 4 | Wiring the key without the guard would read files through links out of the project. | low; dormant | S when wired | prompts-context-9b | Known gaps; plan M1 table (prompts-context-9b adds @path imports and does not wire the key, so the row stays open) | packages/schema/src/config.ts:131 instructions key; docs/untrusted-repositories.md:1948 |
-| FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file; share stat after the write; lexical fallback when a hook strips Write output | 14,13 | Misleading reason; regressions unnoticed. | low | S | file-web-tools-9 | PR #84 C0-C8 | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
-| FU-M3-154 | LSP: content-modified retry re-sends the document; server starts before the size cap and read; git check-ignore batch fails whole on one bad path; junction Location hides nothing | perf,7 | Extra didChange; one bad path shows every ignored file. | low | S | file-web-tools-9 | PR #92 C0-C4 | packages/core/src/lsp/index.ts ignored() |
 | FU-M4-004 | The run result prints the spend of responses only, while turn limits also count side queries and generations | behaviour | A run stopped by side-query spend prints a cost below its own --max-cost. | low | S | loop-robustness-18 | turn-spend study, section 4 | packages/cli/src/run/noninteractive.ts reconcile and packages/cli/src/run/stream.ts spentFromHistory sum assistant rows; SessionTurn.usage also reads session_usage |
 | FU-M4-005 | A provider-hosted tool fee (web search per call) is not priced | behaviour | A hosted tool fee is free under --max-cost. | low | S | loop-robustness-18 | turn-spend study, section 4 | packages/core/src/session/usage.ts calculateCost prices tokens only; needs a per-call price in the catalog |
 | FU-M4-37 | The reminder tests carry a 699-line copy of the runner harness beside the one in session-runner.test.ts | test hygiene | Two harnesses must be kept in step; a change to one can leave the other testing old behaviour. | low | M: move session-runner.test.ts onto packages/core/test/lib/runner.ts and delete the copy | loop-robustness-17 | prompts-context-5 review (minor) | packages/core/test/lib/runner.ts, packages/core/test/session-runner.test.ts |
@@ -362,12 +360,14 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 | FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | agents-extensibility-43 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
 
-### Sweep (161)
+### Sweep (163)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
+| FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file (needs a one-line change in tool/plugin/lsp.ts, outside file-web-tools-9's files); share stat after the write (changes the tool contract); lexical fallback when a hook strips Write output (a user plugin's execute.after hook runs before every post plugin and can replace Write's result, so the remaining case is a user plugin; reordering inside post would not cover it; file-web-tools-9 left it open because it changes plugin order, not this producer) | 14,13 | Misleading reason; regressions unnoticed. | low | S | sweep | PR #84 C0-C8; file-web-tools-9 study | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
+| FU-M3-154 | LSP: git check-ignore batch fails whole on one bad path (the reference does the same per batch of 50); junction Location hides nothing (the reference hides nothing there either) | perf,7 | One bad path shows every ignored file. | low | S | sweep | PR #92 C0-C4; file-web-tools-9 study | packages/core/src/lsp/index.ts ignored() |
 | FU-M1-004 | Real filesystem-root holder test runs only as root on Linux | 14 | The end-to-end root case can regress unseen on Windows and non-root Linux. | low | S: run tools/linux-test as root before each milestone closes | sweep | Known gaps (A filesystem root as holder); plan M1 table N1 | docs/untrusted-repositories.md:1829-1832; the real-root row in packages/core/test/config/config-trust.test.ts returns when the root is not writable |
 | FU-M1-005 | VS Code trust advice for a folder above the project has no command (and the Windows path is unquoted, non-ASCII names break it) | 3, 15 | A VS Code user cannot see how to lift config held back above the project, and the person cannot copy a working command; TUI, Mini and CLI print orb trust `<folder>` --for. | medium for monorepo users | S: add the command text, quote the path, and test a Windows path and a non-ASCII name | sweep | Known gaps (VS Code advice); PR #107 C2-C10 | packages/vscode/src/trust.ts:153 says only 'each folder is trusted on its own' |
 | FU-M2-001 | No command-file test pins that a command's model is withheld | 8, 14 | A regression in the .orbit/commands loader could let a clone pick a paid model unseen. | low | S: marker-file test with a trusted control | sweep | Known gaps (Decided: model withheld); PR #38 review rounds 2-3 | docs/untrusted-repositories.md:1843-1844; only sanitizeCommands is tested |
@@ -640,6 +640,8 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 | id | title | fixed by | test |
 |---|---|---|---|
 | FU-M4-58 | The server root check of `config.sources.changed` cannot be observed through the agent list | commit b7600135 (review fixes of the clients-ux-48 pull request, #139) | tests packages/server/test/config-sources.test.ts 'a path outside every config directory changes nothing' (a report of a missing file inside a config directory, with an unreported sibling that must stay absent) and 'a link out of the config directory is not followed' (mutation: accepting every absolute path fails both) |
+| FU-M3-154a | LSP: a content-modified retry re-sends the document | 093f6015 | test packages/core/test/lsp-reminder.test.ts 'sends the document once when the server asks for a retry' (mutation: the open moved back inside the retried effect fails it) |
+| FU-M3-154b | LSP: the server starts before the size cap and the read | 093f6015 | test packages/core/test/lsp-reminder.test.ts 'checks the size of a file before it starts a server' (mutation: starting the client before the stat fails it) |
 | FU-M1-045 | Plan session's subagent description offers agents Plan refuses | ea36dfdf | test packages/core/test/session-context-listings.test.ts 'lists only the agents Plan mode allows to a Plan session, and every agent to a Build session' (the session's agent reaches the filter), and the filter itself in agent-instructions-fields.test.ts |
 | FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | commit 4b063090 and the Mini menu fix (fix(tui): draw Mini menu text through plain) | tests packages/tui/test/prompt/autocomplete-hostile.test.tsx (@ skills and / commands), packages/tui/test/component/dialog-listings.test.tsx, packages/tui/test/mini/footer.view.test.tsx (Mini agent picker and Mini slash menu) |
 | FU-M1-014 | External editor starts with shell:true and has no decoy test | c94d12b7 | test packages/tui/test/editor.test.ts 'starts the prompt editor from PATH and never a code.cmd, code.exe or vim.bat in the folder it runs in' (Windows; mutation: shell: true with the bare name fails it) |
@@ -861,11 +863,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) plus 10 rows that the M4 task clients-ux-48 raised (FU-M4-52 to FU-M4-61) = 735.
-- Output: 653 rows plus 83 listed duplicates = 736. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 653 register rows have a table entry.
-- Open minors by carrier: M4: 7, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 161, Owner: 96.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) plus 10 rows that the M4 task clients-ux-48 raised (FU-M4-52 to FU-M4-61) plus 2 rows split off the parts that file-web-tools-9 closed (FU-M3-154a, FU-M3-154b) = 737.
+- Output: 655 rows plus 83 listed duplicates = 738. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 655 register rows have a table entry.
+- Open minors by carrier: M4: 5, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 163, Owner: 96.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
-- Fixed: 130.
+- Fixed: 132.
 - Duplicates: 83.
-- Check: 429 open + 86 owner + 130 fixed + 83 duplicates = 728, the 728 inputs.
+- Check: 429 open + 86 owner + 132 fixed + 83 duplicates = 730, the 730 inputs.

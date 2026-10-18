@@ -129,6 +129,8 @@ const it = testEffect(
         llmClient,
       ]),
       [
+        // The production node reads the Location for its language-server reminder; these tests have none.
+        SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
         Bus.node.replace(Bus.configured({ persist: true })),
         llmClient.replace(llm),
         Model.node.replace(catalogModels),

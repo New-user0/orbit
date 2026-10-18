@@ -3552,3 +3552,14 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 **Affects:** people who use the terminal UI; clients of the generated API gain `config.sources.changed`; code that implements `Config.Interface` gains `notify`.
 
 **What to do:** Nothing. A server started with the file watcher off now picks up an agent file when the terminal UI reports it.
+
+## Late language-server problems reach the model as a reminder
+
+- When a language server publishes a problem for a file the session changed after the edit tool stopped waiting (about 3 seconds), the problem now reaches the model once, at the start of a later step, as a hidden reminder row. Only the main conversation gets it, and only when a shell tool is offered. A subagent's late problems are reported to its top-level session.
+- The reminder lists errors, then warnings, information and hints, at most 10 per file and 30 per step, with the path relative to the project, the line and column, the message, and the code and source when the server sends them. A problem is reported once; a completed compaction makes the ones that remain reportable again. The inline block after an edit is unchanged, except that a diagnostic with no severity now counts as an error there, as it already did in the `LSP` tool.
+- Language servers that spell a file's address differently from Orbit (a lower-case Windows drive with an encoded colon) now match the file they published for.
+- A server is no longer started for a file that the `LSP` tool would refuse for its size, and a request the server asks to retry sends the document once instead of once per retry.
+
+**Affects:** plugins and clients that read hidden `session.synthetic` rows (kind `lsp-diagnostics`), and servers that were slow to publish.
+
+**What to do:** Nothing. A client that shows reminder rows can show the row's description, which holds counts only.

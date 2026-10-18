@@ -5,6 +5,9 @@ import { plain } from "@orbit/util/plain"
 import { Cause, Context, Duration, Effect, Layer, Option } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
+import { LspDiagnostics } from "../lsp/collector.js"
+import { LspReminder } from "../lsp/reminder.js"
+import { Location } from "../location.js"
 import { PlanReminders } from "../plan/reminders.js"
 import { TodoReminders } from "../tool/todo-reminders.js"
 import type { SessionContext } from "./context.js"
@@ -152,8 +155,25 @@ export const configured = (lists: Lists) =>
     deps: [Bus.node],
   })
 
-/** `orb run --bare` switches instruction files off, and a bare run adds nothing else to the conversation either. */
-export const node = configured(process.env.ORBIT_DISABLE_INSTRUCTIONS === "1" ? minimal(production) : production)
+/**
+ * The production node. The language-server producer reads a service, and a producer's `run` has no requirements, so it
+ * is built here from that service and appended to the durable list. `orb run --bare` switches instruction files off, and
+ * a bare run adds nothing else to the conversation either.
+ */
+export const node = makeLocationNode({
+  service: Service,
+  layer: Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const diagnostics = yield* LspDiagnostics.Service
+      const location = yield* Location.Service
+      const lists: Lists = { ...production, durable: [...production.durable, LspReminder.durable(diagnostics, location.directory)] }
+      return make(bus, process.env.ORBIT_DISABLE_INSTRUCTIONS === "1" ? minimal(lists) : lists)
+    }),
+  ),
+  deps: [Bus.node, LspDiagnostics.node, Location.node],
+})
 
 const make = (bus: Bus.Interface, lists: Lists) => {
   const input = (loaded: SessionContext.Loaded, step: number): Input => {

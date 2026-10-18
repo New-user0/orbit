@@ -92,7 +92,11 @@ const it = testEffect(
       SessionModelRequest.node,
       PluginHooks.node,
     ]),
-    [Bus.node.replace(Bus.configured({ persist: true })), llmClient.replace(client)],
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      llmClient.replace(client),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
+    ],
   ),
 )
 

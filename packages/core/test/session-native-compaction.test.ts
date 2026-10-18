@@ -20,6 +20,7 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionProviderContext } from "@orbit/core/session/provider-context"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { SessionStore } from "@orbit/core/session/store"
@@ -41,7 +42,10 @@ const it = testEffect(
       PluginHooks.node,
       llmClient,
     ]),
-    [Bus.node.replace(Bus.configured({ persist: true }))],
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
+    ],
   ),
 )
 
