@@ -648,6 +648,42 @@ who lose them until Orbit's IDE bridge ships, and people who turn compatibility 
 **What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
 not. Leave compatibility on if you want Zed's selection in the TUI.
 
+### The TUI finds VS Code through Orbit's own bridge
+
+The Orbit extension for VS Code now starts a bridge when the window opens (it needs a trusted workspace). The bridge
+listens on `127.0.0.1` on a random port, writes a lock file with that port and a token into the `ide` folder of Orbit's
+state folder (`~/.local/state/orbit/ide`, or under `XDG_STATE_HOME`), and sets `ORBIT_EDITOR_SSE_PORT` in the
+terminals of the window. The terminal UI reads the lock, connects with the token in an `x-orbit-ide-token` header and shows
+the file and selection you are working in. The new command **Orbit: Mention Selection in Terminal** puts an `@` reference
+to the file, with the selected lines, into the prompt of a connected terminal UI. The setting `orbit.ideBridge.enabled`
+(on by default, user settings only) turns the bridge off.
+
+Two things stop working. `ORBIT_EDITOR_SSE_PORT` alone no longer connects the TUI to a WebSocket server: there must be a
+lock under `ide` that names that port and holds a token, and the messages are Orbit's own (`hello`, `selection` and
+`mention`), so a custom editor server that spoke the old JSON-RPC message names is not understood. Outside the terminal of
+VS Code (no `ORBIT_EDITOR_SSE_PORT`, and `TERM_PROGRAM` not `vscode`) the TUI no longer looks for an editor on its own.
+`Env.session()` also withholds every `ORBIT_EDITOR_*` variable from the managed server and from session shells.
+
+**Affects:** TUI users who point `ORBIT_EDITOR_SSE_PORT` at their own editor server, and VS Code users, who get the
+connection without setting anything.
+
+**What to do:** use the Orbit extension for VS Code; set `orbit.ideBridge.enabled` to `false` if you do not want the
+listener. An editor plugin of your own writes a version 1 lock to `ide/<port>.lock` and speaks the message set.
+
+### The prompt editor is started without a shell
+
+`$VISUAL` and `$EDITOR` for the prompt editor (the editor command of the prompt and Mini) are now found on `PATH` and started by the path
+that was found, with no shell, as `/keybindings` already did. On Windows a program of the same name in the folder you work
+in (`code.cmd`, `vim.bat`, `code.exe`) is no longer run in place of your editor. An editor value that relied on `cmd.exe`
+no longer starts: a builtin such as `start /wait notepad`, `%VAR%` expansion, or a program found only in the current
+folder. A value of exactly `code` or `subl` now gets `--wait`, so the prompt waits until the file is closed. A missing
+editor is reported as "Cannot find the editor ... on PATH".
+
+**Affects:** Windows users whose `VISUAL` or `EDITOR` is a shell builtin, uses `%VAR%`, or names a program that is not on
+`PATH`.
+
+**What to do:** give the full path of the editor, quoted if it has spaces, or put it on `PATH`.
+
 ### `orb -p` sends a message and prints the answer
 
 `orb -p <message>` (or `--print`) runs one message the way `orb run` does and exits. The words after the flags are the

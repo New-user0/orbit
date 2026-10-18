@@ -296,12 +296,16 @@ export function Autocomplete(props: {
     return absolute.split(path.sep).join("/")
   }
 
-  function insertFileMention(input: { filePath: string; lineStart: number; lineEnd: number }) {
+  // A mention from the editor names a file, and the lines of the selection when there was one.
+  function insertFileMention(input: { filePath: string; lineStart?: number; lineEnd?: number }) {
     const item = normalizeMentionPath(input.filePath)
-    const lineRange = {
-      startLine: input.lineStart,
-      endLine: input.lineEnd > input.lineStart ? input.lineEnd : undefined,
-    }
+    const lineRange =
+      input.lineStart === undefined
+        ? undefined
+        : {
+            startLine: input.lineStart,
+            endLine: input.lineEnd !== undefined && input.lineEnd > input.lineStart ? input.lineEnd : undefined,
+          }
     const { filename, part } = createFilePart({ path: item, type: "file" }, input.filePath, lineRange)
     const index = store.visible === "reference" ? store.index : props.input().cursorOffset
 
