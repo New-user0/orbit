@@ -4,6 +4,7 @@ import { ToolFailure } from "@orbit/ai"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { Hash } from "@orbit/util/hash"
 import { Effect, Schema } from "effect"
 import path from "path"
 import { InstructionDiscovery } from "../../instruction-discovery.js"
@@ -69,6 +70,36 @@ export const Plugin = {
       yield* index.current ? fs.writeWithDirs(indexPath, index.current) : fs.remove(indexPath).pipe(Effect.ignore)
       yield* discovery.reload()
     })
+
+    // A repository with no remote is named by its path until it is trusted and by its first commit afterwards, and a
+    // Location keeps the ID it was bound with, so notes can sit under the path-named folder. Move them over; a note that
+    // already has the name here wins, and the index is rebuilt from the files.
+    const moved = yield* Effect.forEach(
+      [...new Set([location.project.directory, location.project.canonical])]
+        .map((folder) => path.join(global.data, "memory", Hash.fast(`directory:${folder}`)))
+        .filter((legacy) => legacy !== directory),
+      (legacy) =>
+        Effect.gen(function* () {
+          const names = (yield* fs.readDirectory(legacy)).filter((file) => file.endsWith(".md") && file !== INDEX)
+          if (names.length === 0) return false
+          yield* fs.ensureDir(directory)
+          yield* Effect.forEach(
+            names,
+            (file) =>
+              fs
+                .existsSafe(path.join(directory, file))
+                .pipe(
+                  Effect.flatMap((exists) =>
+                    exists ? Effect.void : fs.rename(path.join(legacy, file), path.join(directory, file)),
+                  ),
+                ),
+            { discard: true },
+          )
+          yield* fs.remove(path.join(legacy, INDEX)).pipe(Effect.ignore)
+          return true
+        }).pipe(Effect.orElseSucceed(() => false)),
+    )
+    if (moved.includes(true)) yield* rebuild()
 
     yield* ctx.tool.transform((editor) => {
       editor.add({
