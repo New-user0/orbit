@@ -92,20 +92,42 @@ test("selecting an entry with a mention restores its text", async () => {
   await app.setup.waitForFrame((frame) => frame.includes("› explain @src/main.ts please"))
 })
 
-test("in Vim normal mode ctrl+r redoes and does not open the search", async () => {
+test("in Vim normal mode ctrl+r opens the search, as in insert mode", async () => {
   await using app = await mount({ vim: true })
 
   await app.setup.mockInput.typeText("abc")
   await app.setup.waitForFrame((frame) => frame.includes("› abc"))
-  // Escape enters normal mode, u undoes the typing, and ctrl+r brings it back.
+  app.setup.mockInput.pressEscape()
+  await app.setup.renderOnce()
+  await Bun.sleep(80)
+  app.setup.mockInput.pressKey("r", { ctrl: true })
+  await app.setup.waitForFrame((frame) => frame.includes("Search prompt history"))
+})
+
+test("in Vim normal mode redo stays on its own binding and ctrl+r does not redo", async () => {
+  await using app = await mount({ vim: true })
+
+  await app.setup.mockInput.typeText("abc")
+  await app.setup.waitForFrame((frame) => frame.includes("› abc"))
+  // Escape enters normal mode, u undoes the typing, and the redo binding brings it back.
   app.setup.mockInput.pressEscape()
   await app.setup.renderOnce()
   await Bun.sleep(80)
   app.setup.mockInput.pressKey("u")
   await app.setup.waitForFrame((frame) => frame.includes("› ab ") && !frame.includes("› abc"))
-  app.setup.mockInput.pressKey("r", { ctrl: true })
+  app.setup.mockInput.pressKey(".", { ctrl: true })
   await app.setup.waitForFrame((frame) => frame.includes("› abc"))
   expect(app.setup.captureCharFrame()).not.toContain("Search prompt history")
+})
+
+test("in Vim normal mode the up arrow recalls the previous prompt, as in insert mode", async () => {
+  await using app = await mount({ vim: true })
+
+  app.setup.mockInput.pressEscape()
+  await app.setup.renderOnce()
+  await Bun.sleep(80)
+  app.setup.mockInput.pressArrow("up")
+  await app.setup.waitForFrame((frame) => frame.includes("› explain @src/main.ts please"))
 })
 
 // A session that accepts prompts, so that a submit reaches the server and the body can be read.

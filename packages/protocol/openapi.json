@@ -14571,6 +14571,15 @@
           "output_style": {
             "type": "string"
           },
+          "system_prompt": {
+            "type": "string"
+          },
+          "system_prompt_file": {
+            "type": "string"
+          },
+          "append_system_prompt": {
+            "type": "string"
+          },
           "update": {
             "type": "string",
             "enum": ["disable", "notify", "auto"]

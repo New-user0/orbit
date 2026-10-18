@@ -2266,6 +2266,9 @@ export type ConfigEntry =
         git_status?: boolean
         default_agent?: string
         output_style?: string
+        system_prompt?: string
+        system_prompt_file?: string
+        append_system_prompt?: string
         update?: "disable" | "notify" | "auto"
         share?: "manual" | "auto" | "disabled"
         enterprise?: { url?: string }

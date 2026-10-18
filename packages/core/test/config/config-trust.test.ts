@@ -14,6 +14,7 @@ import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
+import { PromptConfigPlugin } from "@orbit/core/plugin/prompt-config"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WellKnown } from "@orbit/core/wellknown"
@@ -302,6 +303,40 @@ describe("Config under workspace trust", () => {
           FOREIGN_ONLY: "f",
           COUNT: "3",
         })
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("withholds system_prompt_file of an untrusted project and local file, keeps the prompt text, and applies it once trusted", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const project = path.join(folders.repo, "orbit.json")
+      const local = path.join(folders.repo, "orbit.local.json")
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(project, { system_prompt_file: "/etc/marker-project.md", append_system_prompt: "Project append.", output_style: "default" }),
+          write(local, { system_prompt_file: "/etc/marker-local.md" }),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const before = yield* config.entries()
+        // The file key is withheld from both documents; the text keys stay, because a repository may already set an agent prompt.
+        for (const file of [project, local]) {
+          expect(named(before, file)).toMatchObject({ trusted: false, withheld: ["settings"] })
+          expect(named(before, file)?.info.system_prompt_file).toBeUndefined()
+        }
+        expect(PromptConfigPlugin.promptKeys(before)).toEqual({
+          replacement: undefined,
+          append: "Project append.",
+        })
+
+        const granted = yield* nextUpdate
+        yield* grantWithRecords(folders.repo, { persist: true, via: "test" })
+        yield* Fiber.join(granted)
+        const after = yield* config.entries()
+        expect(named(after, project)?.info.system_prompt_file).toBe("/etc/marker-project.md")
+        expect(named(after, local)?.info.system_prompt_file).toBe("/etc/marker-local.md")
       }).pipe(Effect.provide(loader(folders)))
     }),
   )

@@ -12,6 +12,7 @@ import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
 import type { Permission } from "@orbit/schema/permission"
 import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 
 // Config from a folder that is not trusted yet. Consumers read whole values with `Config.latest`, and project and local
 // documents outrank the user's, so a partial value from a repository could replace one the user set. Whatever a
@@ -114,7 +115,7 @@ function isUrl(entry: string) {
 // A path stays inside when it is read from the document's own folder and lands in one of the folders trust is decided
 // for. Home is not one of them, and neither is a network share, which `\\host\share` and `//host/share` both name.
 function inside(place: Place, entry: string) {
-  if (entry === "~" || entry.startsWith("~/") || entry.startsWith("~\\") || /^[\\/]{2}/.test(entry)) return false
+  if (entry === "~" || entry.startsWith("~/") || entry.startsWith("~\\") || LinkShare.isShare(entry)) return false
   const resolved = path.resolve(place.directory, entry)
   return place.roots.some((root) => FSUtil.contains(root, resolved))
 }
@@ -237,6 +238,11 @@ export const classification = {
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,
+    // Text in the system prompt, like `agents.*.system`, which a repository can already set; the core rules stay after it.
+    system_prompt: inert,
+    append_system_prompt: inert,
+    // It reads a file of this machine into every request, which a repository must not be able to ask for.
+    system_prompt_file: withhold("settings"),
     update: withhold("network"),
     share: withhold("network"),
     enterprise: withhold("network"),

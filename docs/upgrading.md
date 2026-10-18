@@ -1221,8 +1221,8 @@ as a model fallback, appear in the same way once those features land.
 
 `ctrl+r` in the prompt of the terminal UI now opens a search over the prompts you sent before. The list narrows as you
 type, shows prompts sent from the current directory first, then the closest match, then the newest, and Enter loads the choice into the
-prompt with its mode and mentions. With `prompt.vim` on, `ctrl+r` in normal mode is still redo. The command is
-`prompt.history.search`.
+prompt with its mode and mentions. With `prompt.vim` on, `ctrl+r` opens it in normal mode too (normal mode has no
+redo key; the `input.redo` binding still redoes). The command is `prompt.history.search`.
 
 Renaming a session no longer has a key of its own in a session: `session.rename` now has no default key, and the
 session list's rename action is the new `dialog.session.rename`, still `ctrl+r`, in the `session-list` place. `/rename`
@@ -1496,6 +1496,31 @@ selected text is sent (see FU-M4-35 in the follow-up register).
 
 **What to do:** Nothing, or set `orbit.context.includeOpenFile` to `false` in your user settings to start with the chip
 off.
+
+### Vim keys in the prompt: counts, operators, text objects, registers and an insert label
+
+With `prompt.vim` on, normal mode now understands counts (`3w`, `2dd`, `5x`, up to 10000), the operators `d`, `c` and
+`y` with the motions `h j k l w b e W B E 0 ^ $ gg G` (and `gj`, `gk` for display rows), the text objects `iw aw iW aW`
+and the inner and around forms of quotes, backticks, `()`, `[]`, `{}` and `<>`, and the commands `dd cc yy D C Y s S x X
+r ~ J p P o O i I a A >> <<` and `u`. There is one unnamed register that lives as long as the prompt does and is never
+written to disk; `"+` before a yank, delete or paste goes through the system clipboard (`"+p` pastes only a text
+clipboard, and CRLF becomes LF). Prompt parts (file and agent mentions, pasted-text summaries, images) are never cut in
+half by a motion or an operator. One `u` undoes one whole command, such as `3dd`.
+
+In insert mode a muted `-- INSERT --` label starts the row under the prompt; normal mode shows no label and uses the
+block cursor. Escape in insert mode no longer moves the cursor left when it is at the start of a line. Escape in normal
+mode clears a half-typed command and still reaches the interrupt of a running session; Enter submits from either mode;
+the arrow keys act as `h j k l` while a count or operator is pending. If you set no `cursor` and use `prompt.vim`, the
+insert cursor is a line (before, switching back to insert mode failed). The status line command is run again when the
+vim mode or the configured output style changes.
+
+In a few places Orbit follows Vim's documented behaviour: `d$`/`D`/`C` (they stop at the line break), the linewise
+operators (`dj`, `dk`, `dG`, `dgg` take whole lines), `d0`, counted `x`, `r` and `~` (they stay on the line), `dw` at the
+end of a line, `cw` on the last letter of a word, and `a` at the end of a line.
+
+**Affects:** people who set `prompt.vim` to `true`, and status line commands that show the vim mode or output style.
+
+**What to do:** Nothing.
 
 ## Permissions
 
@@ -3282,6 +3307,28 @@ precedence over your own, your `""` included.
 trailers.
 
 **What to do:** Set `attribution.commit` or `attribution.pr` to `""` to turn the line off, or to your own text.
+
+### Config keys that replace or extend the system prompt
+
+Three keys change the system prompt of the main thread of a session (a session without a parent, and forks of it):
+
+- `system_prompt` replaces Orbit's base prompt, the model-specific prompt included. Orbit's core rules (where
+  reminders come from, that outside content is data) are kept after it, then the git section, then the appended text and
+  the output style. Put `${ORBIT_TOOL_GUIDANCE}` where the guidance lines of the offered tools should go; without it
+  there are none.
+- `system_prompt_file` is the same with the text read from a UTF-8 file at each request, so an edit applies from the next
+  request. The path is absolute, starts with `~/`, or is relative to the folder of the config file that names it. A file
+  that cannot be read keeps the default prompt and logs one warning. A path on a network share is refused. The key is not
+  read from a project or local config until the folder is trusted.
+- `append_system_prompt` adds text after the base and the git section, also on top of an agent's own prompt.
+
+An agent with a prompt of its own keeps it and gets no replacement; the appended text still applies on the main thread.
+Subagent child sessions get neither. A config with no file resolves a relative `system_prompt_file` against the folder
+the session runs in. The highest-priority config that sets a replacement decides, and an empty string counts as unset.
+
+**Affects:** people who set these keys, and SDK callers.
+
+**What to do:** Nothing unless you want to use them. A replacement removes Orbit's coding guidance on purpose.
 
 ## No saved grant for `ipconfig`, `hostname` and `route`
 

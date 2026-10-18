@@ -80,6 +80,18 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Server** (`packages/core`):
 
+- `system_prompt_file` in `PromptConfigPlugin` (`packages/core/src/plugin/prompt-config.ts`) reads a UTF-8 file into
+  `system[0]` of each request of the main thread, so `ConfigTrust` withholds the key (kind `settings`) from an untrusted
+  project or local document, and the gate is the config's own, at each request. The loader also refuses, for every
+  document, a target that `LinkShare.isShare` names (two separators: `\\host\share`, `//host/share`, `\\?\UNC\`; or a
+  rooted `\??\` NT spelling such as `\??\UNC\`, also behind a dot segment such as `\x\..\??\UNC\`: the predicate tests
+  the spelling as written and as normalized), before any file system call, and a path that reaches a share through a
+  link (`LinkShare.blocked`; pinned by the link test in `test/plugin/prompt-config.test.ts`). The same predicate answers
+  for the trust fingerprint, `{file:}` reach and `ConfigTrust.inside`, and `test/link-share.test.ts` pins each NT
+  spelling against `of`, `ofSync`, `blocked` and `scan` with no file system call. `system_prompt` and `append_system_prompt`
+  are text and stay inert, like `agents.*.system`; the core rules follow a replacement. A drive letter mapped to a share
+  is not detected (follow-up). Proof: `test/plugin/prompt-config.test.ts`, `test/config/trust.test.ts`,
+  `test/config/config-trust.test.ts`.
 - `hg` in `Project.resolve` (`hg log`) and in the Mercurial VCS provider (`hg branch`, `status`, `diff`, which the
   terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
   each command, so none is started while the folder is untrusted. The provider answers an empty branch, status and

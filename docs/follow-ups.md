@@ -154,7 +154,7 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (17)
+### M4 (16)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -171,7 +171,6 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-088 | Wake-up option lookup recurses through every wake-up turn | behaviour | Long loops of wake-ups slow every SessionTurn.current call. | low | S | loop-robustness-18 | #62 follow-up 59 | packages/core/src/session/turn.ts:204 wakeUpOptions |
 | FU-M2-098 | A prompt after the busy period inherits an earlier turn's spent limit | behaviour | A fresh prompt stops at once on an old limit. | low to moderate | S | loop-robustness-18 | #62 follow-up 77 | packages/core/src/session/turn.ts:199-204 when a notice is promoted ahead (not re-probed) |
 | FU-M2-113 | A subagent's cost check misses the parent step that started it | 8 | --max-cost and --max-tokens overshoot by that step's spend. | certain with foreground subagents | S | loop-robustness-18 | #65 round 5 follow-up 14 | packages/core/src/session/runner/step.ts publishes Step.Ended after tool fibers join (not re-probed) |
-| FU-M3-043 | vim_mode and output_style are not in the status line watch list | behaviour | The line keeps the old mode or style until the next trigger. | medium | S | clients-ux-8 | PR #73 C8 follow-up | packages/tui/src/component/prompt/index.tsx:1729-1738 |
 | FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file; share stat after the write; lexical fallback when a hook strips Write output | 14,13 | Misleading reason; regressions unnoticed. | low | S | file-web-tools-9 | PR #84 C0-C8 | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
 | FU-M3-154 | LSP: content-modified retry re-sends the document; server starts before the size cap and read; git check-ignore batch fails whole on one bad path; junction Location hides nothing | perf,7 | Extra didChange; one bad path shows every ignored file. | low | S | file-web-tools-9 | PR #92 C0-C4 | packages/core/src/lsp/index.ts ignored() |
 | FU-M4-37 | The reminder tests carry a 699-line copy of the runner harness beside the one in session-runner.test.ts | test hygiene | Two harnesses must be kept in step; a change to one can leave the other testing old behaviour. | low | M: move session-runner.test.ts onto packages/core/test/lib/runner.ts and delete the copy | loop-robustness-17 | prompts-context-5 review (minor) | packages/core/test/lib/runner.ts, packages/core/test/session-runner.test.ts |
@@ -430,7 +429,7 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M3-035 | Approval matrix rows that cannot fail: Patch decoy patchText, core Read rows calling authorizeRead, replay link rows for NotebookEdit, Glob, Grep and Patch; indentation and prettier drift | 14 | A regression in those tools' replay places passes the suite. | n/a | S | sweep | PR #72 C5 minors 4-5, C6 m1 and m4 | packages/cli/test/acp/replay.test.ts:116 (input spells only file_path) |
 | FU-M3-036 | No test pins that a pending shell call with no input names no place | 14,15 | Docs claim it (untrusted-repositories.md, upgrading.md) with no test. | n/a | S | sweep | PR #72 C6 m2 | packages/cli/src/acp/tool.ts:121; no empty-input shell row in packages/cli/test/acp/tool.test.ts |
 | FU-M3-037 | VS Code Open diff for a move has no test | 14 | A regression in the move diff goes unnoticed. | n/a | S | sweep | PR #72 C1 | packages/vscode (unit tests do not load the VS Code API) |
-| FU-M3-045 | Status line tests: undisposed createRoot, vim_mode pinned only for the start mode, version/session_id/duration only in the builder, watch entry for project.directory equivalent by ordering | 14 | Regressions in those fields go unnoticed. | n/a | S | sweep | PR #73 C3, C6, C8 m2 and follow-ups | packages/tui/test/status-line-app.test.tsx (no "vim":"normal" row) |
+| FU-M3-045 | Status line tests: undisposed createRoot, vim_mode pinned only for the start mode, version/session_id/duration only in the builder, watch entry for project.directory equivalent by ordering | 14 | Regressions in those fields go unnoticed. | n/a | S | sweep | PR #73 C3, C6, C8 m2 and follow-ups | packages/tui/test/status-line-app.test.tsx (the vim mode `normal` is now pinned by 'the status line reruns when the vim mode or the output style changes' in clients-ux-8; the rest of the row stays open) |
 | FU-M3-049 | ORBIT_PWSH_PARSE_TIMEOUT_MS read once at layer build | behaviour | A changed value after startup is ignored (tests only). | low | S | sweep | PR #74 C10-C16 | packages/core/src/shell/powershell-parse.ts:312 |
 | FU-M3-064 | Absolute-place permission table does not go through FileAccess | 14 | If FileAccess asked relative to the project root, no row would fail. | n/a | S | sweep | PR #75 C5 m2 | packages/core/test/permission.test.ts absolute-place table (resources written by hand) |
 | FU-M3-070 | Plugin route title not pinned; app-lifecycle width test flaked once | 9,14 | Reverting terminalTitle passes every test. | n/a | S | sweep | PR #76 C3 and C6 | packages/tui/src/app.tsx:651; no docs/known-failures.md row |
@@ -527,6 +526,7 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M4-36 | Reminder look-alikes are not escaped in skill and reference listings, plugin-supplied system parts, host-supplied instruction entries, a hosted tool's provider-format result, the opaque window of a native compaction, the descriptions of direct MCP tools (`codemode: false`) in the tools array, instruction text the person chose to run (an activated skill's body, a prompt's skill text, command templates, MCP prompt commands), image and PDF bytes, or file text that a client puts inside its own envelope (the TUI's `formatEditorContext`, VS Code's `editorContext`, ACP assistant-audience text, which lowers as an unmarked synthetic) | 9 | Text from a file or a tool that reaches the model through one of these sinks can still pose as a `<system-reminder>` block. Tool results (also when split across parts, and text or JSON files in them), attachments (also an ACP embedded text resource), shell and subagent output, instruction files, MCP server instructions, the Code Mode tool listing and the git snapshot are escaped and pinned. The client envelopes belong to prompts-context-13 as carrier. | low | S per sink | sweep | prompts-context-5 review (Known gaps) | packages/core/src/session/runner/to-llm-message.ts (syntheticText), packages/core/src/skill/instructions.ts, packages/core/src/reference/instructions.ts, packages/core/src/session/provider-context.ts; docs/untrusted-repositories.md Known gaps |
 | FU-M4-38 | ReminderText.neutralize matches ASCII hyphens and white space only | 9 | A tag spelled with a Unicode hyphen (U+2010 to U+2015, U+2212), a soft hyphen, a zero-width character, a fullwidth bracket or an ASCII underscore (`system_reminder`) is not escaped. The reference escapes nothing, and a model reads such a spelling as text, so this is hardening only. | low | S | sweep | prompts-context-5 review (follow-up) | packages/core/src/session/reminder-text.ts (TAG) |
 | FU-M4-41 | A compaction drops a Plan mode leave or re-entry note that was still owed, and the plan path | behaviour | Messages start at the checkpoint, so the first step after it gets the plain reminder or none; the reference keeps both flags across a compaction. | low | M: have the checkpoint record the owed state | sweep | plan-todo-reminders review (follow-up) | packages/core/src/plan/reminders.ts; packages/core/src/session/history.ts |
+| FU-M4-43 | A session ID is used as stored, so an imported session's ID can reach a plan file path and the plan reminder text | security (class 5) | SessionTransfer.import keeps the file's ID and SessionID checks only the ses prefix; the ID is joined into the plan file path (ExitPlanMode write, plan reminders). | low | S: validate the exact ID shape at SessionTransfer.import | sweep | plan-todo-reminders review round 4 | packages/core/src/session/transfer.ts; packages/core/src/plan/reminders.ts; packages/core/src/tool/plugin/plan-mode.ts |
 
 ### Owner (94)
 
@@ -633,6 +633,7 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 
 | id | title | fixed by | test |
 |---|---|---|---|
+| FU-M3-043 | vim_mode and output_style are not in the status line watch list | 43822725 | test packages/tui/test/status-line-app.test.tsx 'the status line reruns when the vim mode or the output style changes' (and status-line-trust.test.tsx 'a vim mode change in an untrusted start folder starts no status line command') |
 | FU-M1-017 | Git.clean compared paths with startsWith | 97cb7e7 | test packages/flow/test/git.test.ts 'a run is cleaned up whatever case the repository path is spelled with'. Known gaps entry and class 5 text are stale |
 | FU-M1-025 | No in-repo list of known test failures | 933be24 | Known gaps entry 'No list of known failures' is stale |
 | FU-M1-029 | which resolved relative PATH entries against the working folder | 9aaaeed | test packages/util/test/which.test.ts (util.which) |
@@ -838,11 +839,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-42, carried by later tasks) = 717.
-- Output: 634 rows plus 83 listed duplicates = 717. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 634 register rows have a table entry.
-- Open minors by carrier: M4: 17, M5: 5, M6: 37, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 149, Owner: 94.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) = 718.
+- Output: 635 rows plus 83 listed duplicates = 718. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 635 register rows have a table entry.
+- Open minors by carrier: M4: 16, M5: 5, M6: 37, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 150, Owner: 94.
 - Open majors: 14 open, plus 5 marked major in "For the owner" that wait for a decision = 19.
 - For the owner: 86.
-- Fixed: 113.
+- Fixed: 114.
 - Duplicates: 83.
-- Check: 435 open + 86 owner + 113 fixed + 83 duplicates = 717, the 717 inputs.
+- Check: 435 open + 86 owner + 114 fixed + 83 duplicates = 718, the 718 inputs.
