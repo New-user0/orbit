@@ -40,7 +40,9 @@ export const Plugin = define({
             ? writtenFile(event.input, event.result.output, location.directory)
             : changedFiles(event.result.metadata?.files).map((file) => path.resolve(location.directory, file))
         if (files.length === 0) return
-        const found = yield* lsp.diagnostics(files, { save: true })
+        // A server that is not running yet is started in the background: the edit does not wait for a cold start, and the
+        // next step's reminder carries what the server publishes.
+        const found = yield* lsp.diagnostics(files, { save: true, background: true })
         // A diagnostic without a usable severity counts as an error, as it does in the query tool.
         const errors = Object.entries(found).flatMap(([file, items]) => {
           const list = items.filter((item) => LspClient.severity(item) === 1)

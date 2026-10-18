@@ -109,7 +109,7 @@ describe("LspPlugin", () => {
           "execute.after",
           base("Write", { file_path: given, content: "x" }, { content: "Wrote it" } as Tool.Result),
         )
-        expect({ given, asked }).toEqual({ given, asked: [{ files: [expected], options: { save: true } }] })
+        expect({ given, asked }).toEqual({ given, asked: [{ files: [expected], options: { save: true, background: true } }] })
         // The collector is told the same file, under the session that made the edit.
         expect({ given, touched }).toEqual({ given, touched: [{ sessionID: "ses_lsp_plugin", files: [expected] }] })
       }
@@ -139,7 +139,7 @@ describe("LspPlugin", () => {
               metadata: { files: [{ file: "b.ipynb" }, { file: "gone.ts", status: "deleted" }] },
             } as Tool.Result),
           )
-          expect(asked).toEqual([{ files: [path.resolve(location.directory, "b.ipynb")], options: { save: true } }])
+          expect(asked).toEqual([{ files: [path.resolve(location.directory, "b.ipynb")], options: { save: true, background: true } }])
         }
         asked.length = 0
         yield* hooks.trigger("tool", "execute.after", {
@@ -196,6 +196,11 @@ describe("LspPlugin", () => {
       )
       const trust = Context.get(lsp, WorkspaceTrust.Service)
       yield* trust.grant(location.directory, { persist: false, via: "test" })
+      // An edit waits inline for a server that is running, and starts one that is not in the background. These rows look
+      // at the inline block, so the server is started first.
+      const warmup = path.join(location.directory, "orbit-warmup.fake")
+      yield* Effect.promise(() => Bun.write(warmup, "fine\n"))
+      yield* Context.get(lsp, Lsp.Service).diagnostics([warmup])
       const access = Context.get(lsp, FileAccess.Service)
       yield* body(hooks, location.directory, {
         trust,
@@ -373,7 +378,7 @@ describe("LspPlugin", () => {
       }
       yield* hooks.trigger("tool", "execute.after", event)
       const absolute = path.resolve(location.directory, "src/a.ts")
-      expect(asked).toEqual([{ files: [absolute], options: { save: true } }])
+      expect(asked).toEqual([{ files: [absolute], options: { save: true, background: true } }])
       expect(event.result.content).toEqual([
         { type: "text", text: "Edited src/a.ts (1 replacement)" },
         {

@@ -62,11 +62,14 @@ export const BUILT_IN: readonly Server[] = [
 export interface Interface {
   /**
    * Diagnostics for each file that has a language server, keyed by absolute path. With `save`, each server is also told
-   * its file was saved; only edits that reached the disk say so, so a read-only query never does.
+   * its file was saved; only edits that reached the disk say so, so a read-only query never does. With `background`, a
+   * file whose server is not running yet is not waited for: the start, the read, the sync and the save go on in the
+   * Location's scope and the file comes back with an empty list, to be read later through `current`. A server that is
+   * already running is waited for briefly, as without it.
    */
   readonly diagnostics: (
     files: readonly string[],
-    options?: { readonly save?: boolean },
+    options?: { readonly save?: boolean; readonly background?: boolean },
   ) => Effect.Effect<Record<string, Diagnostic[]>>
   /**
    * The last diagnostics each of these files was published, from servers that are already running. It never starts a
@@ -99,6 +102,7 @@ const layer = Layer.effect(
     const trust = yield* ProjectTrust.Service
     const spawner = yield* ChildProcessSpawner
     const git = yield* Git.Service
+    const scope = yield* Effect.scope
     // One start attempt per server; a server that fails to start stays off until the Location reloads.
     const clients = new Map<string, Promise<LspClient.Client | undefined>>()
     // The servers that finished starting, so a read of what they published never starts or waits for one.
@@ -222,6 +226,15 @@ const layer = Layer.effect(
       }).pipe(Effect.retry({ schedule: retrySchedule, while: (error) => error.code === CONTENT_MODIFIED }))
     })
 
+    // Starts the file's server if needed, sends the file and waits briefly for what the server publishes.
+    const check = Effect.fnUntraced(function* (file: string, options?: { readonly save?: boolean }) {
+      const target = yield* client(file)
+      const text = target ? yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined)) : undefined
+      if (!target || text === undefined) return []
+      const items = yield* Effect.promise(() => target.diagnostics(file, text, options).catch(() => []))
+      return [[file, items] as const]
+    })
+
     return Service.of({
       diagnostics: Effect.fn("Lsp.diagnostics")(
         function* (files, options) {
@@ -231,13 +244,12 @@ const layer = Layer.effect(
             (file) =>
               Effect.gen(function* () {
                 if (!(yield* allowed(file))) return []
-                const target = yield* client(file)
-                const text = target
-                  ? yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
-                  : undefined
-                if (!target || text === undefined) return []
-                const items = yield* Effect.promise(() => target.diagnostics(file, text, options).catch(() => []))
-                return [[file, items] as const]
+                const server = options?.background ? yield* serverFor(file) : undefined
+                if (server === undefined || running.has(server.id)) return yield* check(file, options)
+                // A cold start can take many seconds. It goes on in the Location's scope, which stops it with the
+                // Location, and the caller reads the result later through `current`.
+                yield* check(file, options).pipe(Effect.ignoreCause, Effect.forkIn(scope))
+                return [[file, [] as Diagnostic[]] as const]
               }),
             { concurrency: "unbounded" },
           )

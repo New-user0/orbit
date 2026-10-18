@@ -37,7 +37,11 @@ const LATE_MS = 1500
 type Place = { readonly directory: string; readonly marker: string; readonly changes: string }
 
 /** A real language server, the real collector and the real plugin, over the PluginTestLayer's bus and sessions. */
-const setup = (flags: ReadonlyArray<string> = [], options: { readonly trusted?: boolean } = {}) =>
+const setup = (
+  flags: ReadonlyArray<string> = [],
+  // `cold` leaves the server unstarted, so the first edit meets a server that is not running.
+  options: { readonly trusted?: boolean; readonly cold?: boolean } = {},
+) =>
   Effect.gen(function* () {
     const location = yield* Location.Service
     const bus = yield* Bus.Service
@@ -84,6 +88,14 @@ const setup = (flags: ReadonlyArray<string> = [], options: { readonly trusted?: 
       Effect.provideService(Lsp.Service, lsp),
       Effect.provideService(LspDiagnostics.Service, collector),
     )
+    // A running server is waited for inline; a cold one is started in the background. The rows that look at the inline
+    // block start from a running server, and the marker and the change log are emptied after it started.
+    if (options.cold !== true && options.trusted !== false) {
+      const warmup = path.join(location.directory, "orbit-warmup.fake")
+      yield* Effect.promise(() => Bun.write(warmup, "fine\n"))
+      yield* lsp.diagnostics([warmup], { save: true })
+      yield* Effect.promise(() => Promise.all([Bun.write(marker, ""), Bun.write(changes, "")]))
+    }
     const place: Place = { directory: location.directory, marker, changes }
     const create = () => sessions.create({ location: Location.Ref.make({ directory: location.directory }) })
     const edit = Effect.fnUntraced(function* (
@@ -326,7 +338,7 @@ describe("the language-server reminder", () => {
     Effect.gen(function* () {
       // A server start sends `initialize`, which `--record-init` writes down; a document open would not show it.
       const initialized = path.join((yield* tmpdirScoped()).path, "init.json")
-      const h = yield* setup([`--record-init=${initialized}`], { trusted: true })
+      const h = yield* setup([`--record-init=${initialized}`], { trusted: true, cold: true })
       const file = path.join(h.place.directory, "cold.fake")
       yield* Effect.promise(() => Bun.write(file, "a HINT\n"))
       expect(yield* h.lsp.current([file])).toEqual({})
@@ -498,10 +510,84 @@ describe("the reminder text", () => {
   )
 })
 
-describe("language-server requests", () => {
-  const request = (flags: string[]) =>
+// FU-M3-111: an edit does not wait for a language server to start. The start goes on in the background, and the next
+// step's reminder carries what the server published.
+describe("an edit that meets a server which is not running", () => {
+  const INIT_MS = 2000
+
+  it.live("returns at once with no inline block, and the next reminder carries the error once", () =>
     Effect.gen(function* () {
-      const h = yield* setup(flags)
+      const h = yield* setup([`--init-delay-ms=${INIT_MS}`], { cold: true })
+      const session = yield* h.create()
+
+      const started = performance.now()
+      const { file, result } = yield* h.edit(session.id, "cold.fake", "an ERROR here\n")
+      // A real clock, as the server's own delay is.
+      expect(performance.now() - started).toBeLessThan(1000)
+      expect(JSON.stringify(result.content)).not.toContain("Language server errors")
+      expect(yield* reminder(h, session)).toEqual([])
+
+      // Both the change and the save are published once the start is over.
+      yield* published(h, file, 2)
+      expect(content(yield* reminder(h, session))).toEqual([
+        "cold.fake:\n  error 1:4 found ERROR\n  error 1:1 checked on save (with text)",
+      ])
+      expect(yield* reminder(h, session)).toEqual([])
+    }),
+  )
+
+  it.live("control: a running server still shows the inline block", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const session = yield* h.create()
+      const { result } = yield* h.edit(session.id, "warm.fake", "an ERROR here\n")
+      expect(JSON.stringify(result.content)).toContain("found ERROR")
+    }),
+  )
+
+  it.live("control: a direct call still waits for the start", () =>
+    Effect.gen(function* () {
+      const h = yield* setup([`--init-delay-ms=${INIT_MS}`], { cold: true })
+      const file = path.join(h.place.directory, "direct.fake")
+      yield* Effect.promise(() => Bun.write(file, "an ERROR here\n"))
+      const found = yield* h.lsp.diagnostics([file], { save: true })
+      expect(found[file]?.map((item) => item.message)).toContain("found ERROR")
+    }),
+  )
+
+  it.live("stops the process that was starting when the Location ends", () =>
+    Effect.gen(function* () {
+      const pidFile = path.join((yield* tmpdirScoped()).path, "pid.txt")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const h = yield* setup([`--init-delay-ms=${INIT_MS}`, `--pid=${pidFile}`], { cold: true })
+          const session = yield* h.create()
+          yield* h.edit(session.id, "stray.fake", "an ERROR here\n")
+          // The Location ends while the server is still answering `initialize`.
+          yield* until(() => Effect.promise(() => Bun.file(pidFile).exists()))
+        }),
+      )
+      const pid = Number(yield* Effect.promise(() => Bun.file(pidFile).text()))
+      expect(pid).toBeGreaterThan(0)
+      // The server is told to exit when the Location ends, a moment after its start finishes.
+      yield* until(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(pid, 0)
+            return false
+          } catch {
+            return true
+          }
+        }),
+      )
+    }),
+  )
+})
+
+describe("language-server requests", () => {
+  const request = (flags: string[], options: { readonly cold?: boolean } = {}) =>
+    Effect.gen(function* () {
+      const h = yield* setup(flags, options)
       const file = path.join(h.place.directory, "q.fake")
       yield* Effect.promise(() => Bun.write(file, "text\n"))
       return { h, file }
@@ -523,7 +609,7 @@ describe("language-server requests", () => {
   it.live("checks the size of a file before it starts a server", () =>
     Effect.gen(function* () {
       const initialized = path.join((yield* tmpdirScoped()).path, "init.json")
-      const { h, file } = yield* request([`--record-init=${initialized}`])
+      const { h, file } = yield* request([`--record-init=${initialized}`], { cold: true })
       yield* Effect.promise(() => Bun.write(file, "x".repeat(10_000_001)))
       const error = yield* h.lsp.request("textDocument/hover", file, { position: { line: 0, character: 0 } }).pipe(Effect.flip)
       expect(error.message).toContain("up to 10 MB")

@@ -71,7 +71,13 @@ const remember = (uri: string, text: string) => {
 }
 // The project root as the client sent it; positions in answers are built from it.
 let rootUri = ""
-connection.onRequest("initialize", (params: { rootUri: string }) => {
+// `--init-delay-ms=<n>` answers initialize after that long, as a server that loads a large project does, and
+// `--pid=<file>` writes the process id, so a test can tell whether the process is gone.
+const pidFile = process.argv.find((argument) => argument.startsWith("--pid="))?.slice("--pid=".length)
+if (pidFile) writeFileSync(pidFile, String(process.pid))
+connection.onRequest("initialize", async (params: { rootUri: string }) => {
+  const delay = Number(flagValue("init-delay-ms") ?? 0)
+  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
   rootUri = params.rootUri.replace(/\/$/, "")
   const recorded = process.argv.find((argument) => argument.startsWith("--record-init="))?.slice("--record-init=".length)
   if (recorded) writeFileSync(recorded, JSON.stringify(params))
