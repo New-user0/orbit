@@ -43,6 +43,34 @@ export const record = (usage: Usage | undefined, costs: Model.Info["cost"]): Rec
   return { tokens: normalized, cost: calculateCost(costs, normalized) }
 }
 
+/**
+ * Spend that a sent request incurred but the provider never reported, because the response was cut off, timed out or
+ * was abandoned. The sizes are estimates, priced with the model's own rates, so the turn counts the call as computed
+ * spend instead of free. A model with no price stays unpriced: its tokens carry a cost of zero, which a limit reads as
+ * unknown.
+ */
+export const estimate = (
+  costs: Model.Info["cost"],
+  size: { readonly input: number; readonly output: number },
+): Recorded => {
+  const normalized: TokenUsage.Info = {
+    input: safe(Math.round(size.input)),
+    output: safe(Math.round(size.output)),
+    reasoning: 0,
+    cache: { read: 0, write: 0 },
+  }
+  return { tokens: normalized, cost: calculateCost(costs, normalized) }
+}
+
+/** Whether a record holds any tokens, so a call that never ran is not recorded as a zero. */
+export const hasTokens = (recorded: Recorded) =>
+  recorded.tokens.input +
+    recorded.tokens.output +
+    recorded.tokens.reasoning +
+    recorded.tokens.cache.read +
+    recorded.tokens.cache.write >
+  0
+
 export const add = (a: Recorded, b: Recorded): Recorded => ({
   cost: Money.USD.make(a.cost + b.cost),
   tokens: {

@@ -44,16 +44,18 @@ import {
   InstructionStateTable,
   SessionMessageTable,
   SessionInboxTable,
+  SessionUsageTable,
   SessionTable,
 } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
+import { SessionTurn } from "@orbit/core/session/turn"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Tool } from "@orbit/core/tool"
 import { asc, eq } from "drizzle-orm"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
 import { noScratchpad } from "./lib/scratchpad"
@@ -365,7 +367,22 @@ it.effect(
       expect(requests[0]?.tools).toMatchObject([{ name: "lookup", description: "Lookup" }])
       expect(requests[0]?.toolChoice).toBeUndefined()
       expect(options[0]?.webSocket).toBeUndefined()
-      expect(yield* durableState(db, sessionID)).toEqual(before)
+      // The only durable fact is what the call spent, recorded on the Session so turn limits count it.
+      const after = yield* durableState(db, sessionID)
+      expect(after.bus.slice(before.bus.length).map((event) => event.type)).toEqual(["session.side_query.recorded.1"])
+      expect({ ...after, bus: after.bus.slice(0, before.bus.length), sequence: before.sequence, session: before.session }).toEqual(before)
+      const spent = yield* db
+        .select()
+        .from(SessionUsageTable)
+        .where(eq(SessionUsageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(spent.map((row) => [row.kind, row.source, row.tokens_input, row.tokens_output])).toEqual([
+        ["side_query", "session.generate", 0, 10],
+      ])
+      expect(
+        (yield* SessionTurn.usage(db, sessionID, { seq: -1, time: DateTime.makeUnsafe(0) })).tokens,
+      ).toBe(10)
     }),
   { timeout: 15_000 },
 )

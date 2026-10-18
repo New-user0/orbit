@@ -410,7 +410,7 @@ export function failure(state: TurnState) {
 }
 
 function limited(state: TurnState) {
-  // A cost limit that cannot be checked (`limit.cost-unknown`) is a refusal, not a limit that was reached.
+  // A cost or token limit that cannot be checked (`limit.cost-unknown`, `limit.tokens-unknown`) is a refusal, not a limit that was reached.
   const type = state.executionError?.type
   return type === "limit.steps" || type === "limit.cost" || type === "limit.tokens"
 }
