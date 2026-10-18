@@ -55,6 +55,7 @@ import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionTurn } from "@orbit/core/session/turn"
 import { ShellResult } from "@orbit/core/shell/result"
 import { SessionOutput } from "@orbit/core/session/output"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
@@ -6384,7 +6385,9 @@ describe("SessionRunnerLLM", () => {
       expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
 
       expect(s.requests).toHaveLength(1)
-      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+      expect(
+        (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+      ).toHaveLength(0)
     })
 
     scenario("fails with the limit when it is spent at the output-limit cap", function* (s) {
@@ -6400,7 +6403,9 @@ describe("SessionRunnerLLM", () => {
       expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
 
       expect(s.requests).toHaveLength(4)
-      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
+      expect(
+        (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+      ).toHaveLength(3)
     })
 
     // The step rule counts a cut-off that holds a tool part, so the check at the cut-off must count it too; otherwise a
@@ -6448,7 +6453,9 @@ describe("SessionRunnerLLM", () => {
         expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
 
         expect(s.requests).toHaveLength(1)
-        expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+        expect(
+          (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+        ).toHaveLength(0)
       }),
     )
 
@@ -8077,7 +8084,9 @@ describe("SessionRunnerLLM", () => {
       expect(error).toBeInstanceOf(StepFailedError)
       expect((error as StepFailedError).error).toMatchObject({ type: "limit.tokens" })
       expect(s.requests).toHaveLength(row.requests)
-      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+      expect(
+        (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+      ).toHaveLength(0)
     }),
   )
 
@@ -10159,7 +10168,9 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume.pipe(Effect.ignore)
 
     expect(s.requests).toHaveLength(1)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+    ).toHaveLength(0)
   })
 
   // FU-M2-078: the cut-off reply is part of the logical step that its escalation continues, not a step of its own.
