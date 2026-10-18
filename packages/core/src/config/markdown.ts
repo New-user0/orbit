@@ -15,17 +15,25 @@ const options = {
   },
 }
 
-export function parse(content: string) {
+// `indicators` adds a last retry that also reads a value holding a YAML indicator as text. It comes after the first, so a
+// file that already parsed through `sanitize` parses as it did, and only a reader that asks for it (the `paths` of a rule)
+// accepts what the others still refuse.
+export function parse(content: string, indicators = false) {
   try {
     return matter(content, options)
   } catch {
-    return matter(sanitize(content), options)
+    if (!indicators) return matter(sanitize(content), options)
+    try {
+      return matter(sanitize(content), options)
+    } catch {
+      return matter(sanitize(content, true), options)
+    }
   }
 }
 
-export function parseOption(content: string) {
+export function parseOption(content: string, indicators = false) {
   try {
-    return parse(content)
+    return parse(content, indicators)
   } catch {
     return undefined
   }
@@ -58,9 +66,15 @@ export function split(text: string): { readonly frontmatter?: string; readonly b
   return { body: text }
 }
 
+// The characters YAML 1.2 reserves to start a node (section 5.3), which a plain value may not open with: the flow
+// brackets, the brace pair, `*`, `&`, `#`, `!`, `|`, `>`, `%`, `@` and the backtick.
+const INDICATOR = /[[\]{}*&#!|>%@`]/
+
 // Other coding agents accept unquoted colons in frontmatter values. Retry
-// those values as YAML block scalars so existing config files keep working.
-export function sanitize(content: string) {
+// those values as YAML block scalars so existing config files keep working. With `indicators`, a value that holds one of
+// the YAML indicator characters is read as text too, so `paths: **/*.ts` is a string and not an alias. List items are
+// left as written.
+export function sanitize(content: string, indicators = false) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (!match) return content
   const frontmatter = match[1]
@@ -70,7 +84,7 @@ export function sanitize(content: string) {
     if (!entry) return [line]
     const value = entry[2].trim()
     if (value === "" || value === ">" || value === "|" || value.startsWith('"') || value.startsWith("'")) return [line]
-    if (!value.includes(":")) return [line]
+    if (!value.includes(":") && !(indicators && INDICATOR.test(value))) return [line]
     return [`${entry[1]}: |-`, `  ${value}`]
   })
   return content.replace(frontmatter, () => result.join("\n"))
