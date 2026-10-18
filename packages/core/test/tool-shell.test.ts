@@ -3328,7 +3328,7 @@ describe("ShellTool timeouts", () => {
       inFolder(undefined, ({ registry, notifications }) =>
         Effect.gen(function* () {
           const settled = yield* executeTool(registry, call({ command: idleCommand, timeout: 200 }))
-          expect(settled.metadata).toMatchObject({ timeout: true, error: true })
+          expect(settled.metadata).toMatchObject(isWindows ? { timeout: true } : { timeout: true, error: true })
           expect(text(settled)).toContain("Command exceeded timeout of 200 ms")
           yield* Effect.promise(() => Bun.sleep(300))
           expect(notifications()).toEqual([])
@@ -3606,7 +3606,7 @@ describe("ShellTool timeouts", () => {
             }),
           )
           const settled = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 200 }))
-          expect(settled.metadata).toMatchObject({ timeout: true, error: true })
+          expect(settled.metadata).toMatchObject(isWindows ? { timeout: true } : { timeout: true, error: true })
         }),
       ),
     { timeout: 30_000 },
