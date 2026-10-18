@@ -14,7 +14,7 @@ import { Service } from "@orbit/client/effect/service"
 import { Orbit } from "@orbit/client/promise"
 import { findSession } from "../../session-target"
 import { errorMessage } from "../../util/error"
-import { bypassRefusal } from "../../util/managed-bypass"
+import { bypassDecision, printBypassNotice } from "../../util/managed-bypass"
 import { mcpConfigRefusal } from "../../util/managed-mcp"
 
 export default Runtime.handler(Commands, (input) =>
@@ -105,12 +105,12 @@ export default Runtime.handler(Commands, (input) =>
     // Home sends --prompt to a new session as soon as it shows, which is not the session that the person picks.
     if (resumePicks && Option.isSome(input.prompt))
       return yield* Effect.fail(new Error("--prompt cannot be combined with a --resume that opens the session list"))
-    const bypass = yield* bypassRefusal(
+    const bypass = yield* bypassDecision(
       Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
       process.cwd(),
       input.auto || input.yolo || input.dangerouslySkipPermissions,
     )
-    if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
+    printBypassNotice(bypass.notice)
     const mcpOnly = yield* mcpConfigRefusal(
       Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
       process.cwd(),
@@ -149,7 +149,7 @@ export default Runtime.handler(Commands, (input) =>
         fork: input.fork,
         resume: resumePicks ? resume : undefined,
         prompt: Option.getOrUndefined(input.prompt),
-        auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
+        auto: bypass.auto,
       },
       config: {
         path: config.path,

@@ -6,7 +6,7 @@ import { Commands } from "../commands"
 import { ConfigOverlay } from "../../config-overlay"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
-import { bypassRefusal } from "../../util/managed-bypass"
+import { bypassDecision, printBypassNotice } from "../../util/managed-bypass"
 import { requireTrust } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -49,12 +49,12 @@ export default Runtime.handler(Commands.commands.loop, (input) =>
     // Once, before the first run: a refusal that came with every run would only repeat itself on each interval. The
     // folder is the one the runs happen in, which is the folder of the session when --session names one that exists.
     yield* requireTrust(client, directory(), { grant: input.trust, session: target })
-    const bypass = yield* bypassRefusal(
+    const bypass = yield* bypassDecision(
       client,
       directory(),
       input.auto || input.yolo || input.dangerouslySkipPermissions,
     )
-    if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
+    printBypassNotice(bypass.notice)
     // One session for the whole loop, so each run sees what the previous ones found.
     const session = target ?? SessionID.create()
     const times = Option.getOrUndefined(input.times)
@@ -69,7 +69,7 @@ export default Runtime.handler(Commands.commands.loop, (input) =>
           agent: Option.getOrUndefined(input.agent),
           format: "default",
           file: [],
-          auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
+          auto: bypass.auto,
         }),
       )
       if (times !== undefined && run >= times) break

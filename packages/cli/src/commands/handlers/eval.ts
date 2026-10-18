@@ -7,7 +7,7 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
-import { bypassRefusal } from "../../util/managed-bypass"
+import { bypassDecision, printBypassNotice } from "../../util/managed-bypass"
 import { requireTrust } from "../../util/trust"
 import { directory, trustOptions } from "./flow/execute"
 
@@ -27,8 +27,8 @@ export default Runtime.handler(
     // the folder of the run.
     const trust = yield* trustOptions(file, "suite")
     yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
-    const bypass = yield* bypassRefusal(client, directory(), input.auto)
-    if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
+    const bypass = yield* bypassDecision(client, directory(), input.auto)
+    printBypassNotice(bypass.notice)
     const suite = yield* Effect.tryPromise({ try: () => loadSuite(file), catch: (cause) => cause })
     const resume = Option.getOrUndefined(input.resume)
     // A resumed eval compares the models it started with.
@@ -56,7 +56,7 @@ export default Runtime.handler(
           directory: directory(),
           models,
           concurrency: Option.getOrUndefined(input.concurrency),
-          permissions: input.auto ? "auto" : "reject",
+          permissions: bypass.auto ? "auto" : "reject",
           resume,
           log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
         }),

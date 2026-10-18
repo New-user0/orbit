@@ -326,10 +326,14 @@ managed `agents.<name>.permissions` gives an agent now apply to that agent too; 
   "always" reply as "once". The built-in rules of the agents stay.
 - `disable_hooks` runs no declarative hook, and `managed_hooks_only` runs only the hooks of managed settings. The managed file's own `hooks.disabled` and `hooks.managed_only` mean the same.
 - `disable_bypass_permissions` makes `orb`, `orb run`, `orb -p`, `orb loop`, `orb flow run`, `orb flow resume` and
-  `orb eval` refuse `--auto`, `--yolo` and `--dangerously-skip-permissions`. A workflow or suite node whose
+  `orb eval` ignore `--auto`, `--yolo` and `--dangerously-skip-permissions`: the command prints one notice and goes on
+  without the mode, so it keeps asking, and a question that nothing can answer is declined (headless runs reject it).
+  Managed asks and denies still apply. The notice goes to stderr, except under `--format json` and `stream-json`, which
+  print it as a `{"type":"warning",...}` line on stdout. A workflow or suite node whose
   `permissions` is `auto` (including a team member's) has its requests rejected, with the managed message as feedback.
   The terminal interface keeps asking for permission and shows a notice when auto-accept was requested. A server that
-  cannot say whether bypass is allowed counts as refusing it.
+  cannot say whether bypass is allowed gets the same treatment: the mode is ignored, with a notice. (An earlier build
+  stopped these commands with an error; the rows of `test/managed-bypass.test.ts` pin the new behaviour.)
 - `GET /api/config/effective` also reports `permissions: { bypass, always }`, so clients can read these switches.
 - `orb flow clean` now compares a worktree's folder with the run's folder the way the platform compares paths, so a
   run is cleaned up when the repository path is spelled with other case on Windows.

@@ -2168,7 +2168,7 @@ The program-wide register of every follow-up, these gaps included, with each one
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
   starts a run without `requireTrust`. Nothing calls it except an import-boundary test, so it is dormant. Whoever wires
   it in calls `requireTrust` first. It and `runNonInteractive({ auto })` also select the mode that skips permission prompts
-  without the managed-settings check that the command handlers make (`bypassRefusal`), so whoever wires them in adds it too.
+  without the managed-settings check that the command handlers make (`bypassDecision`), so whoever wires them in adds it too.
 - **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
   `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
   cannot tell a trust refusal from any other failure of a command.
