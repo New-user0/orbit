@@ -403,6 +403,18 @@ describe("agent definition: replacement", () => {
       expect((yield* get(agents, "mine"))?.source).toEqual({ scope: "project" })
     }),
   )
+
+  it.live("keeps Explore's other context switch off when a trusted document turns one back on", () =>
+    Effect.gen(function* () {
+      const builtIn = yield* load({})
+      expect((yield* get(builtIn, "explore"))?.context).toEqual({ instructions: false, git_status: false })
+      expect((yield* get(builtIn, "general"))?.context).toBeUndefined()
+
+      const agents = yield* load({}, () => [jsonDocument({ agents: { explore: { context: { instructions: true } } } })])
+
+      expect((yield* get(agents, "explore"))?.context).toEqual({ instructions: true, git_status: false })
+    }),
+  )
 })
 
 describe("agent definition: an untrusted folder", () => {
@@ -424,14 +436,47 @@ describe("agent definition: an untrusted folder", () => {
     }),
   )
 
-  it.live("keeps Explore's other context switch off when a file turns one back on", () =>
+  // Class 8: `context.instructions: false` would hide the user's own instruction files, so a folder that is not trusted
+  // cannot set it; `git_status` and `instructions: true` stay. Columns: where the key comes from.
+  const switchOff = { context: { instructions: false, git_status: false } }
+  const unstamped = (directory: string) => ConfigTrust.stamp(jsonDocument({ agents: { build: switchOff, fresh: switchOff } }), {
+    roots: [directory],
+    directory,
+  })
+
+  it.live("drops the instruction switch of an agent in orbit.json, a new agent included, and keeps the git one", () =>
     Effect.gen(function* () {
-      const builtIn = yield* load({})
-      expect((yield* get(builtIn, "explore"))?.context).toEqual({ instructions: false, git_status: false })
-      expect((yield* get(builtIn, "general"))?.context).toBeUndefined()
+      const agents = yield* load({}, (directory) => [unstamped(directory)])
+      for (const id of ["build", "fresh"]) expect([id, (yield* get(agents, id))?.context]).toEqual([id, { git_status: false }])
+      // Explore ships with both off; an untrusted document adds nothing to it and removes nothing.
+      expect((yield* get(agents, "explore"))?.context).toEqual({ instructions: false, git_status: false })
+    }),
+  )
 
-      const agents = yield* load({}, () => [jsonDocument({ agents: { explore: { context: { instructions: true } } } })])
+  it.live("drops it from an agent file in an untrusted directory", () =>
+    Effect.gen(function* () {
+      const agents = yield* load({ "agents/fresh.md": md("context:\n  instructions: false\n  git_status: false") }, (directory) => [
+        untrustedEntry(directory),
+      ])
+      expect((yield* get(agents, "fresh"))?.context).toEqual({ git_status: false })
+    }),
+  )
 
+  it.live("keeps it when the document is trusted, as the control", () =>
+    Effect.gen(function* () {
+      const agents = yield* load({}, () => [jsonDocument({ agents: { build: switchOff } })])
+      expect((yield* get(agents, "build"))?.context).toEqual({ instructions: false, git_status: false })
+    }),
+  )
+
+  it.live("keeps an untrusted document's instructions: true", () =>
+    Effect.gen(function* () {
+      const agents = yield* load({}, (directory) => [
+        ConfigTrust.stamp(jsonDocument({ agents: { explore: { context: { instructions: true } } } }), {
+          roots: [directory],
+          directory,
+        }),
+      ])
       expect((yield* get(agents, "explore"))?.context).toEqual({ instructions: true, git_status: false })
     }),
   )

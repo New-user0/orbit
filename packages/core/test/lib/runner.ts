@@ -615,7 +615,11 @@ const setup = Effect.gen(function* () {
     agent: agentHost(agents),
     model: modelHost(models),
     provider: noProviders,
-    session: { hook: (name, callback) => hooks.register("session", name, callback) },
+    session: {
+      hook: (name, callback) => hooks.register("session", name, callback),
+      // These sessions have no parent and no fork, so no plugin takes them for a subagent.
+      get: (input) => Effect.fail(new Session.NotFoundError({ sessionID: input.sessionID })),
+    },
   })
   yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(pluginHost), {
     discard: true,

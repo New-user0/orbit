@@ -165,9 +165,7 @@ export const Plugin = {
                       yield* sessions
                         .prompt({
                           sessionID: child.id,
-                          text: ["You are a subagent spawned by a workflow in another session.", call.prompt].join(
-                            "\n",
-                          ),
+                          text: call.prompt,
                         })
                         .pipe(
                           Effect.mapError(

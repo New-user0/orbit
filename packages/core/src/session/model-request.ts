@@ -142,11 +142,10 @@ export const baseTranscript = (input: {
   return {
     providerMetadataKey,
     system: [
+      // An agent's own prompt is kept as written: `SubagentPromptPlugin` fills its guidance slot after the hooks that
+      // change the tool set have run.
       input.agent.system
-        ? SessionSystemPrompt.render(
-            input.agent.system,
-            input.tools.definitions.map((tool) => tool.name),
-          )
+        ? input.agent.system
         : SessionSystemPrompt.make(input.tools.definitions.map((tool) => tool.name)),
       input.initial,
     ]

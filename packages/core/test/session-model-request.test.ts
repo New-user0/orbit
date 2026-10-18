@@ -124,12 +124,10 @@ describe("SessionModelRequest.baseTranscript", () => {
     messages: [],
   })
 
-  test("renders the guidance of a custom prompt that has the placeholder, in guidance order", () => {
-    const text = baseTranscript(input("Own.\n${ORBIT_TOOL_GUIDANCE}\nEnd.", ["Read", "Bash"])).system[0]?.text ?? ""
-    expect(text).not.toContain("${ORBIT_TOOL_GUIDANCE}")
-    expect(text.startsWith("Own.\n- Bash is for")).toBe(true)
-    expect(text.indexOf("- Use Read")).toBeGreaterThan(text.indexOf("- Bash is for"))
-    expect(text.endsWith("\nEnd.")).toBe(true)
+  test("leaves the placeholder of a custom prompt for the plugin that renders it after the tool set is final", () => {
+    expect(baseTranscript(input("Own.\n${ORBIT_TOOL_GUIDANCE}\nEnd.", ["Read", "Bash"])).system[0]?.text).toBe(
+      "Own.\n${ORBIT_TOOL_GUIDANCE}\nEnd.",
+    )
   })
 
   test("keeps a custom prompt without the placeholder as written", () => {

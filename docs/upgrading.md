@@ -595,6 +595,16 @@ mode that run as children, which now get the task-worker prompt.
 **What to do:** Set `"agents": { "explore": { "context": { "instructions": true } } }` (or `"git_status": true`) in
 `orbit.json` to bring either back. Setting one key leaves the other at the built-in value.
 
+A folder that is not trusted cannot switch the instruction files off: `"instructions": false` in its `orbit.json` or
+agent files is dropped, because it would hide your own instruction files and memory index from the agent, as the
+withheld `instructions_exclude` does. `"git_status": false` and `"instructions": true` are kept. Trust the folder to
+use the switch.
+
+A prompt of your own for an agent has its `${ORBIT_TOOL_GUIDANCE}` placeholder filled from the tools the model is
+actually offered: on a PowerShell session the line reads PowerShell, and a model that loses Edit and Write gets no line
+for them. Your own words around the placeholder stay as written. Workflow subagents also get the brief alone as their
+first message.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.

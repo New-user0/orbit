@@ -1,13 +1,16 @@
-// What an agent's `context` switches leave out of its baseline: the instruction files and the git snapshot. The fixture is
-// the one of session-context-vcs.test.ts, with the real instruction discovery. The git snapshot among the sources of a session's baseline, on the real session context, the real trust and the real
-// Git service, over a temporary repository that the Location is bound to. The repository has `core.fsmonitor` planted,
-// which git runs for `status` and which writes a marker line, so that a test sees whether git did any work in the folder.
+// What an agent's `context` switches leave out of its baseline: the instruction files and the git snapshot, on the real
+// session context, the real trust and the real Git service, over a temporary repository that the Location is bound to.
+// The repository has `core.fsmonitor` planted, which git runs for `status` and which writes a marker line, so that a
+// test sees whether git did any work in the folder.
 import { describe, expect } from "bun:test"
-import fs from "fs/promises"
 import path from "path"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Document, Info } from "@orbit/schema/config"
+import { ConfigNormalize } from "@orbit/core/config/normalize"
+import { ConfigAgentPlugin } from "@orbit/core/config/plugin/agent"
+import { ConfigTrust } from "@orbit/core/config/trust"
+import { agentHost, host } from "./plugin/host"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
@@ -16,6 +19,7 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { Instructions } from "@orbit/core/instructions/index"
 import { Location } from "@orbit/core/location"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { McpInstructions } from "@orbit/core/mcp/instructions"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Project } from "@orbit/core/project"
@@ -35,10 +39,10 @@ import { Tool } from "@orbit/core/tool"
 import { VcsInstructions } from "@orbit/core/vcs/instructions"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { LayerNode } from "@orbit/util/effect/layer-node"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { eq } from "drizzle-orm"
-import { Context, Effect, Layer } from "effect"
-import { currentDirectoryOnPath, plant } from "./fixture/decoy"
+import { Effect, Layer, Schema } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
 import { keys, live, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
@@ -54,7 +58,7 @@ const filesKey = "core/instructions"
 const ids = {
   main: SessionSchema.ID.make("ses_vcs_main"),
   child: SessionSchema.ID.make("ses_vcs_child"),
-  fork: SessionSchema.ID.make("ses_vcs_fork"),
+  plain: SessionSchema.ID.make("ses_vcs_plain"),
   other: SessionSchema.ID.make("ses_vcs_other"),
 }
 
@@ -71,8 +75,9 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 const empty = Instructions.empty
 
 const state = {
-  found: undefined as { readonly root: string; readonly folder: string; readonly ran: () => Effect.Effect<readonly string[]> } | undefined,
-  config: undefined as Config.TestInterface | undefined,
+  found: undefined as
+    | { readonly root: string; readonly folder: string; readonly ran: () => Effect.Effect<readonly string[]> }
+    | undefined,
 }
 
 // A repository with the key planted, as the folder of the Location. `vcs` says what the project resolved it as.
@@ -93,20 +98,14 @@ const harness = (vcs: (root: string) => Project.Vcs | undefined) =>
         ProjectTrust.node,
         Location.node,
         Global.node,
+        FSUtil.node,
+        ManagedPolicy.node,
       ]),
       [
         Global.node.replace(tempGlobalLayer),
         // No implicit trust: the folder is untrusted until a test grants it, which is what the core tests would otherwise skip.
         WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
-        Config.node.replace(
-          Config.testLayer().pipe(
-            Layer.tap((context) =>
-              Effect.sync(() => {
-                state.config = Context.get(context, Config.Test)
-              }),
-            ),
-          ),
-        ),
+        Config.node.replace(Config.testLayer()),
         SessionRunnerModel.node.replace(models),
         InstructionDiscovery.node.replace(InstructionDiscovery.configured()),
         SkillInstructions.node.replace(Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(empty) })),
@@ -181,7 +180,7 @@ const setup = Effect.gen(function* () {
   const options = { directory: here.directory }
   yield* insertSession({ id: ids.main, agent: "build", ...options })
   yield* insertSession({ id: ids.child, parentID: ids.main, agent: agentIDs.lean, ...options })
-  yield* insertSession({ id: ids.fork, parentID: ids.main, agent: agentIDs.worker, ...options })
+  yield* insertSession({ id: ids.plain,parentID: ids.main, agent: agentIDs.worker, ...options })
   yield* insertSession({ id: ids.other, parentID: ids.main, agent: agentIDs.tweaked, ...options })
   const found = state.found!
   const step = (id: SessionSchema.ID) =>
@@ -226,7 +225,7 @@ describe("what an agent's context switches leave out of its baseline", () => {
       yield* grant
       yield* stepped(ids.main)
 
-      const worker = yield* stepped(ids.fork)
+      const worker = yield* stepped(ids.plain)
 
       expect(worker.value.text).toContain(MARK)
       expect(worker.value.text).toContain("Current branch: main")
@@ -286,6 +285,51 @@ describe("what an agent's context switches leave out of its baseline", () => {
       expect(yield* ran()).toEqual([])
       expect(yield* stored(ids.other, key)).toBeUndefined()
       expect(Object.keys(untrusted.value.delta)).not.toContain(key)
+    }),
+  )
+})
+
+// Class 8, switching the instruction files off: a document of an untrusted folder cannot hide the user's own files
+// (the global file and the memory index come from the same source) from an agent. Columns: the document is trusted or
+// not; rows: an existing primary agent, an existing subagent. A new agent is pinned in agent-definition.test.ts.
+describe("an agent's context in the document of an untrusted folder", () => {
+  const decode = Schema.decodeUnknownSync(Info)
+  const document = (input: unknown) => {
+    const result = ConfigNormalize.normalize(input)
+    if (result.type !== "normalized") throw new Error("expected normalized config")
+    return new Document({ type: "document", scope: "project", info: decode(result.encoded) })
+  }
+  const off = { agents: { build: { context: { instructions: false, git_status: false } }, worker: { context: { instructions: false } } } }
+
+  const configured = (trusted: boolean) =>
+    Effect.gen(function* () {
+      const result = yield* setup
+      const here = yield* Location.Service
+      const stamped = document(off)
+      const entry = trusted ? stamped : ConfigTrust.stamp(stamped, { roots: [here.directory], directory: here.directory })
+      const agents = yield* Agent.Service
+      yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+        Effect.provide(Config.testLayer([entry])),
+      )
+      yield* result.grant
+      return result
+    })
+
+  it.live("keeps the instruction files of build and of a subagent in their baselines, and honours the git switch", () =>
+    Effect.gen(function* () {
+      const { stepped } = yield* configured(false)
+      const main = yield* stepped(ids.main)
+      expect(main.value.text).toContain(MARK)
+      expect(main.value.text).not.toContain("Current branch")
+      expect((yield* stepped(ids.plain)).value.text).toContain(MARK)
+    }),
+  )
+
+  it.live("removes them when the document is trusted, as the control", () =>
+    Effect.gen(function* () {
+      const { stepped } = yield* configured(true)
+      expect((yield* stepped(ids.main)).value.text).not.toContain(MARK)
+      expect((yield* stepped(ids.plain)).value.text).not.toContain(MARK)
     }),
   )
 })

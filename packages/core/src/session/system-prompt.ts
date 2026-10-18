@@ -29,7 +29,8 @@ import SUBAGENT_NOTES from "./runner/prompt/subagent-notes.txt"
  * `GUIDANCE` lines of the tools the request offers, in `GUIDANCE` order and not in the order of the tool list, so
  * `system[0]` is the same string for the same agent, model and tool set. Orbit caches per conversation, so the guidance
  * can live inside `system[0]`. An agent with a system prompt of its own gets guidance only where its text holds the
- * placeholder.
+ * placeholder, filled by `SubagentPromptPlugin` (not by `baseTranscript`) after `PatchTool`, with the author's text
+ * around the slot registered as `personal`.
  *
  * A subagent (a session with a parent that is not a fork of the main thread, `SubagentPromptPlugin`) has a different
  * base: `runner/prompt/subagent.txt` when its agent has no prompt of its own, followed by `subagent-notes.txt` whatever

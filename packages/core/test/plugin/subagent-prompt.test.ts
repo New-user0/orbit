@@ -13,6 +13,8 @@ import { SubagentPromptPlugin } from "@orbit/core/plugin/subagent-prompt"
 import { Provider } from "@orbit/core/provider"
 import { Session } from "@orbit/core/session"
 import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
+import { ShellSelect } from "@orbit/core/shell/select"
+import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Model } from "@orbit/schema/model"
 import { Effect, Layer, Schema } from "effect"
@@ -143,6 +145,52 @@ describe("SubagentPromptPlugin", () => {
 
       expect(asChild.startsWith(`${own}\n\n${SessionSystemPrompt.SUBAGENT_REPORT}`)).toBe(true)
       expect(asRoot).toBe(own)
+    }),
+  )
+
+  // An agent's own prompt keeps its `${ORBIT_TOOL_GUIDANCE}` slot until this plugin, which runs after the patch plugin,
+  // so the guidance names the tools the request offers. Columns: root and child session; rows: the tool set.
+  const slotted = "Own Bash prompt\n${ORBIT_TOOL_GUIDANCE}\nEnd Bash."
+  const powershell = Layer.succeed(ShellSelect.Service, { resolve: () => Effect.succeed("pwsh") } as never)
+
+  for (const kind of ["root", "child"] as const) {
+    it.effect(`fills the slot of an agent's own prompt from the tools left after the patch plugin, on a ${kind} session`, () =>
+      Effect.gen(function* () {
+        const { root, child } = yield* setup
+        const sessionID = kind === "root" ? root.id : child.id
+        const tools = ["Bash", "Read", "Edit", "Write", "Patch"]
+        const lost = yield* request({ sessionID, agent: "own", model: "gpt-5", tools, text: slotted })
+        expect(lost).toContain(readLine)
+        expect(lost).not.toContain(editLine)
+        expect(lost).not.toContain(writeLine)
+        expect(lost).not.toContain("${ORBIT_TOOL_GUIDANCE}")
+
+        const kept = yield* request({ sessionID, agent: "own", model: "gpt-4.1", tools, text: slotted })
+        expect(kept).toContain(editLine)
+        expect(kept).toContain(writeLine)
+      }),
+    )
+
+    it.effect(`names the shell tool the model is offered in an own prompt's guidance, on a ${kind} session`, () =>
+      Effect.gen(function* () {
+        const { host, root, child } = yield* setup
+        yield* ShellTool.AdvertisePlugin.effect(host as never).pipe(Effect.provide(powershell))
+        const text = yield* request({ sessionID: kind === "root" ? root.id : child.id, agent: "own", text: slotted })
+        expect(text).toContain("- PowerShell is for what only a shell can do")
+        expect(text).not.toContain("- Bash is for")
+        // The author's own words keep the word they used.
+        expect(text.startsWith("Own Bash prompt\n")).toBe(true)
+        expect(text).toContain("\nEnd Bash.")
+      }),
+    )
+  }
+
+  it.effect("keeps the main prompt of a session it cannot read", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const text = yield* request({ sessionID: Session.ID.make("ses_missing"), agent: "worker" })
+      expect(text.startsWith(main)).toBe(true)
+      expect(text).not.toContain(SessionSystemPrompt.SUBAGENT_REPORT)
     }),
   )
 

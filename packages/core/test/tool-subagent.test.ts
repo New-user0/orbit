@@ -968,6 +968,11 @@ describe("SubagentTool in Plan mode", () => {
           status: "completed",
           content: [{ type: "text", text: expect.stringContaining(childText) }],
         })
+        // The brief is the child's first message, with nothing in front of it.
+        const child = (yield* sessions.list({ parentID: parent.id })).data[0]
+        expect((yield* sessions.inbox(child!.id)).find((message) => message.type === "user")?.payload.text).toBe(
+          "scan it",
+        )
       }),
     ),
   )
