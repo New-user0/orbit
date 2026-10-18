@@ -22,10 +22,15 @@ import { Project } from "@orbit/core/project"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { Provider } from "@orbit/core/provider"
 import { ReadTool } from "@orbit/core/tool/plugin/read"
+import { WriteTool } from "@orbit/core/tool/plugin/write"
+import { FileMutation } from "@orbit/core/file-mutation"
+import { Formatter } from "@orbit/core/formatter"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionInstructions } from "@orbit/core/session/instructions"
+import { InstructionTriggers } from "@orbit/core/instruction-triggers"
+import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionStore } from "@orbit/core/session/store"
@@ -40,6 +45,7 @@ import { Document, Info } from "@orbit/schema/config"
 import { scriptedMarkdown } from "./fixture/front-matter"
 import { location, tempLocationLayer } from "./fixture/location"
 import { canLinkFile } from "./fixture/symlink"
+import { makePdf } from "./lib/pdf"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
@@ -60,8 +66,25 @@ const readToolNode = makeLocationNode({
     Image.node,
     Permission.node,
     SessionInstructions.node,
+    InstructionTriggers.node,
+    InstructionDiscovery.node,
     FSUtil.node,
     Location.node,
+  ],
+})
+
+const writeToolNode = makeLocationNode({
+  name: "test/write-tool-plugin",
+  layer: Layer.effectDiscard(registerToolPlugin(WriteTool.Plugin)),
+  deps: [
+    FileLedger.node,
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    Environment.node,
+    Formatter.node,
+    Location.node,
+    Permission.node,
   ],
 })
 
@@ -74,7 +97,10 @@ const sessionLayer = (
   trusted = true,
   filesystem?: Layer.Layer<FSUtil.Service>,
   // The home folder is the project: a Location in a folder below it, as a downloaded folder is.
-  place?: { readonly home: string; readonly directory: string },
+  // `project` is the project's folder when it is not the home folder.
+  place?: { readonly home: string; readonly directory: string; readonly project?: string },
+  // `--bare` and a vanilla instance switch the instruction files off.
+  bare = false,
 ) => {
   const imageLayer = AppNodeBuilder.build(Image.node, [Config.node.replace(config)])
   return AppNodeBuilder.build(
@@ -89,11 +115,14 @@ const sessionLayer = (
       FileAccess.node,
       ReadToolFileSystem.node,
       readToolNode,
+      writeToolNode,
       FileLedger.node,
       Tool.node,
       PluginHooks.node,
       ProjectTrust.node,
       SessionInstructions.node,
+      InstructionTriggers.node,
+      InstructionDiscovery.node,
       Global.node,
       Image.node,
     ]),
@@ -105,7 +134,7 @@ const sessionLayer = (
           ? Layer.succeed(
               Location.Service,
               Location.Service.of(
-                location({ directory: AbsolutePath.make(place.directory) }, { projectDirectory: AbsolutePath.make(place.home) }),
+                location({ directory: AbsolutePath.make(place.directory) }, { projectDirectory: AbsolutePath.make(place.project ?? place.home) }),
               ),
             )
           : tempLocationLayer,
@@ -116,6 +145,7 @@ const sessionLayer = (
       Image.node.replace(imageLayer),
       WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: trusted })),
       ...(filesystem ? [FSUtil.node.replace(filesystem)] : []),
+      ...(bare ? [InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: false, global: false }))] : []),
     ],
   )
 }
@@ -262,13 +292,13 @@ describe("SessionInstructions", () => {
       const firstInjected = yield* synthetics(sessionID)
       expect(firstInjected).toHaveLength(1)
       expect(firstInjected[0]!.text).toBe(
-        `Instructions from: ${deepPath}\ndeep-instructions\n\nInstructions from: ${subPath}\nsub-instructions`,
+        `Instructions from: ${subPath}\nsub-instructions\n\nInstructions from: ${deepPath}\ndeep-instructions`,
       )
       expect(firstInjected[0]!.description).toBe(
-        `Loaded ${path.relative(dir, deepPath)}, ${path.relative(dir, subPath)}`,
+        `Loaded ${path.relative(dir, subPath)}, ${path.relative(dir, deepPath)}`,
       )
-      // The synthetic's metadata carries the durable dedup ledger.
-      expect(firstInjected[0]!.metadata).toEqual({ instruction: { paths: [deepPath, subPath] } })
+      // The synthetic's metadata carries the durable dedup ledger, outermost folder first.
+      expect(firstInjected[0]!.metadata).toEqual({ instruction: { paths: [subPath, deepPath] } })
       expect(firstInjected[0]!.text).not.toContain("root-instructions")
 
       // Neither a full nor a partial read adds an automatic copy of the file itself.
@@ -411,7 +441,7 @@ describe("SessionInstructions", () => {
 
       // The model no longer has the rules, so the next read under the subtree must
       // re-inject them rather than trusting a stale in-memory claim.
-      yield* executeTool(registry, readCall(sessionID, "call-after", "sub/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-after", "sub/file.txt", { limit: 5 }))
       expect(yield* synthetics(sessionID)).toHaveLength(1)
     }),
   )
@@ -532,7 +562,7 @@ describe("SessionInstructions in a project that is not trusted", () => {
       yield* instructions.load({ sessionID, paths: [outsideFile] })
       yield* instructions.load({ sessionID, paths: [outsideFile] })
       expect(yield* synthetics(sessionID)).toHaveLength(0)
-      expect(skipped).toMatchObject([{ path: outsideFile, reason: expect.stringContaining("not trusted") }])
+      expect(skipped).toMatchObject([{ path: outsideFile, reason: expect.stringContaining("leads outside") }])
 
       // The grant changes what is asked, not what is injected.
       yield* trust.grant({ persist: false, via: "test" })
@@ -547,7 +577,7 @@ describe("SessionInstructions in a project that is not trusted", () => {
   })
 
   const linked = canLinkFile ? untrusted.live : untrusted.live.skip
-  linked("does not inject a file that an instruction file is a symlink to, until the project is trusted", () => {
+  linked("does not inject a file that an instruction file is a symlink to, trusted or not", () => {
     const { skipped, logger } = skippedNotices()
     return Effect.gen(function* () {
       const location = yield* Location.Service
@@ -570,14 +600,36 @@ describe("SessionInstructions in a project that is not trusted", () => {
       yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
       expect(yield* synthetics(sessionID)).toHaveLength(0)
       expect(skipped).toMatchObject([{ path: secret }])
+      expect(yield* providerText(sessionID)).not.toContain("TOP SECRET")
 
       yield* trust.grant({ persist: false, via: "test" })
-      yield* executeTool(registry, readCall(sessionID, "call-trusted", "sub/file.txt"))
-      const injected = yield* synthetics(sessionID)
-      expect(injected).toHaveLength(1)
-      expect(injected[0]!.text).toBe(`Instructions from: ${secret}\nTOP SECRET`)
+      yield* executeTool(registry, readCall(sessionID, "call-trusted", "sub/file.txt", { limit: 5 }))
+      // The grant does not open a link that leads out: what the model's reads load stays inside the project.
+      // A different range, so the read is not answered with the "has not changed" stub before touched() runs.
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+      expect(yield* providerText(sessionID)).not.toContain("TOP SECRET")
     }).pipe(Effect.provide(logger))
   })
+
+  // The control of the row above, in the same layout: a plain file that holds the marker loads in both states.
+  untrusted.live("injects a plain nested file that holds the same marker, before and after it is trusted", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* nested(dir, "AGENTS.md", "TOP SECRET")
+      const registry = yield* Tool.Service
+      const trust = yield* ProjectTrust.Service
+      const sessionID = yield* sessionIn(dir)
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+      expect((yield* synthetics(sessionID)).map((message) => message.text)).toEqual([
+        `Instructions from: ${path.resolve(dir, "sub", "AGENTS.md")}\nTOP SECRET`,
+      ])
+      yield* trust.grant({ persist: false, via: "test" })
+      const other = yield* nested(dir, "AGENTS.md", "TOP SECRET", "other")
+      yield* executeTool(registry, readCall(sessionID, "call-other", "other/file.txt"))
+      expect((yield* synthetics(sessionID)).map((message) => message.text)).toHaveLength(2)
+      expect((yield* synthetics(sessionID))[1]!.text).toContain(other)
+    }),
+  )
 
   untrusted.live("still injects the instruction files that the project holds itself", () =>
     Effect.gen(function* () {
@@ -614,6 +666,14 @@ const nested = (directory: string, name: string, text: string, folder = "sub") =
     yield* writeAgents(file, text)
     yield* Effect.promise(() => fs.writeFile(path.resolve(directory, folder, "file.txt"), "content"))
     return file
+  })
+
+// Everything that the next request to the provider would carry from the stored session.
+const providerText = (sessionID: Session.ID) =>
+  Effect.gen(function* () {
+    const store = yield* SessionStore.Service
+    const model = Model.Ref.make({ id: Model.ID.make("model"), providerID: Provider.ID.make("provider") })
+    return JSON.stringify(toLLMMessages(yield* store.context(sessionID), model))
   })
 
 const sessionIn = (directory: string) =>
@@ -671,7 +731,7 @@ describe("SessionInstructions processes what it injects", () => {
 
       // Nothing was recorded for it, so a later read finds it again once it has something to say.
       yield* writeAgents(subPath, "# Now it does\n")
-      yield* executeTool(registry, readCall(sessionID, "call-after", "sub/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-after", "sub/file.txt", { limit: 5 }))
       const injected = yield* synthetics(sessionID)
       expect(injected).toHaveLength(1)
       expect(injected[0]!.text).toBe(`Instructions from: ${subPath}\n# Now it does\n`)
@@ -761,7 +821,7 @@ describe("SessionInstructions applies instructions_exclude", () => {
       expect(yield* synthetics(sessionID)).toHaveLength(0)
 
       yield* settings.setEntries([])
-      yield* executeTool(registry, readCall(sessionID, "call-after", "excluded/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-after", "excluded/file.txt", { limit: 5 }))
       const injected = yield* synthetics(sessionID)
       expect(injected).toHaveLength(1)
       expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath] } })
@@ -1209,4 +1269,314 @@ describe("SessionInstructions keeps a project at the home folder from opening th
       }),
     )
   }
+})
+
+// The files that a read brings are found by `InstructionTriggers`: the folders below the folder the session started in,
+// outermost first, and only for what the read returned.
+describe("InstructionTriggers", () => {
+  const bare = testEffect(sessionLayer(Config.testLayer(), true, undefined, undefined, true))
+  const placed = (directory: (home: string) => string, trusted = true) =>
+    testEffect(
+      Layer.unwrap(
+        Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ).pipe(
+          Effect.map((tmp) =>
+            sessionLayer(Config.testLayer(), trusted, undefined, { home: tmp.path, directory: directory(tmp.path) }),
+          ),
+        ),
+      ),
+    )
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  )
+
+  // A session started in packages/x is bounded by it: packages/y is in the project, but not below the started folder.
+  const below = placed((home) => path.join(home, "packages", "x"))
+  below.live("loads nothing for a read in the project outside the folder the session started in", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const sibling = path.resolve(dir, "..", "y")
+      yield* mkdir(sibling)
+      yield* writeAgents(path.resolve(sibling, "AGENTS.md"), "SIBLING MARKER")
+      yield* writeAgents(path.resolve(sibling, "z.ts"), "export {}")
+      const control = yield* nested(dir, "AGENTS.md", "CONTROL MARKER")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sibling", path.resolve(sibling, "z.ts")))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+
+      yield* executeTool(registry, readCall(sessionID, "call-control", "sub/file.txt"))
+      expect((yield* synthetics(sessionID)).map((message) => message.text)).toEqual([
+        `Instructions from: ${control}\nCONTROL MARKER`,
+      ])
+    }),
+  )
+
+  it.live("loads nothing for a file directly in the folder the session started in, or a listing of it", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* writeAgents(path.resolve(dir, "AGENTS.md"), "ROOT MARKER")
+      yield* writeAgents(path.resolve(dir, "top.txt"), "top")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      yield* executeTool(registry, readCall(sessionID, "call-top", "top.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-list", "."))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+    }),
+  )
+
+  bare.live("loads no nested file when the instruction files are off, as in --bare", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* nested(dir, "AGENTS.md", "BARE MARKER")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+    }),
+  )
+
+  it.live("loads for an image and not for a file that is missing", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* nested(dir, "AGENTS.md", "SUB MARKER")
+      yield* nested(dir, "AGENTS.md", "GONE MARKER", "gone")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "pixel.png"), png))
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* Effect.exit(executeTool(registry, readCall(sessionID, "call-missing", "gone/missing.txt")))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+
+      yield* executeTool(registry, readCall(sessionID, "call-image", "sub/pixel.png"))
+      expect((yield* synthetics(sessionID)).map((message) => message.text.split("\n")[1])).toEqual(["SUB MARKER"])
+    }),
+  )
+
+  it.live("loads nothing for a PDF, with an image in the same folder as the control", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* nested(dir, "AGENTS.md", "PDF MARKER")
+      yield* Effect.promise(() => makePdf(1).then((bytes) => fs.writeFile(path.resolve(dir, "sub", "doc.pdf"), bytes)))
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "pixel.png"), png))
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      const pdf = yield* Effect.exit(executeTool(registry, readCall(sessionID, "call-pdf", "sub/doc.pdf")))
+      expect(pdf._tag).toBe("Success")
+      expect(JSON.stringify(pdf)).toContain("Read PDF")
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+
+      yield* executeTool(registry, readCall(sessionID, "call-image", "sub/pixel.png"))
+      expect(yield* synthetics(sessionID)).toHaveLength(1)
+    }),
+  )
+
+  it.live("loads a folder reached by a link inside the project once, under its real path", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const real = yield* nested(dir, "AGENTS.md", "REAL MARKER")
+      yield* Effect.promise(() => fs.symlink(path.resolve(dir, "sub"), path.resolve(dir, "alias"), "junction"))
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      yield* executeTool(registry, readCall(sessionID, "call-alias", "alias/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-real", "sub/file.txt"))
+      expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([
+        { instruction: { paths: [real] } },
+      ])
+    }),
+  )
+
+  // The home folder cannot be trusted for good, and contains everything below it: a session started there has no root
+  // for its nested files until a person has trusted it for the session.
+  const home = placed((root) => root, false)
+  home.live("loads a nested file for a session at the home folder only once the folder is trusted", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const sub = yield* nested(dir, "AGENTS.md", "HOME MARKER")
+      const registry = yield* Tool.Service
+      const trust = yield* ProjectTrust.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+
+      yield* trust.grant({ persist: false, via: "test" })
+      yield* executeTool(registry, readCall(sessionID, "call-sub-trusted", "sub/file.txt", { limit: 5 }))
+      expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([
+        { instruction: { paths: [sub] } },
+      ])
+    }),
+  )
+
+  const dangling = canLinkFile ? it.live : it.live.skip
+  dangling("loads nothing, and reads the file all the same, when the instruction file is a dangling link or a loop", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* nested(dir, "AGENTS.md", "unused", "gone")
+      yield* nested(dir, "AGENTS.md", "unused", "loop")
+      yield* Effect.promise(async () => {
+        await fs.rm(path.resolve(dir, "gone", "AGENTS.md"))
+        await fs.symlink(path.resolve(dir, "nowhere"), path.resolve(dir, "gone", "AGENTS.md"))
+        await fs.rm(path.resolve(dir, "loop", "AGENTS.md"))
+        await fs.symlink(path.resolve(dir, "loop", "AGENTS.md"), path.resolve(dir, "loop", "AGENTS.md"))
+      })
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      const read = yield* executeTool(registry, readCall(sessionID, "call-gone", "gone/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-loop", "loop/file.txt"))
+      expect(read.content?.[0]).toMatchObject({ type: "text", text: expect.stringContaining("content") })
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+    }),
+  )
+
+  // The first instruction file of a folder is the one it loads, whichever file the model reads in it.
+  it.live("reading a folder's own instruction file brings neither the next name nor itself", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const first = yield* nested(dir, "ORBIT.md", "FIRST MARKER")
+      yield* writeAgents(path.resolve(dir, "sub", "AGENTS.md"), "SECOND MARKER")
+      yield* writeAgents(path.resolve(dir, "sub", CompatNames.vendor.instructions), "THIRD MARKER")
+      const registry = yield* Tool.Service
+      const reading = yield* sessionIn(dir)
+      yield* executeTool(registry, readCall(reading, "call-own", "sub/ORBIT.md"))
+      expect(yield* synthetics(reading)).toHaveLength(0)
+      yield* executeTool(registry, readCall(reading, "call-second", "sub/AGENTS.md"))
+      expect((yield* synthetics(reading)).map((message) => message.metadata)).toEqual([{ instruction: { paths: [first] } }])
+      const text = yield* providerText(reading)
+      expect(text).not.toContain("SECOND MARKER")
+      expect(text).not.toContain("THIRD MARKER")
+    }),
+  )
+
+  // The bound is the folder the session started in. Here the project is a repository above it, so the sibling package is
+  // inside the project and outside the bound, and the home folder is somewhere else (the bound is the only thing left out).
+  for (const [name, trusted] of [
+    ["trusted", true],
+    ["not trusted", false],
+  ] as const) {
+    const repository = testEffect(
+      Layer.unwrap(
+        Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ).pipe(
+          Effect.map((tmp) =>
+            sessionLayer(Config.testLayer(), trusted, undefined, {
+              home: path.join(tmp.path, "home"),
+              project: path.join(tmp.path, "repo"),
+              directory: path.join(tmp.path, "repo", "packages", "x"),
+            }),
+          ),
+        ),
+      ),
+    )
+    repository.live(`in a project that is ${name} and is not the home folder, a read in a sibling package loads nothing, and one in the folder does`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const sibling = path.resolve(dir, "..", "y")
+        yield* mkdir(path.resolve(dir, "..", "..", ".git"))
+        yield* mkdir(sibling)
+        yield* writeAgents(path.resolve(sibling, "AGENTS.md"), "SIBLING MARKER")
+        yield* writeAgents(path.resolve(sibling, "z.ts"), "export {}")
+        const control = yield* nested(dir, "AGENTS.md", "CONTROL MARKER")
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+        yield* executeTool(registry, readCall(sessionID, "call-sibling", path.resolve(sibling, "z.ts")))
+        expect(yield* synthetics(sessionID)).toHaveLength(0)
+        yield* executeTool(registry, readCall(sessionID, "call-control", "sub/file.txt"))
+        expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([{ instruction: { paths: [control] } }])
+        expect(yield* providerText(sessionID)).not.toContain("SIBLING MARKER")
+      }),
+    )
+  }
+
+  // A nested repository's files belong to its folder: its own instruction file loads, and one that links out sends nothing.
+  for (const [name, harness] of [
+    ["trusted", it],
+    ["not trusted", untrusted],
+  ] as const) {
+    harness.live(`in a project that is ${name}, a nested repository's own instruction file loads`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const lib = yield* nested(dir, "AGENTS.md", "LIB MARKER", path.join("vendor", "lib"))
+        yield* mkdir(path.resolve(dir, "vendor", "lib", ".git"))
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+        yield* executeTool(registry, readCall(sessionID, "call-lib", "vendor/lib/file.txt"))
+        expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([{ instruction: { paths: [lib] } }])
+        expect(yield* providerText(sessionID)).toContain("LIB MARKER")
+      }),
+    )
+    ;(canLinkFile ? harness.live : harness.live.skip)(`in a project that is ${name}, a nested repository's instruction file that links out sends nothing`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const outside = (yield* tmpdirScoped()).path
+        yield* writeAgents(path.resolve(outside, "secret.txt"), "OUTSIDE MARKER")
+        yield* mkdir(path.resolve(dir, "vendor", "other", ".git"))
+        yield* writeAgents(path.resolve(dir, "vendor", "other", "file.txt"), "content")
+        yield* Effect.promise(() =>
+          fs.symlink(path.resolve(outside, "secret.txt"), path.resolve(dir, "vendor", "other", "AGENTS.md")),
+        )
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+        yield* executeTool(registry, readCall(sessionID, "call-other", "vendor/other/file.txt"))
+        expect(yield* synthetics(sessionID)).toHaveLength(0)
+        expect(yield* providerText(sessionID)).not.toContain("OUTSIDE MARKER")
+      }),
+    )
+  }
+
+  it.live("a notebook read loads the nested file", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const sub = yield* nested(dir, "AGENTS.md", "NOTEBOOK MARKER")
+      yield* Effect.promise(() => fs.copyFile(path.join(import.meta.dir, "fixtures", "notebook", "sample.ipynb"), path.resolve(dir, "sub", "n.ipynb")))
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      yield* executeTool(registry, readCall(sessionID, "call-notebook", "sub/n.ipynb"))
+      expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([{ instruction: { paths: [sub] } }])
+    }),
+  )
+
+  it.live("a write into a new folder loads nothing, and a later read of the folder loads its file", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const fresh = yield* nested(dir, "AGENTS.md", "FRESH MARKER", "fresh")
+      yield* Effect.promise(() => fs.rm(path.resolve(dir, "fresh", "file.txt")))
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      yield* executeTool(registry, {
+        sessionID,
+        ...identity,
+        call: { type: "tool-call", id: "call-write", name: "Write", input: { file_path: "fresh/new.ts", content: "export {}" } },
+      })
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+      yield* executeTool(registry, readCall(sessionID, "call-list", "fresh"))
+      expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([{ instruction: { paths: [fresh] } }])
+    }),
+  )
+
+  // A repeat read answered with the stub brings nothing new: a file that becomes loadable between two identical reads
+  // waits for a read that is not a repeat.
+  it.live("a repeat read answered with the stub triggers nothing", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      yield* mkdir(path.resolve(dir, "sub"))
+      yield* writeAgents(path.resolve(dir, "sub", "file.txt"), "content")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+      yield* executeTool(registry, readCall(sessionID, "call-1", "sub/file.txt"))
+      const sub = yield* nested(dir, "AGENTS.md", "LATE MARKER")
+      const repeat = yield* executeTool(registry, readCall(sessionID, "call-2", "sub/file.txt"))
+      expect(JSON.stringify(repeat.content)).toContain("has not changed since you last read it")
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+      yield* executeTool(registry, readCall(sessionID, "call-3", "sub"))
+      expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([{ instruction: { paths: [sub] } }])
+    }),
+  )
 })

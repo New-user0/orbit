@@ -68,6 +68,7 @@ import { Ripgrep } from "../ripgrep.js"
 import { Session } from "../session.js"
 import { SessionCompaction } from "../session/compaction.js"
 import { SessionInstructions } from "../session/instructions.js"
+import { InstructionTriggers } from "../instruction-triggers.js"
 import { SideQuery } from "../side-query.js"
 import { Shell } from "../shell.js"
 import { PowerShellParse } from "../shell/powershell-parse.js"
@@ -166,6 +167,7 @@ const services = [
   Session.Service,
   SessionCompaction.Service,
   SessionInstructions.Service,
+  InstructionTriggers.Service,
   SideQuery.Service,
   Shell.Service,
   ShellSelect.Service,
@@ -225,6 +227,7 @@ export const requirements = LayerNode.group([
   Session.node,
   SessionCompaction.node,
   SessionInstructions.node,
+  InstructionTriggers.node,
   SideQuery.node,
   Shell.node,
   ShellSelect.node,

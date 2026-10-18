@@ -31,7 +31,8 @@ import { LinkShare } from "@orbit/util/link-share"
 // (`ConfigVariable`). Every other reader of a file that the repository supplies asks `ProjectTrust` before it reads one,
 // and these are the readers, so that the next one added has a list to join:
 //
-// - `reachable`: an instruction file (`ConfigInstructionPlugin`, `SessionInstructions`). Both then process the text with
+// - `reachable`: an instruction file (`ConfigInstructionPlugin`; `SessionInstructions` asks `importable` on the real
+//   path instead, so that a link out of the project's folders is refused in a trusted project too). Both then process the text with
 //   `ConfigInstructionFile.parse`, which takes the front matter off with `ConfigMarkdown.split`, by its delimiter lines
 //   alone and without parsing it, and leave out what `instructions_exclude` names, a list that an untrusted folder does
 //   not supply. The files they import with `@path` (`ConfigInstructionFile.load`) are readers of the same list: a
