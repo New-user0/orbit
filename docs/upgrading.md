@@ -1795,7 +1795,8 @@ read as a drive. Read, Write, Edit, NotebookEdit, Patch and LSP refuse it, and s
 `workdir` and the folder of a `cd`. A part of a path that is an 8.3 short name is named by its long name, trailing
 periods and spaces are dropped as Windows drops them, and a `\\?\` or `\\.\` prefix is read as the plain path, so your
 rules see `.env` and `new.sh`, and an approval names the file by its own name. An 8.3 name whose long name cannot be
-told is refused with `file.spelling` as well.
+told is refused with `file.spelling` as well, and so is a part of that form that exists in a folder Orbit cannot list
+(a part that is not there stays as it is; pinned by `test/tool-windows-spelling.test.ts`).
 
 **Affects:** Windows users with rules for file names, and shell commands that change their location to a PowerShell
 drive such as `HKLM:`, which now fail. Code that matches on a failed tool call's `error.type` can see `file.spelling`.
