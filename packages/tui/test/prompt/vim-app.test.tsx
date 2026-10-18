@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { type Renderable, TextareaRenderable } from "@opentui/core"
-import { takeDraft } from "../../src/component/prompt/draft-stash"
+import { clearDrafts, takeDraft } from "../../src/component/prompt/draft-stash"
 import { createAppFixture, promptReady } from "../fixture/app"
 import { tmpdir } from "../fixture/fixture"
 import { directory, json, type FetchHandler } from "../fixture/tui-client"
@@ -63,15 +63,16 @@ async function mount(
     session?: boolean
     style?: "line" | "block"
     clipboard?: ReturnType<typeof fakeClipboard>["service"]
+    fetch?: FetchHandler
   } = {},
 ) {
-  takeDraft(undefined)
+  clearDrafts()
   const state = await tmpdir()
   const setup = await createAppFixture({
     state: state.path,
     clipboard: input.clipboard,
     width: input.width ?? 120,
-    fetch: server,
+    fetch: input.fetch ?? server,
     args: input.session === false ? undefined : { sessionID },
     config: {
       animations: false,
@@ -96,6 +97,7 @@ async function mount(
   }
   return {
     setup,
+    state: state.path,
     textarea,
     async press(key: string, modifiers?: { ctrl?: boolean; shift?: boolean }) {
       setup.mockInput.pressKey(key, modifiers)
@@ -210,37 +212,74 @@ test("a change command is one undo step even though it deletes and inserts", asy
 })
 
 test('"+yy writes the line to the clipboard, "+p pastes what it reads, and a read that outlives an edit pastes nothing', async () => {
-  const yanked = fakeClipboard()
-  await using copy = await mount({ clipboard: yanked.service })
-  await copy.type("ab")
-  await copy.normal()
-  await copy.type('"+yy')
-  expect(yanked.written).toEqual(["ab\n"])
+  // Each app is disposed before the next mounts: two live apps on one session would hand each other their drafts.
+  {
+    const yanked = fakeClipboard()
+    await using copy = await mount({ clipboard: yanked.service })
+    await copy.type("ab")
+    await copy.normal()
+    await copy.type('"+yy')
+    expect(yanked.written).toEqual(["ab\n"])
+  }
 
-  const pasted = fakeClipboard("XY")
-  await using paste = await mount({ clipboard: pasted.service })
-  await paste.type("ab")
-  await paste.normal()
-  await paste.press("0")
-  await paste.type('"+p')
-  await Bun.sleep(50)
-  await paste.setup.renderOnce()
-  expect(paste.textarea().plainText).toBe("aXYb")
+  {
+    const pasted = fakeClipboard("XY")
+    await using paste = await mount({ clipboard: pasted.service })
+    await paste.type("ab")
+    await paste.normal()
+    await paste.press("0")
+    await paste.type('"+p')
+    await Bun.sleep(50)
+    await paste.setup.renderOnce()
+    expect(paste.textarea().plainText).toBe("aXYb")
+  }
 
-  const late = fakeClipboard("XY")
-  late.state.held = true
-  await using stale = await mount({ clipboard: late.service })
-  await stale.type("ab")
-  await stale.normal()
-  await stale.press("0")
-  await stale.type('"+p')
-  await stale.press("x")
-  late.release()
-  await Bun.sleep(50)
-  await stale.setup.renderOnce()
-  expect(late.state.reads).toBe(1)
-  expect(stale.textarea().plainText).toBe("b")
+  {
+    const late = fakeClipboard("XY")
+    late.state.held = true
+    await using stale = await mount({ clipboard: late.service })
+    await stale.type("ab")
+    await stale.normal()
+    await stale.press("0")
+    await stale.type('"+p')
+    await stale.press("x")
+    late.release()
+    await Bun.sleep(50)
+    await stale.setup.renderOnce()
+    expect(late.state.reads).toBe(1)
+    expect(stale.textarea().plainText).toBe("b")
+  }
 }, 20_000)
+
+test("the register survives a submit in the same prompt and is never written to the state folder", async () => {
+  const prompts: string[] = []
+  await using app = await mount({
+    fetch: async (url, request) => {
+      if (url.pathname === `/api/session/${sessionID}/prompt`) {
+        prompts.push(((await request.json()) as { text?: string }).text ?? "")
+        return json({ data: { id: "msg_x" } })
+      }
+      return server(url, request)
+    },
+  })
+  await app.type("zebrafish tail")
+  await app.normal()
+  await app.press("0")
+  await app.type("yw")
+  app.setup.mockInput.pressEnter()
+  await Bun.sleep(300)
+  await app.setup.renderOnce()
+  expect(prompts.length).toBe(1)
+  expect(app.textarea().plainText).toBe("")
+  await app.press("p")
+  expect(app.textarea().plainText).toBe("zebrafish ")
+  const files = await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: app.state, onlyFiles: true, dot: true }))
+  const holders = await Promise.all(
+    files.map(async (file) => ((await Bun.file(`${app.state}/${file}`).text()).includes("zebrafish ") ? file : undefined)),
+  )
+  // The submitted prompt may be kept as history; the yanked text with its trailing space is the register alone.
+  expect(holders.filter((file) => file !== undefined && !file.includes("history"))).toEqual([])
+})
 
 test("Escape at the start of a line stays there", async () => {
   await using app = await mount()

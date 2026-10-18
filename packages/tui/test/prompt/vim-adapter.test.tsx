@@ -153,3 +153,42 @@ test("a command that deletes and inserts takes two native steps, and the adapter
   editor.input.undo()
   expect(editor.input.plainText).toBe("foo bar")
 })
+
+// Characters whose cell count differs from terminal width: pictographs the textarea draws two cells wide and
+// format characters it counts as one.
+const ambiguous = ["❤", "‼", "⁉", "☢", "⚛", "🗑", "🖥", "‪", "⁦", "⁡", "؜"]
+
+test("offsets match the textarea after inserting characters that terminal width gets wrong", async () => {
+  for (const char of ambiguous) {
+    const text = `a${char}b`
+    using e = await mount(text)
+    for (const index of [0, 1, 1 + char.length, text.length]) {
+      e.input.cursorOffset = VimAdapter.toOffset(text, index)
+      expect(e.input.getTextRange(0, e.input.cursorOffset)).toBe(text.slice(0, index))
+    }
+  }
+})
+
+test("dw and D after a double-cell pictograph delete the right text", async () => {
+  using heart = await mount("I ❤ vim so much")
+  heart.press("$")
+  heart.press("b")
+  heart.press("dw")
+  expect(heart.input.plainText).toBe("I ❤ vim so ")
+
+  using bang = await mount("wow‼ fix this bug")
+  bang.press("$")
+  bang.press("b")
+  bang.press("dw")
+  expect(bang.input.plainText).toBe("wow‼ fix this ")
+
+  using bin = await mount("🗑 remove old files")
+  bin.cursor(0)
+  bin.press("wwD")
+  expect(bin.input.plainText).toBe("🗑 remove ")
+
+  using isolate = await mount("⁦ab⁩ cd ef gh")
+  isolate.cursor(5)
+  isolate.press("D")
+  expect(isolate.input.plainText).toBe("⁦ab⁩ ")
+})

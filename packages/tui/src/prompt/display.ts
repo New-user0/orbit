@@ -1,23 +1,29 @@
-import { stringWidth } from "../util/string-width"
+import { EditBuffer } from "@opentui/core"
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
-// The textarea gives these a cell count that terminal width does not: a newline one, a tab its tab width, and the
-// invisible direction marks and soft hyphen one each.
-const offsetCells: Record<string, number> = {
-  "\n": 1,
-  "\t": 2,
-  [String.fromCharCode(0xad)]: 1,
-  [String.fromCharCode(0x200e)]: 1,
-  [String.fromCharCode(0x200f)]: 1,
-}
+// Offsets are the textarea's own cell counts (a newline one, a tab its tab width, a heart or a double exclamation
+// mark two, an invisible direction mark one). Each grapheme is measured by an edit buffer of the same kind instead of
+// a width table kept in step by hand, and the result is cached.
+const cells = new Map<string, number>()
+let probe: EditBuffer | undefined
 
 export function promptOffsetWidth(value: string) {
   let width = 0
-  for (const part of graphemes.segment(value)) {
-    width += offsetCells[part.segment] ?? stringWidth(part.segment)
-  }
+  for (const part of graphemes.segment(value)) width += graphemeCells(part.segment)
   return width
+}
+
+function graphemeCells(grapheme: string) {
+  if (grapheme === "\n" || (grapheme.length === 1 && grapheme >= " " && grapheme <= "~")) return 1
+  const known = cells.get(grapheme)
+  if (known !== undefined) return known
+  probe ??= EditBuffer.create("unicode")
+  probe.setText(grapheme)
+  probe.setCursor(0, Number.MAX_SAFE_INTEGER)
+  const measured = probe.getCursorPosition().offset
+  cells.set(grapheme, measured)
+  return measured
 }
 
 function displayOffsetIndex(value: string, offset: number) {
@@ -25,7 +31,7 @@ function displayOffsetIndex(value: string, offset: number) {
 
   let width = 0
   for (const part of graphemes.segment(value)) {
-    const next = width + promptOffsetWidth(part.segment)
+    const next = width + graphemeCells(part.segment)
     if (next > offset) return part.index
     width = next
   }
@@ -40,7 +46,7 @@ export function displaySlice(value: string, start = 0, end = promptOffsetWidth(v
 export function displayCharAt(value: string, offset: number) {
   let width = 0
   for (const part of graphemes.segment(value)) {
-    const next = width + promptOffsetWidth(part.segment)
+    const next = width + graphemeCells(part.segment)
     if (offset === width || offset < next) return part.segment
     width = next
   }
