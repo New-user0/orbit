@@ -5401,7 +5401,7 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[1])).toEqual([
       "Look and echo",
       // A steer that follows a round of tool calls carries the mid-turn note first.
-      "<system-reminder>\nAfter you began your current task the person added the message below. It MUST NOT be ignored; handle it once that task is done.\n</system-reminder>",
+      "<system-reminder>\nThe person sent the message below after your current task had begun. Act on it when that task is done, and do not drop it.\n</system-reminder>",
       "STEER",
     ])
     expect(toolResultIDs(s.requests[1])).toEqual(["call-cancelable", "call-echo"])
@@ -8057,7 +8057,7 @@ describe("SessionRunnerLLM", () => {
     },
     {
       name: "a fallback after repeated overloads",
-      turn: { maxTokens: 8700, fallbackModel },
+      turn: { maxTokens: 7500, fallbackModel },
       requests: 3,
       attempts: () => [
         ...Array.from({ length: 3 }, () => TestLLM.failAfter(overloaded(), LLMEvent.stepStart({ index: 0 }))),

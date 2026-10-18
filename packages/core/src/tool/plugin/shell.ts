@@ -94,7 +94,7 @@ export const Input = Schema.Struct({
   }),
   run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion. To wait for a server to become ready, use TaskWatch; to stop the command, use TaskStop.",
+      "Run the command detached and return at once, which suits dev servers and long builds. No trailing ampersand is needed. A notification reports completion, so do not poll. TaskWatch waits for a server to become ready, and TaskStop ends the command.",
   }),
 })
 

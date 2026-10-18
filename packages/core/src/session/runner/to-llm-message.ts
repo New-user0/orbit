@@ -330,24 +330,24 @@ const queuedNote = (origin: unknown) =>
   ReminderText.render({
     text:
       origin === "agent"
-        ? "The agent that started you added the message below partway through. It must not be dropped, and your current task is not finished until you have handled it."
-        : "After you began your current task the person added the message below. It MUST NOT be ignored; handle it once that task is done.",
+        ? "The agent that started you sent the message below while you were working. It belongs to your job: the job is not complete until you have dealt with it."
+        : "The person sent the message below after your current task had begun. Act on it when that task is done, and do not drop it.",
   })
 
 const agentHints = (agents: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["agents"]>) =>
   [...new Set(agents.map((agent) => agent.name))].map((name) =>
     ReminderText.render({
-      text: `The person would like the agent named below to be used. Launch it with the ${ToolNames.tools.subagent} tool and give it the context it needs.`,
+      text: `The person picked the agent named below with an at-mention. Start it through the ${ToolNames.tools.subagent} tool, with a brief that stands on its own.`,
       data: { label: "requested agent", content: name },
     }),
   )
 
 const editorNote = (editor: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["editor"]>) => {
-  const caveat = "This may be unrelated to your task."
+  const caveat = "It is background context, not a request, and may have nothing to do with the task."
   const selection = editor.selection
   if (selection === undefined || selection.text === "")
     return ReminderText.render({
-      text: `The file named below is the one open in the person's editor right now. ${caveat}`,
+      text: `Editor state: the file named below is open in the person's editor. ${caveat}`,
       data: { label: "open file", content: editor.path },
     })
   // Line endings are normalized first, so a file cuts at the same place on every platform.
@@ -364,7 +364,7 @@ const editorNote = (editor: NonNullable<Extract<SessionMessage.Info, { type: "us
   const left = text.length - kept.length
   return ReminderText.render({
     text: [
-      `The person has highlighted ${range} in the file named below; the highlighted text follows. ${caveat}`,
+      `Editor state: ${range} of the file named below is highlighted, and the highlighted text follows. ${caveat}`,
       ...(split
         ? [
             `The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at its end ${left === 1 ? "is" : "are"} not shown.`,

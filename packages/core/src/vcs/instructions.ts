@@ -186,20 +186,20 @@ export function render(snapshot: Snapshot) {
 function lines(snapshot: Snapshot) {
   return [
     snapshot.late
-      ? "This is the state of the git repository, captured partway through the session rather than at its start, for example once the folder was trusted. It is a snapshot and is not updated as the work goes on."
-      : "This is the state of the git repository when the session began. It is a snapshot and is not updated as the work goes on.",
-    `Current branch: ${snapshot.branch}`,
-    `Main branch (pull requests usually target this branch): ${snapshot.main}`,
-    ...(snapshot.user === "" ? [] : [`Git user: ${snapshot.user}`]),
+      ? "Git facts for this folder, taken partway through the session (for example once the folder was trusted). They do not change for the rest of the session."
+      : "Git facts for this folder, taken when the session began. They do not change for the rest of the session.",
+    `Branch: ${snapshot.branch}`,
+    `Pull request target: ${snapshot.main}`,
+    ...(snapshot.user === "" ? [] : [`Configured author: ${snapshot.user}`]),
     [
-      "Status:",
-      snapshot.status === "" ? "(clean)" : snapshot.status,
+      "Changes:",
+      snapshot.status === "" ? "(none)" : snapshot.status,
       ...(snapshot.truncated
         ? [
-            `... (the status is longer than ${STATUS_LIMIT.toLocaleString("en-US")} characters and was cut here; run git status in the shell tool to see the rest)`,
+            `... (cut at ${STATUS_LIMIT.toLocaleString("en-US")} characters; the shell can give the full git status)`,
           ]
         : []),
     ].join("\n"),
-    ["Recent commits:", ...snapshot.commits].join("\n"),
+    ["Latest commits:", ...snapshot.commits].join("\n"),
   ].join("\n\n")
 }

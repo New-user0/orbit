@@ -8,8 +8,8 @@ import { useToast } from "../ui/toast"
 
 const BUILT_IN = [
   { value: "default", title: "Default", description: "Concise answers focused on the task" },
-  { value: "explanatory", title: "Explanatory", description: "Adds short insights about the codebase and choices" },
-  { value: "learning", title: "Learning", description: "Leaves small TODO(human) pieces for you to write" },
+  { value: "explanatory", title: "Explanatory", description: "Adds short design notes about the codebase and choices" },
+  { value: "learning", title: "Learning", description: "Leaves small ORBIT:YOURS pieces for you to write" },
 ]
 
 /** The output style that a location's config sets, or undefined when it sets none. */

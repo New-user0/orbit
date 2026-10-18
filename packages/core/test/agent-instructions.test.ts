@@ -39,9 +39,12 @@ describe("AgentInstructions", () => {
               "- alpha: Does A (all tools)",
               "- zeta: Does Z (Read)",
               "",
-              "When several agents can work independently, start them together by putting multiple calls in a single message.",
+              "Agents whose work does not depend on each other are started in the same response.",
             ].join("\n"),
           )
+          // The retired concurrency sentence, as data.
+          expect(initial.text).not.toContain("start them together")
+          expect(initial.text).not.toContain("multiple calls in a single message")
         }),
     ),
   )
@@ -164,7 +167,7 @@ describe("AgentInstructions", () => {
           agents = [agent("one", { description: "first" })]
           const again = yield* service.load(on).pipe(Effect.flatMap((list) => readUpdate(list, { values: none.values })))
           expect(again.text).toContain("These are the agent types the Agent and Workflow tools can start:")
-          expect(again.text).toContain("start them together")
+          expect(again.text).toContain("started in the same response")
         }),
     )
   })

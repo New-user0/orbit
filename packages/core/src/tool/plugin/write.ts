@@ -24,7 +24,7 @@ export const name = "Write"
 // TODO: Revisit whether model-facing mutation schemas should prefer absolute `filePath` naming for trained-in compatibility after evaluating model behavior.
 export const Input = Schema.Struct({
   file_path: Schema.String.annotate({
-    description: "Path to the file to write to",
+    description: "Path of the file to create or replace",
   }),
   content: Schema.String.annotate({ description: "Content to write to the file" }),
 })
@@ -62,7 +62,7 @@ export const Plugin = {
           options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
-            "Writes a file to the local filesystem, overwriting if one exists.\n\nMissing parent directories are created automatically.\n\nUse this tool to create new files or overwrite existing files. For partial changes, use the Edit tool instead.",
+            "Creates a file, or replaces all of the content of an existing one. Missing parent folders are created. A partial change belongs to Edit.",
           input: Input,
           output: Output,
           execute: (input, context) =>

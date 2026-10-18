@@ -21,9 +21,9 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,
   status: "running" as const,
   output: [
-    `The subagent is working in the background (sessionID: ${sessionID}). You will be notified automatically when it finishes.`,
-    "DO NOT sleep, poll for progress, ask the subagent for status, or duplicate this subagent's work; avoid working with the same files or topics it is using.",
-    "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
+    `The subagent now runs in the background as session ${sessionID}, and a notification arrives when it ends.`,
+    "Do not poll, sleep or request status meanwhile, and leave its files and topics to it.",
+    "Either continue with unrelated work, or tell the user in a sentence what you launched and end your response.",
   ].join("\n"),
 })
 
@@ -44,7 +44,7 @@ export const Input = Schema.Struct({
   }),
   background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress.",
+      "Start the subagent detached and return at once. A notification reports its completion, so no polling is needed.",
   }),
 })
 

@@ -455,10 +455,10 @@ class Chat implements vscode.WebviewViewProvider {
         { label: "Default", description: "Concise answers focused on the task", value: "default" },
         {
           label: "Explanatory",
-          description: "Adds short insights about the codebase and choices",
+          description: "Adds short design notes about the codebase and choices",
           value: "explanatory",
         },
-        { label: "Learning", description: "Leaves small TODO(human) pieces for you to write", value: "learning" },
+        { label: "Learning", description: "Leaves small ORBIT:YOURS pieces for you to write", value: "learning" },
       ],
       { title: "Orbit output style" },
     )

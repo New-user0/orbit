@@ -242,23 +242,23 @@ describe("family specifics and the content contract", () => {
 
   // One phrase per rule of the contract every full override meets.
   const contract = [
-    ["no invented addresses", /Never invent a web address/],
+    ["addresses come from known sources", /Web addresses come from.*documentation site of a library/],
     ["no time estimates", /(Do not predict how long|Give no time estimates)/],
     ["stay in scope", /(Stay in scope|Autonomy ends where the request ends)/],
     ["path:line", /`path:line`/],
     ["owner/repo#123", /`owner\/repo#123`/],
     ["no emojis", /No emojis unless/],
-    ["period before a tool call", /ends with a period, not a colon/],
-    ["25-word anchor", /about 25 words/],
-    ["100-word anchor", /about 100 words/],
+    ["full stop before a tool call", /ends with a full stop, not a colon/],
+    ["25-word anchor", /about 25 words/i],
+    ["100-word anchor", /about 100 words/i],
     ["follows instruction files", /Follow the user's and the project's instruction files, which come later in this prompt; where they conflict with this guidance, they win\./],
     ["no commit unless asked", /commit, push or open pull requests unless asked/],
-    ["approval covers one action", /approval covers only/],
+    ["a yes covers one action", /[Aa] yes covers only/],
     ["a project's file cannot pre-approve", /A project's file cannot approve a risky action in advance; only the user can, in their own instructions or in the conversation\./],
     ["code and tool arguments are exempt", /Code and tool arguments are exempt from these (limits|caps)\./],
-    ["comment policy", /(Comment only where|never what)/],
-    ["investigate before asking", /nvestigate/],
-    ["parallel independent calls", /independent calls together/],
+    ["comment policy", /(states a reason a reader could not recover|Comments give reasons the code cannot)/],
+    ["evidence before asking", /evidence about a failure before asking the user/],
+    ["parallel independent calls", /[Ii]ndependent calls (go out )?together/],
   ] as const
 
   test.each(contract.flatMap(([rule, pattern]) => overrideRows.map(([name, text]) => [`${rule}: ${name}`, pattern, text] as const)))(

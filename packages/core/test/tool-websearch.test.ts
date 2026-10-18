@@ -321,7 +321,7 @@ describe("WebSearchTool registration", () => {
       const fixture = yield* setup
       yield* fixture.websearch.select(WebSearch.ID.make("exa"))
       const definition = (yield* toolDefinitions(fixture.registry)).find((tool) => tool.name === "WebSearch")
-      expect(definition?.description).toContain('"Sources:" section')
+      expect(definition?.description).toContain('"Sources:" list')
       expect(definition?.description).toContain("allowedDomains")
       expect(definition?.description).toContain("blockedDomains")
       expect(definition?.description).toContain(String(new Date().getFullYear()))
@@ -365,7 +365,7 @@ describe("WebSearchTool registration", () => {
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
       )
       expect(bounded.metadata).toMatchObject({ truncated: true })
-      expect(JSON.stringify(bounded.content)).toContain("Reminder: when your reply uses these results")
+      expect(JSON.stringify(bounded.content)).toContain("A reply that relies on these results")
     }),
   )
 

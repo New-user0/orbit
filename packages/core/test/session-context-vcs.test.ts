@@ -194,7 +194,7 @@ describe("the git snapshot in the baseline of a session", () => {
       const snapshot = yield* stored(ids.main)
       expect(snapshot).toMatchObject({ branch: "main", main: "main", user: "Test", late: false, truncated: false })
       expect(snapshot).toMatchObject({ status: " M a.txt", commits: [expect.stringMatching(/ one$/)] })
-      expect(first.value.text).toContain("This is the state of the git repository when the session began.")
+      expect(first.value.text).toContain("Git facts for this folder, taken when the session began.")
       // The trusted control: git ran, and ran the key that the folder plants.
       expect(mentions(first.git, "status")).not.toEqual([])
       expect(mentions(first.git, "log")).not.toEqual([])
@@ -224,8 +224,8 @@ describe("the git snapshot in the baseline of a session", () => {
       // The folder was trusted partway through the session, which already holds its baseline.
       const after = yield* stepped(ids.main)
       expect(Object.keys(after.value.delta)).toEqual([key])
-      expect(after.value.text).toContain("captured partway through the session")
-      expect(after.value.text).toContain("Current branch: main")
+      expect(after.value.text).toContain("taken partway through the session")
+      expect(after.value.text).toContain("Branch: main")
       expect(mentions(after.git, "status")).toHaveLength(1)
       expect((yield* ran()).length).toBeGreaterThan(0)
       expect(yield* stored(ids.main)).toMatchObject({ late: true })
@@ -369,7 +369,7 @@ describe("the git snapshot in the baseline of a session", () => {
       expect(after.git).toEqual([])
       expect(after.value.delta).toEqual({})
       expect(yield* stored(ids.main)).toEqual(before)
-      expect(yield* InstructionState.initial(db, ids.main, selected.instructions)).toContain("Current branch: main")
+      expect(yield* InstructionState.initial(db, ids.main, selected.instructions)).toContain("Branch: main")
     }),
   )
 

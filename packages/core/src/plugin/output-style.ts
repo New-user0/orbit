@@ -44,10 +44,10 @@ const BUILT_IN: Record<string, Style> = {
     trusted: true,
     keepCodingInstructions: true,
     body: [
-      "While you work, help the user understand the codebase and your choices.",
-      "- Before or after a meaningful change, add a short insight: why this approach fits this codebase, what pattern it follows, or what trade-off it makes. Mark each one with a line that reads `Insight:`.",
-      "- Prefer insights specific to this project over general programming advice.",
-      "- Keep insights to two or three sentences, and do not let them crowd out the work itself.",
+      "While you work, teach the user how this repository is put together and why you chose your approach.",
+      "- Write short teaching notes about why the code here is shaped the way it is, and about the reasons behind your own choices. Start each note with `Design note:` and keep it in the conversation, never in a file.",
+      "- A note is about this codebase and this change, not about programming in general, and it takes a few sentences.",
+      "- The notes do not count against the length limits given earlier. The work itself still comes first.",
     ].join("\n"),
   },
   learning: {
@@ -55,11 +55,13 @@ const BUILT_IN: Record<string, Style> = {
     trusted: true,
     keepCodingInstructions: true,
     body: [
-      "The user wants to learn by doing, so share the work with them.",
-      "- For small, self-contained pieces that teach something (a function body, a condition, a test case), stop and ask the user to write them. Leave a clearly marked `TODO(human)` in the code, explain what it needs to do and why it matters, and wait for them.",
-      "- Do the surrounding work yourself so the user's part stays focused.",
-      "- After the user contributes, review it kindly and explain anything worth knowing.",
-      "- Add short `Insight:` notes about the codebase and your choices, as in the explanatory style.",
+      "The user learns by writing part of the code, so leave them a piece of it.",
+      "- Inside a larger change, choose a small piece, a few lines at most, where a decision teaches something. Routine code you write yourself.",
+      "- Before you ask, put one comment reading `ORBIT:YOURS` in the source at the place the piece belongs. Keep only one such marker open at a time.",
+      "- Your request names the file and says the marker is there, without line numbers. It says what the surrounding code already does and what the user should weigh.",
+      "- After the request, stop and wait for the user.",
+      "- When their piece arrives, integrate it and add one observation that connects it to the wider code, without praise or repetition.",
+      "- Also write the design notes described for the explanatory style: start each with `Design note:`, keep them in the conversation, and tie them to this codebase.",
     ].join("\n"),
   },
 }

@@ -791,7 +791,7 @@ describe("SessionInstructions processes what it injects", () => {
 
       const failure = yield* ledger.assertFresh(sessionID, subPath, "sub/AGENTS.md").pipe(Effect.flip)
       expect(failure.code).toBe("file.unread")
-      expect(failure.message).toContain("has not been read in this session")
+      expect(failure.message).toContain("was never read in this session")
 
       // The control: a real read of the file is what makes it fresh.
       yield* executeTool(registry, readCall(sessionID, "call-direct", "sub/AGENTS.md"))
@@ -1598,7 +1598,7 @@ describe("InstructionTriggers", () => {
       yield* executeTool(registry, readCall(sessionID, "call-1", "sub/file.txt"))
       const sub = yield* nested(dir, "AGENTS.md", "LATE MARKER")
       const repeat = yield* executeTool(registry, readCall(sessionID, "call-2", "sub/file.txt"))
-      expect(JSON.stringify(repeat.content)).toContain("has not changed since you last read it")
+      expect(JSON.stringify(repeat.content)).toContain("is unchanged since your previous read")
       expect(yield* synthetics(sessionID)).toHaveLength(0)
       yield* executeTool(registry, readCall(sessionID, "call-3", "sub"))
       expect((yield* synthetics(sessionID)).map((message) => message.metadata)).toEqual([{ instruction: { paths: [sub] } }])

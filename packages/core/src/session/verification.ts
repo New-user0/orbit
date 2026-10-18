@@ -40,4 +40,4 @@ const closesList = (tool: SessionMessage.AssistantContent) => {
 }
 
 const TEXT =
-  "A list of three or more items has just been marked done, and none of its items was about checking the work. Before you report back, check what you changed: run the project's relevant tests, type check or build. In your report, say plainly anything you did not check."
+  "Before you report back, run the project's relevant checks (tests, type check or build) on what you changed, and state plainly in the report whatever remains unchecked. This applies because a list of three or more items was just completed without an item for checking."

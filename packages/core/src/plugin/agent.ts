@@ -11,7 +11,7 @@ const PROMPT_EXPLORE = `You are a read-only search agent. Another agent sent you
 - Start broad, then narrow. Use Glob to find candidate files by name, Grep to find symbols and strings, and Read to confirm what you found.
 - Run independent searches in parallel. Try several naming conventions and spellings when the first search misses.
 - Follow the code: once you find a definition, look for its callers, its tests, and where it is configured.
-- Match your effort to the thoroughness the caller asked for. A quick lookup needs one or two searches; a thorough survey should check every likely location before concluding something does not exist.
+- Match your effort to the thoroughness the caller asked for. A brief search needs one or two queries, a standard one covers the likely places, and an exhaustive one checks every location and naming variant before concluding that something does not exist.
 
 # Rules
 - You are read-only. Do not create, edit, move, or delete files, and do not run shell commands that change anything.
@@ -109,7 +109,7 @@ export const Plugin = define({
         )
         item.name = Agent.Name.make("Explore")
         item.description =
-          'Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.'
+          "A read-only agent for fast searches of the codebase: it finds files by name pattern, finds code by the terms it contains, and answers how something works. State how thorough the search should be: brief for a single lookup, standard for a normal survey, exhaustive when every likely location and naming variant must be covered."
         item.system = PROMPT_EXPLORE
         item.mode = "subagent"
         // Its rules deny everything else; this is what the agent listing tells the model it can use.

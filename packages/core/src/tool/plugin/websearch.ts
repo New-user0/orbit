@@ -26,15 +26,15 @@ const notEnabled = () => new ToolFailure({ message: NOT_ENABLED, code: Tool.Erro
 
 // Placed before the first result: the session runner keeps the head of an oversized result, so a trailing line is lost.
 export const SOURCES_REMINDER =
-  'Reminder: when your reply uses these results, end it with a "Sources:" section listing each page you used as a markdown link, like [Title](URL).'
+  'A reply that relies on these results closes with a "Sources:" list holding a Markdown link, [Title](URL), for each page it used.'
 
-export const description = `Search the web using the user's selected search integration. Use this for current information beyond knowledge cutoff.
+export const description = `Searches the web through the integration the user chose, for information newer than the model's training.
 
-When your reply draws on search results, end it with a "Sources:" section that lists the pages you used as markdown links, like [Title](URL).
+A reply built on the results ends with a "Sources:" list of the pages used, each as a Markdown link, [Title](URL).
 
-Use allowedDomains to restrict results to certain sites (subdomains included) and blockedDomains to exclude sites. Both are optional and are applied to the results after the search. Give one of them, not both: a call with both is refused.
+allowedDomains limits results to the sites named (subdomains included) and blockedDomains removes sites. Each is optional and filters after the search; a call may carry one of them but not both, and a call with both is refused.
 
-The current year is ${new Date().getFullYear()}. Use this year when searching for recent information or current events.`
+It is ${new Date().getFullYear()} now, so queries about recent events should use that year.`
 
 export const Input = Schema.Struct({
   query: Schema.String.check(Schema.isMinLength(2, { message: "Query must be at least 2 characters" })).annotate({
@@ -213,7 +213,7 @@ export const Plugin = {
             }).pipe(
               Effect.mapError((error) => {
                 if (error instanceof ToolFailure && error.code !== undefined) return error
-                const fallback = `Unable to search the web for ${input.query}`
+                const fallback = `The web search for ${input.query} failed`
                 if (!Schema.is(WebSearch.RequestError)(error)) return new ToolFailure({ message: fallback, error })
                 const status = HttpClientError.isHttpClientError(error.cause) ? error.cause.response?.status : undefined
                 return new ToolFailure({

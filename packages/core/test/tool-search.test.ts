@@ -161,7 +161,7 @@ describe("search tools", () => {
               const grepText = grep.content?.[0]?.type === "text" ? grep.content[0].text : ""
               expect(globText.split("\n")).toHaveLength(FileSystem.DEFAULT_SEARCH_LIMIT + 2)
               expect(globText).toEndWith(
-                `(Results are truncated: showing first ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Consider using a more specific path or pattern.)`,
+                `(The list stops at ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Search a narrower folder or use a tighter pattern to see the rest.)`,
               )
               expect(FileSystem.DEFAULT_GREP_LIMIT).toBe(250)
               expect(grepText).toStartWith("Found 250 matches\n")

@@ -416,10 +416,10 @@ function hostListed(entries: ReadonlyArray<string>, url: URL) {
 function extractionInstructions(listed: boolean) {
   return [
     "You answer a question about one web page. The page is between <page> tags and the question follows it.",
-    "Answer only from the page and use no outside knowledge. If the page does not contain the answer, say so plainly. Be concise.",
+    "Take the answer from the page alone, and when the page lacks it, state that. Keep the reply brief.",
     listed
-      ? "The user has chosen to trust this site, so you may quote longer passages and keep sample code or commands intact when they answer the question."
-      : "Quote the page only when exact wording matters: keep each quotation to about 125 characters, put it in quotation marks, and paraphrase everything else. Do not reproduce song lyrics, and do not comment on the legality of the request or the answer.",
+      ? "This host is one the user trusts: longer quotations are acceptable, and code samples or commands that answer the question stay unchanged."
+      : "Quote only where the exact wording matters, each quotation in quotation marks and no longer than 125 characters; everything else is in your own words. Song lyrics are never reproduced, and the reply carries no judgement on whether the request or the answer is legal.",
   ].join("\n")
 }
 

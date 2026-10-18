@@ -52,7 +52,7 @@ const parts = (messages: ReturnType<typeof toLLMMessages>, value: string) => {
   return message.content.map((part) => (part.type === "text" ? part.text : `<${part.type}>`))
 }
 
-const NOTE = "<system-reminder>\nAfter you began"
+const NOTE = "<system-reminder>\nThe person sent the message below"
 const hasNote = (messages: ReturnType<typeof toLLMMessages>, value: string) =>
   parts(messages, value)[0].startsWith(NOTE)
 
@@ -67,7 +67,7 @@ describe("the note on input sent while work was in progress", () => {
     expect(body).toHaveLength(2)
     expect(body[0]).toStartWith("<system-reminder>\n")
     expect(body[0]).toEndWith("\n</system-reminder>")
-    expect(body[0]).toContain("MUST NOT be ignored")
+    expect(body[0]).toContain("do not drop it")
     expect(body[0]).not.toContain("words of b")
     expect(body[1]).toBe("words of b")
   })
@@ -141,10 +141,10 @@ describe("the note on input sent while work was in progress", () => {
     const out = toLLMMessages([user("a"), toolStep("s1"), user("b", { metadata: { origin: "agent" } })], model)
     const note = parts(out, "b")[0]
     expect(note).toContain("agent that started you")
-    expect(note).not.toContain("the person added")
-    expect(note).toContain("not finished until you have handled it")
+    expect(note).not.toContain("The person sent")
+    expect(note).toContain("not complete until you have dealt with it")
     expect(parts(toLLMMessages([user("a"), toolStep("s1"), user("c")], model), "c")[0]).not.toContain(
-      "not finished until",
+      "not complete until",
     )
   })
 
@@ -200,15 +200,40 @@ describe("editor context", () => {
   test("an open file renders a note and the path in a data block", () => {
     const body = parts(editorOf({ path: "/p/src/a.ts" }), "a")
     expect(body).toHaveLength(2)
-    expect(body[0]).toContain("open in the person's editor")
+    expect(body[0]).toContain("is open in the person's editor")
     expect(body[0].split("</system-reminder>")[0]).not.toContain("/p/src/a.ts")
     expect(body[0]).toContain("open file:\n```\n/p/src/a.ts\n```")
     expect(body[1]).toBe("words of a")
   })
 
+  // The provenance audit rewrote the three notes. The old phrases are data, so restoring one fails its row.
+  test.each([
+    ["the mid-task person note", /MUST NOT be ignored|handle it once that task is done/],
+    ["the mid-task agent note", /must not be dropped|partway through/],
+    ["the agent-mention note", /would like the agent named below|give it the context it needs/],
+    ["the editor caveat", /may be unrelated to your task|may or may not be relevant/],
+    ["the editor opened-file note", /open in the person's editor right now/],
+    ["the editor selection note", /has highlighted|the highlighted text follows\. This may/],
+  ])("keeps the retired wording out of %s", (_, pattern) => {
+    const mentioned = toLLMMessages([user("a", { agents: [AgentAttachment.make({ name: "alpha" })], metadata: undefined })], model)
+    const queued = toLLMMessages([user("a"), toolStep("s1"), user("b")], model)
+    const parent = toLLMMessages([user("a"), toolStep("s1"), user("b", { metadata: { origin: "agent" } })], model)
+    const opened = editorOf({ path: "/p/a.ts" })
+    const selected = editorOf({ path: "/p/a.ts", selection: { start: 4, end: 9, text: "const a = 1" } })
+    const texts = [
+      ...parts(mentioned, "a"),
+      ...parts(queued, "b"),
+      ...parts(parent, "b"),
+      ...parts(opened, "a"),
+      ...parts(selected, "a"),
+    ]
+    expect(texts.length).toBeGreaterThan(6)
+    texts.forEach((text) => expect(text).not.toMatch(pattern))
+  })
+
   test("a selection with empty text renders the open-file form", () => {
     const body = parts(editorOf({ path: "/p/a.ts", selection: { start: 3, end: 3, text: "" } }), "a")
-    expect(body[0]).toContain("open in the person's editor")
+    expect(body[0]).toContain("is open in the person's editor")
     expect(body[0]).not.toContain("lines 3")
   })
 
@@ -302,7 +327,7 @@ test("a steer delivered mid-turn lowers to the note and the text only", () => {
   })
   const body = parts(toLLMMessages([user("a"), toolStep("s1"), message], model), "b")
   expect(body).toHaveLength(2)
-  expect(body[0]).toContain("MUST NOT be ignored")
+  expect(body[0]).toContain("do not drop it")
   expect(body[1]).toBe("words of b")
 })
 
@@ -367,7 +392,7 @@ describe("the reasoning boost note", () => {
     const out = toLLMMessages([keyword("a", { editor: { path: "/p/a.ts" } })], model)
     const body = parts(out, "a")
     expect(body).toHaveLength(3)
-    expect(body[0]).toContain("open in the person's editor")
+    expect(body[0]).toContain("is open in the person's editor")
     expect(body[1]).toStartWith("<system-reminder>\n")
     expect(body[1]).toContain(EFFORT)
     expect(body[1]).toEndWith("\n</system-reminder>")

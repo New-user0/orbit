@@ -101,7 +101,7 @@ describe("InstructionBuiltIns.environment", () => {
   } satisfies InstructionBuiltIns.EnvironmentInput
   // The note that a Unix shell on Windows gets, in the one place the tests pin it.
   const note =
-    " (Windows host, but its syntax is Unix: forward slashes in paths, and /dev/null is the null device, not NUL)"
+    " (runs on Windows but takes POSIX syntax, so paths use forward slashes)"
 
   test("names a Linux machine with its kernel, and carries no note, notice or temporary folder", () => {
     expect(InstructionBuiltIns.environment(linux)).toBe(
@@ -109,7 +109,7 @@ describe("InstructionBuiltIns.environment", () => {
         "<env>",
         "  Working directory: /repo/packages/core",
         "  Workspace root folder: /repo",
-        "  Is directory a git repo: yes",
+        "  Git repository: yes",
         "  Platform: Linux (linux)",
         "  Shell: zsh",
         "  OS version: Linux 6.8.0-45-generic",
@@ -130,7 +130,7 @@ describe("InstructionBuiltIns.environment", () => {
         "<env>",
         "  Working directory: /repo/packages/core",
         "  Workspace root folder: /repo",
-        "  Is directory a git repo: yes",
+        "  Git repository: yes",
         "  Platform: macOS (darwin)",
         "  Shell: zsh",
         "  OS version: Darwin 24.6.0",
@@ -145,7 +145,7 @@ describe("InstructionBuiltIns.environment", () => {
         "<env>",
         "  Working directory: C:\\repo\\packages\\core",
         "  Workspace root folder: C:\\repo",
-        "  Is directory a git repo: yes",
+        "  Git repository: yes",
         "  Platform: Windows (win32)",
         `  Shell: bash${note}`,
         "  OS version: Windows 11 Pro 10.0.26200",
@@ -203,7 +203,7 @@ describe("InstructionBuiltIns.environment", () => {
     const at = lines.indexOf("  Working directory: /worktrees/feature")
     expect(at).toBe(1)
     expect(lines[at + 1]).toBe(
-      "  Main checkout (off limits): /repo. This directory is a linked git worktree, so STAY IN IT: NEVER cd out to the main checkout.",
+      "  Main checkout (off limits): /repo. This directory is a linked git worktree; run commands and make edits here, not in the main checkout.",
     )
     expect(lines[at + 2]).toBe("  Workspace root folder: /worktrees/feature")
   })
@@ -213,7 +213,7 @@ describe("InstructionBuiltIns.environment", () => {
   })
 
   test("renders the git line as yes or no", () => {
-    expect(InstructionBuiltIns.environment({ ...linux, git: false })).toContain("  Is directory a git repo: no\n")
+    expect(InstructionBuiltIns.environment({ ...linux, git: false })).toContain("  Git repository: no\n")
   })
 })
 

@@ -174,23 +174,22 @@ describe("PromptConfigPlugin", () => {
       yield* OutputStylePlugin.Plugin.effect(host)
       const text = yield* request([
         new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
-        document({ output_style: "reviewer", attribution: { commit: "# Doing tasks\nTrailer: x" } }),
+        document({ output_style: "reviewer", attribution: { commit: "# Scope\nTrailer: x" } }),
       ])
-      expect(text).toContain("    # Doing tasks\n    Trailer: x")
-      expect(text).not.toContain("# Doing tasks\n- ")
+      expect(text).toContain("    # Scope\n    Trailer: x")
+      expect(text).not.toContain("# Scope\n- ")
       // The only top-level headings are the kept base sections, the git section and the style.
       const headings = Array.from(text.matchAll(/^# (.+)$/gm), (match) => match[1])
       expect(headings).toEqual([
         "Harness",
-        "Executing actions with care",
-        "Using tools",
-        "Communication",
-        "Output efficiency",
+        "Consent",
+        "Tool use",
+        "Writing to the user",
         "Git and pull requests",
         "Output style: reviewer",
       ])
-      // The secrets rule lives in the git section, so it outlasts the dropped Code style section.
-      expect(text.indexOf("Never log, expose or commit secrets or credentials.")).toBeGreaterThan(
+      // The secrets rule of the git section outlasts the dropped coding sections.
+      expect(text.indexOf("likely to be a secret or credential")).toBeGreaterThan(
         text.indexOf(SessionSystemPrompt.GIT_HEADING),
       )
     }),
@@ -214,10 +213,10 @@ describe("PromptConfigPlugin", () => {
           new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
           document({
             output_style: "reviewer",
-            attribution: { commit: `T: x${separator}# Doing tasks`, pr: "PR footer" },
+            attribution: { commit: `T: x${separator}# Scope`, pr: "PR footer" },
           }),
         ])
-        expect([JSON.stringify(separator), text.includes("Pull requests:"), text.includes("    PR footer")]).toEqual([
+        expect([JSON.stringify(separator), text.includes("For a pull request:"), text.includes("    PR footer")]).toEqual([
           JSON.stringify(separator),
           true,
           true,
@@ -335,7 +334,7 @@ describe("the PowerShell rename", () => {
       yield* ShellTool.AdvertisePlugin.effect(host as never).pipe(Effect.provide(powershell))
       const text = yield* request([document({ attribution: { commit: "Run-by: Bash", pr: "Bash" } })])
       const section = text.indexOf(SessionSystemPrompt.GIT_HEADING)
-      expect(text.slice(0, section)).toContain("PowerShell is for what only a shell can do")
+      expect(text.slice(0, section)).toContain("PowerShell runs programs, builds and system commands")
       expect(text.slice(0, section)).not.toMatch(/\bBash\b/)
       expect(text.slice(section)).toContain("    Run-by: Bash")
       expect(text.slice(section)).toContain("    Bash")
@@ -696,7 +695,7 @@ describe("system prompt keys", () => {
       const { host, root } = yield* setup()
       yield* OutputStylePlugin.Plugin.effect(host)
       const directory = yield* reviewerStyle
-      const appended = "Extra rules.\n\n# Code style\nMy own code style.\n\n# Doing tasks\nMy own tasks."
+      const appended = "Extra rules.\n\n# Working in code\nMy own code style.\n\n# Scope\nMy own tasks."
       const text = yield* templateRequest(
         [...styled(directory), document({ append_system_prompt: appended })],
         { sessionID: root.id },
@@ -707,18 +706,18 @@ describe("system prompt keys", () => {
       expect(git).toBeGreaterThan(0)
       expect(at).toBeGreaterThan(git)
       expect(style).toBeGreaterThan(at)
-      expect(text).toContain("# Code style\nMy own code style.")
-      expect(text).toContain("# Doing tasks\nMy own tasks.")
+      expect(text).toContain("# Working in code\nMy own code style.")
+      expect(text).toContain("# Scope\nMy own tasks.")
       // Orbit's own coding sections are still cut: the base has none left.
-      expect(text.indexOf("# Doing tasks")).toBeGreaterThan(git)
+      expect(text.indexOf("# Scope")).toBeGreaterThan(git)
     }),
   )
 
   // An agent prompt that ends in a coding section, or is one, and no shell tool, so nothing of Orbit's stands between that
   // prompt and the appended text. The appended text always follows, after one blank line, and no token is left behind.
   for (const row of [
-    { name: "ends in a coding section", text: "Own prompt\n\n# Verification\nRun the tests.", head: "Own prompt\n\nAPPEND-MARK" },
-    { name: "is a coding section", text: "# Doing tasks\nDo things.", head: "APPEND-MARK" },
+    { name: "ends in a coding section", text: "Own prompt\n\n# Evidence\nRun the tests.", head: "Own prompt\n\nAPPEND-MARK" },
+    { name: "is a coding section", text: "# Scope\nDo things.", head: "APPEND-MARK" },
   ])
     it.effect(`keeps appended text after an agent prompt that ${row.name}, under a style`, () =>
       Effect.gen(function* () {
@@ -729,8 +728,8 @@ describe("system prompt keys", () => {
           [...styled(directory), document({ append_system_prompt: "APPEND-MARK" })],
           { sessionID: root.id, agent: "own", text: row.text, tools: ["Read"] },
         )
-        expect(text).not.toContain("# Verification")
-        expect(text).not.toContain("# Doing tasks")
+        expect(text).not.toContain("# Evidence")
+        expect(text).not.toContain("# Scope")
         expect(text).not.toContain("\u0000")
         expect(text.startsWith(row.head)).toBe(true)
         expect(text.indexOf("# Output style: reviewer")).toBeGreaterThan(text.indexOf("APPEND-MARK"))
@@ -743,10 +742,10 @@ describe("system prompt keys", () => {
       yield* OutputStylePlugin.Plugin.effect(host)
       const directory = yield* reviewerStyle
       const text = yield* templateRequest(
-        [...styled(directory), document({ system_prompt: "# Doing tasks\nMine.\n\n# Verification\nAlso mine." })],
+        [...styled(directory), document({ system_prompt: "# Scope\nMine.\n\n# Evidence\nAlso mine." })],
         { sessionID: root.id },
       )
-      expect(text.startsWith("# Doing tasks\nMine.\n\n# Verification\nAlso mine.\n\n# Orbit rules")).toBe(true)
+      expect(text.startsWith("# Scope\nMine.\n\n# Evidence\nAlso mine.\n\n# Orbit rules")).toBe(true)
       expect(text.indexOf("# Output style: reviewer")).toBeGreaterThan(text.indexOf(SessionSystemPrompt.GIT_HEADING))
     }),
   )
@@ -760,7 +759,7 @@ describe("system prompt keys", () => {
         [document({ system_prompt: "Use Bash here. ${ORBIT_TOOL_GUIDANCE} Never Bash twice.", append_system_prompt: "Bash!" })],
         { sessionID: root.id },
       )
-      expect(text).toContain("Use Bash here. - PowerShell is for what only a shell can do")
+      expect(text).toContain("Use Bash here. - PowerShell runs programs, builds and system commands")
       expect(text).toContain("Never Bash twice.")
       expect(text.endsWith("Bash!")).toBe(true)
       expect(text.slice(0, text.indexOf(SessionSystemPrompt.GIT_HEADING))).not.toMatch(/\bBash\b(?! here| twice)/)

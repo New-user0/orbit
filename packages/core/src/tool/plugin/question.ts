@@ -11,19 +11,16 @@ export const name = "AskUserQuestion"
 
 export const description = `Ask the user one to four questions while you work, then continue with their answers.
 
-Reach for it to learn preferences or requirements, to resolve an ambiguous instruction, to settle an implementation decision, or to let the user pick a direction.
+It fits when an instruction is ambiguous, when a requirement or preference is missing, or when a decision about direction belongs to the user.
 
-How questions are shaped:
-- Send 1 to 4 questions per call. Question texts must differ from each other.
-- Give every question 2 to 4 options with labels that differ within that question. Keep each label short and use the description for what the option means or costs.
-- Do not add an option for a free-form reply. A "Type your own answer" row is always added for you.
-- Set \`multiple: true\` when the choices are not mutually exclusive.
-- To recommend an option, list it first and end its label with "(Recommended)".
+Shape of a call:
+- One to four questions, each with its own text.
+- Two to four options per question, with labels that differ from each other. A label is short; its description says what the option means or costs.
+- A free-form row ("Type your own answer") is added automatically, so do not supply one.
+- \`multiple: true\` lets the user combine options that do not exclude each other.
+- A recommended option goes first, and its label ends with "(Recommended)".
 
-Planning:
-- While planning, use this tool to pin down requirements or to choose between approaches before you finish the plan.
-- Never use it to ask whether the plan is ready or whether to go ahead. Present the plan with ExitPlanMode instead.
-- The user cannot see your plan until ExitPlanMode shows it, so do not word a question as if they had read it.`
+In plan mode, settle requirements and the choice of approach with it before the plan is written. Approval of the plan is never asked this way: ExitPlanMode presents the plan, which the user cannot see until then, so a question must not refer to it.`
 
 export const Input = Schema.Struct({
   questions: Schema.Array(Question.Prompt)
@@ -62,7 +59,7 @@ export const toModelContent = (questions: ReadonlyArray<Question.Prompt>, answer
       return preview ? `${entry} (preview of the chosen option:\n${preview}\n)` : entry
     })
     .join(", ")
-  return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
+  return `The user's answers: ${formatted}. Carry on with the work using them.`
 }
 
 export const Plugin = {

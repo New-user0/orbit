@@ -210,7 +210,7 @@ describe("what an agent's context switches leave out of its baseline", () => {
       const lean = yield* stepped(ids.child)
 
       expect(lean.value.text).not.toContain(MARK)
-      expect(lean.value.text).not.toContain("Current branch")
+      expect(lean.value.text).not.toContain("Branch")
       expect(Object.keys(lean.value.delta)).not.toContain(filesKey)
       expect(Object.keys(lean.value.delta)).not.toContain(key)
       expect(lean.value.text).toContain("Today's date")
@@ -228,7 +228,7 @@ describe("what an agent's context switches leave out of its baseline", () => {
       const worker = yield* stepped(ids.plain)
 
       expect(worker.value.text).toContain(MARK)
-      expect(worker.value.text).toContain("Current branch: main")
+      expect(worker.value.text).toContain("Branch: main")
       expect(worker.git).toEqual([])
     }),
   )
@@ -253,7 +253,7 @@ describe("what an agent's context switches leave out of its baseline", () => {
       const back = yield* stepped(ids.main)
       expect(Object.keys(back.value.delta).sort()).toEqual([filesKey, key].sort())
       expect(back.value.text).toContain(MARK)
-      expect(back.value.text).toContain("Current branch: main")
+      expect(back.value.text).toContain("Branch: main")
     }),
   )
 
@@ -270,7 +270,7 @@ describe("what an agent's context switches leave out of its baseline", () => {
       const result = yield* stepped(ids.child)
 
       expect(result.value.text).toContain(MARK)
-      expect(result.value.text).not.toContain("Current branch")
+      expect(result.value.text).not.toContain("Branch")
       expect(result.git).toEqual([])
     }),
   )
@@ -320,7 +320,7 @@ describe("an agent's context in the document of an untrusted folder", () => {
       const { stepped } = yield* configured(false)
       const main = yield* stepped(ids.main)
       expect(main.value.text).toContain(MARK)
-      expect(main.value.text).not.toContain("Current branch")
+      expect(main.value.text).not.toContain("Branch")
       expect((yield* stepped(ids.plain)).value.text).toContain(MARK)
     }),
   )

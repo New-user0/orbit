@@ -116,7 +116,7 @@ const layer = Layer.effect(
       )
     const unread = (display: string) =>
       new ToolFailure({
-        message: `${display} has not been read in this session. Read it before changing it.`,
+        message: `${display} was never read in this session; read it first, then change it.`,
         code: Tool.ErrorCode.FileUnread,
       })
     const remember = (sessionID: Session.ID, path: string, seen: Seen) => {
@@ -149,7 +149,7 @@ const layer = Layer.effect(
           return
         }
         return yield* new ToolFailure({
-          message: `${display} changed since it was last read. Read it again before changing it.`,
+          message: `${display} was modified after your last read of it; read it again, then change it.`,
           code: Tool.ErrorCode.FileStale,
         })
       }),

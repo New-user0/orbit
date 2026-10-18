@@ -24,15 +24,15 @@ const give = (messages: ReadonlyArray<SessionMessage.Info>, agent = "plan", pare
 })
 
 const kind = (text: string) =>
-  text.includes("## How to plan")
+  text.includes("## Working order")
     ? "full"
-    : text.includes("still on; the full instructions")
+    : text.includes("is still on, and the full instructions")
       ? "sparse"
-      : text.includes("If you need to write a plan down")
+      : text.includes("If you must write a plan down")
         ? "subagent"
-        : text.includes("Returning to Plan mode")
+        : text.includes("Back in Plan mode")
           ? "reentry"
-          : text.includes("Plan mode has ended")
+          : text.includes("Plan mode is over")
             ? "leave"
             : "other"
 
@@ -125,8 +125,8 @@ describe("plan reminders", () => {
 
   test("puts the plan file part right after the opening paragraph and points to it there", () => {
     const text = PlanReminders.insertions(give([History.user("plan it")]), home)[0].text
-    expect(text.indexOf("## The plan file")).toBeLessThan(text.indexOf("## How to plan"))
-    expect(text.split("\n")[0]).toContain("other than the plan file named in the next section")
+    expect(text.indexOf("## Where the plan lives")).toBeLessThan(text.indexOf("## Working order"))
+    expect(text.split("\n")[0]).toContain("apart from writing the plan file described below")
   })
 
   test.each([
@@ -292,6 +292,41 @@ Run it`],
       "leave",
       "full",
     ])
+  })
+
+  // The provenance audit rewrote every plan text. Each row is a phrase of the old wording, kept here as data, that none of
+  // the five texts may carry again; restoring any old line fails its row.
+  test.each([
+    ["the opening chain", /do not edit files, run commands that alter state|including a request to go ahead/],
+    ["the section names", /## The plan file|## How to plan|## Ending a turn|Returning to Plan mode|Plan mode has ended/],
+    ["the explore step", /Understand the request\.|One search is enough when the task is small/],
+    ["the sample approval questions", /does this look right|shall I go ahead|ready to implement/i],
+    ["the bold turn-ending rule", /\*\*Every turn in Plan mode/],
+    ["the re-entry close", /only a starting point|\*\*Do this before planning/],
+    ["the sparse text", /still on; the full instructions/],
+  ])("keeps the retired wording out of the %s", (_, pattern) => {
+    const recorded = path.join(home, ".orbit", "plan", "ses_parent.md")
+    const approved = History.tool("ExitPlanMode", { plan: "p" }, { metadata: { approved: true, file: recorded } })
+    const returning = [
+      History.user("plan it"),
+      History.assistant("plan", approved),
+      History.switched("build", "plan"),
+      History.user("go"),
+      History.assistant("build", History.text()),
+      ...turns(5, "build"),
+      History.switched("plan", "build"),
+      History.user("again"),
+    ]
+    const left = [History.user("plan it"), History.assistant("plan", approved), History.switched("build", "plan"), History.user("go")]
+    const texts = [
+      ...PlanReminders.insertions(give([History.user("plan it")]), home),
+      ...PlanReminders.insertions(give(turns(6)), home),
+      ...PlanReminders.insertions(give(turns(6), "plan", Session.ID.make("ses_parent")), home),
+      ...PlanReminders.insertions(give(returning), home),
+      ...PlanReminders.insertions(give(left, "build"), home),
+    ].map((insertion) => insertion.text)
+    expect(new Set(texts.map(kind))).toEqual(new Set(["full", "sparse", "subagent", "reentry", "leave"]))
+    texts.forEach((text) => expect(text).not.toMatch(pattern))
   })
 
   test("gives a child session the subagent text at full and sparse positions", () => {
