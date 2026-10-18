@@ -3107,6 +3107,43 @@ describe("ShellTool", () => {
   )
 })
 
+describe("ShellTool interruption before the call waits on its job", () => {
+  // FU-M2-041: the call is interrupted while its first progress update is being published, after the command was
+  // created and before the job that waits for it was started. The command must not be left running.
+  it.live(
+    "stops a command whose call is interrupted between its creation and its job",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              const blocked = yield* Deferred.make<void>()
+              const running = yield* executeTool(registry, {
+                ...call({ command: idleCommand, timeout: 0 }, "call-interrupted-early"),
+                progress: (update) =>
+                  typeof update.shellID === "string"
+                    ? Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Effect.never))
+                    : Effect.void,
+              }).pipe(Effect.forkChild({ startImmediately: true }))
+              yield* Deferred.await(blocked)
+              expect((yield* shell.list()).length).toBe(1)
+              yield* Fiber.interrupt(running)
+
+              for (let attempt = 0; attempt < 400 && (yield* shell.list()).length > 0; attempt++)
+                yield* Effect.promise(() => Bun.sleep(5))
+              expect(yield* shell.list()).toEqual([])
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+})
+
 // The deadline: a foreground command that outlives it moves to the background, except one made only of sleeps.
 describe("ShellTool timeouts", () => {
   const releaseLoop = (release: string) =>

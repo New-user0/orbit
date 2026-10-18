@@ -386,39 +386,53 @@ export const Plugin = {
                     analysis = prepared.analysis
                   }),
               )
-              yield* context.progress({ shellID: info.id })
-
               const settled = yield* Deferred.make<Output>()
-              const run = Effect.gen(function* () {
-                const result = yield* shell.result(info)
-                if (!result.capture) return yield* new Shell.NotFoundError({ id: info.id })
-                const output = ShellResult.output(result)
-                return {
-                  ...output,
-                  output: output.timeout
-                    ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-                    : output.output,
-                  status: "completed" as const,
-                }
+              const startedJob = yield* Ref.make<string | undefined>(undefined)
+              // An interrupt after create returns and before block takes over would leave the command running until its
+              // timeout, and for ever without one: take the shell back, and the job once it has started.
+              const job = yield* Effect.gen(function* () {
+                yield* context.progress({ shellID: info.id })
+                const run = Effect.gen(function* () {
+                  const result = yield* shell.result(info)
+                  if (!result.capture) return yield* new Shell.NotFoundError({ id: info.id })
+                  const output = ShellResult.output(result)
+                  return {
+                    ...output,
+                    output: output.timeout
+                      ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
+                      : output.output,
+                    status: "completed" as const,
+                  }
+                }).pipe(
+                  Effect.tap((output) => Deferred.succeed(settled, output)),
+                  Effect.map((output) => resultMessages(output).join("\n\n")),
+                  Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
+                )
+                const started = yield* jobs.start({
+                  // CodeMode children share a tool-call ID, but each shell must own its job.
+                  id: info.id,
+                  type: "shell",
+                  title: input.description ?? info.command,
+                  metadata: { sessionID: context.sessionID, shellID: info.id },
+                  recovery: {
+                    kind: "shell",
+                    sessionID: context.sessionID,
+                    shellID: info.id,
+                    command: info.command,
+                  },
+                  run,
+                })
+                yield* Ref.set(startedJob, started.id)
+                return started
               }).pipe(
-                Effect.tap((output) => Deferred.succeed(settled, output)),
-                Effect.map((output) => resultMessages(output).join("\n\n")),
-                Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
+                Effect.onInterrupt(() =>
+                  Effect.gen(function* () {
+                    const id = yield* Ref.get(startedJob)
+                    if (id) yield* jobs.cancel(id)
+                    yield* shell.remove(info.id)
+                  }).pipe(Effect.ignore),
+                ),
               )
-              const job = yield* jobs.start({
-                // CodeMode children share a tool-call ID, but each shell must own its job.
-                id: info.id,
-                type: "shell",
-                title: input.description ?? info.command,
-                metadata: { sessionID: context.sessionID, shellID: info.id },
-                recovery: {
-                  kind: "shell",
-                  sessionID: context.sessionID,
-                  shellID: info.id,
-                  command: info.command,
-                },
-                run,
-              })
 
               if (input.run_in_background === true) {
                 yield* jobs.background(job.id)
