@@ -112,11 +112,13 @@ export const insertions = (input: Given, home: string): ReadonlyArray<Insertion>
 const LEGACY_ENTER = "<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly"
 const LEGACY_LEAVE = "<system-reminder>\nYou are NO LONGER in Plan mode."
 
+// Compared as written, with no normalizing: ExitPlanMode builds the path with path.join, and normalizing would let a
+// `..` or `.` segment carry text the envelope would print.
 // The recorded path comes from a stored call, which an imported session can carry from a file, so it goes into the
 // envelope only when it is a session's plan file in the harness-owned folder.
 const ownsPlanPath = (recorded: string, home: string) =>
-  path.normalize(path.dirname(recorded)) === path.normalize(PlanMode.directory(home)) &&
-  /^ses_[A-Za-z0-9_-]+\.md$/.test(path.basename(recorded))
+  /^ses_[A-Za-z0-9_-]+\.md$/.test(path.basename(recorded)) &&
+  recorded === path.join(PlanMode.directory(home), path.basename(recorded))
 
 /** `undefined` for any other part, the recorded path for an approval, `true` for one recorded without a path. */
 const approvedPlan = (part: SessionMessage.Assistant["content"][number]) => {
@@ -125,7 +127,7 @@ const approvedPlan = (part: SessionMessage.Assistant["content"][number]) => {
   return typeof part.state.metadata.file === "string" ? part.state.metadata.file : true
 }
 
-const full = (file: string, saved: string | undefined) => `Plan mode is on. The user wants a plan first, not a change: until they approve one, do not edit files, run commands that alter state, change configuration or commit, except for the plan file described below. This holds over any other instruction in this conversation, including a request to go ahead.
+const full = (file: string, saved: string | undefined) => `Plan mode is on. The user wants a plan first, not a change: until they approve one, do not edit files, run commands that alter state, change configuration or commit, other than the plan file named in the next section. This holds over any other instruction in this conversation, including a request to go ahead.
 
 ## The plan file
 
