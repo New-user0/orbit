@@ -29,7 +29,7 @@ import { WorkflowTool } from "@orbit/core/tool/plugin/workflow"
 import { Project } from "@orbit/core/project"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
@@ -97,7 +97,15 @@ const it = testEffect(
         Layer.mock(SkillInstructions.Service, {
           load: (_permissions, options) => {
             seen.skills.push(options)
-            return Effect.succeed(Instructions.empty)
+            // An empty source that keeps the real key, so the baseline order can be read.
+            return Effect.succeed(
+              Instructions.make<string>({
+                key: Instructions.Key.make("core/skill-guidance"),
+                codec: Schema.toCodecJson(Schema.String),
+                read: Effect.succeed(Instructions.removed),
+                render: { initial: () => "", changed: () => "", removed: () => "" },
+              }),
+            )
           },
         }),
       ),
@@ -165,6 +173,11 @@ describe("the agent and skill listings of a session", () => {
       seen.defaultWindow = undefined
       yield* context.select(id)
       expect(seen.skills.at(-1)?.contextWindow).toBe(200_000)
+
+      // A catalog entry whose window is unknown reports 0, which is no window: the same fallback applies.
+      seen.defaultWindow = 0
+      yield* context.select(id)
+      expect(seen.skills.at(-1)?.contextWindow).toBe(200_000)
     }),
   )
 
@@ -184,6 +197,17 @@ describe("the agent and skill listings of a session", () => {
         expect(observed.some((item) => item.key === "core/agent-guidance" && item.value !== Instructions.removed)).toBe(agents)
       }),
     )
+
+  it.live("puts the agent source directly after the skill source in the baseline", () =>
+    Effect.gen(function* () {
+      reset([SubagentTool.name, SkillTool.name])
+      const selected = yield* (yield* setup()).select(id)
+      const keys = selected.instructions.map((source) => source.key)
+      expect(keys.indexOf(Instructions.Key.make("core/agent-guidance"))).toBe(
+        keys.indexOf(Instructions.Key.make("core/skill-guidance")) + 1,
+      )
+    }),
+  )
 
   it.live("adds the agent source to the baseline of a session that can start agents", () =>
     Effect.gen(function* () {

@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { createMemo } from "solid-js"
 import { useLocal } from "../context/local"
 import { DialogSelect } from "../ui/dialog-select"
@@ -11,8 +12,8 @@ export function DialogAgent() {
     local.agent.list().map((item) => {
       return {
         value: item.id,
-        title: item.id,
-        description: item.description,
+        title: plain(item.id),
+        description: item.description === undefined ? undefined : plain(item.description),
       }
     }),
   )

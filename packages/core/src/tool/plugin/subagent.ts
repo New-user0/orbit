@@ -30,7 +30,7 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
 export const Input = Schema.Struct({
   agent: Schema.String.annotate({
     description:
-      "The type of specialized agent to use for this task. The available agent types are listed in the conversation context. If the user asks for a subagent by a name that is not one of them, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
+      "The type of specialized agent to use for this task. Your context carries a roster of the agents you may pick from. If the user asks for a subagent by a name that is not one of them, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
   }),
   description: Schema.String.annotate({ description: "A short 3-5 word label for the task, displayed to the user" }),
   prompt: Schema.String.annotate({ description: "The task for the subagent to perform" }),
@@ -60,7 +60,7 @@ export const description = [
   "Foreground (default) runs the subagent to completion and returns its final response.",
   "Background mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.",
   "Use background only for independent work that can run while you continue elsewhere.",
-  "The agent types you can start are listed in the conversation context.",
+  "Pick the agent from the roster of startable agents that your context carries; each entry says what the agent is for and what it can use.",
 ].join("\n")
 
 /** Admission checks and model resolution shared by every tool that spawns subagents. */

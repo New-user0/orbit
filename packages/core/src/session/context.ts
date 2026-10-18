@@ -192,12 +192,15 @@ const layer = Layer.effect(
           skills: Effect.gen(function* () {
             // The skill listing is budgeted against the window of the model that runs this request.
             const pinned = session.model && (yield* model.get(session.model.providerID, session.model.id))
-            const contextWindow = (pinned || (yield* model.default()))?.limit.context ?? DEFAULT_CONTEXT_WINDOW
+            const known = (pinned || (yield* model.default()))?.limit.context
+            // A catalog entry with no known window reports 0, which is not a window.
+            const contextWindow = known !== undefined && known > 0 ? known : DEFAULT_CONTEXT_WINDOW
             return yield* skillInstructions.load(permissions, { contextWindow, enabled: offered(SkillTool.name) })
           }),
           agents: agentInstructions.load({
             permissions,
             enabled: offered(AgentInstructions.NAME) || offered(WorkflowTool.name),
+            agent: agent.info.id,
           }),
           references: referenceInstructions.load(),
           mcp: mcpInstructions.load(permissions),

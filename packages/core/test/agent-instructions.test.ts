@@ -123,14 +123,14 @@ describe("AgentInstructions", () => {
 
           agents = [...agents, agent("three", { description: "third" })]
           const added = yield* service.load(on).pipe(Effect.flatMap((list) => readUpdate(list, initial)))
-          expect(added.text).toBe("New agent types are now available:\n- three: third (all tools)")
+          expect(added.text).toBe("Additional agents you can delegate to, added since the last listing:\n- three: third (all tools)")
 
           agents = [agent("one", { description: "first" }), agent("three", { description: "third" }), agent("four", { description: "fourth" })]
           const both = yield* service.load(on).pipe(Effect.flatMap((list) => readUpdate(list, added)))
           expect(both.text).toBe(
             [
-              "New agent types are now available:\n- four: fourth (all tools)",
-              "These agent types are no longer available:\n- two",
+              "Additional agents you can delegate to, added since the last listing:\n- four: fourth (all tools)",
+              "Withdrawn since the last listing, so do not start them:\n- two",
             ].join("\n\n"),
           )
 

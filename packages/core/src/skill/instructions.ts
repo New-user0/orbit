@@ -46,9 +46,6 @@ const cap = (text: string) => {
   return kept + "…"
 }
 
-// Skill text can come from a trusted project's files: one entry stays one line and cannot pose as an envelope.
-const flatten = (value: string) => ReminderText.neutralize(value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " "))
-
 const line = (skill: Summary) =>
   skill.description === undefined ? `- ${skill.id}` : `- ${skill.id}: ${skill.description}`
 
@@ -60,7 +57,11 @@ export function budgeted(
   skills: ReadonlyArray<{ readonly id: Skill.ID; readonly description: string }>,
   budget: number,
 ): ReadonlyArray<Summary> {
-  const full = skills.map((skill) => ({ id: skill.id, description: cap(flatten(skill.description)) }))
+  // Ids and descriptions can come from a project's files: each entry stays one line and cannot pose as an envelope.
+  const full = skills.map((skill) => ({
+    id: Skill.ID.make(ReminderText.oneLine(skill.id)),
+    description: cap(ReminderText.oneLine(skill.description)),
+  }))
   const fits =
     full.reduce((sum, skill) => sum + Bun.stringWidth(line(skill)), 0) + Math.max(0, full.length - 1) <= budget
   if (fits) return full

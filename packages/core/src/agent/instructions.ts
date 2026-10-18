@@ -4,6 +4,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Agent } from "../agent.js"
 import { Permission } from "../permission.js"
+import { PlanMode } from "../plan-mode.js"
 import { Instructions } from "../instructions/index.js"
 import { ReminderText } from "../session/reminder-text.js"
 
@@ -18,18 +19,17 @@ const Summary = Schema.Struct({
 type Summary = typeof Summary.Type
 
 // The stored summary is the text the model reads, so a change that does not alter that text makes no delta.
+// Tool names come from config, even from a folder that is not trusted, so they are cleaned before they are stored.
 const toolSummary = (tools: Agent.Info["tools"]) => {
-  const deny = tools?.deny ?? []
+  const deny = (tools?.deny ?? []).map(ReminderText.oneLine)
   if (tools?.allow === undefined) return deny.length === 0 ? "all tools" : `all tools except ${deny.join(", ")}`
-  const left = tools.allow.filter((tool) => !deny.includes(tool))
+  const left = tools.allow.map(ReminderText.oneLine).filter((tool) => !deny.includes(tool))
   return left.length === 0 ? "no tools" : left.join(", ")
 }
 
-// Agent text can come from a trusted project's files: one entry stays one line and cannot pose as an envelope.
-const text = (value: string) => ReminderText.neutralize(value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " "))
-
+// Every field is cleaned once, where the summary is built, so what is measured, stored and shown is the same text.
 const line = (agent: Summary) =>
-  `- ${text(agent.id)}: ${text(agent.description ?? "Start this agent only when the user asks for it.")} (${agent.tools})`
+  `- ${agent.id}: ${agent.description ?? "Start this agent only when the user asks for it."} (${agent.tools})`
 
 const render = (agents: ReadonlyArray<Summary>) =>
   [
@@ -48,10 +48,10 @@ const update = (previous: ReadonlyArray<Summary>, current: ReadonlyArray<Summary
   )
   // Added, then removed, then changed, as separate blocks.
   return [
-    diff.added.length === 0 ? [] : ["New agent types are now available:", ...diff.added.map(line)],
+    diff.added.length === 0 ? [] : ["Additional agents you can delegate to, added since the last listing:", ...diff.added.map(line)],
     diff.removed.length === 0
       ? []
-      : ["These agent types are no longer available:", ...diff.removed.map((agent) => `- ${text(agent.id)}`)],
+      : ["Withdrawn since the last listing, so do not start them:", ...diff.removed.map((agent) => `- ${agent.id}`)],
     diff.changed.length === 0
       ? []
       : [
@@ -75,6 +75,8 @@ export interface Interface {
   readonly load: (input: {
     readonly permissions: Permission.Ruleset
     readonly enabled: boolean
+    /** The running agent. A Plan-mode session may start only what Plan mode allows, so the listing leaves out the rest. */
+    readonly agent?: string
   }) => Effect.Effect<Instructions.List>
 }
 
@@ -94,12 +96,13 @@ const layer = Layer.effect(
                 (agent) =>
                   agent.mode !== "primary" &&
                   !agent.hidden &&
+                  (input.agent !== PlanMode.agent || PlanMode.allowedSubagents.has(agent.id)) &&
                   Permission.evaluate(NAME, agent.id, input.permissions).effect !== "deny",
               )
               .toSorted((a, b) => a.id.localeCompare(b.id))
               .map((agent) => ({
-                id: agent.id,
-                ...(agent.description === undefined ? {} : { description: agent.description }),
+                id: ReminderText.oneLine(agent.id),
+                ...(agent.description === undefined ? {} : { description: ReminderText.oneLine(agent.description) }),
                 tools: toolSummary(agent.tools),
               }))
         return Instructions.make<ReadonlyArray<Summary>>({
@@ -110,7 +113,7 @@ const layer = Layer.effect(
             initial: render,
             changed: update,
             removed: (previous) =>
-              `No agents can be started any more. These agent types were listed before: ${previous.map((agent) => text(agent.id)).join(", ")}.`,
+              `No agents can be started any more. These agent types were listed before: ${previous.map((agent) => agent.id).join(", ")}.`,
           },
         })
       }),
