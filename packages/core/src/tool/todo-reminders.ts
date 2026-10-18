@@ -84,14 +84,14 @@ export const insertions = (input: Given): ReadonlyArray<Insertion> => {
       const items = itemsOf(part)
       if (items === undefined) return
       if (name === "TodoWrite") todos = items
-      if (name.startsWith("Task")) tasks = items
+      if (name === "TaskCreate" || name === "TaskUpdate" || name === "TaskList") tasks = items
     })
   })
   return out
 }
 
 const todoText = (listed: boolean) =>
-  `The todo list has not been touched for a while. If the work in front of you would benefit from tracking, update it with TodoWrite, and tidy a list that no longer matches what you are doing. Use it only when it fits; if it does not, carry on.${listed ? " The list as it stands follows." : ""}`
+  `The todo list has not been touched for a while. Multi-step work is easier to follow with a list: if this is such work, record progress with TodoWrite, and fix or clear entries that have gone stale. Skip it when it does not apply and carry on.${listed ? " The list as it stands follows." : ""}`
 
 const taskText = (listed: boolean) =>
-  `The task list has not been touched for a while. If the work in front of you would benefit from tracking, add tasks with TaskCreate and move them with TaskUpdate: in_progress when you start one, completed when it is done. Tidy tasks that no longer match what you are doing. Use the list only when it fits; if it does not, carry on.${listed ? " The tasks as they stand follow." : ""}`
+  `The task list has not been touched for a while. Multi-step work is easier to follow with a list: if this is such work, add tasks with TaskCreate and move them with TaskUpdate, in_progress when you begin one and completed when it is done. Fix or remove tasks that have gone stale. Skip it when it does not apply and carry on.${listed ? " The tasks as they stand follow." : ""}`

@@ -154,7 +154,7 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (17)
+### M4 (21)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -175,6 +175,10 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file; share stat after the write; lexical fallback when a hook strips Write output | 14,13 | Misleading reason; regressions unnoticed. | low | S | file-web-tools-9 | PR #84 C0-C8 | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
 | FU-M3-154 | LSP: content-modified retry re-sends the document; server starts before the size cap and read; git check-ignore batch fails whole on one bad path; junction Location hides nothing | perf,7 | Extra didChange; one bad path shows every ignored file. | low | S | file-web-tools-9 | PR #92 C0-C4 | packages/core/src/lsp/index.ts ignored() |
 | FU-M4-37 | The reminder tests carry a 699-line copy of the runner harness beside the one in session-runner.test.ts | test hygiene | Two harnesses must be kept in step; a change to one can leave the other testing old behaviour. | low | M: move session-runner.test.ts onto packages/core/test/lib/runner.ts and delete the copy | loop-robustness-17 | prompts-context-5 review (minor) | packages/core/test/lib/runner.ts, packages/core/test/session-runner.test.ts |
+| FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
+| FU-M4-40 | The verification nudge does not name a verification agent (ae-3) | parity | The nudge asks for checks in general because Orbit has no verification agent to point to. | low | S once the agent exists | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/session/reminders.ts (verification nudge) |
+| FU-M4-41 | A compaction drops a Plan mode leave or re-entry note that was still owed, and the plan path | behaviour | Messages start at the checkpoint, so the first step after it gets the plain reminder or none; the reference keeps both flags across a compaction. | low | M: have the checkpoint record the owed state | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/plan/reminders.ts; packages/core/src/session/history.ts |
+| FU-M4-42 | Todo nudge gating and the family choice read the tool set offered now at every position | behaviour | Turning TodoWrite or TaskUpdate on or off re-derives earlier nudges and costs one prompt-cache miss; Orbit also nudges for both list families at once where the reference offers one family. | low | S: record the family with the nudge | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts |
 
 ### M5 (5)
 
@@ -834,11 +838,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) = 713.
-- Output: 630 rows plus 83 listed duplicates = 713. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 630 register rows have a table entry.
-- Open minors by carrier: M4: 17, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 148, Owner: 93.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-42) = 717.
+- Output: 634 rows plus 83 listed duplicates = 717. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 634 register rows have a table entry.
+- Open minors by carrier: M4: 21, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 148, Owner: 93.
 - Open majors: 14 open, plus 5 marked major in "For the owner" that wait for a decision = 19.
 - For the owner: 86.
 - Fixed: 113.
 - Duplicates: 83.
-- Check: 431 open + 86 owner + 113 fixed + 83 duplicates = 713, the 713 inputs.
+- Check: 435 open + 86 owner + 113 fixed + 83 duplicates = 717, the 717 inputs.

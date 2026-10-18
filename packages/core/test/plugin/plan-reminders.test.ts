@@ -57,6 +57,33 @@ describe("plan reminders", () => {
     expect(kind(insertion.text)).toBe("full")
     expect(insertion.text).toContain("ExitPlanMode")
     expect(insertion.text).toContain("AskUserQuestion")
+    expect(insertion.text).toContain(file)
+  })
+
+  test("leaves Plan mode with a note when the switch row names no previous agent", () => {
+    const messages = [
+      History.user("plan it"),
+      History.assistant("plan", History.text()),
+      History.switched("build"),
+      History.user("go"),
+    ]
+    expect(where(messages, "build")).toEqual(["0:full", "1:leave"])
+  })
+
+  test("names the path recorded with the approval, not one rebuilt from the session ID", () => {
+    const recorded = path.join(home, ".orbit", "plan", "ses_parent.md")
+    const approved = History.tool("ExitPlanMode", { plan: "p" }, { metadata: { approved: true, file: recorded } })
+    const messages = [
+      History.user("plan it"),
+      History.assistant("plan", approved),
+      History.switched("build", "plan"),
+      History.user("go"),
+      History.assistant("build", History.text()),
+      History.user("again"),
+    ]
+    const leave = PlanReminders.insertions(give(messages, "build"), home).find((insertion) => kind(insertion.text) === "leave")
+    expect(leave?.text).toContain(recorded)
+    expect(leave?.text).not.toContain(file)
   })
 
   test("gives nothing in later tool rounds of the same turn", () => {

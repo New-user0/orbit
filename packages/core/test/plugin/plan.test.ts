@@ -25,8 +25,9 @@ const build = Agent.ID.make("build")
 const home = "/home/plan-test"
 const planDirectory = path.join(home, ".orbit", "plan")
 
-/** Runs the plan plugin against stubbed domains, capturing the tool hook. The host has no session or event stubs, so a plugin that persists or subscribes would die. */
+/** Runs the plan plugin against stubbed domains, capturing the tool hook. The host has no session or event stubs, so a plugin that persists or subscribes fails the test. */
 const run = Effect.fnUntraced(function* (planHome = home) {
+  let subscribed = false
   let toolHook: ((input: ToolHooks["execute.after"]) => Effect.Effect<void>) | undefined
   const planAgent = {
     id: plan,
@@ -59,7 +60,12 @@ const run = Effect.fnUntraced(function* (planHome = home) {
           return Effect.succeed({ dispose: Effect.void })
         },
       },
-      event: { subscribe: () => Stream.die("unused event.subscribe") },
+      event: {
+        subscribe: () => {
+          subscribed = true
+          return Stream.empty
+        },
+      },
       tool: {
         transform: () => Effect.die("unused tool.transform"),
         reload: () => Effect.die("unused tool.reload"),
@@ -83,7 +89,7 @@ const run = Effect.fnUntraced(function* (planHome = home) {
     ),
   )
   if (!toolHook) return yield* Effect.die("plan plugin did not register a tool hook")
-  return { toolHook, files: Environment.makeFiles(driver), planAgent }
+  return { toolHook, files: Environment.makeFiles(driver), planAgent, subscribed: () => subscribed }
 })
 
 type ToolErrorEvent = Extract<ToolHooks["execute.after"], { readonly status: "error" }>
@@ -109,7 +115,8 @@ describe("plan plugin mutations", () => {
 
   it.effect("allows edits only inside the Plan directory", () =>
     Effect.gen(function* () {
-      const { planAgent } = yield* run()
+      const { planAgent, subscribed } = yield* run()
+      expect(subscribed()).toBe(false)
       expect(Permission.evaluate("edit", path.join(planDirectory, "work.md"), planAgent.permissions).effect).toBe(
         "allow",
       )
