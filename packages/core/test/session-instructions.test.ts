@@ -209,6 +209,31 @@ describe("SessionInstructions", () => {
     }),
   )
 
+  // A lean agent (`context.instructions: false`) leaves the start-of-session files out of its baseline only: a file it
+  // reads in a subfolder still brings that folder's instruction file.
+  it.live("injects a subfolder's instruction file on a read by a lean subagent", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const subPath = path.resolve(dir, "sub", "AGENTS.md")
+      yield* mkdir(path.dirname(subPath))
+      yield* writeAgents(subPath, "sub-instructions")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "file.txt"), "file content"))
+      const session = yield* Session.Service
+      const registry = yield* Tool.Service
+      const parent = yield* session.create({ location: Location.Ref.make({ directory: dir }) })
+      const child = yield* session.create({ parentID: parent.id, agent: Agent.ID.make("explore") })
+
+      yield* executeTool(registry, {
+        ...readCall(child.id, "call-lean", "sub/file.txt"),
+        agent: Agent.ID.make("explore"),
+      })
+
+      expect((yield* synthetics(child.id)).map((message) => message.text)).toEqual([
+        `Instructions from: ${subPath}\nsub-instructions`,
+      ])
+    }),
+  )
+
   it.live("injects AGENTS.md files above a read, excludes the Location root, and dedups across reads", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service

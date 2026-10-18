@@ -115,6 +115,7 @@ import { SkillPlugin } from "./skill.js"
 import { VcsHgPlugin } from "./vcs/hg.js"
 import { ToolInputRepairPlugin } from "./tool-input-repair.js"
 import { OptimizePlugin } from "./optimize.js"
+import { SubagentPromptPlugin } from "./subagent-prompt.js"
 import { VcsGitPlugin } from "./vcs/git.js"
 import { VerbosityPlugin } from "./verbosity.js"
 import { OutputStylePlugin } from "./output-style.js"
@@ -254,6 +255,9 @@ const pre = [
   ...ProviderPlugins,
   ...WebSearchPlugins,
   PatchTool.Plugin,
+  // A subagent's base, rendered after the patch plugin selects the available editing tools. The model prompts below
+  // leave a subagent alone.
+  SubagentPromptPlugin.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.
   ...OptimizePlugin.Plugins,
   // After the model prompts, so the git guidance follows whichever base was chosen, and before the output style.

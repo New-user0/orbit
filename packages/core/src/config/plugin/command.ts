@@ -146,7 +146,7 @@ export const Plugin = define({
                   yield* sessions.prompt({
                     ...input.prompt,
                     sessionID: child.id,
-                    text: ["You are a subagent spawned by another session.", text].join("\n"),
+                    text,
                     resume: false,
                   })
                   const recovery = {

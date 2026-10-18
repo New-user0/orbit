@@ -540,14 +540,10 @@ export const AdvertisePlugin = {
         if (!tool) return
         event.tools[ToolNames.powershell] = tool
         delete event.tools[name]
-        // The guidance and the model prompts call the tool `Bash`. An agent's own system prompt is its author's text.
+        // The guidance and the model prompts call the tool `Bash`. The author's own words in an agent's system prompt are
+        // registered as personal text, which the rename leaves alone.
         const system = event.system[0]
         if (!system) return
-        const custom = yield* ctx.agent.get({ agentID: event.agent }).pipe(
-          Effect.map((agent) => agent.data.system !== undefined),
-          Effect.catch(() => Effect.succeed(true)),
-        )
-        if (custom) return
         // The git section and an output style are appended to this text before this runs. The section names no shell tool
         // and carries the person's attribution text, and the style is the person's own words, so both stay as written.
         const gitAt = system.text.indexOf(`\n\n${SessionSystemPrompt.GIT_HEADING}\n`)
