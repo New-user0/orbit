@@ -439,7 +439,7 @@ describe("the base system prompt", () => {
       ["Read", ["rather than `cat` or `head` through Bash", "`offset` and `limit`", "at most 20 pages per call"]],
       ["Edit", ["rather than `sed` or `awk` through Bash", "`old_string`", "`replace_all`", "lengthen the snippet"]],
       ["Write", ["rather than redirection or heredocs through Bash", "Prefer Edit for targeted changes"]],
-      ["Glob", ["rather than `find` or `ls` through Bash", "most recently modified first"]],
+      ["Glob", ["rather than `find` or `ls` through Bash", "by name pattern"]],
       ["Grep", ["rather than `grep` or `rg` through Bash", "`outputMode`"]],
       ["TodoWrite", ["an item is marked done when it is done"]],
       ["TaskCreate", ["`blockedBy`", "complete each task when it finishes"]],

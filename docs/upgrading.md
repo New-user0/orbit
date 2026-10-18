@@ -1842,9 +1842,17 @@ Grep and Glob asked their own rules about the pattern only, so a Read deny of `*
 which sent the file's lines to the model. Both now ask your Read rules about the path they search, as a Read of that
 path would, before they ask about the pattern: a Read deny of `*.env` refuses a Grep of `.env`, a Read deny of a folder
 refuses a Glob of it, and a Read ask asks about the path. A search of a folder does not yet hold each file it finds to
-your Read rules, so a Grep of `.` still reads a `.env` in it unless a rule covers the folder.
+your Read rules, so a Grep of `.` still reads a `.env` in it unless a rule covers the folder. A Glob does hold them: it
+leaves out of its list every file that a Read deny of yours matches, decided without asking (a Read ask does not remove
+a file), and the files left out do not count against the limit.
 
-**Affects:** people with Read rules that ask or deny. With a Read ask that covers the searched path, a search now asks
+A Glob also lists differently now. It lists hidden files unless the call says `hidden: false`, lists files that
+`.gitignore` names, sorts the files by modification time with the oldest first (it was the newest first), and stops at
+100 files unless `limit` says otherwise. The tool description and the system prompt no longer say "most recently modified
+first". Pinned by `test/tool-search.test.ts`.
+
+**Affects:** people with Read rules that ask or deny, and prompts or plugins that relied on the order or on the omission
+of hidden and ignored files. With a Read ask that covers the searched path, a search now asks
 about the path as well as about the pattern, and an agent whose rules allow Grep or Glob but deny Read can no longer
 search.
 

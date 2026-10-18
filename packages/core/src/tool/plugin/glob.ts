@@ -21,7 +21,7 @@ export const Input = Schema.Struct({
     description: "Directory to search. Defaults to the current working directory.",
   }),
   hidden: FileSystem.GlobInput.fields.hidden.annotate({
-    description: "Include hidden files and directories (default: false).",
+    description: "Include hidden files and directories (default: true).",
   }),
   limit: FileSystem.GlobInput.fields.limit.annotate({
     description: `Maximum number of matching files to return (default: ${FileSystem.DEFAULT_SEARCH_LIMIT})`,
@@ -29,6 +29,10 @@ export const Input = Schema.Struct({
 })
 
 export const Output = Schema.Array(FileSystem.Entry)
+
+// The most files read from ripgrep while looking for enough that a Read rule leaves in.
+const MAX_FETCH = 5_000
+const slash = (file: string) => file.replaceAll("\\", "/")
 type EncodedOutput = typeof Output.Encoded
 
 /** Format raw search results into the concise line-oriented output models expect. */
@@ -59,7 +63,7 @@ export const Plugin = {
           options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
           description:
-            'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx"). Results are sorted with the most recently modified files first.',
+            'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx"). Files that .gitignore names are listed too.',
           input: Input,
           output: Output,
           execute: (input, context) =>
@@ -96,13 +100,38 @@ export const Plugin = {
                 )
               const root = target.absolute
               const limit = input.limit ?? FileSystem.DEFAULT_SEARCH_LIMIT
-              const entries = yield* ripgrep
-                .glob({
-                  cwd: root,
-                  pattern: input.pattern,
-                  hidden: input.hidden,
-                  limit: limit + 1,
-                })
+              // A file that the person's Read rules deny is left out of the list, decided without asking anybody, so the
+              // list never names what a Read of it would be refused. Files left out do not count against the limit.
+              const readable = (entries: readonly FileSystem.Entry[]) =>
+                Effect.forEach(
+                  entries,
+                  (entry) =>
+                    permission
+                      .denied({
+                        action: "Read",
+                        resources: [slash(path.relative(location.directory, path.resolve(root, entry.path)))],
+                        save: ["*"],
+                        metadata: {},
+                        sessionID: context.sessionID,
+                        agent: context.agent,
+                        source,
+                      })
+                      .pipe(Effect.map((denied) => (denied ? [] : [entry]))),
+                  { concurrency: 16 },
+                ).pipe(Effect.map((rows) => rows.flat()))
+              const list = (fetch: number): Effect.Effect<readonly FileSystem.Entry[], unknown> =>
+                ripgrep.glob({ cwd: root, pattern: input.pattern, hidden: input.hidden, limit: fetch }).pipe(
+                  Effect.flatMap((found) =>
+                    readable(found).pipe(
+                      Effect.flatMap((kept) =>
+                        kept.length > limit || found.length < fetch || fetch >= MAX_FETCH
+                          ? Effect.succeed(kept)
+                          : list(fetch * 2),
+                      ),
+                    ),
+                  ),
+                )
+              const entries = yield* list(limit + 1)
                 .pipe(
                   Effect.timeoutOrElse({
                     duration: FileSystem.DEFAULT_SEARCH_TIMEOUT_MS,

@@ -146,7 +146,7 @@ export const GUIDANCE = [
   {
     tool: "Glob",
     lines: [
-      "- Use Glob, rather than `find` or `ls` through Bash, to find files by name pattern. Results are sorted with the most recently modified first.",
+      "- Use Glob, rather than `find` or `ls` through Bash, to find files by name pattern.",
     ],
   },
   {

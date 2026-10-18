@@ -81,6 +81,7 @@ export interface GlobInput {
   readonly cwd: string
   readonly pattern: string
   readonly limit: number
+  /** Hidden files are listed unless this is `false`. */
   readonly hidden?: boolean
   readonly follow?: boolean
   readonly signal?: AbortSignal
@@ -322,13 +323,15 @@ const layer = Layer.effect(
           args: [
             "--no-config",
             "--files",
-            // Newest first, so a limited listing keeps the files most likely to matter.
-            "--sortr=modified",
-            ...(input.hidden ? ["--hidden"] : []),
+            // Oldest first, as a listing by modification time reads. Hidden files and files that .gitignore names are
+            // listed: a search for a file by name is not a search of what a build leaves out.
+            "--sort=modified",
+            ...(input.hidden === false ? [] : ["--hidden"]),
+            "--no-ignore",
             ...(input.follow ? ["--follow"] : []),
             `--glob=${input.pattern}`,
             // Positive globs override rg's hidden-file filter; exclude before applying the result limit.
-            ...(input.hidden ? [] : ["--glob=!**/.*"]),
+            ...(input.hidden === false ? ["--glob=!**/.*"] : []),
             ...vcsGlobs,
             ".",
           ],
