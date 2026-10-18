@@ -1,6 +1,6 @@
 export * as InstructionDiscovery from "./instruction-discovery.js"
 
-import { Context, Effect, Layer, Schema, Types } from "effect"
+import { Cause, Context, Effect, Layer, Schema, type Scope, Types } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { createPatch } from "diff"
 import { Instruction } from "@orbit/schema/instruction"
@@ -118,6 +118,17 @@ export interface Interface extends State.Transformable<Editor> {
   readonly section: (
     names: string | ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyArray<{ readonly path: AbsolutePath; readonly text: string }>>
+  /**
+   * Registers, for as long as the caller's scope lives, a way to read the instruction files again from disk. A source of
+   * files registers the one that refreshes it, so that `rescan` does not depend on a file watcher.
+   */
+  readonly addRescan: (rescan: Effect.Effect<void>) => Effect.Effect<void, never, Scope.Scope>
+  /**
+   * Reads every registered source again, in registration order, and then publishes one update. It is a correctness
+   * refresh, not a reload of the instructions into a session: a source that fails costs only itself, and with nothing
+   * registered it only publishes. A client calls it when it needs the list to be what the disk holds now.
+   */
+  readonly rescan: () => Effect.Effect<void>
   /** `removed` reads nothing: the session's agent leaves the instruction files out of its context (`context.instructions`). */
   readonly load: (options?: { readonly removed?: boolean }) => Effect.Effect<Instructions.List>
 }
@@ -182,6 +193,34 @@ export const layer = (options?: Options) =>
           },
         })
 
+      const rescans: Effect.Effect<void>[] = []
+      const addRescan = Effect.fn("InstructionDiscovery.addRescan")(function* (rescan: Effect.Effect<void>) {
+        // A wrapper per registration, so that two registrations of one effect are removed one at a time.
+        const entry = Effect.suspend(() => rescan)
+        rescans.push(entry)
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            const index = rescans.indexOf(entry)
+            if (index !== -1) rescans.splice(index, 1)
+          }),
+        )
+      })
+      const rescan = Effect.fn("InstructionDiscovery.rescan")(function* () {
+        yield* Effect.forEach(
+          [...rescans],
+          (entry) =>
+            entry.pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.logWarning("instruction rescan failed", { cause }),
+              ),
+            ),
+          { discard: true },
+        )
+        yield* state.reload()
+      })
+
       const list = Effect.fn("InstructionDiscovery.list")(function* () {
         const current = state.get()
         if (!current.available) return Instructions.unavailable
@@ -193,6 +232,8 @@ export const layer = (options?: Options) =>
         global: options?.global !== false,
         transform: state.transform,
         reload: state.reload,
+        addRescan,
+        rescan,
         list,
         warnings: Effect.fn("InstructionDiscovery.warnings")(function* () {
           return Array.from(state.get().warnings)

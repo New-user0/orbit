@@ -3096,3 +3096,85 @@ describe("InstructionDiscovery.section", () => {
     }),
   )
 })
+
+describe("InstructionDiscovery.rescan", () => {
+  const updates = Effect.gen(function* () {
+    const bus = yield* Bus.Service
+    const seen = { count: 0 }
+    yield* bus.subscribe(InstructionDiscovery.Event.Updated).pipe(
+      Stream.runForEach(() => Effect.sync(() => void seen.count++)),
+      Effect.forkScoped,
+    )
+    yield* Effect.yieldNow
+    return seen
+  })
+
+  it.live("reads an edited file without a watcher event and publishes one update", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.rootFile, "before")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const seen = yield* updates
+        yield* Effect.promise(() => fs.writeFile(where.rootFile, "after"))
+        expect((yield* discovery.list()) as InstructionDiscovery.File[]).toMatchObject([{ content: "before" }])
+        yield* discovery.rescan()
+        yield* Effect.sleep("50 millis")
+        expect((yield* discovery.list()) as InstructionDiscovery.File[]).toMatchObject([{ content: "after" }])
+        expect(seen.count).toBe(1)
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("only publishes when the loader is off, and runs nothing else", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.rootFile, "x")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const seen = yield* updates
+        const ran = { count: 0 }
+        yield* discovery.rescan()
+        yield* Effect.sleep("50 millis")
+        expect(seen.count).toBe(1)
+        expect(ran.count).toBe(0)
+        expect(yield* discovery.list()).toEqual([])
+      }).pipe(Effect.provide(layerFor(where, { project: false, global: false })))
+    }),
+  )
+
+  it.live("runs the entries in registration order, and skips one whose scope has closed", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* Effect.gen(function* () {
+        const discovery = yield* InstructionDiscovery.Service
+        const order: string[] = []
+        const note = (name: string) => Effect.sync(() => void order.push(name))
+        yield* discovery.addRescan(note("first"))
+        yield* Effect.scoped(discovery.addRescan(note("closed")))
+        yield* discovery.addRescan(note("last"))
+        yield* discovery.rescan()
+        expect(order).toEqual(["first", "last"])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("logs a failing entry and still runs the next one", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const warnings: unknown[] = []
+      const logger = Logger.make((entry) => {
+        if (Array.isArray(entry.message) && entry.message[0] === "instruction rescan failed") warnings.push(entry.message)
+      })
+      yield* Effect.gen(function* () {
+        const discovery = yield* InstructionDiscovery.Service
+        const ran: string[] = []
+        yield* discovery.addRescan(Effect.die("boom"))
+        yield* discovery.addRescan(Effect.sync(() => void ran.push("next")))
+        yield* discovery.rescan()
+        expect(ran).toEqual(["next"])
+        expect(warnings).toHaveLength(1)
+      }).pipe(Effect.provide(layerFor(where)), Effect.provide(Logger.layer([logger])))
+    }),
+  )
+})
