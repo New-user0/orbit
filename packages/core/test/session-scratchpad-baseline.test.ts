@@ -168,7 +168,7 @@ describe("the scratchpad among the sources of the baseline", () => {
       expect(main?.["core/scratchpad"]).toBeDefined()
 
       // A fork starts from the newest values of its session, as `Session.fork` hands them over.
-      yield* InstructionState.initialize(db, ids.fork, 0, main ?? {})
+      yield* InstructionState.initialize(db, ids.fork, 0, { initial: main ?? {}, current: main ?? {} })
       const selected = yield* select(ids.fork)
       const observation = yield* InstructionState.observe(db, selected.instructions, ids.fork)
       expect(Object.keys(observation.delta)).not.toContain("core/scratchpad")
@@ -186,7 +186,8 @@ describe("the scratchpad among the sources of the baseline", () => {
     Effect.gen(function* () {
       const { db, select, prepare, scratchpad } = yield* setup
       yield* prepare(ids.child)
-      yield* InstructionState.initialize(db, ids.forkOfChild, 0, (yield* InstructionState.current(db, ids.child)) ?? {})
+      const child = (yield* InstructionState.current(db, ids.child)) ?? {}
+      yield* InstructionState.initialize(db, ids.forkOfChild, 0, { initial: child, current: child })
       const selected = yield* select(ids.forkOfChild)
       const observation = yield* InstructionState.observe(db, selected.instructions, ids.forkOfChild)
       expect(Object.keys(observation.delta)).toContain("core/scratchpad")
