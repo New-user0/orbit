@@ -238,6 +238,8 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
         if ((frame.type === "selection" || frame.type === "mention") && frame.filePath && hostile(frame.filePath)) {
           // A clone can name its files as it likes, and the name reaches the footer and the prompt.
           log.warn("dropped a frame whose file name holds control characters")
+          // A refused selection still replaces the stored one, so the previous file's selection never goes with the next prompt.
+          if (frame.type === "selection") setSelection(undefined)
           return
         }
         if (frame.type === "selection") {
@@ -417,7 +419,9 @@ export function editorSelectionKey(selection: EditorSelection | undefined) {
 
 /** Control and format characters (escape sequences, bidi overrides, zero-width spaces) in a file name. */
 function hostile(filePath: string) {
-  return /[\p{Cc}\p{Cf}]/u.test(filePath)
+  // Controls, line separators, bidi controls and zero-width space act on a terminal or reorder text. ZWNJ, ZWJ and the
+  // soft hyphen are ordinary in some scripts' file names, so they pass.
+  return /[\p{Cc}\u200B\u200E\u200F\u061C\u2028-\u202E\u2066-\u2069\uFEFF]/u.test(filePath)
 }
 
 function parse(value: unknown, dropped: () => void) {

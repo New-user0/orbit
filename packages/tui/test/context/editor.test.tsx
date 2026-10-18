@@ -559,6 +559,23 @@ test.each(hostileNames)("drops a selection and a mention whose file name holds %
   }
 })
 
+test("a refused selection clears the previous one, and a name with ZWNJ or ZWJ is accepted", async () => {
+  const run = await connectedEditor()
+  try {
+    await wait(() => run.setup.editor.connected(), 3_000, "the connection")
+    run.editor.send(selection)
+    await wait(() => run.setup.editor.selection() !== undefined, 3_000, "the selection")
+    run.editor.send({ ...selection, filePath: "/work/evil\u001b]0;x\u0007.ts" })
+    await wait(() => run.setup.editor.selection() === undefined, 3_000, "the stale selection to clear")
+    expect(run.setup.editor.labelState()).toBe("none")
+
+    run.editor.send({ ...selection, filePath: "/work/persian\u200cname\u200d.ts" })
+    await wait(() => run.setup.editor.selection() !== undefined, 3_000, "the ZWNJ name")
+  } finally {
+    await run.done()
+  }
+})
+
 test("does not connect to the port another product's variable names", async () => {
   const root = await tmpdir()
   const cwd = path.join(root.path, "project")

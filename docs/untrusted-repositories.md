@@ -521,9 +521,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   is skipped, and the terminal UI never deletes a lock. A workspace folder holds the session folder by real path
   (`FSUtil.contains` on `realpathSync.native` of both, NFC), so a link, a shared prefix or a dangling link cannot make a
   window match; a network or device spelling is compared as written and never read from disk. The editor's name goes
-  through `plain`. A selection or mention frame whose file name holds a control or format character (escape sequences, C1
-  controls, bidi overrides, zero-width spaces, line breaks) is dropped whole with one log line, since a clone can name its
-  files as it likes; the footer label goes through `plain` as well. A frame over `IdeLock.frameCap` is dropped.
+  through `plain`. A selection or mention frame whose file name holds a control character, a line or paragraph separator, a bidi
+  control or a zero-width space is dropped whole with one log line, since a clone can name its files as it likes; a
+  refused selection also clears the stored one, so the previous file's selection never goes with the next prompt. The
+  joiners ZWNJ and ZWJ and the soft hyphen are ordinary in some scripts' file names, so they pass (the trade-off: the
+  footer and prompt show them as written). The footer label goes through `plain` as a second guard for the Zed source,
+  whose names do not pass this check; that guard is not pinned by a test yet, so it is a defence in depth and not a claim.
+  A frame over `IdeLock.frameCap` is dropped.
   Proof: `test/context/editor.test.tsx` (the hostile-name and frame-cap rows) and `test/editor-bridge-app.test.tsx` (the
   drawn footer and prompt). The token goes into the `x-orbit-ide-token` header and nowhere else. Proof: `test/editor.test.ts` (the
   discovery rows), `test/context/editor.test.tsx` (a real server: header, hello, ignored frames, reconnect that reads the

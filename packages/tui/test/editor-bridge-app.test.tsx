@@ -103,6 +103,8 @@ test("draws the open file in the footer, and drops a name that holds control cha
     expect(frame).not.toContain("\u001b")
     expect(frame).not.toContain("pwned")
     expect(frame).not.toContain("red.ts")
+    // The refused frame also drops the previous selection.
+    expect(frame).not.toContain("plain.ts#3-9")
   } finally {
     await bridge.stop()
   }
