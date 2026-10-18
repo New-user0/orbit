@@ -876,9 +876,10 @@ export function Prompt(props: PromptProps) {
     setVim(result.state)
     if (wasVisual && !result.selection) input.clearSelection()
     // Escape, Enter, an idle arrow and Ctrl chords are the ordinary editor's (and the session interrupt's) to handle.
-    if (result.pass) return
+    if (result.pass) return false
     event.preventDefault()
     applyVim(snap, result)
+    return true
   }
 
   function applyVim(snap: Vim.Snapshot, result: Vim.Result) {
@@ -1145,32 +1146,23 @@ export function Prompt(props: PromptProps) {
     ],
   }))
 
-  // The managed text-area layer ranks below every app layer and would take these keys before the prompt's key handler
-  // sees them (moving or deleting through the textarea under the drawn selection), so visual mode claims them here and
-  // hands each to the engine, which moves the head or swallows the key.
-  Keymap.createLayer(() => ({
-    context: "prompt",
-    priority: 1,
-    target: inputTarget,
-    enabled:
-      inputTarget() !== undefined &&
-      !disabled() &&
-      config.prompt?.vim === true &&
-      Vim.isVisual(vim().mode) &&
-      store.mode !== "shell",
-    commands: [
-      {
-        id: "prompt.vim.visual.move",
-        palette: undefined,
-        bind: "left,right,up,down,shift+left,shift+right,shift+up,shift+down,backspace,shift+backspace,delete,home,end,shift+home,shift+end",
-        title: "Vim move the visual selection",
-        group: "Prompt",
-        run: (_input: string | undefined, event?: KeyEvent) => {
-          if (event) runVim(event)
+  // Every key goes to the engine first while a selection is up. Layers that bind keys (the text area's own commands,
+  // prompt history, the session's) would otherwise move or edit the text under the drawn selection. The engine moves
+  // the head or swallows the key; for a chord or Enter it ends the selection and leaves the key to run as it would
+  // from a plain cursor.
+  createEffect(() => {
+    if (config.prompt?.vim !== true || !Vim.isVisual(vim().mode)) return
+    onCleanup(
+      keymap.intercept(
+        "key",
+        ({ event, consume }) => {
+          if (disabled() || store.mode === "shell" || renderer.currentFocusedEditor !== input) return
+          if (runVim(event)) consume()
         },
-      },
-    ],
-  }))
+        { priority: 50 },
+      ),
+    )
+  })
 
   Keymap.createLayer(() => {
     return {

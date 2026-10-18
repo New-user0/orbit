@@ -378,7 +378,7 @@ test("Enter submits from normal mode and normal mode stays for the next prompt",
 const visual = "-- VISUAL --"
 const visualLine = "-- VISUAL LINE --"
 
-async function arrow(app: Awaited<ReturnType<typeof mount>>, direction: "left" | "right" | "up", shift = false) {
+async function arrow(app: Awaited<ReturnType<typeof mount>>, direction: "left" | "right" | "up" | "down", shift = false) {
   app.setup.mockInput.pressArrow(direction, shift ? { shift: true } : undefined)
   await app.setup.renderOnce()
   await Bun.sleep(30)
@@ -741,3 +741,111 @@ test("recalling a history entry restarts the typed record, so . does not re-type
   await app.press(".")
   expect(app.textarea().plainText).toBe("deploy it")
 }, 20_000)
+
+// --- visual routing, round two: Up and Down, and every key the text area binds ---
+
+test("in visual mode Up and Down move the head through the engine on two lines", async () => {
+  await using app = await mount()
+  await app.type("one")
+  await app.press("j", { ctrl: true })
+  await app.type("two")
+  await app.normal()
+  await app.press("v")
+  await arrow(app, "up")
+  expect(app.textarea().getSelectedText()).toBe("e\ntwo")
+  expect(app.setup.captureCharFrame()).toContain(visual)
+  await arrow(app, "down")
+  expect(app.textarea().getSelectedText()).toBe("o")
+  expect(app.setup.captureCharFrame()).toContain(visual)
+})
+
+test("on one line Up and Down leave the label and the drawn selection in step, and d deletes what is drawn", async () => {
+  for (const direction of ["up", "down"] as const) {
+    await using app = await mount()
+    await app.type("abcdef")
+    await app.normal()
+    await app.press("0")
+    await app.press("v")
+    await app.press("l")
+    await arrow(app, direction)
+    const drawn = app.textarea().getSelectedText()
+    expect(drawn).not.toBe("")
+    expect(app.setup.captureCharFrame()).toContain(visual)
+    await app.press("d")
+    expect(app.textarea().plainText).toBe("abcdef".replace(drawn, ""))
+  }
+})
+
+type Modifiers = { ctrl?: boolean; shift?: boolean; meta?: boolean; super?: boolean }
+
+// Every key the text area binds by default, as pressKey spells it. In visual mode each one moves the head through the
+// engine, is swallowed, or ends visual mode before the text area acts. Whichever it is, the label matches the drawn
+// selection, and d deletes exactly what is drawn.
+const inputKeys: Array<[string, string, Modifiers?]> = [
+  ["left", "ARROW_LEFT"],
+  ["right", "ARROW_RIGHT"],
+  ["up", "ARROW_UP"],
+  ["down", "ARROW_DOWN"],
+  ["shift+left", "ARROW_LEFT", { shift: true }],
+  ["shift+right", "ARROW_RIGHT", { shift: true }],
+  ["shift+up", "ARROW_UP", { shift: true }],
+  ["shift+down", "ARROW_DOWN", { shift: true }],
+  ["home", "HOME"],
+  ["end", "END"],
+  ["shift+home", "HOME", { shift: true }],
+  ["shift+end", "END", { shift: true }],
+  ["backspace", "BACKSPACE"],
+  ["shift+backspace", "BACKSPACE", { shift: true }],
+  ["delete", "DELETE"],
+  ["shift+delete", "DELETE", { shift: true }],
+  ["ctrl+f", "f", { ctrl: true }],
+  ["ctrl+a", "a", { ctrl: true }],
+  ["ctrl+e", "e", { ctrl: true }],
+  ["ctrl+d", "d", { ctrl: true }],
+  ["ctrl+k", "k", { ctrl: true }],
+  ["ctrl+u", "u", { ctrl: true }],
+  ["ctrl+w", "w", { ctrl: true }],
+  ["ctrl+z", "z", { ctrl: true }],
+  ["ctrl+right", "ARROW_RIGHT", { ctrl: true }],
+  ["ctrl+left", "ARROW_LEFT", { ctrl: true }],
+  ["ctrl+backspace", "BACKSPACE", { ctrl: true }],
+  ["ctrl+delete", "DELETE", { ctrl: true }],
+  ["alt+f", "f", { meta: true }],
+  ["alt+b", "b", { meta: true }],
+  ["alt+d", "d", { meta: true }],
+  ["alt+a", "a", { meta: true }],
+  ["alt+e", "e", { meta: true }],
+  ["alt+right", "ARROW_RIGHT", { meta: true }],
+  ["alt+left", "ARROW_LEFT", { meta: true }],
+  ["alt+backspace", "BACKSPACE", { meta: true }],
+  ["alt+delete", "DELETE", { meta: true }],
+  ["super+a", "a", { super: true }],
+  ["super+z", "z", { super: true }],
+]
+
+test.each(inputKeys)(
+  "in visual mode %s keeps the label, the drawn selection and d in step",
+  // Rest parameters: a third named parameter would be taken for a done callback in the rows that have two entries.
+  async (...row) => {
+    const [, keyName, modifiers] = row
+    await using app = await mount()
+    await app.type("abcdef")
+    await app.normal()
+    await app.press("0")
+    await app.press("v")
+    await app.press("l")
+    expect(app.textarea().getSelectedText()).toBe("ab")
+    await key(app, () => app.setup.mockInput.pressKey(keyName, modifiers))
+    const text = app.textarea()
+    if (!app.setup.captureCharFrame().includes(visual)) {
+      expect(text.hasSelection()).toBe(false)
+      return
+    }
+    // Still in visual mode: nothing was edited behind the selection, and d acts on exactly what is drawn.
+    expect(text.plainText).toBe("abcdef")
+    const drawn = text.getSelectedText()
+    expect(drawn).not.toBe("")
+    await app.press("d")
+    expect(text.plainText).toBe("abcdef".replace(drawn, ""))
+  },
+)

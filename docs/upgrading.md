@@ -1597,12 +1597,14 @@ With `prompt.vim` on, normal mode gains four things.
 
 - **Visual mode.** `v` starts a characterwise selection and `V` a linewise one; the same letter leaves, the other letter
   switches. Move the head with the normal motions, the finds, `%`, the arrow keys (also with Shift) and Backspace, which
-  moves the head left and deletes nothing; Delete, Home and End do nothing. `o` swaps the ends. `d`, `c` and `y` act on the selection, and `>` and `<` shift every line it touches (a count before
-  them is the number of levels). `"+` before an operator uses the system clipboard. Escape leaves and is not passed on,
-  so it does not interrupt a running session; the next Escape does. Enter submits and ends the selection. Other keys
-  (`p x s r ~ J u i a`, `gv`) do nothing in visual mode yet, so `viw` ignores the `i` and moves the head one word.
-  A Ctrl or Alt chord ends the selection and then does what it does elsewhere, so Ctrl+V ends it and pastes. The row under the prompt shows
-  `-- VISUAL --` or `-- VISUAL LINE --`. The selection is drawn with the editor's own selection colour.
+  moves the head left and deletes nothing; Delete, Home and End do nothing. `o` swaps the ends. `d`, `c` and `y` act on
+  the selection, and `>` and `<` shift every line it touches (a count before them is the number of levels). `"+` before
+  an operator uses the system clipboard. Escape leaves and is not passed on, so it does not interrupt a running session;
+  the next Escape does. Enter submits and ends the selection. Other keys (`p x s r ~ J u i a`, `gv`) do nothing in
+  visual mode yet, so `viw` ignores the `i` and moves the head one word. A Ctrl, Alt or Super chord (Ctrl+D,
+  Ctrl+W, Ctrl+Z, Alt+F and so on) ends the selection and then does what it does elsewhere, from a plain cursor, so
+  Ctrl+V ends it and pastes. The row under the prompt shows `-- VISUAL --` or `-- VISUAL LINE --`. The selection is
+  drawn with the editor's own selection colour.
 - **Finds.** `f`, `F`, `t` and `T` take the next key as the character to look for (a digit, a space and an emoji
   included), with a count for the Nth one; `;` repeats the last find and `,` runs it the other way. `df-`, `ct,` and `yF.`
   work as operators. Parts such as file mentions never match and are never split.
