@@ -27,6 +27,8 @@ import { Pdf } from "@orbit/core/tool/pdf"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { SessionInstructions } from "@orbit/core/session/instructions"
+import { InstructionTriggers } from "@orbit/core/instruction-triggers"
+import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { Environment } from "@orbit/core/environment/index"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -45,6 +47,8 @@ const readToolNode = makeLocationNode({
     Image.node,
     Permission.node,
     SessionInstructions.node,
+    InstructionTriggers.node,
+    InstructionDiscovery.node,
     FSUtil.node,
     Location.node,
   ],
