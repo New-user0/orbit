@@ -870,6 +870,9 @@ describe("SubagentTool", () => {
           })
           expect(settled.metadata).toEqual({ sessionID: childID, status: "running" })
           expect(settled.content).toEqual([{ type: "text", text: expect.stringContaining(`Session ${childID}`) }])
+          expect(settled.content).toEqual([
+            { type: "text", text: expect.stringContaining("Take on work the subagent is not covering") },
+          ])
 
           const admission = Array.from(yield* Fiber.join(admitted))[0]
           expect(admission?.data.item.type).toBe("synthetic")

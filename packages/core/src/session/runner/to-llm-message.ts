@@ -330,7 +330,7 @@ const queuedNote = (origin: unknown) =>
   ReminderText.render({
     text:
       origin === "agent"
-        ? "The agent that started you sent the message below while you were working. It belongs to your job: the job is not complete until you have dealt with it."
+        ? "The agent that started you added the message below after you began. It belongs to your job: the job is not complete until you have dealt with it."
         : "The person sent the message below after your current task had begun. Act on it when that task is done, and do not drop it.",
   })
 

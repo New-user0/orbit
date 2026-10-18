@@ -51,7 +51,7 @@ export const Input = Schema.Struct({
   }),
   type: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_+-]+$/))).annotate({
     description:
-      'ripgrep file type to search, for example "ts", "py", or "rust". More efficient than `include` for standard types.',
+      'ripgrep file type to search, for example "ts", "py", or "rust". For a type ripgrep already knows, this is quicker than an `include` glob.',
   }),
   multiline: Schema.optionalKey(Schema.Boolean).annotate({
     description: "Let the pattern span lines, with `.` matching newlines (default: false).",

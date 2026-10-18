@@ -276,6 +276,7 @@ Run it`],
     const result = PlanReminders.insertions(give(messages), home).map((insertion) => kind(insertion.text))
     expect(result).toEqual(["full", "leave", "reentry", "full"])
     expect(PlanReminders.insertions(give(messages), home).at(-2)?.text).toContain(file)
+    expect(PlanReminders.insertions(give(messages), home).at(-2)?.text).toContain("the file must describe the current request")
   })
 
   test("gives no re-entry note when the earlier plan was never approved", () => {
@@ -335,6 +336,10 @@ Run it`],
 
   test("gives a child session the subagent text at full and sparse positions", () => {
     expect(where(turns(6), "plan", Session.ID.make("ses_parent"))).toEqual(["0:subagent", "6:subagent"])
+    const subagent = PlanReminders.insertions(give(turns(6), "plan", Session.ID.make("ses_parent")), home).find(
+      (insertion) => kind(insertion.text) === "subagent",
+    )
+    expect(subagent?.text).toContain(`The one exception is ${file}`)
   })
 
   test("counts a stored enter row of the old plugin as the first reminder and its leave row as the leave", () => {

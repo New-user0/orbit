@@ -170,7 +170,7 @@ const restyleQuotes = (slice: string, text: string) => {
 const refusal = (input: typeof Input.Type) => {
   if (input.old_string === input.new_string)
     return new ToolFailure({
-      message: "No changes to apply: old_string and new_string are identical.",
+      message: "The edit would change nothing, because new_string equals old_string.",
       code: Tool.ErrorCode.EditNoChange,
     })
   if (input.old_string === "")

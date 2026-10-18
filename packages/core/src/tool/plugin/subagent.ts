@@ -57,7 +57,7 @@ export const description = [
   "The output includes a sessionID you can pass back later to continue that specific conversation with the subagent.",
   "New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
   "Foreground (default) runs the subagent to completion and returns its final response.",
-  "Background mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.",
+  "Background mode (background=true) launches it asynchronously and returns at once; a message reports back when the subagent ends.",
   "Use background only for independent work that can run while you continue elsewhere.",
   "Pick the agent from the roster of startable agents that your context carries; each entry says what the agent is for and what it can use.",
 ].join("\n")

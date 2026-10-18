@@ -211,6 +211,7 @@ describe("editor context", () => {
     ["the mid-task person note", /MUST NOT be ignored|handle it once that task is done/],
     ["the mid-task agent note", /must not be dropped|partway through/],
     ["the agent-mention note", /would like the agent named below|give it the context it needs/],
+    ["the mid-task wrapper", /while you were working/],
     ["the editor caveat", /may be unrelated to your task|may or may not be relevant/],
     ["the editor opened-file note", /open in the person's editor right now/],
     ["the editor selection note", /has highlighted|the highlighted text follows\. This may/],

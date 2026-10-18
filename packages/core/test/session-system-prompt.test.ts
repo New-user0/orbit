@@ -417,7 +417,7 @@ describe("the base system prompt", () => {
       expect(writing).toContain("No emojis unless the user asks")
       expect(writing).toContain("`path:line`")
       expect(writing).toContain("`owner/repo#123`")
-      expect(writing).toContain("ends in a full stop, since the call itself may not show")
+      expect(writing).toContain("ends in a full stop, since the call itself may stay out of sight")
       expect(writing).toContain("Begin the work with one sentence of intent")
       expect(writing).toContain("speak only when something changes")
       expect(writing).toContain("someone who did not watch the work")

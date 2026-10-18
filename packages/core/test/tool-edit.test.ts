@@ -576,7 +576,7 @@ describe("EditTool", () => {
       name: "identical strings",
       input: { file_path: "matches.txt", old_string: "same", new_string: "same" },
       type: "edit.no-change",
-      message: "No changes to apply: old_string and new_string are identical.",
+      message: "The edit would change nothing, because new_string equals old_string.",
     },
     {
       name: "an empty old_string",

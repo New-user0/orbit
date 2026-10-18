@@ -3672,7 +3672,7 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
   task and verification reminders, the scratchpad, environment and git snapshot texts, the notes for messages that
   arrive mid-task, the agent listing and several tool descriptions and results (the explore agent, the background
   results of the Agent and shell tools, the question tool, edit, write, glob, web search, web fetch, read and the file
-  ledger refusals) were audited and rewritten from Orbit's requirements, and a second round rewrote the Consent, Evidence and Writing sections, the overlays, the plan reminders and a few tool texts again. The rules are the same; the words are new.
+  ledger refusals) were audited and rewritten from Orbit's requirements, and a second round rewrote the Consent, Evidence and Writing sections, the overlays, the plan reminders and a few tool texts again. A last pass rewrote the General agent description, the edit tool's no-change error, the grep type parameter, the shell tool's background notice and a few short phrases. The rules are the same; the words are new.
 - The base prompt has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool
   use and Writing to the user. A style without coding instructions drops Scope, Working in code and Evidence. The old
   names (Doing tasks, Code style, Verification, Executing actions with care, Using tools, Communication and Output

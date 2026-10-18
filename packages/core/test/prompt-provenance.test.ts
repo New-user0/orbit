@@ -103,6 +103,7 @@ describe("retired headings", () => {
 describe("retired wording", () => {
   // One row per rewritten passage: a distinctive phrase of the old line that no prompt text may carry again.
   const retiredWording: ReadonlyArray<readonly [string, RegExp]> = [
+    ["the reference's tails", /merely read|may not be shown|may not show|create an empty commit/],
     ["the address rule's leading emphasis", /Important: never invent|Never invent a web address/],
     ["the refusal chain", /stays refused|resending it unchanged|do not send it again unchanged/i],
     ["the summarizing fact", /shrinks the older conversation/],
@@ -171,20 +172,20 @@ describe("retired wording in the source texts", () => {
   // The tool descriptions, results, reminders and guidance lines that the audit rewrote live in source files, so each row
   // names the file and a phrase of the old wording that the file may not carry again.
   const sources: ReadonlyArray<readonly [string, RegExp]> = [
-    ["plugin/agent.ts", /quick for a lookup|A quick search|Fast agent|src\/components|very thorough|finds files by name pattern|every likely location|brief for a single lookup/],
+    ["plugin/agent.ts", /researching complex questions|units of work in parallel|quick for a lookup|A quick search|Fast agent|src\/components|very thorough|finds files by name pattern|every likely location|brief for a single lookup/],
     [
       "tool/plugin/subagent.ts",
-      /DO NOT sleep|duplicate this subagent|now runs in the background as session|Do not poll, sleep|its files and topics|is working in the background|will be notified when it finishes|end your response/,
+      /DO NOT sleep|duplicate this subagent|now runs in the background as session|Do not poll, sleep|its files and topics|is working in the background|will be notified when it finishes|end your response|notified when/,
     ],
-    ["tool/plugin/shell.ts", /need to use '&'/],
+    ["tool/plugin/shell.ts", /need to use '&'|notified automatically|DO NOT poll|end your response|notified when/],
     [
       "tool/plugin/question.ts",
       /learn preferences|User has answered|answers in mind|free-form reply|It fits when an instruction is ambiguous|cannot see until then|never asked this way/,
     ],
-    ["tool/plugin/edit.ts", /preserve the exact indentation|Multiple matches FAIL|such as renaming a variable|Add more surrounding context/],
+    ["tool/plugin/edit.ts", /No changes to apply|preserve the exact indentation|Multiple matches FAIL|such as renaming a variable|Add more surrounding context/],
     ["tool/plugin/write.ts", /local filesystem|file to write to/],
     ["tool/plugin/glob.ts", /more specific path|are truncated/],
-    ["tool/plugin/grep.ts", /more specific path|Consider using/],
+    ["tool/plugin/grep.ts", /more specific path|Consider using|More efficient than/],
     ["tool/plugin/websearch.ts", /knowledge cutoff|this year when|Unable to search the web|Reminder: when/],
     ["tool/plugin/webfetch.ts", /use no outside knowledge|Be concise\.|do not comment on the legality/],
     ["tool/plugin/read.ts", /rely on the earlier result/],

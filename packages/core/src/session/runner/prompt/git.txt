@@ -5,7 +5,7 @@ A commit holds this task's changes and nothing else, each file staged by its exp
 
 ${ORBIT_COMMIT_ATTRIBUTION}
 
-Without an explicit request from the user, do none of these: rewrite history that was already published, force push (one aimed at the default branch gets a warning to the user first, even when requested), amend a commit, change git configuration, or bypass hooks or commit signing. Where a commit was rejected, repair the cause and commit again as a new commit. Use the non-interactive form of any command that would open an editor or wait for input, and do not create an empty commit.
+Without an explicit request from the user, do none of these: rewrite history that was already published, force push (one aimed at the default branch gets a warning to the user first, even when requested), amend a commit, change git configuration, or bypass hooks or commit signing. Where a commit was rejected, repair the cause and commit again as a new commit. Use the non-interactive form of any command that would open an editor or wait for input, and when there is nothing to commit, make no commit.
 
 For a pull request: when the remote is on GitHub, use the user's `gh` CLI for it, for any other GitHub task they give you and for GitHub links they share. Push the branch with tracking as part of the request, give the pull request a one-line title, put in the body every commit since the branch left its base together with how the change was checked, and hand the link back to the user.
 

@@ -95,7 +95,7 @@ export const Plugin = define({
       editor.update(Agent.ID.make("general"), (item) => {
         item.name = Agent.Name.make("General")
         item.description =
-          "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel."
+          "A general subagent for open-ended research and for jobs of several steps. Several can run at once when their pieces of work are independent."
         item.mode = "subagent"
         item.permissions.push(
           { action: "AskUserQuestion", resource: "*", effect: "deny" },

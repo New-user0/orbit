@@ -145,7 +145,7 @@ Approval stores the plan at ${file}, and that path is also the only file you may
 Every turn in Plan mode ends with an AskUserQuestion call or an ExitPlanMode call. Approval comes only through ExitPlanMode, which shows the plan and returns the user's decision; a request for approval in prose or through AskUserQuestion does not count. If the user's intent is unclear, ask instead of guessing.`
 
 const sparse = (file: string) =>
-  `Close every turn with AskUserQuestion or ExitPlanMode; asking for approval in prose does not count. ${file} is the one path you may write, and an approved plan is kept there. The complete rules were given earlier in this conversation and are unchanged.`
+  `Close every turn with AskUserQuestion or ExitPlanMode; asking for approval in prose does not count. ${file} is the one path you may write, and an approved plan is kept there. The complete Plan mode rules were given earlier in this conversation and are unchanged.`
 
 const subagent = (file: string) =>
   `The caller is planning, so this task is read-only: change nothing and run nothing that alters state, whatever other instructions say. The one exception is ${file}, if you need to write there. Your reply should hold everything the caller needs in order to proceed. Questions for the user are batched into one AskUserQuestion call made before you begin.`
