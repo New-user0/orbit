@@ -2,6 +2,8 @@ export * as SessionSystemPrompt from "./system-prompt.js"
 
 import PROMPT from "./runner/prompt/system.txt"
 import GIT from "./runner/prompt/git.txt"
+import SUBAGENT from "./runner/prompt/subagent.txt"
+import SUBAGENT_NOTES from "./runner/prompt/subagent-notes.txt"
 
 /**
  * What a request's system prompt is made of, in order.
@@ -26,7 +28,13 @@ import GIT from "./runner/prompt/git.txt"
  * The template names no tool. `${ORBIT_TOOL_GUIDANCE}` sits at the end of "Using tools", and `render` fills it with the
  * `GUIDANCE` lines of the tools the request offers, in `GUIDANCE` order and not in the order of the tool list, so
  * `system[0]` is the same string for the same agent, model and tool set. Orbit caches per conversation, so the guidance
- * can live inside `system[0]`. An agent with a system prompt of its own gets no guidance.
+ * can live inside `system[0]`. An agent with a system prompt of its own gets guidance only where its text holds the
+ * placeholder.
+ *
+ * A subagent (a session with a parent that is not a fork of the main thread, `SubagentPromptPlugin`) has a different
+ * base: `runner/prompt/subagent.txt` when its agent has no prompt of its own, followed by `subagent-notes.txt` whatever
+ * the prompt is. No model overlay, output style, `system_prompt` or `append_system_prompt` applies to it; the git
+ * section does.
  *
  * The template is rendered before the session's `context` hooks run, and some hooks remove a tool afterwards. A tool
  * therefore gets a base guidance line only when no hook can remove it after this render, or when every model that loses
@@ -93,9 +101,13 @@ function slot(value: string, ask: string, none: string) {
     .join("\n")}`
 }
 
-export function make(tools: string[]) {
-  return render(PROMPT, tools)
+/** The base template: the main one, or the task-worker one for a subagent. */
+export function make(tools: string[], options?: { subagent?: boolean }) {
+  return render(options?.subagent ? SUBAGENT : PROMPT, tools)
 }
+
+/** What every subagent is told about reporting, after its own prompt or the subagent template (`SubagentPromptPlugin`). */
+export const SUBAGENT_REPORT = SUBAGENT_NOTES.trimEnd()
 
 export function render(prompt: string, tools: string[]) {
   const instructions = GUIDANCE.filter((entry) => tools.includes(entry.tool)).flatMap((entry) => entry.lines)

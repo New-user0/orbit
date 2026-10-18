@@ -143,7 +143,10 @@ export const baseTranscript = (input: {
     providerMetadataKey,
     system: [
       input.agent.system
-        ? input.agent.system
+        ? SessionSystemPrompt.render(
+            input.agent.system,
+            input.tools.definitions.map((tool) => tool.name),
+          )
         : SessionSystemPrompt.make(input.tools.definitions.map((tool) => tool.name)),
       input.initial,
     ]

@@ -5,6 +5,7 @@ import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Model } from "@orbit/schema/model"
 import { Effect } from "effect"
 import { SessionSystemPrompt } from "../session/system-prompt.js"
+import { SubagentPromptPlugin } from "./subagent-prompt.js"
 
 import PROMPT_GPT from "./system-prompt/gpt.txt"
 import PROMPT_ASTRA from "./system-prompt/gpt-astra.txt"
@@ -90,6 +91,8 @@ function make(
           const template = optimize(model, event.tools)
           if (!template) return
           if ((yield* ctx.agent.get({ agentID: event.agent })).data.system) return
+          // A subagent has its own base (`SubagentPromptPlugin`); the overlays are written for the main template.
+          if (yield* SubagentPromptPlugin.subagent(ctx, event.sessionID)) return
           const system = event.system[0]
           if (!system) return
           const rendered = SessionSystemPrompt.render(template, Object.keys(event.tools))

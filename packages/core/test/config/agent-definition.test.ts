@@ -424,6 +424,18 @@ describe("agent definition: an untrusted folder", () => {
     }),
   )
 
+  it.live("keeps Explore's other context switch off when a file turns one back on", () =>
+    Effect.gen(function* () {
+      const builtIn = yield* load({})
+      expect((yield* get(builtIn, "explore"))?.context).toEqual({ instructions: false, git_status: false })
+      expect((yield* get(builtIn, "general"))?.context).toBeUndefined()
+
+      const agents = yield* load({}, () => [jsonDocument({ agents: { explore: { context: { instructions: true } } } })])
+
+      expect((yield* get(agents, "explore"))?.context).toEqual({ instructions: true, git_status: false })
+    }),
+  )
+
   it.live("replaces the same agents when the folder is trusted", () =>
     Effect.gen(function* () {
       const agents = yield* load(files)

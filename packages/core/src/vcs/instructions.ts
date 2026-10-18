@@ -48,7 +48,7 @@ export interface Interface {
    * (class 1) and is removed from a session that held one when trust is taken away. A session that already holds a
    * snapshot reads `unavailable`, so the stored value stands; this source can therefore never block initialization.
    */
-  readonly source: (session: Lineage) => Instructions.List
+  readonly source: (session: Lineage, options?: { readonly enabled?: boolean }) => Instructions.List
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/VcsInstructions") {}
@@ -99,7 +99,9 @@ const layer = Layer.effect(
       return { branch: branch ?? "HEAD", main, user: user ?? "", ...cut, commits, late } satisfies Snapshot
     })
 
-    const read = Effect.fn("VcsInstructions.read")(function* (session: Lineage) {
+    const read = Effect.fn("VcsInstructions.read")(function* (session: Lineage, enabled: boolean) {
+      // The session's agent leaves the snapshot out (`context.git_status`): no git runs and the parent's snapshot is not reused.
+      if (!enabled) return Instructions.removed
       // Asked before anything else, and at every read, so that a revoke takes effect at the next step (class 1).
       if (!(yield* trust.trusted())) return Instructions.removed
       if (Config.latest(yield* config.entries(), "git_status") === false) return Instructions.removed
@@ -144,11 +146,11 @@ const layer = Layer.effect(
     })
 
     return Service.of({
-      source: (session) =>
+      source: (session, options) =>
         Instructions.make({
           key,
           codec: Schema.toCodecJson(Snapshot),
-          read: read(session),
+          read: read(session, options?.enabled !== false),
           render: {
             initial: render,
             changed: (_previous, current) => `The git snapshot was replaced by a newer one.\n\n${render(current)}`,

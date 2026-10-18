@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Message, ToolResultPart, Media } from "@orbit/ai"
-import { boundImages, unsupportedParts } from "@orbit/core/session/model-request"
+import { Agent } from "@orbit/core/agent"
+import { baseTranscript, boundImages, unsupportedParts } from "@orbit/core/session/model-request"
+import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
 
 const capabilities = (input: string[]) => ({ tools: true, input, output: ["text"] })
 
@@ -110,5 +112,33 @@ describe("SessionModelRequest.boundImages", () => {
         value: [{ type: "text" }, { type: "file", name: "second.png" }],
       },
     })
+  })
+})
+
+describe("SessionModelRequest.baseTranscript", () => {
+  const input = (system: string | undefined, tools: string[]) => ({
+    agent: { ...Agent.Info.default(Agent.ID.make("a")), system },
+    model: { model: { route: {}, provider: "test" }, ref: { providerID: "test", id: "model" } } as never,
+    tools: { definitions: tools.map((name) => ({ name })) } as never,
+    initial: "",
+    messages: [],
+  })
+
+  test("renders the guidance of a custom prompt that has the placeholder, in guidance order", () => {
+    const text = baseTranscript(input("Own.\n${ORBIT_TOOL_GUIDANCE}\nEnd.", ["Read", "Bash"])).system[0]?.text ?? ""
+    expect(text).not.toContain("${ORBIT_TOOL_GUIDANCE}")
+    expect(text.startsWith("Own.\n- Bash is for")).toBe(true)
+    expect(text.indexOf("- Use Read")).toBeGreaterThan(text.indexOf("- Bash is for"))
+    expect(text.endsWith("\nEnd.")).toBe(true)
+  })
+
+  test("keeps a custom prompt without the placeholder as written", () => {
+    expect(baseTranscript(input("Own prompt.", ["Read"])).system[0]?.text).toBe("Own prompt.")
+  })
+
+  test("gives an agent without a prompt the main template, and an empty prompt counts as none", () => {
+    const expected = SessionSystemPrompt.make(["Read"])
+    expect(baseTranscript(input(undefined, ["Read"])).system[0]?.text).toBe(expected)
+    expect(baseTranscript(input("", ["Read"])).system[0]?.text).toBe(expected)
   })
 })

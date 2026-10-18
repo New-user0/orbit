@@ -572,6 +572,29 @@ gain optional fields.
 **What to do:** Move the changes to a built-in into `agents.<id>` in `orbit.json`, or keep the file and copy the rules
 you still want into it. Rename an agent whose name is not plain.
 
+### Subagents get a task-worker prompt, and Explore leaves out the instruction files and the git snapshot
+
+A session that runs as a subagent (it has a parent and is not a fork of the main conversation) used to start from the
+main conversation's prompt when its agent had no prompt of its own, and was sent a fixed "you are a subagent" line
+before the task. It now starts from a shorter task-worker prompt that tells it to finish the brief, state its
+assumptions because nobody can answer, and end with a report. Every subagent, one with a prompt of its own included,
+also gets a few reporting notes (absolute paths, no emojis, no colon before a tool call). The model overlays, the output
+style, `system_prompt` and `append_system_prompt` do not apply to a subagent; the git section still does. A prompt of
+your own for an agent can now hold the `${ORBIT_TOOL_GUIDANCE}` placeholder, which is filled with the guidance for the
+tools the agent has. The task text is the child's first message, with nothing in front of it.
+
+The `agents.<id>.context` keys now work. Explore ships with `instructions: false` and `git_status: false`, so it no
+longer sees the project instruction files, the memory index or the git snapshot taken when the session began. Explore
+has no shell tool, so it cannot ask git for the branch or the status either. Files in a subfolder that it reads still
+bring their instruction file. A session that switches to such an agent is told once that the earlier instructions no
+longer apply.
+
+**Affects:** people whose Explore searches relied on conventions in `AGENTS.md` or on the branch name, and agents in `all`
+mode that run as children, which now get the task-worker prompt.
+
+**What to do:** Set `"agents": { "explore": { "context": { "instructions": true } } }` (or `"git_status": true`) in
+`orbit.json` to bring either back. Setting one key leaves the other at the built-in value.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
