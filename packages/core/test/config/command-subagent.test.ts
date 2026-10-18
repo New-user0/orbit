@@ -110,6 +110,35 @@ describe("command subagents", () => {
     )
   }
 
+  // The keyword boosts the turn that a person's own prompt starts. A command run in the thread is that prompt; a
+  // command run as a subagent hands its text to a child as a prompt the harness wrote.
+  for (const fixture of [
+    { name: "runs in the thread", subagent: false },
+    { name: "runs as a subagent", subagent: true },
+  ] as const)
+    it.live(`a command that ${fixture.name} and holds the effort keyword puts the note in the right session`, () =>
+      Effect.gen(function* () {
+        const parent = yield* project(
+          { subagent: fixture.subagent, template: "Think hard, ultrathink: $ARGUMENTS" },
+          "json",
+        )
+        const sessions = yield* Session.Service
+        const llm = yield* TestLLM.Test
+        yield* sessions.command({ sessionID: parent.id, command: "review", text: "changes" })
+        yield* llm.wait(1)
+        yield* sessions.wait(parent.id)
+        const children = (yield* sessions.list({ parentID: parent.id })).data
+        expect(children).toHaveLength(fixture.subagent ? 1 : 0)
+        const effort = (messages: unknown) =>
+          JSON.stringify(messages).split("asked for a high level of reasoning effort").length - 1
+        const child = children[0]
+        if (child) yield* sessions.wait(child.id)
+        const requests = yield* llm.requests()
+        // The first request is the child's when the command forks, and the thread's otherwise.
+        expect(effort(requests[0]?.messages)).toBe(fixture.subagent ? 0 : 1)
+      }),
+    )
+
   it.live("subagent: false overrides subagent mode and the legacy alias", () =>
     Effect.gen(function* () {
       const parent = yield* project({ subagent: false, subtask: true, agent: "reviewer" }, "json")
@@ -210,7 +239,7 @@ function setup(frontmatter: string[], settings: Record<string, unknown> = {}) {
 }
 
 function project(
-  command: { agent?: string; model?: string; subagent?: boolean; subtask?: boolean },
+  command: { agent?: string; model?: string; subagent?: boolean; subtask?: boolean; template?: string },
   format: "json" | "markdown",
 ) {
   return Effect.gen(function* () {

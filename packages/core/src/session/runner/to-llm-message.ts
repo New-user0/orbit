@@ -355,14 +355,21 @@ const editorNote = (editor: NonNullable<Extract<SessionMessage.Info, { type: "us
   const split = text.length > EDITOR_SELECTION_LIMIT
   // Never inside a surrogate pair.
   const end =
-    split && /[\uD800-\uDBFF]/.test(text[EDITOR_SELECTION_LIMIT - 1]) ? EDITOR_SELECTION_LIMIT - 1 : EDITOR_SELECTION_LIMIT
+    split && /[\uD800-\uDBFF]/.test(text[EDITOR_SELECTION_LIMIT - 1])
+      ? EDITOR_SELECTION_LIMIT - 1
+      : EDITOR_SELECTION_LIMIT
   const kept = split ? text.slice(0, end) : text
-  const range = selection.start === selection.end ? `line ${selection.start}` : `lines ${selection.start} to ${selection.end}`
+  const range =
+    selection.start === selection.end ? `line ${selection.start}` : `lines ${selection.start} to ${selection.end}`
   const left = text.length - kept.length
   return ReminderText.render({
     text: [
       `The person has highlighted ${range} in the file named below; the highlighted text follows. ${caveat}`,
-      ...(split ? [`The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at its end ${left === 1 ? "is" : "are"} not shown.`] : []),
+      ...(split
+        ? [
+            `The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at its end ${left === 1 ? "is" : "are"} not shown.`,
+          ]
+        : []),
     ].join(" "),
     data: { label: editor.path, content: kept },
   })
@@ -438,7 +445,15 @@ function toLLMMessage(
         Message.make({
           id: message.id,
           role: "user",
-          content: `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${ReminderText.neutralize(message.output?.output ?? "")}`,
+          content: [
+            Message.text(
+              `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${ReminderText.neutralize(message.output?.output ?? "")}`,
+            ),
+            // Shell input the person typed is scanned like a prompt.
+            ...(!lowering.minimal && SessionEffort.requested(message.command)
+              ? [Message.text(ReminderText.render({ text: SessionEffort.note }))]
+              : []),
+          ],
           metadata: message.metadata,
         }),
       ]
