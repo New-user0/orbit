@@ -324,6 +324,34 @@ describe("SessionInstructions", () => {
     }),
   )
 
+  it.live("injects a nested folder's local file beside its shared file, and alone in a folder with no shared file", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const both = path.resolve(dir, "both")
+      const only = path.resolve(dir, "only")
+      yield* mkdir(both)
+      yield* mkdir(only)
+      yield* writeAgents(path.resolve(both, "ORBIT.md"), "both-shared")
+      yield* writeAgents(path.resolve(both, "AGENTS.md"), "hidden-by-the-first-name")
+      yield* writeAgents(path.resolve(both, "ORBIT.local.md"), "both-local")
+      yield* writeAgents(path.resolve(only, "ORBIT.local.md"), "only-local")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(both, "file.txt"), "file content"))
+      yield* Effect.promise(() => fs.writeFile(path.resolve(only, "file.txt"), "file content"))
+      const session = yield* Session.Service
+      const registry = yield* Tool.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+
+      yield* executeTool(registry, readCall(sessionID, "call-both", "both/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-only", "only/file.txt"))
+
+      const injected = (yield* synthetics(sessionID)).map((message) => message.text)
+      expect(injected).toEqual([
+        `Instructions from: ${path.resolve(both, "ORBIT.md")}\nboth-shared\n\nInstructions from: ${path.resolve(both, "ORBIT.local.md")}\nboth-local`,
+        `Instructions from: ${path.resolve(only, "ORBIT.local.md")}\nonly-local`,
+      ])
+    }),
+  )
+
   it.live("does not re-inject paths already recorded in durable session history", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service
@@ -582,6 +610,31 @@ describe("SessionInstructions in a project that is not trusted", () => {
       expect(yield* providerText(sessionID)).not.toContain("TOP SECRET")
     }).pipe(Effect.provide(logger))
   })
+
+  // The same row for the local names: a local variant that a link leads out of the project sends nothing.
+  for (const name of ["ORBIT.local.md", CompatNames.vendor.localInstructions])
+    linked(`does not inject ${name} when it is a symlink out of the project, trusted or not`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const outside = (yield* tmpdirScoped()).path
+        const secret = path.resolve(outside, "secret.txt")
+        yield* mkdir(path.resolve(dir, "sub"))
+        yield* writeAgents(secret, "TOP SECRET")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.resolve(dir, "sub", "file.txt"), "content")
+          await fs.symlink(secret, path.resolve(dir, "sub", name))
+        })
+        const registry = yield* Tool.Service
+        const trust = yield* ProjectTrust.Service
+        const sessionID = yield* sessionIn(dir)
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+        expect(yield* synthetics(sessionID)).toHaveLength(0)
+        yield* trust.grant({ persist: false, via: "test" })
+        yield* executeTool(registry, readCall(sessionID, "call-trusted", "sub/file.txt", { limit: 5 }))
+        expect(yield* synthetics(sessionID)).toHaveLength(0)
+        expect(yield* providerText(sessionID)).not.toContain("TOP SECRET")
+      }),
+    )
 
   // The control of the row above, in the same layout: a plain file that holds the marker loads in both states.
   untrusted.live("injects a plain nested file that holds the same marker, before and after it is trusted", () =>

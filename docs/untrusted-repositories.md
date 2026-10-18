@@ -313,6 +313,19 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
+- Local variants (`ORBIT.local.md`, and the reference vendor's local name with compatibility on) are repository-supplied
+  files like any shared file: they are looked up in every walked folder, with a slot of their own beside the shared names
+  (`ConfigInstructionFile.pick`), and meet the same `reachable` gate, the same exclusion and the same imports. Proof: the
+  "keeps a project's imports inside the project until its holder is trusted" block of
+  `test/instruction-discovery.test.ts` (a local name that is a link out, and an import outside from a local file, each
+  trusted and not, with the label `local` on the file and on what it imports) and the "does not inject ORBIT.local.md
+  when it is a symlink out of the project" rows of `test/session-instructions.test.ts` (the lazy read).
+- The managed instruction file (`ORBIT.md` in the folder the `ManagedSettings` snapshot was read from): the folder is
+  the administrator's, so the file loads whatever the project's trust decision is and `instructions_exclude` never
+  applies to it or to what it imports. Its imports inside the project load as a project file's do; an import outside the
+  project waits for the project itself to be trusted, and a refused one is an import warning for the project root
+  (class 1, 3, 7). A file that is there and cannot be read makes the source unavailable, so policy text already admitted
+  stays. Proof: the "loads the managed instruction file" block of `test/instruction-discovery.test.ts`.
 - `@path` imports in instruction files (`ConfigInstructionFile.imports` and `load`, called by `ConfigInstructionPlugin`
   and `SessionInstructions`; class 1, 4, 5, 6 and 7). A token is hostile input: it is found by one linear pass over the
   lines (no Markdown library), and a token with a control character is dropped alone, never joined into a path. For each

@@ -4,7 +4,7 @@ import { define } from "@orbit/plugin/effect/plugin"
 import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
-import { dirname, join, relative } from "path"
+import { basename, dirname, join, relative } from "path"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
@@ -12,6 +12,7 @@ import { Watcher } from "../../filesystem/watcher.js"
 import { InstructionDiscovery } from "../../instruction-discovery.js"
 import { Instructions } from "../../instructions/index.js"
 import { Location } from "../../location.js"
+import { ManagedSettings } from "../../managed-settings.js"
 import { ProjectTrust } from "../../project-trust.js"
 import { AbsolutePath } from "../../schema.js"
 import { ConfigInstructionFile } from "../instruction-file.js"
@@ -52,6 +53,7 @@ export const Plugin = define({
       const fs = yield* FSUtil.Service
       const global = yield* Global.Service
       const location = yield* Location.Service
+      const managed = yield* ManagedSettings.Service
       const trust = yield* ProjectTrust.Service
       const watcher = yield* Watcher.Service
       const changes = yield* PubSub.sliding<string>(1)
@@ -61,6 +63,14 @@ export const Plugin = define({
       const home = yield* fs.resolve(global.home)
       const project = discovery.project && FSUtil.contains(root, start)
       const stop = FSUtil.contains(home, start) ? home : root
+      // A worktree inside its main checkout: the walk passes through the main checkout's folders above the worktree, whose
+      // shared files the worktree has its own copy of. Its local files are not checked in, so only the main checkout has them.
+      const canonical = yield* fs.resolve(location.project.canonical)
+      const nested = relative(canonical, root) !== "" && FSUtil.contains(canonical, root)
+      const inherited = (directory: string) => nested && FSUtil.contains(canonical, directory) && !FSUtil.contains(root, directory)
+      // The one folder the managed settings were read from, so that the instruction file and the settings never disagree.
+      const managedDirectory = managed.current().directory
+      const managedFile = managedDirectory === "" ? undefined : join(managedDirectory, "ORBIT.md")
       const loaded: { current: Loaded } = { current: { type: "available", ...nothing } }
       // One fiber for each path that is watched. The instruction files that could exist stay watched once they are,
       // and the imports that were read are watched for as long as something imports them.
@@ -85,6 +95,7 @@ export const Plugin = define({
         // The ancestor walk can reach the global file when the location sits
         // beneath the global config dir; global: false excludes it there too.
         const candidates = [
+          ...(managedFile === undefined ? [] : [managedFile]),
           ...(discovery.global ? globalFiles : []),
           ...(project
             ? ancestorDirectories(start, stop)
@@ -127,6 +138,8 @@ export const Plugin = define({
         scope: "user" | "project",
         visited: Set<string>,
         patterns: readonly string[],
+        // What the file is, and so what every file it imports is: an import takes its importer's kind.
+        kind?: InstructionDiscovery.Kind,
       ) {
         const loaded = yield* ConfigInstructionFile.load({
           path,
@@ -140,7 +153,15 @@ export const Plugin = define({
           // decision lets the project supply: both are asked of the real path, which is the file that is read. What is
           // outside waits for the folder that holds the importing file to be trusted (`outward`).
           allow: (real, spelling) => trust.importable(spelling, real),
-          outward: trust.outward,
+          // The managed file is held by an administrator's folder, which says nothing about the project it is read for:
+          // what it imports from outside the project waits for the project itself to be trusted.
+          outward:
+            kind === "managed"
+              ? () =>
+                  trust.trusted().pipe(
+                    Effect.map((open) => ({ open, directory: location.project.canonical })),
+                  )
+              : trust.outward,
         })
         if (loaded === undefined) {
           yield* Effect.logDebug("instruction file skipped", { path, reason: "unavailable" })
@@ -148,7 +169,12 @@ export const Plugin = define({
         }
         return {
           files: loaded.files.map(
-            (item) => new InstructionDiscovery.File({ path: AbsolutePath.make(item.path), content: item.content }),
+            (item) =>
+              new InstructionDiscovery.File({
+                path: AbsolutePath.make(item.path),
+                content: item.content,
+                ...(kind === undefined ? {} : { kind }),
+              }),
           ),
           warnings: [
             ...loaded.files.flatMap((item) =>
@@ -204,18 +230,33 @@ export const Plugin = define({
         return (yield* read(existing[0].real, "user", visited, patterns)) ?? nothing
       })
 
+      // The administrator's file. It is read whatever the project's trust decision is and whichever scopes are on, because the
+      // folder is theirs and not the repository's, and no pattern of `instructions_exclude` applies to it or to what it
+      // imports. A file that is there and cannot be read makes the source unavailable, so that policy text already admitted
+      // is never dropped for a read that failed.
+      const managedSource = Effect.fn("ConfigInstructionPlugin.managedSource")(function* (
+        file: string | undefined,
+        visited: Set<string>,
+      ) {
+        if (file === undefined || !(yield* fs.isFile(file))) return nothing
+        const loaded = yield* read(yield* fs.resolve(file), "project", visited, [], "managed")
+        if (loaded !== undefined) return loaded
+        yield* Effect.logWarning("managed instruction file could not be read", { path: file })
+        return Instructions.unavailable
+      })
+
       const projectSource = Effect.fn("ConfigInstructionPlugin.projectSource")(function* (
-        names: readonly string[],
+        compat: boolean,
         globalFiles: readonly string[],
         patterns: readonly string[],
         visited: Set<string>,
       ) {
         if (!project) return nothing
-        // An excluded file is as good as absent, so the next name in its directory takes its place. Exclusion comes first,
+        // An excluded file is as good as absent, so the next name in its slot takes its place. Exclusion comes first,
         // and only takes files out: what is left meets the same gate as before.
         const wanted = yield* ConfigInstructionFile.included(
           patterns,
-          yield* fs.up({ targets: [...names], start, stop, type: "file" }),
+          yield* fs.up({ targets: [...ConfigInstructionFile.walkNames(compat)], start, stop, type: "file" }),
           fs.resolve,
         )
         // Until the project is trusted it supplies only what is inside it. A link in a repository to a key or a
@@ -234,14 +275,24 @@ export const Plugin = define({
             ),
           ),
         )
-        const walked = found.map((candidate) => candidate.real)
-        const discovered = new Set(
-          walked
-            .filter((file, index) => walked.findIndex((other) => dirname(other) === dirname(file)) === index)
-            .filter((file) => discovery.global || !globalFiles.includes(file)),
-        )
+        // General to specific: the farthest directory first, and in each the shared file and then the local one. A slot
+        // for the directory's rule files goes between the two when rules arrive.
+        const locals = ConfigInstructionFile.localNames(compat)
+        const discovered = ConfigInstructionFile.pick(found, {
+          compat,
+          file: (candidate) => candidate.file,
+          skipShared: inherited,
+        }).filter((candidate) => discovery.global || !globalFiles.includes(candidate.real))
         // One at a time, in render order: a file that two of them import is loaded after the first and not again.
-        const results = yield* Effect.forEach(discovered, (file) => read(file, "project", visited, patterns))
+        const results = yield* Effect.forEach(discovered, (candidate) =>
+          read(
+            candidate.real,
+            "project",
+            visited,
+            patterns,
+            locals.includes(basename(candidate.file)) ? "local" : undefined,
+          ),
+        )
         const contributions = results.filter((item): item is Contribution => item !== undefined)
         if (contributions.length < results.length) return Instructions.unavailable
         return merge(contributions)
@@ -258,9 +309,10 @@ export const Plugin = define({
 
       const refresh = Effect.fn("ConfigInstructionPlugin.refresh")(
         function* (file?: string) {
-          const names = ConfigInstructionFile.names(yield* config.compatEnabled())
+          const compat = yield* config.compatEnabled()
+          const names = ConfigInstructionFile.names(compat)
           const globalFiles = yield* Effect.forEach(names, (name) => fs.resolve(join(global.config, name)))
-          yield* watch(names, globalFiles)
+          yield* watch(ConfigInstructionFile.walkNames(compat), globalFiles)
           // What the settings of every scope exclude as of now. The documents are the stamped ones, so a project that is
           // not trusted has lost its list, which could otherwise hide the user's own instruction files.
           const patterns = yield* ConfigInstructionFile.prepare(
@@ -271,12 +323,13 @@ export const Plugin = define({
           // imported and also found by the walk is loaded once, where it comes first. The sources load one after the other.
           const visited = new Set<string>()
           const sources = yield* Effect.all({
+            managed: isolate("managed", managedSource(managedFile, visited)),
             global: isolate("global", globalSource(names, patterns, visited)),
-            project: isolate("project", projectSource(names, globalFiles, patterns, visited)),
+            project: isolate("project", projectSource(compat, globalFiles, patterns, visited)),
           })
           loaded.current =
-            available(sources.global) && available(sources.project)
-              ? { type: "available", ...merge([sources.global, sources.project]) }
+            available(sources.managed) && available(sources.global) && available(sources.project)
+              ? { type: "available", ...merge([sources.managed, sources.global, sources.project]) }
               : { type: "unavailable" }
           yield* watchImports(loaded.current.type === "available" ? loaded.current.read : [])
           if (!file) return

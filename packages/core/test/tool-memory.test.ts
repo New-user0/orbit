@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import path from "path"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -15,12 +16,14 @@ import { MemoryTool } from "@orbit/core/tool/plugin/memory"
 import { tempLocationLayer } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
+import { readUpdate, state } from "./lib/instructions"
+import { AbsolutePath } from "@orbit/core/schema"
 import { allowAllPermission } from "./lib/permission"
 import { executeTool, expectRegistryAsks, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const node = makeLocationNode({
   name: "test/memory-tool-plugin",
-  layer: Layer.effectDiscard(registerToolPlugin(MemoryTool.Plugin)),
+  layer: Layer.effectDiscard(registerToolPlugin(MemoryTool.Plugin).pipe(Effect.andThen(registerToolPlugin(MemoryTool.IndexPlugin)))),
   deps: [Tool.node, FSUtil.node, Global.node, Location.node, InstructionDiscovery.node],
 })
 const call = (input: unknown) => ({
@@ -31,7 +34,49 @@ const call = (input: unknown) => ({
 const text = (result: { content?: readonly { type: string; text?: string }[] }) =>
   result.content?.[0]?.type === "text" ? (result.content[0].text ?? "") : ""
 
+// Mirrors the activation order: the instruction files are added first, the memory plugin after them.
+const afterFilesNode = makeLocationNode({
+  name: "test/memory-tool-after-files",
+  layer: Layer.effectDiscard(
+    Effect.gen(function* () {
+      const discovery = yield* InstructionDiscovery.Service
+      yield* discovery.transform((editor) => {
+        editor.add(new InstructionDiscovery.File({ path: AbsolutePath.make("/repo/ORBIT.md"), content: "project rules" }))
+      })
+      yield* registerToolPlugin(MemoryTool.Plugin)
+      yield* registerToolPlugin(MemoryTool.IndexPlugin)
+    }),
+  ),
+  deps: [Tool.node, FSUtil.node, Global.node, Location.node, InstructionDiscovery.node],
+})
+
 describe("memory tool", () => {
+  it.live("renders the memory index after the project files, and the first save tells no change of order", () =>
+    Effect.gen(function* () {
+      const data = (yield* tmpdirScoped()).path
+      yield* Effect.gen(function* () {
+        const registry = yield* Tool.Service
+        const discovery = yield* InstructionDiscovery.Service
+        const before = state({ "core/instructions": [{ path: "/repo/ORBIT.md", content: "project rules" }] })
+        yield* executeTool(registry, call({ action: "save", name: "notes", content: "# A note" }))
+        const files = yield* discovery.list()
+        expect(Array.isArray(files) && files.map((item) => path.basename(item.path))).toEqual(["ORBIT.md", "MEMORY.md"])
+        const update = (yield* readUpdate(yield* discovery.load(), before)).text
+        expect(update).toContain("MEMORY.md")
+        expect(update).not.toContain("order of the instruction files changed")
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Tool.node, afterFilesNode, Bus.node, InstructionDiscovery.node]), [
+            Location.node.replace(tempLocationLayer),
+            Global.node.replace(Global.layerWith({ data })),
+            Permission.node.replace(allowAllPermission),
+          ]),
+        ),
+      )
+    }),
+  )
+
+
   it.live("saves memories, indexes them as instructions, and deletes them", () =>
     Effect.gen(function* () {
       const data = (yield* tmpdirScoped()).path

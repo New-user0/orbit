@@ -50,8 +50,9 @@ const layer = Layer.effect(
       const folders = new Set<string>()
       for (let folder = start; folder !== root && FSUtil.contains(root, folder); folder = dirname(folder)) folders.add(folder)
       if (folders.size === 0) return
+      const compat = yield* config.compatEnabled()
       const discovered = yield* fs.up({
-        targets: [...ConfigInstructionFile.names(yield* config.compatEnabled())],
+        targets: [...ConfigInstructionFile.walkNames(compat)],
         start,
         stop: root,
         type: "file",
@@ -62,19 +63,16 @@ const layer = Layer.effect(
         ConfigInstructionFile.excludes(yield* config.entries()),
         fs.resolve,
       )
-      const candidates = (yield* ConfigInstructionFile.included(patterns, discovered, fs.resolve))
-        .map((item) => ({ real: item.real, folder: dirname(item.file) }))
-        .filter((item) => folders.has(item.folder))
-      // `up` walks from the target's folder outward and names the folder's files in order, so the first of a folder is the
-      // one it loads, as it is when the session starts. The file being read is dropped after that choice, not before it:
-      // reading a folder's first file must not bring the second. The model reads the outermost folder's file first.
-      const paths = candidates
-        .filter(
-          (item, index) =>
-            candidates.findIndex((other) => other.folder === item.folder) === index && item.real !== real,
-        )
+      const candidates = (yield* ConfigInstructionFile.included(patterns, discovered, fs.resolve)).filter((item) =>
+        folders.has(dirname(item.file)),
+      )
+      // Each folder gives the first of its shared names and the first of its local names, as it does when the session
+      // starts, and a local file loads beside a shared one or alone. The file being read is dropped after that choice, not
+      // before it: reading a folder's first file must not bring the second. The model reads the outermost folder's files
+      // first, and in a folder the shared file before the local one.
+      const paths = ConfigInstructionFile.pick(candidates, { compat, file: (item) => item.file })
+        .filter((item) => item.real !== real)
         .map((item) => item.real)
-        .reverse()
         .filter((path, index, all) => all.indexOf(path) === index)
       if (paths.length === 0) return
       yield* instructions.load({ sessionID, paths })

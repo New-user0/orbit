@@ -15,6 +15,8 @@ export const vendor = {
   /** The settings file a team shares, and the one a person keeps to themselves. */
   settings: { shared: "settings.json", local: "settings.local.json" },
   instructions: "CLAUDE.md",
+  /** The private variant of the instruction file, which is kept out of version control. */
+  localInstructions: "CLAUDE.local.md",
   projectDirVariable: "CLAUDE_PROJECT_DIR",
 } as const
 

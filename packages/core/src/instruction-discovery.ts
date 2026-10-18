@@ -9,10 +9,20 @@ import { AbsolutePath, PositiveInt } from "./schema.js"
 import { State } from "./state.js"
 import { ReminderText } from "./session/reminder-text.js"
 
+/**
+ * What an instruction file is, when it is not a plain shared file: the administrator's (`managed`), a person's private
+ * notes for a folder (`local`), or a rule file (`rule`, reserved). It is left unset for a plain file, so that the values
+ * already stored keep their hashes. A file that another imports takes its importer's kind and not one of its own, so
+ * that becoming an import, or ceasing to be one, with the same text changes no hash.
+ */
+export const Kind = Schema.Literals(["managed", "local", "rule"])
+export type Kind = typeof Kind.Type
+
 /** An instruction file, with the text the model reads: what is left of it once it is processed (`ConfigInstructionFile`). */
 export class File extends Schema.Class<File>("InstructionDiscovery.File")({
   path: AbsolutePath,
   content: Schema.String,
+  kind: Schema.optional(Kind),
 }) {}
 
 /**
@@ -66,8 +76,9 @@ export type Data = {
 
 export type Editor = {
   list: () => readonly Types.DeepMutable<File>[]
-  // Map insertion order is render order: config adds global then nearest-to-farthest project files;
-  // sibling contributors interleave by transform registration order.
+  // Map insertion order is render order, general to specific: config adds the managed file, the global file, then the
+  // project's files from the farthest folder to the nearest, each folder's local file after its shared one; sibling
+  // contributors interleave by transform registration order.
   add: (file: File) => void
   warn: (warning: Warning | ImportWarning) => void
   /** Records that `path`, which is also added as a file, was imported by `importedBy`. */
@@ -142,7 +153,8 @@ export const layer = (options?: Options) =>
           codec: Schema.toCodecJson(Files),
           read: Effect.succeed(value),
           render: {
-            initial: render,
+            initial: renderInitial,
+            appeared: (files) => `New instructions apply from:\n${render(files)}`,
             changed: renderUpdate,
             removed: () => "Previously loaded instructions no longer apply.",
           },
@@ -189,9 +201,33 @@ export const node = configured(
   process.env.ORBIT_DISABLE_INSTRUCTIONS === "1" ? { project: false, global: false } : undefined,
 )
 
+// The baseline stays in the last system block on purpose: that block is the cached epoch prefix, and later changes reach
+// the model as chronological updates after it. The header belongs to the baseline alone and never repeats in an update.
+export const HEADER =
+  "These are the instruction files in effect for this session. Follow them where they apply to the task. " +
+  "Where a file asks for something other than what you would do by default, do what the file asks. " +
+  "They are listed from general to specific, and where two of them conflict the later one takes precedence. " +
+  "They are standing background for the work, not a request to respond to."
+
+const labels: Record<Kind, string> = {
+  managed: "organisation policy installed by an administrator, which a project cannot switch off",
+  local: "private notes for this folder, kept out of the repository",
+  rule: "a rule file",
+}
+
+function renderInitial(files: ReadonlyArray<File>) {
+  return `${HEADER}\n\n${render(files)}`
+}
+
 function render(files: ReadonlyArray<File>) {
   // Instruction files come from the folder, so a look-alike of an envelope tag in one is escaped where it is rendered.
-  return files.map((file) => ReminderText.neutralize(`Instructions from: ${file.path}\n${file.content}`)).join("\n\n")
+  return files
+    .map((file) =>
+      ReminderText.neutralize(
+        `Instructions from: ${file.path}${file.kind === undefined ? "" : ` (${labels[file.kind]})`}\n${file.content}`,
+      ),
+    )
+    .join("\n\n")
 }
 
 function renderUpdate(previous: ReadonlyArray<File>, current: ReadonlyArray<File>) {
@@ -199,21 +235,40 @@ function renderUpdate(previous: ReadonlyArray<File>, current: ReadonlyArray<File
     previous,
     current,
     (file) => file.path,
-    (before, after) => before.content !== after.content,
+    // A file that kept its text and changed kind is shown again, with its new label.
+    (before, after) => before.content !== after.content || before.kind !== after.kind,
   )
-  return [
+  const surviving = new Set(current.map((file) => file.path))
+  const kept = new Set(previous.map((file) => file.path))
+  const before = previous.filter((file) => surviving.has(file.path)).map((file) => file.path)
+  const ordered = current.filter((file) => kept.has(file.path)).map((file) => file.path)
+  const reordered = before.some((path, index) => path !== ordered[index])
+  // Files that land anywhere but together at the end change what outranks what, so that is told as well.
+  const tail = current.slice(current.length - changes.added.length)
+  const placed = changes.added.every((file, index) => tail[index] === file)
+  const texts = [
     ...changes.removed.map((file) => `The instructions from ${file.path} no longer apply.`),
     ...changes.added.map((file) => `New instructions apply from:\n${render([file])}`),
-    ...changes.changed.map(({ previous: before, current: after }) => {
-      const patch = createPatch(after.path, before.content, after.content, "", "", { context: 3 })
+    ...changes.changed.map(({ previous: old, current: after }) => {
+      const replacement = `The instructions changed:\n${render([after])}`
+      if (old.kind !== after.kind) return replacement
+      const patch = createPatch(after.path, old.content, after.content, "", "", { context: 3 })
       const diff = [
         `The instructions from ${after.path} changed. Here's the diff:`,
         "```diff",
         ReminderText.neutralize(patch.slice(patch.indexOf("@@")).trimEnd()),
         "```",
       ].join("\n")
-      const replacement = `The instructions changed:\n${render([after])}`
       return diff.length < replacement.length ? diff : replacement
     }),
-  ].join("\n\n")
+  ]
+  // Position is the only thing that ranks the files, so a change of order is told.
+  if (reordered || !placed)
+    texts.push(
+      [
+        "The order of the instruction files changed. Later files take precedence over earlier ones. They now run:",
+        ...current.map((file) => `- ${ReminderText.neutralize(file.path)}`),
+      ].join("\n"),
+    )
+  return texts.join("\n\n")
 }

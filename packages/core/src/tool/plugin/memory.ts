@@ -43,13 +43,10 @@ export const Plugin = {
     const directory = path.join(global.data, "memory", location.project.id)
     const indexPath = path.join(directory, INDEX)
     const read = (file: string) => fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
-    const index: { current?: string } = { current: yield* read(indexPath) }
-
-    // The index joins the session's instructions; reload whenever a save or delete changes it.
-    yield* discovery.transform((editor) => {
-      if (discovery.project && index.current?.trim())
-        editor.add(new InstructionDiscovery.File({ path: AbsolutePath.make(indexPath), content: index.current }))
-    })
+    // The index joins the session's instructions through IndexPlugin; reload whenever a save or delete changes it.
+    const index = shared(discovery)
+    index.path = indexPath
+    index.current = yield* read(indexPath)
 
     const rebuild = Effect.fn("MemoryTool.rebuild")(function* () {
       const files = (yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => [] as string[])))
@@ -111,6 +108,34 @@ export const Plugin = {
       })
     })
   }),
+}
+
+/**
+ * Offers the memory index as an instruction file. It is a separate plugin that activates after the instruction files, so
+ * the index renders last (the later a file, the more it outranks) while the tool itself activates with the other tools
+ * and stays replaceable by a plugin. The tool plugin owns the text and reloads discovery when it changes.
+ */
+export const IndexPlugin = {
+  id: "orbit.tool.memory.index",
+  effect: Effect.fn("MemoryTool.IndexPlugin")(function* (_ctx: Context) {
+    const discovery = yield* InstructionDiscovery.Service
+    const index = shared(discovery)
+    yield* discovery.transform((editor) => {
+      if (discovery.project && index.path && index.current?.trim())
+        editor.add(new InstructionDiscovery.File({ path: AbsolutePath.make(index.path), content: index.current }))
+    })
+  }),
+}
+
+// The discovery service is one per location, so it keys the index text the two plugins share.
+const indexes = new WeakMap<object, { path?: string; current?: string }>()
+
+function shared(discovery: object) {
+  const existing = indexes.get(discovery)
+  if (existing) return existing
+  const created: { path?: string; current?: string } = {}
+  indexes.set(discovery, created)
+  return created
 }
 
 function summary(text: string) {
