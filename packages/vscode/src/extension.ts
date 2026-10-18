@@ -775,14 +775,14 @@ function executable() {
   return configured(vscode.workspace.getConfiguration("orbit").inspect<string>("executable"))
 }
 
-// The person's own setting, like `executable`: a repository's .vscode/settings.json must not decide how much of the
-// person's editor goes to the model.
 // The person's own setting, like `executable`: a repository must not be able to open a listener the person turned off.
 function ideBridgeEnabled() {
   const setting = vscode.workspace.getConfiguration("orbit").inspect<boolean>("ideBridge.enabled")
   return setting?.globalValue ?? setting?.defaultValue ?? true
 }
 
+// The person's own setting, like `executable`: a repository's .vscode/settings.json must not decide how much of the
+// person's editor goes to the model.
 function includeOpenFile() {
   const setting = vscode.workspace.getConfiguration("orbit").inspect<boolean>("context.includeOpenFile")
   return setting?.globalValue ?? setting?.defaultValue ?? true

@@ -235,6 +235,11 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
         }
         // Nothing before the bridge's hello counts.
         if (!ready) return
+        if ((frame.type === "selection" || frame.type === "mention") && frame.filePath && hostile(frame.filePath)) {
+          // A clone can name its files as it likes, and the name reaches the footer and the prompt.
+          log.warn("dropped a frame whose file name holds control characters")
+          return
+        }
         if (frame.type === "selection") {
           if (frame.filePath === null) return setSelection(undefined)
           // A frame without a range says nothing about what is selected.
@@ -408,6 +413,11 @@ export function editorSelectionKey(selection: EditorSelection | undefined) {
       range.text,
     ]),
   ].join("\0")
+}
+
+/** Control and format characters (escape sequences, bidi overrides, zero-width spaces) in a file name. */
+function hostile(filePath: string) {
+  return /[\p{Cc}\p{Cf}]/u.test(filePath)
 }
 
 function parse(value: unknown, dropped: () => void) {

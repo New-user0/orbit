@@ -123,8 +123,16 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const port = address.port
   const lockFile = IdeLock.file(options.directory, port)
 
-  prune(options.directory, port, options.log)
-  writeLock(options.directory, port, lockFile, { ideName: options.ideName, folders, token })
+  try {
+    prune(options.directory, port, options.log)
+    writeLock(options.directory, port, lockFile, { ideName: options.ideName, folders, token })
+  } catch (error) {
+    // A lock folder that cannot be used must not leave a listener behind.
+    sockets.close()
+    server.close()
+    server.closeAllConnections()
+    throw error
+  }
   options.environment(port)
   options.log(`IDE bridge: listening on 127.0.0.1:${port}`)
 
@@ -154,7 +162,11 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     },
     folders(next) {
       folders = [...next]
-      writeLock(options.directory, port, lockFile, { ideName: options.ideName, folders, token })
+      try {
+        writeLock(options.directory, port, lockFile, { ideName: options.ideName, folders, token })
+      } catch (error) {
+        options.log(`IDE bridge: could not update the lock: ${error instanceof Error ? error.message : String(error)}`)
+      }
     },
     clients: () => [...clients].filter((client) => client.ready).length,
     dispose() {
@@ -230,7 +242,20 @@ function writeLock(
   }
   const temporary = path.join(directory, `.${port}.${crypto.randomBytes(6).toString("hex")}.tmp`)
   fs.writeFileSync(temporary, JSON.stringify(lock), { mode: 0o600 })
-  fs.renameSync(temporary, lockFile)
+  // On Windows the rename fails while a reader holds the lock open, so it is tried again a few times.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      fs.renameSync(temporary, lockFile)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (attempt >= 8 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) {
+        fs.rmSync(temporary, { force: true })
+        throw error
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * attempt)
+    }
+  }
 }
 
 /**

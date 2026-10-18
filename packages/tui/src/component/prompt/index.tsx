@@ -47,6 +47,7 @@ import { DialogHistorySearch } from "./dialog-history-search"
 import { type AutocompleteOption, type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { Locale } from "../../util/locale"
+import { plain } from "@orbit/util/plain"
 import { errorMessage } from "../../util/error"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
@@ -281,7 +282,7 @@ export function Prompt(props: PromptProps) {
     const file = /^index\.[^./]+$/.test(filename)
       ? [path.basename(path.dirname(value)), filename].filter(Boolean).join("/")
       : filename
-    return `${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`
+    return plain(`${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`)
   })
   const editorFileLabelDisplay = createMemo(() => {
     const file = editorFileLabel()

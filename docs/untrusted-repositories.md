@@ -521,7 +521,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   is skipped, and the terminal UI never deletes a lock. A workspace folder holds the session folder by real path
   (`FSUtil.contains` on `realpathSync.native` of both, NFC), so a link, a shared prefix or a dangling link cannot make a
   window match; a network or device spelling is compared as written and never read from disk. The editor's name goes
-  through `plain`. The token goes into the `x-orbit-ide-token` header and nowhere else. Proof: `test/editor.test.ts` (the
+  through `plain`. A selection or mention frame whose file name holds a control or format character (escape sequences, C1
+  controls, bidi overrides, zero-width spaces, line breaks) is dropped whole with one log line, since a clone can name its
+  files as it likes; the footer label goes through `plain` as well. A frame over `IdeLock.frameCap` is dropped.
+  Proof: `test/context/editor.test.tsx` (the hostile-name and frame-cap rows) and `test/editor-bridge-app.test.tsx` (the
+  drawn footer and prompt). The token goes into the `x-orbit-ide-token` header and nowhere else. Proof: `test/editor.test.ts` (the
   discovery rows), `test/context/editor.test.tsx` (a real server: header, hello, ignored frames, reconnect that reads the
   lock again, no connection without the port, `TERM_PROGRAM=vscode` or `autoConnect`).
 
@@ -591,7 +595,8 @@ every other extension):
 - The IDE bridge (`src/ide-bridge.ts`): a WebSocket server on `127.0.0.1` (the literal, never a name), port 0, with a
   4 KiB frame limit, that accepts an upgrade only with the token in the `x-orbit-ide-token` header (constant-time compare,
   answer 401, one log line that never holds a token; the token is never read from the URL). The token lives in a lock file
-  written with mode 0600 in a 0700 folder, by temporary file and rename, and is never put in the environment (only the
+  written with mode 0600 in a 0700 folder, by temporary file and rename (retried on EPERM, EBUSY and EACCES while a reader
+  holds the lock; the temporary file is removed when it still fails), and is never put in the environment (only the
   port is). It makes no outbound connection and starts no program (`orb` included). `orbit.ideBridge.enabled` has
   machine scope and is read from the user's own settings only, and the extension stays off in an untrusted VS Code
   workspace. At start it removes only version 1 locks whose pid is gone. Proof: `test/ide-bridge.test.ts` and

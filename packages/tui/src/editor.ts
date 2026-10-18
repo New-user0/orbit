@@ -23,7 +23,7 @@ type EditorStdio = "inherit" | "pipe" | "ignore" | number | Stream
  * place of the editor.
  */
 export async function openEditor(input: { value: string; renderer: CliRenderer; cwd?: string; stdin?: EditorStdio }) {
-  const editor = (process.env.VISUAL || process.env.EDITOR)?.trim()
+  const editor = process.env.VISUAL?.trim() || process.env.EDITOR?.trim()
   if (!editor) return
   const file = path.join(os.tmpdir(), `${Date.now()}.md`)
   await writeFile(file, input.value)

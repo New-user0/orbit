@@ -300,6 +300,69 @@ test("removes the locks of editors that are gone at start, and leaves every othe
   expect(logs.filter((line) => line.includes("left"))).toHaveLength(2)
 })
 
+test("rewrites the lock while a reader holds it open, and leaves no temporary file", async () => {
+  const directory = await folder()
+  const { bridge, logs } = await start(directory)
+  const other = path.join(directory, "reader.ts")
+  // The reader is another process, as the terminal UI is, and it holds the lock open for a while: on Windows the rename
+  // is refused until it lets go, and this process blocks while it retries, so the reader cannot be a timer here.
+  await Bun.write(
+    other,
+    `import fs from "node:fs"
+const fd = fs.openSync(process.argv[2], "r")
+console.log("held")
+setTimeout(() => { fs.closeSync(fd); process.exit(0) }, 120)`,
+  )
+  const reader = Bun.spawn([process.execPath, other, bridge.lockFile], { stdout: "pipe" })
+  cleanup.push(() => reader.kill())
+  const stream = reader.stdout.getReader()
+  await stream.read()
+
+  bridge.folders(["/work/project", "/work/moved"])
+  await reader.exited
+
+  expect(logs.filter((line) => line.includes("could not update"))).toEqual([])
+  expect((await lock(bridge)).workspaceFolders).toEqual(["/work/project", "/work/moved"])
+  expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([])
+})
+
+test("logs one line and leaves no temporary file when the lock cannot be rewritten", async () => {
+  const directory = await folder()
+  const { bridge, logs } = await start(directory)
+  // A folder where the lock should be: the rename fails for every attempt and with a code that is not retried.
+  await fs.rm(bridge.lockFile)
+  await fs.mkdir(bridge.lockFile)
+  cleanup.push(() => fs.rm(bridge.lockFile, { recursive: true, force: true }))
+  await fs.writeFile(path.join(bridge.lockFile, "keep"), "x")
+
+  expect(() => bridge.folders(["/work/other"])).not.toThrow()
+
+  expect(logs.filter((line) => line.includes("could not update the lock"))).toHaveLength(1)
+  expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([])
+})
+
+test("closes its listener when the lock folder cannot be used", async () => {
+  const directory = await folder()
+  const blocked = path.join(directory, "ide")
+  await fs.writeFile(blocked, "a file where the folder should be")
+  // In a process of its own: a listener left open keeps that process alive, which a deadline shows.
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      "-e",
+      `const { startBridge } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../src/ide-bridge"))})
+try { await startBridge({ directory: ${JSON.stringify(blocked)}, folders: [], ideName: "x", log() {}, environment() {} }) } catch { console.log("rejected") }`,
+    ],
+    { stdout: "pipe" },
+  )
+  const deadline = setTimeout(() => child.kill(), 5_000)
+  const code = await child.exited
+  clearTimeout(deadline)
+
+  expect(await new Response(child.stdout).text()).toContain("rejected")
+  expect(code).toBe(0)
+})
+
 test("rewrites the lock with the new folders, and a reader never sees half of it", async () => {
   const { bridge } = await start(await folder())
   const token = (await lock(bridge)).authToken

@@ -550,6 +550,8 @@ windows(
     await fakeEditor(bin, "code", record)
     const real = await plant(bin, "vim")
     const decoy = await plant(clone, "code")
+    // A .cmd editor runs through cmd.exe, so a cmd.exe in the folder is a decoy as well.
+    const shell = await plant(clone, "cmd")
     for (const name of ["code.cmd", "vim.bat"])
       await writeFile(path.join(clone, name), `@echo off\r\necho ran >> "%~dp0${name}.ran"\r\n`)
     process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
@@ -576,13 +578,16 @@ windows(
     expect((await real()).map((line) => line.split(" ")[0])).toEqual(["vim.exe"])
     // The decoys of the folder did not.
     expect(await decoy()).toEqual([])
+    expect(await shell()).toEqual([])
     expect(await ran()).toEqual([])
 
     // The control: each decoy is a program that runs when it is started by its path.
+    await Bun.spawn([path.join(clone, "cmd.exe"), "control"], { stdout: "ignore" }).exited
+    expect(await shell()).toEqual(["cmd.exe control"])
     await Bun.spawn([path.join(clone, "code.exe"), "control"], { stdout: "ignore" }).exited
     await Bun.spawn(["cmd.exe", "/c", path.join(clone, "code.cmd")], { stdout: "ignore" }).exited
     await Bun.spawn(["cmd.exe", "/c", path.join(clone, "vim.bat")], { stdout: "ignore" }).exited
-    expect(await decoy()).toEqual(["code.exe control"])
+    expect((await decoy()).sort()).toEqual(["cmd.exe control", "code.exe control"])
     expect((await ran()).sort()).toEqual(["code.cmd.ran", "vim.bat.ran"])
   },
   60_000,
@@ -619,6 +624,18 @@ test("makes the prompt editor wait only when the editor is exactly code or subl"
 
   const lines = (await Bun.file(record).text()).replaceAll('"', "").split(/\r?\n/).filter(Boolean)
   expect(lines.map((line) => line.trim().split(" ").slice(0, -1).join(" "))).toEqual(["--wait", "--wait", "", "--reuse-window"])
+})
+
+test("falls back to $EDITOR when $VISUAL holds only spaces", async () => {
+  await using directory = await tmpdir()
+  process.env.ORBIT_TEST_EDITOR_MARKER = path.join(directory.path, "started.json")
+  process.env.VISUAL = "  "
+  process.env.EDITOR = await recordingEditor(directory.path)
+
+  const result = await openEditor({ value: "original", renderer: screen().renderer, cwd: directory.path })
+
+  expect(result).toBe("original")
+  expect((await started(process.env.ORBIT_TEST_EDITOR_MARKER)).argv).toHaveLength(1)
 })
 
 test("rejects with a message when the prompt editor is not on PATH, and when it exits with an error", async () => {

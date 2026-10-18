@@ -508,6 +508,57 @@ test("stops for good when the bridge speaks another version", async () => {
   }
 })
 
+test("drops a frame over the size cap and still applies the next good one", async () => {
+  const run = await connectedEditor()
+  const mentions: unknown[] = []
+  try {
+    await wait(() => run.setup.editor.connected(), 3_000, "the connection")
+    run.setup.editor.onMention((mention) => mentions.push(mention))
+
+    run.editor.send({ type: "mention", filePath: `/work/${"a".repeat(IdeLock.frameCap)}.ts` })
+    run.editor.send({ type: "mention", filePath: "/work/after.ts" })
+    await wait(() => mentions.length >= 1, 3_000, "the mention after the large frame")
+    await Bun.sleep(100)
+
+    expect(mentions).toEqual([{ filePath: "/work/after.ts" }])
+  } finally {
+    await run.done()
+  }
+})
+
+// A clone can name its files as it likes, so a name from the editor with a control, bidi or zero-width character is
+// refused whole, whether it came with a selection or a mention.
+const hostileNames = [
+  ["an escape sequence", "/work/evil\u001b]0;pwned\u0007\u001b[31mred.ts"],
+  ["a C1 control", "/work/c1\u009b31m.ts"],
+  ["a right-to-left override", "/work/gnp‮exe.ts"],
+  ["a zero-width space", "/work/zero​width.ts"],
+  ["a line break", "/work/line\nbreak.ts"],
+] as const
+
+test.each(hostileNames)("drops a selection and a mention whose file name holds %s", async (_label, filePath) => {
+  const run = await connectedEditor()
+  const mentions: unknown[] = []
+  try {
+    await wait(() => run.setup.editor.connected(), 3_000, "the connection")
+    run.setup.editor.onMention((mention) => mentions.push(mention))
+
+    run.editor.send({ ...selection, filePath })
+    run.editor.send({ type: "mention", filePath })
+    await Bun.sleep(150)
+    expect(run.setup.editor.selection()).toBeUndefined()
+    expect(mentions).toEqual([])
+
+    // A plain name on the same link still works.
+    run.editor.send(selection)
+    run.editor.send({ type: "mention", filePath: "/work/plain.ts" })
+    await wait(() => run.setup.editor.selection() !== undefined && mentions.length === 1, 3_000, "the plain frames")
+    expect(run.setup.editor.selection()?.filePath).toBe("/work/a.ts")
+  } finally {
+    await run.done()
+  }
+})
+
 test("does not connect to the port another product's variable names", async () => {
   const root = await tmpdir()
   const cwd = path.join(root.path, "project")
