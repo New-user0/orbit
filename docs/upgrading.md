@@ -548,7 +548,7 @@ the agent still loads. An agent whose `tools` is a map of tool names to booleans
 style: the map and the keys only that style has (`temperature`, `top_p`, `prompt` (in a Markdown file the body stays the prompt and a front matter `prompt` is ignored), `options`, `maxSteps`, `permission`)
 are read as before, while every key Orbit's own schema has, `model`, `steps` and `permissions` included, is read
 natively beside it. A field with a bad value on either side is dropped with a diagnostic (or a log line, in a Markdown
-file) at its own path, and the rest of the agent, its deny rules included, still loads. A `variant` beside a model is
+file) at its own path, and the rest of the agent, its deny rules included, still loads, and so does the rest of a tools map, a `permission` object or a `permissions` list when one entry in it is bad (that entry alone is dropped, named at `tools.<name>`, `permission.<key>` or `permissions.<n>`). A folder that is not trusted adds its `disallowed_tools` to the list that is there instead of replacing it. A `variant` beside a model is
 joined to it, and beside a model tier it becomes the effort, in `orbit.json` and Markdown alike. A `name` key in a file is
 ignored (the path names the agent). The camelCase spellings of these keys (`disallowedTools`, `permissionMode`,
 `mcpServers`, `maxTurns`, `initialPrompt`) are not read in Orbit's own folders; each one is reported once, naming the
