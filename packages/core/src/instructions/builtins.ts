@@ -50,7 +50,7 @@ export function environment(input: EnvironmentInput) {
     `  Git repository: ${input.git ? "yes" : "no"}`,
     `  Platform: ${platform === input.platform ? platform : `${platform} (${input.platform})`}`,
     windows && POSIX_SHELLS.has(input.shell)
-      ? `  Shell: ${input.shell} (runs on Windows but takes POSIX syntax, so paths use forward slashes)`
+      ? `  Shell: ${input.shell} (runs on Windows but takes POSIX syntax)`
       : `  Shell: ${input.shell}`,
     // On Windows `os.type()` says only `Windows_NT`, and on Linux `os.version()` is the kernel's build banner.
     `  OS version: ${windows ? input.os.version || input.os.type : input.os.type} ${input.os.release}`,
@@ -85,7 +85,7 @@ const layerOf = (options: Options) =>
                   ),
                   render: {
                     initial: (language) =>
-                      `Preferred reply language: ${language}. Prose addressed to the person is written in that language; code, commands, paths, identifiers and technical terms keep their original form.`,
+                      `Preferred reply language: ${language}. Write prose for the person in that language; code, commands, paths, identifiers and technical terms stay as they are.`,
                     changed: (_previous, language) =>
                       `The person's preferred reply language is now ${language}. From here on, write replies to the person in it; the same exceptions for code and technical terms apply.`,
                     removed: () =>

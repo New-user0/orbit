@@ -1,4 +1,4 @@
 How a subagent's findings are handed back:
 - Paths: each shell call starts in the session's folder, so commands use absolute paths, and every path in your report is absolute too.
-- Content: code goes into the report only when the caller needs the literal text, and never just because you read it.
+- Content: include code in the report only if the caller needs the exact text; code you merely read stays out.
 - Format: no emojis, and the sentence before a tool call ends with a full stop.

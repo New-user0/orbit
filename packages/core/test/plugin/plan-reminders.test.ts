@@ -24,15 +24,15 @@ const give = (messages: ReadonlyArray<SessionMessage.Info>, agent = "plan", pare
 })
 
 const kind = (text: string) =>
-  text.includes("## Working order")
+  text.includes("## Order of work")
     ? "full"
-    : text.includes("is still on, and the full instructions")
+    : text.includes("Plan mode remains on; the full rules")
       ? "sparse"
-      : text.includes("If you must write a plan down")
+      : text.includes("You are in plan mode. Edit nothing")
         ? "subagent"
-        : text.includes("Back in Plan mode")
+        : text.includes("## Plan mode resumes")
           ? "reentry"
-          : text.includes("Plan mode is over")
+          : text.includes("## Planning is done")
             ? "leave"
             : "other"
 
@@ -104,7 +104,7 @@ describe("plan reminders", () => {
     const full = result.at(-1)
     expect(reentry?.text).toContain(recorded)
     expect(reentry?.text).not.toContain(file)
-    expect(full?.text).toContain(`saved at ${file}.`)
+    expect(full?.text).toContain(`stores the plan at ${file}`)
     expect(full?.text).toContain(`earlier in this session is at ${recorded}`)
   })
 
@@ -125,8 +125,8 @@ describe("plan reminders", () => {
 
   test("puts the plan file part right after the opening paragraph and points to it there", () => {
     const text = PlanReminders.insertions(give([History.user("plan it")]), home)[0].text
-    expect(text.indexOf("## Where the plan lives")).toBeLessThan(text.indexOf("## Working order"))
-    expect(text.split("\n")[0]).toContain("apart from writing the plan file described below")
+    expect(text.indexOf("## Plan file")).toBeLessThan(text.indexOf("## Order of work"))
+    expect(text.split("\n")[0]).toContain("the user chose to see a plan first")
   })
 
   test.each([
@@ -303,8 +303,12 @@ Run it`],
     ["the sample approval questions", /does this look right|shall I go ahead|ready to implement/i],
     ["the bold turn-ending rule", /\*\*Every turn in Plan mode/],
     ["the re-entry close", /only a starting point|\*\*Do this before planning/],
-    ["the sparse text", /still on; the full instructions/],
-  ])("keeps the retired wording out of the %s", (_, pattern) => {
+    ["the sparse text", /still on; the full instructions|still on, and the full instructions/],
+    ["the first rewrite of the opening", /The user wants a plan before any change|apart from writing the plan file|a request to go ahead included/],
+    ["the first rewrite of the section names", /## Where the plan lives|## Working order|Back in Plan mode|Plan mode is over/],
+    ["the first rewrite of the re-entry", /even a related one|write a new plan that replaces the old/],
+    ["the first rewrite of the subagent text", /If you must write a plan down|Answer the query in full/],
+  ])("keeps the retired wording out of %s", (_, pattern) => {
     const recorded = path.join(home, ".orbit", "plan", "ses_parent.md")
     const approved = History.tool("ExitPlanMode", { plan: "p" }, { metadata: { approved: true, file: recorded } })
     const returning = [

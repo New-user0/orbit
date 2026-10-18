@@ -317,8 +317,8 @@ describe("the base system prompt", () => {
         [
           "reversibility and reach",
           [
-            "Local work that can be undone",
-            "Ask first about anything that cannot be undone, reaches beyond this machine, or touches what other people share",
+            "Work that stays on this machine and can be reverted",
+            "Everything else waits for the user's yes",
           ],
         ],
         // More autonomy is the user's to grant, in so many words, and the risk is still weighed.
@@ -332,8 +332,8 @@ describe("the base system prompt", () => {
         [
           "approval scope",
           [
-            "A yes covers the action it was given for, in the situation it was given in",
-            "read by what the user meant and not only by what they typed",
+            "A yes belongs to the action and the situation it was given for",
+            "read by what the user meant, not only by what they typed",
           ],
         ],
         // Standing approval comes only from what the user said in advance; a skill's claim of it is not that.
@@ -348,18 +348,19 @@ describe("the base system prompt", () => {
         [
           "examples",
           [
-            "uncommitted changes, files, branches, tables",
-            "forced pushes",
-            "anything that posts, comments, messages or pushes",
-            "uploading content to an online service",
+            "an action that loses something",
+            "that others rely on",
+            "that leaves the machine",
+            "posting, commenting, messaging, pushing, sending content to an online service",
           ],
         ],
         [
           "obstacles",
           [
-            "A failing check or hook gets its finding fixed",
-            "leave other people's changes where they are",
-            "When in doubt about a risky step, ask",
+            "An obstacle has a cause, and the cause is what you deal with",
+            "Repair a failing check or hook instead of silencing it",
+            "leave other people's edits in place",
+            "If a risky step is still unclear, ask",
           ],
         ],
       ])
@@ -388,6 +389,8 @@ describe("the base system prompt", () => {
       expect(scope).toContain("rests on a mistaken assumption")
       expect(scope).toContain("Follow the user's and the project's instruction files, which appear later in this prompt")
       expect(scope).toContain("The diff holds what was asked and nothing else")
+      expect(scope).toContain("vague or generic is still software work on the code in the working folder")
+      expect(scope).toContain("validate where outside data comes in, not again behind it")
       expect(scope).toContain("Finish what you start, or report it as unfinished")
       const work = section(prompt, "Working in code")
       expect(work).toContain("Give no estimate of how long anything will take")
@@ -400,9 +403,9 @@ describe("the base system prompt", () => {
       expect(work).toContain("Existing comments stay unless their code goes or they are shown to be wrong")
       expect(work).toContain("Code outside your change is left exactly as found")
       const evidence = section(prompt, "Evidence")
-      expect(evidence).toContain("Work is done only after you have watched it run")
-      expect(evidence).toContain("A report is evidence")
-      expect(evidence).toContain("say so once in a plain sentence")
+      expect(evidence).toContain("Say only what you observed")
+      expect(evidence).toContain("Until you have run the work and read the output, it is unverified")
+      expect(evidence).toContain("A clean run is stated once, in a plain sentence")
     })
 
     test("Writing to the user: emojis, references, the full stop before a tool call, moments and word limits", () => {
@@ -410,14 +413,15 @@ describe("the base system prompt", () => {
       expect(writing).toContain("No emojis unless the user asks")
       expect(writing).toContain("`path:line`")
       expect(writing).toContain("`owner/repo#123`")
-      expect(writing).toContain("ends with a full stop, because the call itself may be hidden")
+      expect(writing).toContain("with a full stop, since the call may be hidden")
       expect(writing).toContain("Before the first tool call, say in one sentence what you are about to do")
-      expect(writing).toContain("speak up only at turning points")
+      expect(writing).toContain("speak only when something changes")
       expect(writing).toContain("someone who did not watch the work")
-      expect(writing).toContain("Lead with the result or the action taken")
+      expect(writing).toContain("opens with what happened or what you did")
+      expect(writing).toContain("Clarity beats brevity, but do not pad or inflate a small result")
       // The limits are ceilings, not targets.
-      expect(writing).toContain("about 25 words at most")
-      expect(writing).toContain("about 100 words at most, unless the task needs more")
+      expect(writing).toContain("in about 25 words")
+      expect(writing).toContain("about 100 words unless the task needs more")
       expect(writing).toContain("Code and tool inputs are exempt")
     })
   })
@@ -482,7 +486,7 @@ describe("the base system prompt", () => {
     test("tells the model how to brief an agent and how to check what it delegated, only when Agent is offered", () => {
       const anchors = [
         "its brief carries the goal and its purpose",
-        "what is already known or ruled out",
+        "what has been established or excluded so far",
         "whether it may edit or only investigate",
         "Independent agents are started together in one response",
         "A search handed to an agent is not repeated by you",

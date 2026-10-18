@@ -101,7 +101,7 @@ describe("InstructionBuiltIns.environment", () => {
   } satisfies InstructionBuiltIns.EnvironmentInput
   // The note that a Unix shell on Windows gets, in the one place the tests pin it.
   const note =
-    " (runs on Windows but takes POSIX syntax, so paths use forward slashes)"
+    " (runs on Windows but takes POSIX syntax)"
 
   test("names a Linux machine with its kernel, and carries no note, notice or temporary folder", () => {
     expect(InstructionBuiltIns.environment(linux)).toBe(

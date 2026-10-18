@@ -509,7 +509,7 @@ describe("EditTool", () => {
                   status: "error",
                   error: {
                     type: "file.unread",
-                    message: "secret.txt was never read in this session; read it first, then change it.",
+                    message: "secret.txt has no read in this session behind it; read it before changing it.",
                   },
                 })
                 expect(missing).toEqual(matching)
@@ -614,14 +614,14 @@ describe("EditTool", () => {
       input: { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true },
       ledger: "unread",
       type: "file.unread",
-      message: "matches.txt was never read in this session; read it first, then change it.",
+      message: "matches.txt has no read in this session behind it; read it before changing it.",
     },
     {
       name: "a file that changed since the session read it",
       input: { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true },
       ledger: "stale",
       type: "file.stale",
-      message: "matches.txt was modified after your last read of it; read it again, then change it.",
+      message: "matches.txt changed on disk after your last read, so read it again before changing it.",
     },
   ]
   for (const item of doomed)

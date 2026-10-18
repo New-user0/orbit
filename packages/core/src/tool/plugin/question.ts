@@ -11,7 +11,7 @@ export const name = "AskUserQuestion"
 
 export const description = `Ask the user one to four questions while you work, then continue with their answers.
 
-It fits when an instruction is ambiguous, when a requirement or preference is missing, or when a decision about direction belongs to the user.
+Use it when the instructions leave a point open, a requirement or preference is missing, or the choice of direction is the user's.
 
 Shape of a call:
 - One to four questions, each with its own text.
@@ -20,7 +20,7 @@ Shape of a call:
 - \`multiple: true\` lets the user combine options that do not exclude each other.
 - A recommended option goes first, and its label ends with "(Recommended)".
 
-In plan mode, settle requirements and the choice of approach with it before the plan is written. Approval of the plan is never asked this way: ExitPlanMode presents the plan, which the user cannot see until then, so a question must not refer to it.`
+While planning, use it for the requirements and the choice of approach. ExitPlanMode is the only channel for approval, and it is also what first shows the plan to the user, so a question cannot point at a plan they have not seen.`
 
 export const Input = Schema.Struct({
   questions: Schema.Array(Question.Prompt)

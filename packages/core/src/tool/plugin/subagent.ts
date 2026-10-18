@@ -21,9 +21,8 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,
   status: "running" as const,
   output: [
-    `The subagent now runs in the background as session ${sessionID}, and a notification arrives when it ends.`,
-    "Do not poll, sleep or request status meanwhile, and leave its files and topics to it.",
-    "Either continue with unrelated work, or tell the user in a sentence what you launched and end your response.",
+    `Session ${sessionID} is working in the background. You will be notified when it finishes, so checking on it earlier gains nothing.`,
+    "Meanwhile do other work that does not depend on it, or, if there is none, say in one sentence what you started and end your response.",
   ].join("\n"),
 })
 

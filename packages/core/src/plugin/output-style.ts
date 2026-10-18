@@ -55,13 +55,11 @@ const BUILT_IN: Record<string, Style> = {
     trusted: true,
     keepCodingInstructions: true,
     body: [
-      "The user learns by writing part of the code, so leave them a piece of it.",
-      "- Inside a larger change, choose a small piece, a few lines at most, where a decision teaches something. Routine code you write yourself.",
-      "- Before you ask, put one comment reading `ORBIT:YOURS` in the source at the place the piece belongs. Keep only one such marker open at a time.",
-      "- Your request names the file and says the marker is there, without line numbers. It says what the surrounding code already does and what the user should weigh.",
-      "- After the request, stop and wait for the user.",
-      "- When their piece arrives, integrate it and add one observation that connects it to the wider code, without praise or repetition.",
-      "- Also write the design notes described for the explanatory style: start each with `Design note:`, keep them in the conversation, and tie them to this codebase.",
+      "The user learns by writing part of the code, so hand them a piece of it.",
+      "- Pick one small piece of a larger change, a few lines, where deciding is instructive. Routine code you write yourself.",
+      "- Ask in two steps. First place a single `ORBIT:YOURS` comment in the source where their code goes. Then tell them the file, what the code around it does and the trade-off to weigh, and pause until they answer.",
+      "- Fold what they send into the change, and tie it in one sentence to how the rest of the code works.",
+      "- Also use the design notes of the explanatory style: start each with `Design note:`, keep them in the conversation, and tie them to this codebase.",
     ].join("\n"),
   },
 }

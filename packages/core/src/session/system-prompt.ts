@@ -210,7 +210,7 @@ export const GUIDANCE = [
     tool: "Agent",
     lines: [
       "- Agent suits work that matches an agent's description and is independent of your own: research running beside you, or output too large for this conversation. A search handed to an agent is not repeated by you.",
-      "- A new agent knows nothing of this conversation, so its brief carries the goal and its purpose, what is already known or ruled out, whether it may edit or only investigate, and the form of answer wanted. Independent agents are started together in one response.",
+      "- A new agent knows nothing of this conversation, so its brief carries the goal and its purpose, what has been established or excluded so far, whether it may edit or only investigate, and the form of answer wanted. Independent agents are started together in one response.",
       "- A known location is looked up directly. Agent is for open-ended searching that would take more than about three queries.",
       "- An agent's result never reaches the user directly, so pass on what matters. Delegated implementation is checked, by a test run or a read of the diff, before it is reported done.",
     ],

@@ -549,7 +549,7 @@ describe("WriteTool", () => {
                   status: "error",
                   error: {
                     type: "file.unread",
-                    message: "ledger.txt was never read in this session; read it first, then change it.",
+                    message: "ledger.txt has no read in this session behind it; read it before changing it.",
                   },
                 })
 
@@ -563,7 +563,7 @@ describe("WriteTool", () => {
                   status: "error",
                   error: {
                     type: "file.stale",
-                    message: "ledger.txt was modified after your last read of it; read it again, then change it.",
+                    message: "ledger.txt changed on disk after your last read, so read it again before changing it.",
                   },
                 })
                 expect(fixture.assertions).toEqual([])

@@ -3658,7 +3658,7 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
   task and verification reminders, the scratchpad, environment and git snapshot texts, the notes for messages that
   arrive mid-task, the agent listing and several tool descriptions and results (the explore agent, the background
   results of the Agent and shell tools, the question tool, edit, write, glob, web search, web fetch, read and the file
-  ledger refusals) were audited and rewritten from Orbit's requirements. The rules are the same; the words are new.
+  ledger refusals) were audited and rewritten from Orbit's requirements, and a second round rewrote the Consent, Evidence and Writing sections, the overlays, the plan reminders and a few tool texts again. The rules are the same; the words are new.
 - The base prompt has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool
   use and Writing to the user. A style without coding instructions drops Scope, Working in code and Evidence. The old
   names (Doing tasks, Code style, Verification, Executing actions with care, Using tools, Communication and Output
@@ -3666,9 +3666,9 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 - The environment block labels the repository line `Git repository`, and the git snapshot labels its fields Branch,
   Pull request target, Configured author, Changes and Latest commits.
 - The built-in Explanatory style marks its notes with `Design note:` instead of `Insight:`, and the Learning style
-  leaves a comment reading `ORBIT:YOURS` in the source instead of `TODO(human)`, with one marker open at a time. A
+  leaves a comment reading `ORBIT:YOURS` in the source instead of `TODO(human)`, for one small piece at a time. A
   comment that an earlier session left behind under the old marker is ordinary text now.
-- The explore agent's description names the thoroughness levels brief, standard and exhaustive.
+- The explore agent's description names the depth levels quick, careful and sweeping.
 - The idle reminder of the terminal UI now reads "The session has stopped and the next step is yours" (the notification
   title stays `Orbit`).
 

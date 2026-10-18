@@ -507,11 +507,16 @@ describe("OutputStylePlugin", () => {
         for (const coding of SessionSystemPrompt.CODING_SECTIONS)
           expect([style.key, text.includes(`# ${coding}\n`)]).toEqual([style.key, true])
         for (const retired of retiredMarkers) expect([style.key, retired, text.includes(retired)]).toEqual([style.key, retired, false])
+        // The body is Orbit's own text: no identity line and no other product's instruction file or folder.
+        const body = text.slice(text.indexOf(`# Output style: ${style.name}\n`))
+        const foreignNames = [CompatNames.vendor.instructions, CompatNames.vendor.directory, ...Object.values(CompatNames.foreign).flat()]
+        expect([style.key, body.split("\n").filter((line) => /^You are\b/.test(line))]).toEqual([style.key, []])
+        for (const name of foreignNames) expect([style.key, name, body.includes(name)]).toEqual([style.key, name, false])
       }
     }),
   )
 
-  it.live("asks the learning style for one marker at a time and a stop after the request", () =>
+  it.live("asks the learning style for one piece with one marker and a pause after the request", () =>
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service
       const config = yield* Config.Test
@@ -520,9 +525,9 @@ describe("OutputStylePlugin", () => {
       const event = context()
       yield* hooks.trigger("session", "context", event)
       const text = event.system[0]?.text ?? ""
-      expect(text).toContain("Keep only one such marker open at a time")
-      expect(text).toContain("After the request, stop and wait for the user")
-      expect(text).toContain("without line numbers")
+      expect(text).toContain("Pick one small piece of a larger change")
+      expect(text).toContain("place a single `ORBIT:YOURS` comment")
+      expect(text).toContain("pause until they answer")
     }),
   )
 

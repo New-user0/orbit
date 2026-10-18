@@ -33,18 +33,18 @@ describe("FileLedger", () => {
         Exit.void,
       )
       expect(message(yield* ledger.assertFresh(sessionID, file, "a.ts").pipe(Effect.exit))).toContain(
-        "a.ts was never read in this session",
+        "a.ts has no read in this session behind it",
       )
       expect((yield* ledger.assertFresh(sessionID, file, "a.ts").pipe(Effect.flip)).code).toBe("file.unread")
 
       yield* readNow(sessionID, file)
       expect(yield* ledger.assertFresh(sessionID, file, "a.ts").pipe(Effect.exit)).toEqual(Exit.void)
-      expect(message(yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.exit))).toContain("was never read")
+      expect(message(yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.exit))).toContain("has no read in this session")
       expect((yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.flip)).code).toBe("file.unread")
 
       yield* Effect.promise(() => fs.utimes(file, new Date(2_000_000), new Date(2_000_000)))
       expect(message(yield* ledger.assertFresh(sessionID, file, "a.ts").pipe(Effect.exit))).toContain(
-        "a.ts was modified after your last read of it",
+        "a.ts changed on disk after your last read",
       )
       expect((yield* ledger.assertFresh(sessionID, file, "a.ts").pipe(Effect.flip)).code).toBe("file.stale")
     }).pipe(Effect.provide(AppNodeBuilder.build(FileLedger.node, [Location.node.replace(tempLocationLayer)]))),
@@ -78,7 +78,7 @@ describe("FileLedger", () => {
             .assertFresh(sessionID, file, "a.ts", { mtimeMs: 3_000_000, digest: digestOf("two\n") })
             .pipe(Effect.exit),
         ),
-      ).toContain("a.ts was modified after your last read of it")
+      ).toContain("a.ts changed on disk after your last read")
     }).pipe(Effect.provide(ledgerLayer)),
   )
 

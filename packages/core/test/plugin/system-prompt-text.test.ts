@@ -248,7 +248,7 @@ describe("family specifics and the content contract", () => {
     ["path:line", /`path:line`/],
     ["owner/repo#123", /`owner\/repo#123`/],
     ["no emojis", /No emojis unless/],
-    ["full stop before a tool call", /ends with a full stop, not a colon/],
+    ["full stop before a tool call", /precedes a tool call ends with a full stop/],
     ["25-word anchor", /about 25 words/i],
     ["100-word anchor", /about 100 words/i],
     ["follows instruction files", /Follow the user's and the project's instruction files, which come later in this prompt; where they conflict with this guidance, they win\./],

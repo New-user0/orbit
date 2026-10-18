@@ -791,7 +791,7 @@ describe("SessionInstructions processes what it injects", () => {
 
       const failure = yield* ledger.assertFresh(sessionID, subPath, "sub/AGENTS.md").pipe(Effect.flip)
       expect(failure.code).toBe("file.unread")
-      expect(failure.message).toContain("was never read in this session")
+      expect(failure.message).toContain("has no read in this session behind it")
 
       // The control: a real read of the file is what makes it fresh.
       yield* executeTool(registry, readCall(sessionID, "call-direct", "sub/AGENTS.md"))
