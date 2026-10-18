@@ -22,6 +22,8 @@ import { compileRequest } from "@orbit/ai/route/client"
 import { TestLLM } from "@orbit/ai/testing"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Database } from "@orbit/core/database/database"
+import { LspDiagnostics } from "@orbit/core/lsp/collector"
+import { ToolNames } from "@orbit/core/tool/names"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@orbit/core/effect/app-node-platform"
@@ -242,7 +244,8 @@ const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string,
   )
 // With `real` the scratchpad is the service itself on a temporary folder, as a person has it. Otherwise a stand-in names
 // no folder, so that no request holds a path of this machine, and it records each drain that made one.
-const makeLayer = (persist: boolean) =>
+// With `production`, the scenario runs the production reminder node on these diagnostics, and offers a shell tool.
+const makeLayer = (persist: boolean, production?: LspDiagnostics.Interface) =>
   Layer.unwrap(
     Effect.map(RunnerState, (state) => {
       const scratchpad: LayerNode.Replacements = [
@@ -372,6 +375,18 @@ const makeLayer = (persist: boolean) =>
                 traits: { concurrencySafe: true },
                 execute: () => state.awaitToolBarrier.pipe(Effect.andThen(Effect.die("unexpected tool defect"))),
               },
+              ...(production
+                ? {
+                    [ToolNames.tools.shell]: {
+                      name: ToolNames.tools.shell,
+                      description: "Offered so the production reminders see a shell",
+                      input: Schema.Struct({}),
+                      output: Schema.Struct({}),
+                      traits: { concurrencySafe: true },
+                      execute: () => Effect.succeed({ output: {} }),
+                    },
+                  }
+                : {}),
               storefail: {
                 name: "storefail",
                 description: "Produce output that cannot be persisted",
@@ -500,7 +515,9 @@ const makeLayer = (persist: boolean) =>
         Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
         SessionModelTransport.node.replace(modelTransport),
         SessionTurnEnd.node.replace(SessionTurnEnd.layerWith([{ name: "test", run: (input) => state.turnEnd(input) }])),
-        SessionReminders.node.replace(SessionReminders.configured(state.reminders)),
+        ...(production
+          ? [LspDiagnostics.node.replace(Layer.succeed(LspDiagnostics.Service, production))]
+          : [SessionReminders.node.replace(SessionReminders.configured(state.reminders))]),
       ]
       const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
         ...replacements,
@@ -698,9 +715,11 @@ export {
   undersizedContextModel,
   layer,
   model,
+  makeLayer,
   nativeWindowModel,
   replacementModel,
   scenario,
+  scenarioOn,
   sessionID,
   setup,
   testLLM,

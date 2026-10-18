@@ -4,7 +4,7 @@ import { Effect } from "effect"
 import type { Database } from "../database/database.js"
 import type { SessionMessage } from "./message.js"
 import { SessionOutput } from "./output.js"
-import { runs } from "./reminder-text.js"
+import { isReminder, runs } from "./reminder-text.js"
 import type { Durable } from "./reminders.js"
 import { SessionTurn } from "./turn.js"
 
@@ -29,7 +29,10 @@ export const durable = (db: Database.Interface["db"]): Durable => ({
     Effect.gen(function* () {
       const turn = yield* SessionTurn.current(db, input.session.id)
       const options = turn.options
-      if (!options || (options.maxSteps === undefined && options.maxCost === undefined && options.maxTokens === undefined))
+      if (
+        !options ||
+        (options.maxSteps === undefined && options.maxCost === undefined && options.maxTokens === undefined)
+      )
         return []
       // A drain that restarts between collection and the request runs this again for the same step.
       if (runs(input.messages).at(-1)?.messages.some(isBudget)) return []
@@ -38,16 +41,25 @@ export const durable = (db: Database.Interface["db"]): Durable => ({
       const whole = (value: number) => `${value}`
       const dollars = (value: number) => `$${value.toFixed(4)}`
       const limits = [
-        ...(options.maxSteps === undefined ? [] : [{ name: "Steps", used: spent.steps, max: options.maxSteps, show: whole }]),
-        ...(options.maxCost === undefined ? [] : [{ name: "Cost", used: spent.cost, max: options.maxCost, show: dollars }]),
-        ...(options.maxTokens === undefined ? [] : [{ name: "Tokens", used: spent.tokens, max: options.maxTokens, show: whole }]),
+        ...(options.maxSteps === undefined
+          ? []
+          : [{ name: "Steps", used: spent.steps, max: options.maxSteps, show: whole }]),
+        ...(options.maxCost === undefined
+          ? []
+          : [{ name: "Cost", used: spent.cost, max: options.maxCost, show: dollars }]),
+        ...(options.maxTokens === undefined
+          ? []
+          : [{ name: "Tokens", used: spent.tokens, max: options.maxTokens, show: whole }]),
       ]
       const lastStep = options.maxSteps !== undefined && options.maxSteps - spent.steps <= 1
       const wrapUp = lastStep || limits.some((limit) => limit.used >= limit.max * WRAP_UP)
       const answered = options.output
         ? (yield* SessionOutput.progress(db, input.session.id, options.seq)).latest === "accepted"
         : true
-      const answer = answered ? "your final answer" : `your final answer, handed in by calling ${SessionOutput.NAME}`
+      const answer = "your final answer"
+      const handIn = answered
+        ? []
+        : [`Hand in the final answer by calling ${SessionOutput.NAME}; a written reply does not count.`]
 
       return [
         {
@@ -56,14 +68,19 @@ export const durable = (db: Database.Interface["db"]): Durable => ({
             "Budget of the current turn:",
             ...limits.map(
               (limit) =>
-                `- ${limit.name}: ${limit.show(limit.used)} of ${limit.show(limit.max)} used, ${limit.show(Math.max(0, limit.max - limit.used))} left.`,
+                `- ${limit.name}: ${limit.show(limit.used)} of ${limit.show(limit.max)} used, ` +
+                `${limit.show(Math.max(0, limit.max - limit.used))} left.`,
             ),
-            "These figures count what was spent before this request, subagents and background work such as compaction included.",
-            `When any one of these limits is reached the turn stops at once and no reply is sent, so ${answer} has to come before that.`,
+            "These figures count what was spent before this request, " +
+              "subagents and background work such as compaction included.",
+            "When any one of these limits is reached the turn stops at once and no reply is sent, " +
+              `so ${answer} has to come before that.`,
             ...(wrapUp ? [`A limit is nearly used up. Do not start new work; give ${answer} now.`] : []),
+            ...handIn,
             ...(lastStep
               ? [
-                  `This response is the last one of the turn. Tool calls made in it get no follow-up request, so the response itself must carry ${answer}.`,
+                  "This response is the last one of the turn. Tool calls made in it get no follow-up request, " +
+                    `so the response itself must carry ${answer}.`,
                 ]
               : []),
           ].join("\n"),
@@ -76,4 +93,4 @@ export const durable = (db: Database.Interface["db"]): Durable => ({
 })
 
 const isBudget = (message: SessionMessage.Info) =>
-  message.type === "synthetic" && (message.metadata?.reminder as { kind?: unknown } | undefined)?.kind === KIND
+  isReminder(message) && (message.metadata?.reminder as { kind: string }).kind === KIND

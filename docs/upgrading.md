@@ -2688,9 +2688,9 @@ from the accepted `StructuredOutput` call; make the schema an object schema; upd
 
 A turn that sets `maxSteps`, `maxCost` or `maxTokens` now carries a hidden budget reminder on every step. It lists, for
 each limit the turn set, what is used and what is left, and says that the turn stops without a reply when a limit is
-reached. From 90 % of a limit, or on the last step, it asks for the final answer instead of new work; a turn that asked for
-a structured answer is told to hand it in through `StructuredOutput`. The figures are the ones the limit check reads, so
-they include subagent and background spend. Nothing in the text comes from a file. Subagents, turns without limits and
+reached. From 90 % of a limit, or on the last step, it asks for the final answer instead of new work; a turn that
+asked for a structured answer is told to hand it in through `StructuredOutput`. The figures are the ones the limit check
+reads, so they include subagent and background spend. Nothing in the text comes from a file. Subagents, turns without limits and
 `orb run --bare` get none. Before this, the model was not told about a limit and the turn ended without an answer.
 
 **Affects:** anyone who sets turn limits. Each step sends a few more input tokens, and the stored history holds one more

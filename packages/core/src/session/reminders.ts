@@ -159,8 +159,8 @@ export const configured = (lists: Lists) =>
 
 /**
  * The production node. The language-server and turn-budget producers read services, and a producer's `run` has no
- * requirements, so they are built here from those services and appended to the durable list. `orb run --bare` switches instruction files off, and
- * a bare run adds nothing else to the conversation either.
+ * requirements, so they are built here from those services and appended to the durable list. `orb run --bare`
+ * switches instruction files off, and a bare run adds nothing else to the conversation either.
  */
 export const node = makeLocationNode({
   service: Service,
