@@ -44,13 +44,11 @@ export function pick<T>(
     /** The path the walk built for the item, whose folder and name say which directory and slot it is in. */
     readonly file: (item: T) => string
     readonly skipShared?: (directory: string) => boolean
-    /** Keep the nearest directory first, as the walk found them, instead of the farthest. */
-    readonly nearestFirst?: boolean
   },
 ): T[] {
   const locals = localNames(options.compat)
   const walked = [...new Set(found.map((item) => dirname(options.file(item))))]
-  const directories = options.nearestFirst ? walked : walked.reverse()
+  const directories = walked.reverse()
   return directories.flatMap((directory) => {
     const inside = found.filter((item) => dirname(options.file(item)) === directory)
     const shared = options.skipShared?.(directory)

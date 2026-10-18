@@ -316,8 +316,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Local variants (`ORBIT.local.md`, and the reference vendor's local name with compatibility on) are repository-supplied
   files like any shared file: they are looked up in every walked folder, with a slot of their own beside the shared names
   (`ConfigInstructionFile.pick`), and meet the same `reachable` gate, the same exclusion and the same imports. Proof: the
-  "orders the files and loads local variants" block of `test/instruction-discovery.test.ts` and
-  `test/session-instructions.test.ts`.
+  "keeps a project's imports inside the project until its holder is trusted" block of
+  `test/instruction-discovery.test.ts` (a local name that is a link out, and an import outside from a local file, each
+  trusted and not, with the label `local` on the file and on what it imports) and the "does not inject ORBIT.local.md
+  when it is a symlink out of the project" rows of `test/session-instructions.test.ts` (the lazy read).
 - The managed instruction file (`ORBIT.md` in the folder the `ManagedSettings` snapshot was read from): the folder is
   the administrator's, so the file loads whatever the project's trust decision is and `instructions_exclude` never
   applies to it or to what it imports. Its imports inside the project load as a project file's do; an import outside the

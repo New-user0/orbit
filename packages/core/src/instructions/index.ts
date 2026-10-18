@@ -34,6 +34,7 @@ export interface Source {
   readonly key: Key
   readonly read: Effect.Effect<Schema.Json | Unavailable | Removed>
   readonly initial: (value: Schema.Json) => string | undefined
+  readonly appeared: (value: Schema.Json) => string | undefined
   readonly changed: (previous: Schema.Json, current: Schema.Json) => string | undefined
   readonly removed: (previous: Schema.Json) => string | undefined
 }
@@ -48,6 +49,8 @@ export declare namespace Source {
       readonly initial: (current: A) => string
       readonly changed: (previous: A, current: A) => string
       readonly removed?: (previous: A) => string
+      /** Renders a value whose key was not there before, in an update; falls back to `initial`. */
+      readonly appeared?: (current: A) => string
     }
   }
 }
@@ -89,6 +92,10 @@ export function make<A>(source: Source.Definition<A>): List {
   const decode = Schema.decodeUnknownOption(source.codec)
   const encode = Schema.encodeSync(source.codec)
   const initial = (value: A) => requireText(source.key, "initial", source.render.initial(value))
+  const appeared = (value: A) =>
+    source.render.appeared === undefined
+      ? initial(value)
+      : requireText(source.key, "appeared", source.render.appeared(value))
   const decodeValue = (value: Schema.Json) => Option.getOrUndefined(decode(value))
   return [
     {
@@ -104,11 +111,15 @@ export function make<A>(source: Source.Definition<A>): List {
         const decoded = decodeValue(value)
         return decoded === undefined ? undefined : initial(decoded)
       },
+      appeared: (value) => {
+        const decoded = decodeValue(value)
+        return decoded === undefined ? undefined : appeared(decoded)
+      },
       changed: (previous, current) => {
         const before = decodeValue(previous)
         const after = decodeValue(current)
         if (after === undefined) return undefined
-        if (before === undefined) return initial(after)
+        if (before === undefined) return appeared(after)
         return requireText(source.key, "changed", source.render.changed(before, after))
       },
       removed: (previous) => {
@@ -185,7 +196,7 @@ export function renderUpdate(
       const next = current.value
       const text = Object.hasOwn(previous, source.key)
         ? source.changed(previous[source.key], next)
-        : source.initial(next)
+        : source.appeared(next)
       return text === undefined ? [] : [text]
     }),
   )

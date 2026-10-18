@@ -1719,6 +1719,42 @@ describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the pr
       )
   }
 
+  // Local variants are repository-supplied files: the same reachable gate, imports and kind apply to them as to shared names.
+  for (const name of ["ORBIT.local.md", CompatNames.vendor.localInstructions])
+    for (const trusted of [false, true]) {
+      const world = trusted ? "trusted" : "not trusted"
+      ;(linked ? it.live : it.live.skip)(`gates ${name} that is a link out of the project, in a project that is ${world}`, () =>
+        Effect.gen(function* () {
+          const { where, secret } = yield* layout
+          yield* Effect.promise(() => fs.symlink(secret, path.join(where.repo, name)))
+          yield* Effect.gen(function* () {
+            const discovery = yield* start()
+            const text = (yield* readBody(yield* discovery.load())).text
+            expect(text.includes("TOP SECRET MARKER")).toBe(trusted)
+            const files = (yield* discovery.list()) as readonly InstructionDiscovery.File[]
+            expect(files.map((item) => String(item.path))).toEqual(trusted ? [secret] : [])
+            if (trusted) expect(files.map((item) => item.kind)).toEqual(["local"])
+          }).pipe(scoped(where, trusted))
+        }),
+      )
+
+      it.live(`gates an import outside the project from ${name}, and labels what it imports local, in a project that is ${world}`, () =>
+        Effect.gen(function* () {
+          const { where, above, inside } = yield* layout
+          const local = path.join(where.repo, name)
+          yield* write(local, `${import_(inside)}\n${import_(above)}`)
+          yield* Effect.gen(function* () {
+            const discovery = yield* start()
+            const files = (yield* discovery.list()) as readonly InstructionDiscovery.File[]
+            expect(files.map((item) => String(item.path))).toEqual(trusted ? [local, inside, above] : [local, inside])
+            expect(files.map((item) => item.kind)).toEqual(files.map(() => "local"))
+            const text = (yield* readBody(yield* discovery.load())).text
+            expect(text.includes("ABOVE MARKER")).toBe(trusted)
+          }).pipe(scoped(where, trusted))
+        }),
+      )
+    }
+
   it.live("counts an import with the drive or the folder in another case as inside on Windows", () =>
     Effect.gen(function* () {
       if (process.platform !== "win32") return
@@ -2633,7 +2669,7 @@ describe("InstructionDiscovery renders kinds, the header and order notes", () =>
       })
       return discovery
     }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node]))))
-  const anchors = ["from general to specific", "not a request to respond to"]
+  const anchors = ["from general to specific", "not a request to respond to", "do what the file asks"]
 
   it.effect("starts the baseline with the header, which carries the precedence and the relevance anchors", () =>
     Effect.gen(function* () {
@@ -2660,6 +2696,36 @@ describe("InstructionDiscovery renders kinds, the header and order notes", () =>
       expect(update).toContain("New instructions apply from:")
       expect(update).toContain("no longer apply")
       for (const anchor of anchors) expect(update).not.toContain(anchor)
+    }),
+  )
+
+  it.effect("renders no header in the update that brings the first instruction file of a session", () =>
+    Effect.gen(function* () {
+      const discovery = yield* withFiles([file("/repo/ORBIT.md", "created later")])
+      const update = (yield* readUpdate(yield* discovery.load(), state({}))).text
+      expect(update).toBe("New instructions apply from:\nInstructions from: /repo/ORBIT.md\ncreated later")
+      for (const anchor of anchors) expect(update).not.toContain(anchor)
+    }),
+  )
+
+  it.effect("tells no change of order when several files are added together at the end", () =>
+    Effect.gen(function* () {
+      const old = stored([{ path: "/repo/ORBIT.md", content: "root" }])
+      const discovery = yield* withFiles([
+        file("/repo/ORBIT.md", "root"),
+        file("/repo/ORBIT.local.md", "mine"),
+        file("/repo/docs/x.md", "x"),
+      ])
+      const update = (yield* readUpdate(yield* discovery.load(), old)).text
+      expect(update).toContain("/repo/docs/x.md")
+      expect(update).not.toContain("order of the instruction files changed")
+      // The control: the same two files added before an existing one do change what outranks what.
+      const middle = yield* withFiles([
+        file("/repo/ORBIT.local.md", "mine"),
+        file("/repo/docs/x.md", "x"),
+        file("/repo/ORBIT.md", "root"),
+      ])
+      expect((yield* readUpdate(yield* middle.load(), old)).text).toContain("order of the instruction files changed")
     }),
   )
 

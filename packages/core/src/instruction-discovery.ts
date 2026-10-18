@@ -154,6 +154,7 @@ export const layer = (options?: Options) =>
           read: Effect.succeed(value),
           render: {
             initial: renderInitial,
+            appeared: (files) => `New instructions apply from:\n${render(files)}`,
             changed: renderUpdate,
             removed: () => "Previously loaded instructions no longer apply.",
           },
@@ -204,6 +205,7 @@ export const node = configured(
 // the model as chronological updates after it. The header belongs to the baseline alone and never repeats in an update.
 export const HEADER =
   "These are the instruction files in effect for this session. Follow them where they apply to the task. " +
+  "Where a file asks for something other than what you would do by default, do what the file asks. " +
   "They are listed from general to specific, and where two of them conflict the later one takes precedence. " +
   "They are standing background for the work, not a request to respond to."
 
@@ -241,8 +243,9 @@ function renderUpdate(previous: ReadonlyArray<File>, current: ReadonlyArray<File
   const before = previous.filter((file) => surviving.has(file.path)).map((file) => file.path)
   const ordered = current.filter((file) => kept.has(file.path)).map((file) => file.path)
   const reordered = before.some((path, index) => path !== ordered[index])
-  // A file that lands anywhere but last changes what outranks what, so it is told as well.
-  const placed = changes.added.length === 0 || changes.added.every((file) => current.at(-1) === file)
+  // Files that land anywhere but together at the end change what outranks what, so that is told as well.
+  const tail = current.slice(current.length - changes.added.length)
+  const placed = changes.added.every((file, index) => tail[index] === file)
   const texts = [
     ...changes.removed.map((file) => `The instructions from ${file.path} no longer apply.`),
     ...changes.added.map((file) => `New instructions apply from:\n${render([file])}`),

@@ -611,6 +611,31 @@ describe("SessionInstructions in a project that is not trusted", () => {
     }).pipe(Effect.provide(logger))
   })
 
+  // The same row for the local names: a local variant that a link leads out of the project sends nothing.
+  for (const name of ["ORBIT.local.md", CompatNames.vendor.localInstructions])
+    linked(`does not inject ${name} when it is a symlink out of the project, trusted or not`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const outside = (yield* tmpdirScoped()).path
+        const secret = path.resolve(outside, "secret.txt")
+        yield* mkdir(path.resolve(dir, "sub"))
+        yield* writeAgents(secret, "TOP SECRET")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.resolve(dir, "sub", "file.txt"), "content")
+          await fs.symlink(secret, path.resolve(dir, "sub", name))
+        })
+        const registry = yield* Tool.Service
+        const trust = yield* ProjectTrust.Service
+        const sessionID = yield* sessionIn(dir)
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+        expect(yield* synthetics(sessionID)).toHaveLength(0)
+        yield* trust.grant({ persist: false, via: "test" })
+        yield* executeTool(registry, readCall(sessionID, "call-trusted", "sub/file.txt", { limit: 5 }))
+        expect(yield* synthetics(sessionID)).toHaveLength(0)
+        expect(yield* providerText(sessionID)).not.toContain("TOP SECRET")
+      }),
+    )
+
   // The control of the row above, in the same layout: a plain file that holds the marker loads in both states.
   untrusted.live("injects a plain nested file that holds the same marker, before and after it is trusted", () =>
     Effect.gen(function* () {
