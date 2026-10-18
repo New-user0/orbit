@@ -153,13 +153,12 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (8)
+### M4 (7)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
 | FU-M1-014 | External editor starts with shell:true and has no decoy test | 10, 14 | A regression could let a repository's vim.bat or code.cmd run in place of the editor. | low today (variable is set) | S: route like openFile via which | clients-ux-14 | Known gaps; plan Found while mapping; PR #27 review | packages/tui/src/editor.ts:27 shell: process.platform === 'win32' |
 | FU-M1-023 | Dormant instructions config key needs a real-path guard when wired | 4 | Wiring the key without the guard would read files through links out of the project. | low; dormant | S when wired | prompts-context-9b | Known gaps; plan M1 table (prompts-context-9b adds @path imports and does not wire the key, so the row stays open) | packages/schema/src/config.ts:131 instructions key; docs/untrusted-repositories.md:1948 |
-| FU-M3-043 | vim_mode and output_style are not in the status line watch list | behaviour | The line keeps the old mode or style until the next trigger. | medium | S | clients-ux-8 | PR #73 C8 follow-up | packages/tui/src/component/prompt/index.tsx:1729-1738 |
 | FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file; share stat after the write; lexical fallback when a hook strips Write output | 14,13 | Misleading reason; regressions unnoticed. | low | S | file-web-tools-9 | PR #84 C0-C8 | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
 | FU-M3-154 | LSP: content-modified retry re-sends the document; server starts before the size cap and read; git check-ignore batch fails whole on one bad path; junction Location hides nothing | perf,7 | Extra didChange; one bad path shows every ignored file. | low | S | file-web-tools-9 | PR #92 C0-C4 | packages/core/src/lsp/index.ts ignored() |
 | FU-M4-004 | The run result prints the spend of responses only, while turn limits also count side queries and generations | behaviour | A run stopped by side-query spend prints a cost below its own --max-cost. | low | S | loop-robustness-18 | turn-spend study, section 4 | packages/cli/src/run/noninteractive.ts reconcile and packages/cli/src/run/stream.ts spentFromHistory sum assistant rows; SessionTurn.usage also reads session_usage |
@@ -418,7 +417,7 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M3-035 | Approval matrix rows that cannot fail: Patch decoy patchText, core Read rows calling authorizeRead, replay link rows for NotebookEdit, Glob, Grep and Patch; indentation and prettier drift | 14 | A regression in those tools' replay places passes the suite. | n/a | S | sweep | PR #72 C5 minors 4-5, C6 m1 and m4 | packages/cli/test/acp/replay.test.ts:116 (input spells only file_path) |
 | FU-M3-036 | No test pins that a pending shell call with no input names no place | 14,15 | Docs claim it (untrusted-repositories.md, upgrading.md) with no test. | n/a | S | sweep | PR #72 C6 m2 | packages/cli/src/acp/tool.ts:121; no empty-input shell row in packages/cli/test/acp/tool.test.ts |
 | FU-M3-037 | VS Code Open diff for a move has no test | 14 | A regression in the move diff goes unnoticed. | n/a | S | sweep | PR #72 C1 | packages/vscode (unit tests do not load the VS Code API) |
-| FU-M3-045 | Status line tests: undisposed createRoot, vim_mode pinned only for the start mode, version/session_id/duration only in the builder, watch entry for project.directory equivalent by ordering | 14 | Regressions in those fields go unnoticed. | n/a | S | sweep | PR #73 C3, C6, C8 m2 and follow-ups | packages/tui/test/status-line-app.test.tsx (no "vim":"normal" row) |
+| FU-M3-045 | Status line tests: undisposed createRoot, vim_mode pinned only for the start mode, version/session_id/duration only in the builder, watch entry for project.directory equivalent by ordering | 14 | Regressions in those fields go unnoticed. | n/a | S | sweep | PR #73 C3, C6, C8 m2 and follow-ups | packages/tui/test/status-line-app.test.tsx (the vim mode `normal` is now pinned by 'the status line reruns when the vim mode or the output style changes' in clients-ux-8; the rest of the row stays open) |
 | FU-M3-049 | ORBIT_PWSH_PARSE_TIMEOUT_MS read once at layer build | behaviour | A changed value after startup is ignored (tests only). | low | S | sweep | PR #74 C10-C16 | packages/core/src/shell/powershell-parse.ts:312 |
 | FU-M3-064 | Absolute-place permission table does not go through FileAccess | 14 | If FileAccess asked relative to the project root, no row would fail. | n/a | S | sweep | PR #75 C5 m2 | packages/core/test/permission.test.ts absolute-place table (resources written by hand) |
 | FU-M3-070 | Plugin route title not pinned; app-lifecycle width test flaked once | 9,14 | Reverting terminalTitle passes every test. | n/a | S | sweep | PR #76 C3 and C6 | packages/tui/src/app.tsx:651; no docs/known-failures.md row |
@@ -621,6 +620,7 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 
 | id | title | fixed by | test |
 |---|---|---|---|
+| FU-M3-043 | vim_mode and output_style are not in the status line watch list | 43822725 | test packages/tui/test/status-line-app.test.tsx 'the status line reruns when the vim mode or the output style changes' (and status-line-trust.test.tsx 'a vim mode change in an untrusted start folder starts no status line command') |
 | FU-M1-017 | Git.clean compared paths with startsWith | 97cb7e7 | test packages/flow/test/git.test.ts 'a run is cleaned up whatever case the repository path is spelled with'. Known gaps entry and class 5 text are stale |
 | FU-M1-025 | No in-repo list of known test failures | 933be24 | Known gaps entry 'No list of known failures' is stale |
 | FU-M1-029 | which resolved relative PATH entries against the working folder | 9aaaeed | test packages/util/test/which.test.ts (util.which) |
@@ -838,11 +838,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task turn-spend raised (FU-M4-004 to FU-M4-007) = 717.
-- Output: 634 rows plus 83 listed duplicates = 717. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 634 register rows have a table entry.
-- Open minors by carrier: M4: 8, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 148, Owner: 95.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) = 713.
+- Output: 630 rows plus 83 listed duplicates = 713. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 630 register rows have a table entry.
+- Open minors by carrier: M4: 5, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 148, Owner: 93.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
-- Fixed: 125.
+- Fixed: 126.
 - Duplicates: 83.
-- Check: 423 open + 86 owner + 125 fixed + 83 duplicates = 717, the 717 inputs.
+- Check: 418 open + 86 owner + 126 fixed + 83 duplicates = 713, the 713 inputs.
