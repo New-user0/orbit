@@ -888,6 +888,10 @@ export function projectLocal(head: string, ctx: ShellAnalysis.Context) {
     const relative = raw
       .split(delimiter)
       .map((item) => item.replace(/^"(.*)"$/, "$1"))
+      // An empty entry stands for the working folder in a POSIX shell. On Windows Git Bash drops it and Windows
+      // PowerShell 5.1 does not search the folder for it (pinned by the probes in readonly-tools.test.ts), so it only
+      // gets every command refused.
+      .filter((item) => item !== "" || ctx.platform !== "win32")
       .some((item) => item === "" || item === "." || !ctx.path.isAbsolute(item))
     if (relative) return true
   }

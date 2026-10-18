@@ -1163,11 +1163,11 @@ describe("ShellTool", () => {
     ),
   )
 
-  // The positive rows need a PATH the read-only analysis trusts (no empty or relative entry); a Windows Path often has
-  // one, and Linux runs them (tools/linux-test).
+  // The positive rows need a PATH the read-only analysis trusts (no relative entry, and no empty one off Windows, where
+  // an empty entry is dropped); a Windows Path may have a relative one, and Linux runs them (tools/linux-test).
   const cleanPath = (process.env.PATH ?? "")
     .split(path.delimiter)
-    .every((entry) => entry !== "" && path.isAbsolute(entry))
+    .every((entry) => (entry === "" ? isWindows : path.isAbsolute(entry)))
   const wiring = cleanPath ? it.live : it.live.skip
   const bashOnly = isWindows ? it.live.skip : wiring
 
