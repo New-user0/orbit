@@ -532,6 +532,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
+- Agent, skill and command names and descriptions that a folder supplies: the TUI agent and skill dialogs, the `@` and `/` autocomplete and every Mini menu (`RunFooterMenu` in `src/mini/footer.menu.tsx`, the single render site for the Mini `/` and `@` composer) draw them through `plain`. Proof: `test/component/dialog-listings.test.tsx`, `test/prompt/autocomplete-hostile.test.tsx`, `test/mini/footer.view.test.tsx` (hostile row beside a trusted one).
 - Message bodies on the session screen and in Mini: `bodyText` and `outputText` (`src/util/renderer.ts`),
   `entryBody` (`src/mini/entry.body.ts`) and `permissionPresentation` (`src/util/permission.ts`). Proof: one
   table-driven `captureCharFrame` test on the real components, each with a hostile row and a trusted control row that

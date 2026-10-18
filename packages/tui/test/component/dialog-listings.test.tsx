@@ -5,7 +5,7 @@ import { agent, renderLocal } from "../fixture/local"
 import { directory, json } from "../fixture/tui-client"
 
 // Repository-supplied names and descriptions reach the pickers through `plain`: no control byte survives to the frame.
-const hostile = "line\u001b]0;pwned\u0007 one\r\ntwo three"
+const hostile = "line\u001b]0;pwned\u0007 one‮\r\ntwo three"
 
 test("the agent picker draws a hostile name and description without control characters", async () => {
   await using setup = await renderLocal({
@@ -17,6 +17,8 @@ test("the agent picker draws a hostile name and description without control char
   setup.dialog.replace(() => <DialogAgent />)
   const frame = await setup.waitForFrame((frame) => frame.includes("Select agent"))
   expect(frame).toContain("one")
+  expect(frame).toContain("build")
+  expect(frame).toContain("ok")
   expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
 })
 
@@ -26,12 +28,17 @@ test("the skill picker draws a hostile name and description without control char
       if (url.pathname !== "/api/skill") return
       return json({
         location: { directory },
-        data: [{ id: "one", name: "sk\u001b[2Jill", description: hostile, path: "/x", content: "" }],
+        data: [
+          { id: "one", name: "sk\u001b[2Jill", description: hostile, path: "/x", content: "" },
+          { id: "two", name: "zzgoodskill", description: "fine desc", path: "/y", content: "" },
+        ],
       })
     },
   })
   setup.dialog.replace(() => <DialogSkill onSelect={() => {}} />)
   const frame = await setup.waitForFrame((frame) => frame.includes("Skills"))
   expect(frame).toContain("one")
+  expect(frame).toContain("zzgoodskill")
+  expect(frame).toContain("fine desc")
   expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
 })

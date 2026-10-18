@@ -2672,3 +2672,25 @@ test.each([
     app.renderer.destroy()
   }
 })
+
+test("direct footer draws a hostile command name and description in the slash menu without control characters", async () => {
+  const app = await renderFooter({
+    commands: [
+      command({ name: "zzcmd\u001b[2J", description: "line\u001b]0;pwned\u0007 o‮ne" }),
+      command({ name: "zzgood", description: "fine" }),
+    ],
+  })
+
+  try {
+    await app.renderOnce()
+    "/zz".split("").forEach((key) => app.mockInput.pressKey(key))
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("zzgood")
+    expect(frame).toContain("fine")
+    expect(frame).toContain("zzcmd")
+    expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
+  } finally {
+    app.cleanup()
+  }
+})

@@ -3,7 +3,7 @@ import { createAppFixture, promptReady } from "../fixture/app"
 import { directory, json } from "../fixture/tui-client"
 
 // Skill and command text comes from repository files, so the @ and / pickers draw it through `plain`.
-const hostile = "line\u001b]0;pwned\u0007 one\r\ntwo three"
+const hostile = "line\u001b]0;pwned\u0007 one‮\r\ntwo three"
 const location = { directory, project: { id: "proj_test", directory, canonical: directory } }
 
 async function draw(prefix: string, trusted: string) {
