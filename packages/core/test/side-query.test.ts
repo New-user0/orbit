@@ -23,6 +23,7 @@ import { Provider } from "@orbit/core/provider"
 import { ReferenceInstructions } from "@orbit/core/reference/instructions"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionContext } from "@orbit/core/session/context"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionEvent } from "@orbit/core/session/event"
 import { InstructionState } from "@orbit/core/session/instruction-state"
 import { SessionMessage } from "@orbit/core/session/message"
@@ -122,6 +123,7 @@ const it = testEffect(
         SessionStore.node,
         Agent.node,
         SessionContext.node,
+        SessionReminders.node,
         InstructionBuiltIns.node,
         PluginHooks.node,
         llmClient,
@@ -175,6 +177,7 @@ const setup = (config?: {
     const agents = yield* Agent.Service
     const projects = yield* Project.Service
     const context = yield* SessionContext.Service
+    const reminders = yield* SessionReminders.Service
     const store = yield* SessionStore.Service
     yield* agents.transform((editor) => {
       editor.update(Agent.ID.make("build"), (agent) => {
@@ -211,6 +214,7 @@ const setup = (config?: {
         return Effect.provide(
           Layer.mergeAll(
             Layer.succeed(SessionContext.Service, context),
+            Layer.succeed(SessionReminders.Service, reminders),
             Layer.mock(Plugin.Service, { awaitActivation: config?.activation ?? Effect.void }),
           ) as Layer.Layer<Instance.Services>,
         )

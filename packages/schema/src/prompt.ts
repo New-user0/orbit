@@ -61,23 +61,46 @@ export const SkillAttachment = Schema.Struct({
   mention: PromptMention.pipe(optional),
 }).annotate({ identifier: "Prompt.SkillAttachment" })
 
+const Line = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+
+/**
+ * What the person's editor showed when the prompt was sent: the file that is open and, optionally, the selected lines.
+ * The client converts the editor's positions before sending: lines are 1-based and inclusive, and a selection that ends
+ * at column 0 of its last line stops at the line before it. A selection that ends before it starts
+ * is dropped at admission, and the prompt is admitted without the field. A command (`session.command`) accepts the field
+ * but does not carry it on. A steer delivered while the agent is still working is stored with the field, but the model
+ * is not shown it: only a prompt sent while idle carries the editor context.
+ */
+export interface EditorContext extends Schema.Schema.Type<typeof EditorContext> {}
+export const EditorContext = Schema.Struct({
+  /** The absolute path the editor reported. */
+  path: Schema.NonEmptyString,
+  selection: Schema.Struct({
+    start: Line,
+    end: Line,
+    text: Schema.String,
+  }).pipe(optional),
+}).annotate({ identifier: "Prompt.EditorContext" })
+
 export interface Prompt extends Schema.Schema.Type<typeof Prompt> {}
 export const Prompt = Schema.Struct({
   text: Schema.String,
   files: Schema.Array(FileAttachment).pipe(optional),
   agents: Schema.Array(AgentAttachment).pipe(optional),
   skills: Schema.Array(SkillAttachment).pipe(optional),
+  editor: EditorContext.pipe(optional),
 })
   .annotate({ identifier: "Prompt" })
   .pipe(
     statics((schema) => ({
       equivalence: Schema.toEquivalence(schema),
-      fromUserMessage: (input: Pick<Prompt, "text" | "files" | "agents" | "skills">) =>
+      fromUserMessage: (input: Pick<Prompt, "text" | "files" | "agents" | "skills" | "editor">) =>
         schema.make({
           text: input.text,
           ...(input.files === undefined ? {} : { files: input.files }),
           ...(input.agents === undefined ? {} : { agents: input.agents }),
           ...(input.skills === undefined ? {} : { skills: input.skills }),
+          ...(input.editor === undefined ? {} : { editor: input.editor }),
         }),
     })),
   )

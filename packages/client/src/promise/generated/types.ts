@@ -158,6 +158,8 @@ export type PromptFileSource = { type: "inline" } | { type: "uri"; uri: string }
 
 export type PromptMention = { start: number; end: number; text: string }
 
+export type PromptEditorContext = { path: string; selection?: { start: number; end: number; text: string } }
+
 export type SessionTurnOutput = { schema: { [x: string]: JsonValue }; attempts?: number }
 
 export type SessionInboxDelivery = "steer" | "queue"
@@ -1924,6 +1926,7 @@ export type SessionMessageUser = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
+  editor?: PromptEditorContext
   turn?: SessionTurnOptions
   delivery?: SessionInboxDelivery
   type: "user"
@@ -1934,6 +1937,7 @@ export type SessionInboxUserPayload = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
+  editor?: PromptEditorContext
   metadata?: { [x: string]: JsonValue }
   turn?: SessionTurnOptions
 }
@@ -1943,6 +1947,7 @@ export type SessionInboxUserPayload1 = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
+  editor?: PromptEditorContext
   metadata?: { [x: string]: any }
   turn?: SessionTurnOptions
 }
@@ -3493,6 +3498,10 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly editor?: {
+            readonly path: string
+            readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+          }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -3840,6 +3849,10 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly editor?: {
+            readonly path: string
+            readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+          }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -4187,6 +4200,10 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly editor?: {
+            readonly path: string
+            readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+          }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -4528,6 +4545,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4556,6 +4577,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4584,6 +4609,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4612,6 +4641,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4640,6 +4673,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4651,6 +4688,38 @@ export type SessionPromptInput = {
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["skills"]
+  readonly editor?: {
+    readonly id?: string | null
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly agents?: ReadonlyArray<{
+      readonly name: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly skills?: ReadonlyArray<{
+      readonly id: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
+    readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
+    }
+    readonly delivery?: ("steer" | "queue") | null
+    readonly resume?: boolean | null
+  }["editor"]
   readonly metadata?: {
     readonly id?: string | null
     readonly text: string
@@ -4668,6 +4737,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4696,6 +4769,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4724,6 +4801,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4752,6 +4833,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4786,6 +4871,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["name"]
   readonly text: {
@@ -4805,6 +4894,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["text"]
   readonly files?: {
@@ -4824,6 +4917,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["files"]
   readonly agents?: {
@@ -4843,6 +4940,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["agents"]
   readonly skills?: {
@@ -4862,8 +4963,35 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["skills"]
+  readonly editor?: {
+    readonly name: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly agents?: ReadonlyArray<{
+      readonly name: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly skills?: ReadonlyArray<{
+      readonly id: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
+    readonly delivery?: ("steer" | "queue") | null
+  }["editor"]
   readonly delivery?: {
     readonly name: string
     readonly text: string
@@ -4881,6 +5009,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["delivery"]
 }

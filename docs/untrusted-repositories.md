@@ -518,6 +518,26 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Terminal UI** (`packages/tui`):
 
+- The editor locks: `readLocks` and `discoverEditors` (`src/editor.ts`) read `<state>/ide/<port>.lock`, a folder that Orbit
+  owns and a clone does not supply. Each file is capped (`IdeLock.lockCap`), must be a plain file named digits and
+  `.lock`, and is decoded with a schema (version 1, a pid that is a positive integer, a port that equals the name, absolute
+  workspace folders, a token of the shared shape, which is checked before the value goes into a header). A bad file costs
+  one log line, once per file and change, never quotes the file, and never stops a good sibling; a lock whose pid is gone
+  is skipped, and the terminal UI never deletes a lock. A workspace folder holds the session folder by real path
+  (`FSUtil.contains` on `realpathSync.native` of both, NFC), so a link, a shared prefix or a dangling link cannot make a
+  window match; a network or device spelling is compared as written and never read from disk. The editor's name goes
+  through `plain`. A selection or mention frame whose file name holds a control character, a line or paragraph separator, a bidi
+  control or a zero-width space is dropped whole with one log line, since a clone can name its files as it likes; a
+  refused selection also clears the stored one, so the previous file's selection never goes with the next prompt. The
+  joiners ZWNJ and ZWJ and the soft hyphen are ordinary in some scripts' file names, so they pass (the trade-off: the
+  footer and prompt show them as written). The footer label goes through `plain` as a second guard for the Zed source,
+  whose names do not pass this check; that guard is not pinned by a test yet, so it is a defence in depth and not a claim.
+  A frame over `IdeLock.frameCap` is dropped.
+  Proof: `test/context/editor.test.tsx` (the hostile-name and frame-cap rows) and `test/editor-bridge-app.test.tsx` (the
+  drawn footer and prompt). The token goes into the `x-orbit-ide-token` header and nowhere else. Proof: `test/editor.test.ts` (the
+  discovery rows), `test/context/editor.test.tsx` (a real server: header, hello, ignored frames, reconnect that reads the
+  lock again, no connection without the port, `TERM_PROGRAM=vscode` or `autoConnect`).
+
 - Custom themes (`discoverThemes`, called by the terminal UI's theme provider and by Mini when they mount): a JSON file
   per theme, read from `<folder>/.orbit/themes` of every folder above the working folder, before any trust answer. It is
   data, not code, so trust does not gate it; the class 6 rule does: a name that is, or leads through a link to, a share
@@ -581,6 +601,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **VS Code extension** (`packages/vscode`, which runs in VS Code's extension host: not an Orbit process, and shared with
 every other extension):
+
+- The IDE bridge (`src/ide-bridge.ts`): a WebSocket server on `127.0.0.1` (the literal, never a name), port 0, with a
+  4 KiB frame limit, that accepts an upgrade only with the token in the `x-orbit-ide-token` header (constant-time compare,
+  answer 401, one log line that never holds a token; the token is never read from the URL). The token lives in a lock file
+  written with mode 0600 in a 0700 folder, by temporary file and rename (retried on EPERM, EBUSY and EACCES while a reader
+  holds the lock; the temporary file is removed when it still fails), and is never put in the environment (only the
+  port is). It makes no outbound connection and starts no program (`orb` included). `orbit.ideBridge.enabled` has
+  machine scope and is read from the user's own settings only, and the extension stays off in an untrusted VS Code
+  workspace. At start it removes only version 1 locks whose pid is gone. Proof: `test/ide-bridge.test.ts` and
+  `test/manifest.test.ts` (the setting's decision row, the command's gate row, the scan of the doors).
 
 - Whether the folder is trusted, and the question before work starts: `Controller` asks the server for the folder's
   trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
@@ -1594,8 +1624,8 @@ kind in turn.
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
 - One member of the class stays partly open: a child that is handed a `PATH` with a relative entry still searches it (see
-  Known gaps). Another rests on `ProgramLookup.install()` alone, with no test of its own: the terminal UI's external editor.
-  A third is open for a bare name that is on no `PATH`: cross-spawn resolves it in the working folder, with and without an
+  Known gaps). The terminal UI's external editor used to rest on `ProgramLookup.install()` alone and now has a test of its
+  own (Known gaps, "The external editor"). Another is open for a bare name that is on no `PATH`: cross-spawn resolves it in the working folder, with and without an
   extension, and starts the interpreter that the `#!` line of the file it finds names (Known gaps). Known gaps lists each
   with its task. A change must not widen one.
 - Do not hand the spawner a bare name that `which` could not find. `gitExecutable` does not: on Windows a git that is on
@@ -2063,14 +2093,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   `PATH` with an explicit relative entry still searches it: a hand probe with Bun 1.4.2 on Windows had `cmd.exe` run a
   project `.cmd` through a `.` entry even with `NoDefaultCurrentDirectoryInExePath` set (no test pins this). That needs the person's own `PATH` or the person's own config to name
   the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).
-- **The external editor.** `openEditor` in `packages/tui/src/editor.ts` starts `$VISUAL` or `$EDITOR` with `shell: true`
-  on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and
-  `node:child_process` passes the live environment, so the `cmd.exe` has `NoDefaultCurrentDirectoryInExePath` and a
-  `vim.bat` that a repository ships is not found before `PATH` (measured with Bun 1.4.2 on Windows), but no test starts
-  the editor against a decoy (task `clients-ux-14`). `openFile` in the same file, which the `/keybindings` command uses,
-  does not share this: it finds the editor with `which`, starts it by the path it found through cross-spawn, and a
-  Windows test plants a decoy of the same name in the working folder (`test/editor.test.ts`). `openEditor` can take the
-  same route.
+- **The external editor** is fixed (FU-M1-014, task `clients-ux-14`). `openEditor` and `openFile` in
+  `packages/tui/src/editor.ts` share one launcher: the editor is found with `which` on `PATH` alone, started by the path
+  that was found through cross-spawn with `ProgramLookup.environment(undefined)` and no shell, so a `code.cmd`,
+  `vim.bat` or `code.exe` in the folder it runs in is not the one that runs. It calls cross-spawn directly and not the
+  spawner, which sets `windowsHide` on every child and so would hide an editor the person has to see. Proof:
+  `test/editor.test.ts` "starts the prompt editor from PATH and never a code.cmd, code.exe or vim.bat in the folder it
+  runs in" (Windows; decoys, a control that runs each decoy by its path, and `NoDefaultCurrentDirectoryInExePath` deleted
+  first). A value that needs `cmd.exe` no longer starts (upgrading notes).
 - **VS Code, more than one folder.** The chat works in one folder, the one in view when it first connected, and its
   trust question and banner are about that folder. The Runs view and the terminals follow the editor in view, so in a
   workspace of several folders they can act in another one. What they start gates itself in its own process

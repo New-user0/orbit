@@ -648,6 +648,42 @@ who lose them until Orbit's IDE bridge ships, and people who turn compatibility 
 **What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
 not. Leave compatibility on if you want Zed's selection in the TUI.
 
+### The TUI finds VS Code through Orbit's own bridge
+
+The Orbit extension for VS Code now starts a bridge when the window opens (it needs a trusted workspace). The bridge
+listens on `127.0.0.1` on a random port, writes a lock file with that port and a token into the `ide` folder of Orbit's
+state folder (`~/.local/state/orbit/ide`, or under `XDG_STATE_HOME`), and sets `ORBIT_EDITOR_SSE_PORT` in the
+terminals of the window. The terminal UI reads the lock, connects with the token in an `x-orbit-ide-token` header and shows
+the file and selection you are working in. The new command **Orbit: Mention Selection in Terminal** puts an `@` reference
+to the file, with the selected lines, into the prompt of a connected terminal UI. The setting `orbit.ideBridge.enabled`
+(on by default, user settings only) turns the bridge off.
+
+Two things stop working. `ORBIT_EDITOR_SSE_PORT` alone no longer connects the TUI to a WebSocket server: there must be a
+lock under `ide` that names that port and holds a token, and the messages are Orbit's own (`hello`, `selection` and
+`mention`), so a custom editor server that spoke the old JSON-RPC message names is not understood. Outside the terminal of
+VS Code (no `ORBIT_EDITOR_SSE_PORT`, and `TERM_PROGRAM` not `vscode`) the TUI no longer looks for an editor on its own.
+`Env.session()` also withholds every `ORBIT_EDITOR_*` variable from the managed server and from session shells.
+
+**Affects:** TUI users who point `ORBIT_EDITOR_SSE_PORT` at their own editor server, and VS Code users, who get the
+connection without setting anything.
+
+**What to do:** use the Orbit extension for VS Code; set `orbit.ideBridge.enabled` to `false` if you do not want the
+listener. An editor plugin of your own writes a version 1 lock to `ide/<port>.lock` and speaks the message set.
+
+### The prompt editor is started without a shell
+
+`$VISUAL` and `$EDITOR` for the prompt editor (the editor command of the prompt and Mini) are now found on `PATH` and started by the path
+that was found, with no shell, as `/keybindings` already did. On Windows a program of the same name in the folder you work
+in (`code.cmd`, `vim.bat`, `code.exe`) is no longer run in place of your editor. An editor value that relied on `cmd.exe`
+no longer starts: a builtin such as `start /wait notepad`, `%VAR%` expansion, or a program found only in the current
+folder. A value of exactly `code` or `subl` now gets `--wait`, so the prompt waits until the file is closed. A missing
+editor is reported as "Cannot find the editor ... on PATH".
+
+**Affects:** Windows users whose `VISUAL` or `EDITOR` is a shell builtin, uses `%VAR%`, or names a program that is not on
+`PATH`.
+
+**What to do:** give the full path of the editor, quoted if it has spaces, or put it on `PATH`.
+
 ### `orb -p` sends a message and prints the answer
 
 `orb -p <message>` (or `--print`) runs one message the way `orb run` does and exits. The words after the flags are the
@@ -2733,6 +2769,22 @@ The Plan mode text no longer arrives as a stored `session.synthetic` row. The mo
 Sessions that already hold the old Plan mode rows keep working: an old enter row counts as the first reminder and an old leave row as the leave. A running session sees one prompt-cache miss when it first picks this build up.
 
 **Affects:** sessions that use Plan mode, `TodoWrite` or the task tools; clients that listed the Plan reminders as hidden `session.synthetic` rows will no longer see new ones.
+
+**What to do:** Nothing.
+
+### Input sent mid-turn, @agent mentions and editor context reach the model
+
+Three notes are now written while a user message is lowered, from fields the message already stores, and none is stored itself.
+
+- A message that the person sent while the agent was working, and that is steered in right after a round of tool calls, gets a short note ahead of it saying so and that it must be acted on once the current task is done. The person's words stay outside the note, unchanged. Such a message gets only the note and its text: its `@agent` hints and its `editor` field are stored but not shown to the model, because only a prompt sent while idle carries them. A slash command typed mid-turn is steered like any other input, so its expanded text gets the note too (recorded as a deviation; see FU-M4-35). Input that waited in the queue, a first prompt, a prompt after idle, an interruption or a checkpoint, and a steer that follows a final text-only step get no note. A message that a subagent or workflow tool sent to a child session gets a note naming the parent agent as the sender.
+- Each distinct `agents` entry of a prompt adds one hint that the person asked for that agent and that the `Agent` tool starts it. Admission now drops entries that name an agent the tool cannot start (unknown or primary-only); before, a mention had no effect on the model at all.
+- A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative for the platform the server runs on (on Linux and macOS a Windows spelling such as `C:...`, `\...` or `\host...` is relative; a `~name/` spelling counts as relative; only `~`, `~/` and, on Windows, `~\` mean the home folder), cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI keep sending the editor context as a hidden item until a later change moves them.
+
+`orb run --bare` and vanilla instances keep the mid-turn note and drop the hints and the editor note. On a normal instance, compaction summaries and session generations (/btw and the keep-alive warm-up) lower a prompt like the main request, so they share its cache and see the selection; retained recent messages never carry the hints or the editor note. A redacted session export now replaces `editor.path` and the selected text.
+
+Sessions that already hold steered messages gain the note once when first lowered by this build, so a running session sees one prompt-cache miss. A steer that follows a fork, an import or a crash that cut history right after a tool step also gets the note, and the first steer after a completed checkpoint does not.
+
+**Affects:** people who type while the agent works, users of `@agent` mentions, and SDK or protocol clients that can now send `editor` (the generated clients carry it).
 
 **What to do:** Nothing.
 

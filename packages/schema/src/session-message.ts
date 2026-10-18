@@ -79,6 +79,7 @@ export const User = Schema.Struct({
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
   skills: Prompt.fields.skills,
+  editor: Prompt.fields.editor,
   /** The turn options the prompt was admitted with. */
   turn: SessionTurn.Options.pipe(optional),
   /**

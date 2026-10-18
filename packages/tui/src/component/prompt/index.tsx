@@ -47,6 +47,7 @@ import { DialogHistorySearch } from "./dialog-history-search"
 import { type AutocompleteOption, type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { Locale } from "../../util/locale"
+import { plain } from "@orbit/util/plain"
 import { errorMessage } from "../../util/error"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
@@ -168,10 +169,13 @@ function hasEditorRangeSelection(selection: EditorSelection["ranges"][number]) {
   )
 }
 
-function getEditorRangeLabel(selection: EditorSelection["ranges"][number]) {
+// Positions count from 1. A selection that ends at the first character of a later line does not cover that line.
+export function getEditorRangeLabel(selection: EditorSelection["ranges"][number]) {
   if (!hasEditorRangeSelection(selection)) return
-  if (selection.selection.start.line === selection.selection.end.line) return `#${selection.selection.start.line}`
-  return `#${selection.selection.start.line}-${selection.selection.end.line}`
+  const { start, end } = selection.selection
+  const last = end.character === 1 && end.line > start.line ? end.line - 1 : end.line
+  if (start.line === last) return `#${start.line}`
+  return `#${start.line}-${last}`
 }
 
 function formatEditorContext(selection: EditorSelection) {
@@ -278,7 +282,7 @@ export function Prompt(props: PromptProps) {
     const file = /^index\.[^./]+$/.test(filename)
       ? [path.basename(path.dirname(value)), filename].filter(Boolean).join("/")
       : filename
-    return `${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`
+    return plain(`${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`)
   })
   const editorFileLabelDisplay = createMemo(() => {
     const file = editorFileLabel()

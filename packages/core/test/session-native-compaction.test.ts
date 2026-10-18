@@ -422,6 +422,26 @@ it.live("rejects request-hook route rewrites before provider compaction", () =>
   }),
 )
 
+test("retained users keep their words and lose the agent hint and the editor note", () => {
+  const model = SessionRunnerModel.resolved(OpenAI.responses("gpt-5.4-mini"), {
+    capabilities: { tools: true, input: ["text"], output: ["text"] },
+    cost: [],
+    limit: { context: 200_000, output: 32_000 },
+  })
+  const message = SessionMessage.User.make({
+    id: SessionMessage.ID.create(),
+    type: "user",
+    text: "Fix it",
+    agents: [{ name: "helper" }],
+    editor: { path: "/project/src/open-file.ts" },
+    time: { created: DateTime.makeUnsafe(0) },
+  })
+  const retained = JSON.stringify(SessionCompaction.recentUserMessages([message], model, 64_000))
+  expect(retained).toContain("Fix it")
+  expect(retained).not.toContain("requested agent")
+  expect(retained).not.toContain("open-file.ts")
+})
+
 test("retained user budget counts attachments and drops whole oldest messages", () => {
   const model = SessionRunnerModel.resolved(OpenAI.responses("gpt-5.4-mini"), {
     capabilities: { tools: true, input: ["text", "image"], output: ["text"] },

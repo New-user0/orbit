@@ -38,3 +38,20 @@ test("session environment omits server credentials", () => {
   expect(environment.ORBIT_SERVER_PASSWORD).toBeUndefined()
   expect(environment.ORBIT_SESSION_ENV_TEST).toBe("included")
 })
+
+test("session environment omits the editor bridge variables, and keeps other ORBIT_ ones", () => {
+  process.env.ORBIT_EDITOR_SSE_PORT = "4021"
+  process.env.ORBIT_EDITOR_OTHER = "1"
+  process.env.ORBIT_EDITORIAL = "kept"
+
+  const environment = Env.session()
+
+  delete process.env.ORBIT_EDITOR_SSE_PORT
+  delete process.env.ORBIT_EDITOR_OTHER
+  delete process.env.ORBIT_EDITORIAL
+
+  // A nested orb in a session's shell must not take itself for a terminal of the editor.
+  expect(environment.ORBIT_EDITOR_SSE_PORT).toBeUndefined()
+  expect(environment.ORBIT_EDITOR_OTHER).toBeUndefined()
+  expect(environment.ORBIT_EDITORIAL).toBe("kept")
+})
