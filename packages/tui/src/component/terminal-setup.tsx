@@ -1,3 +1,4 @@
+import type { JSX } from "solid-js"
 import os from "node:os"
 import { plain } from "@orbit/util/plain"
 import { DialogAlert } from "../ui/dialog-alert"
@@ -18,7 +19,7 @@ type Context = {
   capabilities: { kitty_keyboard?: boolean } | null | undefined
   /** The keys that insert a newline in the prompt, as the person has them bound. */
   newlineKeys: string
-  dialog: { replace(render: () => any): void; clear(): void }
+  dialog: { replace(render: () => JSX.Element): void; clear(): void }
   toast: { show(input: { variant: "info" | "success" | "warning" | "error"; message: string }): void }
   copy(text: string): Promise<void>
 }

@@ -80,7 +80,8 @@ it.live("a path outside every config directory changes nothing", () =>
     yield* Effect.promise(() => fs.writeFile(hidden, agent("w things")))
 
     const response = yield* call("/api/experimental/config/sources/changed", {
-      paths: [outside, elsewhere, "relative/y.md", path.join(project, "does-not-exist.md")],
+      // The last one is inside a config directory, but nothing is there: a file that does not exist was not written.
+      paths: [outside, elsewhere, "relative/y.md", path.join(project, "does-not-exist.md"), path.join(project, ".orbit", "agents", "missing.md")],
     })
     expect(response.status).toBe(204)
     yield* Effect.sleep("600 millis")
@@ -107,9 +108,13 @@ it.live("a link out of the config directory is not followed", () =>
       ),
     )
     if (!made) return
+    // Written into the real config directory and never reported: it shows up only if the report made the server read the directory.
+    yield* Effect.promise(() => fs.writeFile(path.join(agents, "w.md"), agent("w things")))
     yield* call("/api/experimental/config/sources/changed", { paths: [path.join(link, "v.md")] })
     yield* Effect.sleep("600 millis")
-    expect(yield* names).not.toContain("v")
+    const list = yield* names
+    expect(list).not.toContain("v")
+    expect(list).not.toContain("w")
   }),
 )
 

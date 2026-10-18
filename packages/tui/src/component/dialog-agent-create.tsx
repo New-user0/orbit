@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core"
 import { Permission } from "@orbit/schema/permission"
 import { plain } from "@orbit/util/plain"
+import path from "node:path"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"
@@ -198,8 +199,8 @@ function NameStep(props: {
   onSubmit: (value: string) => void
   onBack: () => void
 }) {
-  let theme: ReturnType<ReturnType<typeof useTheme>["surface"]>
-  try { theme = useTheme().surface("dialog") } catch (e) { console.log("THEME FAIL", e); throw e }
+
+  const theme = useTheme().surface("dialog")
   const [error, setError] = createSignal<string>()
   return (
     <DialogPrompt
@@ -272,10 +273,8 @@ function ToolsStep(props: {
     return count === 0 ? false : count === tools.length ? true : ("some" as const)
   }
   const toggle = (tools: readonly string[]) => {
-    const next = new Set(chosen())
-    const everything = tools.every((tool) => next.has(tool))
-    for (const tool of tools) everything ? next.delete(tool) : next.add(tool)
-    setChosen(next)
+    const everything = tools.every((tool) => chosen().has(tool))
+    setChosen(new Set(everything ? [...chosen()].filter((tool) => !tools.includes(tool)) : [...chosen(), ...tools]))
   }
   const options = createMemo<DialogSelectOption<string>[]>(() => [
     { value: "continue", title: "Continue", description: "Use the tools chosen below" },
@@ -319,7 +318,10 @@ function ConfirmStep(props: {
     const flat = plain(value)
     return flat.length > 240 ? `${flat.slice(0, 239)}…` : flat
   }
-  const file = () => `${props.configDirectory}/agents/${props.draft.name}.md`
+  const file = () => {
+    const full = path.join(props.configDirectory, "agents", `${props.draft.name}.md`)
+    return props.draft.scope === "project" ? path.relative(props.directory, full) : full
+  }
   const rows = createMemo(() => [
     ["Name", plain(props.draft.name)],
     ["File", plain(file())],

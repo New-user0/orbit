@@ -29,6 +29,8 @@ export async function renderLocal(
     fetch?: FetchHandler
     /** The project directory the app works in; this package's directory by default. */
     directory?: string
+    /** The address the client says the server listens on; none by default. */
+    url?: string
   } = {},
 ) {
   const temporary = await tmpdir()
@@ -67,7 +69,7 @@ export async function renderLocal(
               <ThemeProvider mode="dark" source={{ discover: async () => ({}) }}>
                 <ToastProvider>
                   <RouteProvider initialRoute={{ type: "home" }}>
-                    <ClientProvider api={createApi(calls.fetch)}>
+                    <ClientProvider api={createApi(calls.fetch)} url={input.url}>
                       <DataProvider directory={input.directory ?? directory}>
                         <LocationProvider>
                           <PermissionProvider directory={directory}>

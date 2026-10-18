@@ -58,3 +58,21 @@ test("the count leaves out in progress when nothing is", async () => {
   const frame = await setup.waitForFrame((frame) => frame.includes("1 step"))
   expect(frame).toContain("1 step · 0 done · 1 open")
 })
+
+test("a plan longer than the screen scrolls inside the dialog and says so", async () => {
+  await using setup = await renderLocal()
+  const items = Array.from({ length: 40 }, (_, index) => ({
+    content: `Step ${index + 1}`,
+    status: index === 0 ? ("in_progress" as const) : ("pending" as const),
+  }))
+  setup.dialog.replace(() => <TodosView items={items} session />)
+  const first = await setup.waitForFrame((frame) => frame.includes("40 steps"))
+  expect(first).toContain("Step 1")
+  expect(first).not.toContain("Step 40")
+  expect(first).toContain("scroll")
+
+  await Bun.sleep(60)
+  for (let index = 0; index < 40; index++) setup.mockInput.pressArrow("down")
+  const last = await setup.waitForFrame((frame) => frame.includes("Step 40"))
+  expect(last).not.toContain("Step 1\n")
+})

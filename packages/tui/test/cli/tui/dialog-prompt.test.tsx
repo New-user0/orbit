@@ -22,6 +22,7 @@ async function mountPrompt(input: {
   root: string
   keybinds: Partial<TuiKeybind.Keybinds>
   onConfirm: (value: string) => void
+  onEditor?: (value: string) => Promise<string | undefined>
 }) {
   const state = path.join(input.root, "state")
   await mkdir(state, { recursive: true })
@@ -44,7 +45,7 @@ async function mountPrompt(input: {
 
     function Prompt() {
       onCleanup(Keymap.use().mode.push("modal"))
-      return <DialogPrompt title="Rename Session" value="draft" onConfirm={input.onConfirm} />
+      return <DialogPrompt title="Rename Session" value="draft" onConfirm={input.onConfirm} onEditor={input.onEditor} />
     }
 
     return (
@@ -180,6 +181,34 @@ test("dialog prompt submit can be disabled", async () => {
 
     expect(confirmed).toEqual([])
     expect(textarea.plainText).toBe("draft")
+  } finally {
+    await prompt.cleanup()
+  }
+})
+
+test.each([
+  ["by default", {}, "g", "ctrl+g"],
+  ["when rebound", { "dialog.prompt.editor": "ctrl+o" }, "o", "ctrl+o"],
+] as const)("the editor key of a dialog prompt is the configured one, %s", async (_name, keybinds, key, shown) => {
+  await using tmp = await tmpdir()
+  const handed: string[] = []
+  const prompt = await mountPrompt({
+    root: tmp.path,
+    keybinds: { "input.submit": "return", ...keybinds },
+    onConfirm: () => {},
+    onEditor: async (value) => void handed.push(value),
+  })
+
+  try {
+    await wait(() => prompt.app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    await prompt.app.renderOnce()
+    expect(prompt.app.captureCharFrame()).toContain(`${shown} editor`)
+    // The key that is not bound hands nothing over.
+    prompt.app.mockInput.pressKey(key === "g" ? "o" : "g", { ctrl: true })
+    expect(handed).toEqual([])
+    prompt.app.mockInput.pressKey(key, { ctrl: true })
+    await wait(() => handed.length > 0)
+    expect(handed).toEqual(["draft"])
   } finally {
     await prompt.cleanup()
   }

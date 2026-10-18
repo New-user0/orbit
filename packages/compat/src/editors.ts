@@ -31,7 +31,7 @@ export const remoteFolder = (id: Id) => table[id].remote
  * puts in the environment of its terminals and which lies in the editor's own folder.
  */
 export function terminal(env: Env): Id | undefined {
-  const helper = env.GIT_ASKPASS?.toLowerCase() ?? ""
+  const helper = env.VSCODE_GIT_ASKPASS_MAIN?.toLowerCase() ?? ""
   if (env.CURSOR_TRACE_ID) return "cursor"
   if (helper.includes("cursor")) return "cursor"
   if (helper.includes("windsurf")) return "windsurf"
@@ -44,7 +44,7 @@ export function terminal(env: Env): Id | undefined {
  * keeps its server in. The keybindings file that counts is then on the machine the editor's window is on, not this one.
  */
 export function remote(env: Env) {
-  return [env.GIT_ASKPASS, env.PATH].some(
+  return [env.VSCODE_GIT_ASKPASS_MAIN, env.PATH].some(
     (value) => value !== undefined && ids.some((id) => value.includes(table[id].remote)),
   )
 }

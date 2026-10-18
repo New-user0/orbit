@@ -15,7 +15,7 @@ export type DialogPromptProps = {
   value?: string
   /** Rows of the text box; one by default. More turns on word wrap, and Shift+Enter or Alt+Enter starts a new line. */
   height?: number
-  /** Hands the text to the person's editor and takes back what they saved. Bound to Ctrl+E. */
+  /** Hands the text to the person's editor and takes back what they saved. Bound to `dialog.prompt.editor` (Ctrl+G by default). */
   onEditor?: (value: string) => Promise<string | undefined>
   busy?: boolean
   busyText?: string
@@ -62,7 +62,7 @@ export function DialogPrompt(props: DialogPromptProps) {
     priority: 1,
     commands: [
       {
-        bind: "ctrl+g",
+        id: "dialog.prompt.editor",
         title: "Edit in your editor",
         group: "Dialog",
         run: async () => {
@@ -166,9 +166,9 @@ export function DialogPrompt(props: DialogPromptProps) {
               {shortcuts.get("dialog.prompt.submit")} <span style={{ fg: theme.text.muted }}>submit</span>
             </text>
           </Show>
-          <Show when={props.onEditor}>
+          <Show when={props.onEditor && shortcuts.get("dialog.prompt.editor")}>
             <text fg={theme.text.base}>
-              ctrl+g <span style={{ fg: theme.text.muted }}>editor</span>
+              {shortcuts.get("dialog.prompt.editor")} <span style={{ fg: theme.text.muted }}>editor</span>
             </text>
           </Show>
         </Show>

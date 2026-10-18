@@ -1,4 +1,7 @@
+import type { ScrollBoxRenderable } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, For, Show } from "solid-js"
+import { Keymap } from "../context/keymap"
 import { useData } from "../context/data"
 import { useTheme } from "../context/theme"
 import { bodyText } from "../util/renderer"
@@ -15,6 +18,21 @@ export function DialogTodos(props: { readonly sessionID?: string }) {
 /** The dialog's layout, apart from the data store so that a story can draw it from a fixture. */
 export function TodosView(props: { readonly items: readonly TodoItem[]; readonly session: boolean }) {
   const theme = useTheme()
+  const dimensions = useTerminalDimensions()
+  // The list scrolls inside the dialog, so a plan longer than the screen is not cut off at its edge.
+  const height = () => Math.max(3, Math.min(props.items.length, Math.floor(dimensions().height * 0.6) - 4))
+  let scroll: ScrollBoxRenderable | undefined
+  Keymap.createLayer(() => ({
+    mode: "modal",
+    commands: [
+      { bind: "up", title: "Scroll plan up", group: "Plan", run: () => scroll?.scrollBy(-1) },
+      { bind: "down", title: "Scroll plan down", group: "Plan", run: () => scroll?.scrollBy(1) },
+      { bind: "pageup", title: "Previous plan page", group: "Plan", run: () => scroll?.scrollBy(-height()) },
+      { bind: "pagedown", title: "Next plan page", group: "Plan", run: () => scroll?.scrollBy(height()) },
+      { bind: "home", title: "First step", group: "Plan", run: () => scroll?.scrollTo(0) },
+      { bind: "end", title: "Last step", group: "Plan", run: () => scroll?.scrollTo(Infinity) },
+    ],
+  }))
   const count = (status: TodoItem["status"]) => props.items.filter((item) => item.status === status).length
   const header = () =>
     [
@@ -35,7 +53,11 @@ export function TodosView(props: { readonly items: readonly TodoItem[]; readonly
         }
       >
         <text fg={theme.text.muted}>{header()}</text>
-        <box>
+        <scrollbox
+          ref={(value: ScrollBoxRenderable) => (scroll = value)}
+          height={height()}
+          scrollbarOptions={{ visible: false }}
+        >
           <For each={props.items}>
             {(item) => (
               <box flexDirection="row" gap={1}>
@@ -58,7 +80,10 @@ export function TodosView(props: { readonly items: readonly TodoItem[]; readonly
               </box>
             )}
           </For>
-        </box>
+        </scrollbox>
+        <Show when={props.items.length > height()}>
+          <text fg={theme.text.muted}>↑/↓ scroll · {props.items.length} steps</text>
+        </Show>
       </Show>
     </box>
   )

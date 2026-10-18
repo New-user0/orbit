@@ -116,7 +116,7 @@ test("an earlier backup is never overwritten", async () => {
 test.each([...CompatEditors.ids])("a remote %s is recognised from the git helper and from PATH", (id) => {
   const server = CompatEditors.remoteFolder(id)
   const base = { TERM_PROGRAM: "vscode" }
-  expect(detect({ ...base, GIT_ASKPASS: `/home/me/${server}/bin/askpass.sh` }, null).remote).toBe(true)
+  expect(detect({ ...base, VSCODE_GIT_ASKPASS_MAIN: `/home/me/${server}/bin/askpass.sh` }, null).remote).toBe(true)
   expect(detect({ ...base, PATH: `/usr/bin:/home/me/${server}/bin` }, null).remote).toBe(true)
   expect(detect(base, null).remote).toBe(false)
 })

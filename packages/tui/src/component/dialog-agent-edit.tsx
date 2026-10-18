@@ -35,11 +35,11 @@ export function DialogAgentEdit(props: {
   return (
     <DialogSelect
       title="Edit an agent file"
-      options={editable(props.agents).map((agent) => ({
-        value: agent.source!.path!,
-        title: plain(agent.id),
-        description: plain(agent.source!.path!),
-      }))}
+      options={editable(props.agents).flatMap((agent) =>
+        agent.source?.path === undefined
+          ? []
+          : [{ value: agent.source.path, title: plain(agent.id), description: plain(agent.source.path) }],
+      )}
       emptyView={<text>No agent here is a file you can edit.</text>}
       onSelect={async (option) => {
         const file = option.value

@@ -104,6 +104,9 @@ test("a project agent is written with the chosen tools, model and permission mod
   setup.mockInput.pressEnter()
   const review = await until(setup, "Create agent: review")
   expect(review).toContain("File:")
+  // A project agent is shown relative to the project folder, with the separators of this platform.
+  expect(review).toContain(path.join(".orbit", "agents", "reviewer.md"))
+  expect(review).not.toContain(path.basename(tmp.dir))
   expect(review).toContain("Save and open in your editor")
   setup.mockInput.pressEnter()
   await closed(setup)

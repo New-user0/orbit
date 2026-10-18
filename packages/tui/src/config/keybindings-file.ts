@@ -293,6 +293,7 @@ const listing = {
     "dialog.select.end",
     "dialog.select.submit",
     "dialog.prompt.submit",
+    "dialog.prompt.editor",
     "dialog.integration.rename",
     "dialog.integration.delete",
     "dialog.worktree.generate",

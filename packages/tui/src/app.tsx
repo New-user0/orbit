@@ -1098,7 +1098,10 @@ function App() {
               <DialogIdeOpen
                 windows={windows.matched}
                 directory={directory}
-                onCancel={() => dialog.clear()}
+                onCancel={() => {
+                  dialog.clear()
+                  toast.show({ variant: "info", message: "Nothing was opened." })
+                }}
                 onSelect={async (chosen) => {
                   dialog.clear()
                   const program = CompatEditors.program(chosen.name)
@@ -1128,7 +1131,10 @@ function App() {
               windows={windows}
               directory={directory}
               inEditor={editorPort(process.env) !== undefined || process.env.TERM_PROGRAM === "vscode"}
-              onCancel={() => dialog.clear()}
+              onCancel={() => {
+                dialog.clear()
+                toast.show({ variant: "info", message: "No editor was chosen." })
+              }}
               onSelect={async (port) => {
                 dialog.clear()
                 if (port === undefined) {
@@ -1167,7 +1173,7 @@ function App() {
             capabilities: renderer.capabilities,
             newlineKeys: config.data.keybinds
               .get("input.newline")
-              .map((item) => (typeof item.key === "string" ? item.key : stringifyKeyStroke(item.key as never)))
+              .map((item) => (typeof item.key === "string" ? item.key : stringifyKeyStroke(item.key)))
               .join(", "),
             dialog,
             toast,
