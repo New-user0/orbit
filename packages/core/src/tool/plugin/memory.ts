@@ -99,7 +99,7 @@ export const Plugin = {
           return true
         }).pipe(Effect.orElseSucceed(() => false)),
     )
-    if (moved.includes(true)) yield* rebuild()
+    if (moved.includes(true)) yield* rebuild().pipe(Effect.ignore)
 
     yield* ctx.tool.transform((editor) => {
       editor.add({

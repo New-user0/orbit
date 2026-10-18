@@ -392,13 +392,16 @@ const layer = Layer.effect(
       const store = AbsolutePath.make(dotHg)
       const trusted = (yield* trust.status(worktree)).trusted
       // A folder that is not trusted does not choose its own ID by shipping `.hg/orbit` (class 5, class 3).
-      const previous = trusted ? yield* cached(store) : undefined
-      const id = previous ?? (trusted ? yield* hgRoot(worktree) : undefined)
+      const cachedID = trusted ? yield* cached(store) : undefined
+      const id = cachedID ?? (trusted ? yield* hgRoot(worktree) : undefined)
+      // The ID the folder had while it was untrusted, so the sessions made then follow it into the trusted project.
+      const earlier = ID.make(Hash.fast(`directory:${worktree}`))
+      const resolved = id ?? (trusted ? ID.global : earlier)
       return {
-        previous,
+        previous: trusted && earlier !== resolved && (yield* known(earlier)) ? earlier : cachedID,
         // An untrusted folder is its own project, as a folder without version control is, and not `ID.global`: saved
         // "always allow" answers are keyed by project ID, so every untrusted folder that shared `global` would share them.
-        id: id ?? (trusted ? ID.global : ID.make(Hash.fast(`directory:${worktree}`))),
+        id: resolved,
         directory: worktree,
         vcs: { type: "hg" as const, store },
       }
@@ -459,7 +462,8 @@ const layer = Layer.effect(
             (yield* stored(layout.canonical)).pretrust ??
             ID.make(Hash.fast(`directory:${layout.worktree}`)))
           : undefined
-        const previous = cachedID ?? (earlier && earlier !== id && (yield* known(earlier)) ? earlier : undefined)
+        // A shipped `.git/orbit` names the ID but does not drop the sessions made before trust.
+        const previous = earlier && earlier !== id && (yield* known(earlier)) ? earlier : cachedID
         const canonical = repo.gitDirectory === repo.commonDirectory ? repo.worktree : yield* mainCheckout(repo)
         return yield* persist({
           previous,
