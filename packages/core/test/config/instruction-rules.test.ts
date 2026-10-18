@@ -99,10 +99,13 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     const report = JSON.parse(out) as { readonly name: string; readonly ms: number; readonly matched: boolean }[]
     expect(report.map((item) => item.name)).toEqual([
       "manyStars",
+      "crossSegment",
+      "crossSegmentWide",
       "threeGlobstars",
       "twoGlobstarsDeep",
       "twoGlobstarsAtLimit",
-      "worstAllowed",
+      "worstKept256",
+      "worstKeptStars256",
       "twoStarRuns",
       "control",
     ])
@@ -116,6 +119,19 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     expect(["*.ts", "src/**/*.test.ts", "**/*.{ts}", "/src/*.ts", "!a/*.md"].filter(cheap)).toHaveLength(5)
     expect(cheap(`${"*a".repeat(20)}*ab`)).toBe(false)
     expect(cheap("**/a/**/b/**/c")).toBe(false)
+    // Two runs in each of several segments multiply, so the runs are counted over the whole pattern.
+    expect(cheap(`${"*a*a/".repeat(7)}x`)).toBe(false)
+    expect(cheap("*a/*b/c")).toBe(true)
+    expect(cheap("*a/*b/*c")).toBe(false)
+    expect(cheap("**/*a/b")).toBe(true)
+  })
+
+  test("matches nothing for a path over 32 segments or 1,024 characters", () => {
+    const base = path.resolve("rule-depth-base")
+    const at = (...parts: string[]) => path.join(base, ...parts)
+    expect(ConfigInstructionFile.ruleMatches(["a"], base, at(...Array.from({ length: 32 }, () => "a")))).toBe(true)
+    expect(ConfigInstructionFile.ruleMatches(["a"], base, at(...Array.from({ length: 33 }, () => "a")))).toBe(false)
+    expect(ConfigInstructionFile.ruleMatches(["a*"], base, at("a".repeat(1_030), "x"))).toBe(false)
   })
 
   test("reads the block with plain delimiters, whatever spaces follow the dashes on its own lines", () => {

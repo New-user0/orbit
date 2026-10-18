@@ -1140,11 +1140,13 @@ export function ruleMatches(patterns: readonly string[], base: string, target: s
 const RULE_PATH_LENGTH = 1_024
 const RULE_PATH_DEPTH = 32
 
-// `ignore` compiles a pattern to a backtracking regular expression, so a pattern with many wildcards can take minutes on one
-// file name. Only a pattern whose work stays small is matched: at most two runs of stars in a segment and two `**` segments
-// in all. The rest are dropped, as if they matched nothing.
+// `ignore` compiles a pattern to a backtracking regular expression, and the work multiplies across the segments, so a pattern
+// with many wildcards can take minutes on one file name. Only a pattern with at most two runs of stars in all is matched,
+// a `**` segment counting as one run. The rest are dropped, as if they matched nothing.
 export function cheapPattern(pattern: string) {
-  const segments = pattern.split("/")
-  if (segments.filter((segment) => segment === "**").length > 2) return false
-  return segments.every((segment) => segment === "**" || (segment.match(/\*+/g)?.length ?? 0) <= 2)
+  const runs = pattern
+    .split("/")
+    .reduce((total, segment) => total + (segment === "**" ? 1 : (segment.match(/\*+/g)?.length ?? 0)), 0)
+  return runs <= 2
 }
+
