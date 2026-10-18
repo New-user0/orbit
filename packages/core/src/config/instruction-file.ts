@@ -6,7 +6,6 @@ import { Glob } from "@orbit/util/glob"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
 import { Effect } from "effect"
-import ignore from "ignore"
 import { basename, dirname, extname, posix, relative, win32 } from "path"
 import { ConfigMarkdown } from "./markdown.js"
 
@@ -977,6 +976,8 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
       const rule = input.rules ? rulePatterns(ConfigMarkdown.split(text).frontmatter) : undefined
       if (rule?.malformed)
         yield* Effect.logDebug("rule front matter not read, so the rule applies from the start", { path: real })
+      if (rule !== undefined && rule.dropped > 0)
+        yield* Effect.logDebug("rule patterns left out", { path: real, dropped: rule.dropped })
       files.push({
         path: real,
         content: processed.content,
@@ -1040,13 +1041,15 @@ export function isRuleName(name: string) {
 export function rulePatterns(frontmatter: string | undefined): {
   readonly patterns: readonly string[] | undefined
   readonly malformed: boolean
+  /** How many patterns were left out for a cap or because the matcher does not take them. */
+  readonly dropped: number
 } {
-  if (frontmatter === undefined) return { patterns: undefined, malformed: false }
+  if (frontmatter === undefined) return { patterns: undefined, malformed: false, dropped: 0 }
   // The block is read with plain delimiters, whatever spaces followed the dashes on the file's own lines.
   const lines = frontmatter.replaceAll("\r\n", "\n").split("\n")
   const end = lines.findLastIndex((line) => /^---[ \t]*$/.test(line))
   const parsed = ConfigMarkdown.parseOption(`---\n${lines.slice(1, end).join("\n")}\n---\n`, true)
-  if (parsed === undefined) return { patterns: undefined, malformed: true }
+  if (parsed === undefined) return { patterns: undefined, malformed: true, dropped: 0 }
   const value: unknown = parsed.data["paths"]
   const strings =
     typeof value === "string"
@@ -1056,21 +1059,32 @@ export function rulePatterns(frontmatter: string | undefined): {
         : []
   // Parts are taken one at a time and the work stops once the cap is kept, so what a file spells out past it costs nothing.
   const patterns: string[] = []
+  let dropped = 0
   for (const text of strings) {
     for (const part of splitCommas(text)) {
+      if (patterns.length >= RULE_PATTERNS) {
+        dropped++
+        break
+      }
       // A part this long is dropped before its braces are expanded: each group is a level of recursion.
-      if (part.length > RULE_PATTERN_LENGTH) continue
+      if (part.length > RULE_PATTERN_LENGTH) {
+        dropped++
+        continue
+      }
       for (const spelling of expandBraces(part)) {
         const pattern = spelling.replace(/\/\*\*$/, "").trim()
-        if (pattern !== "" && pattern.length <= RULE_PATTERN_LENGTH) patterns.push(pattern)
+        if (pattern === "") continue
+        if (pattern.length > RULE_PATTERN_LENGTH || compileRulePattern(pattern) === undefined) dropped++
+        else patterns.push(pattern)
         if (patterns.length >= RULE_PATTERNS) break
       }
-      if (patterns.length >= RULE_PATTERNS) break
     }
     if (patterns.length >= RULE_PATTERNS) break
   }
-  if (patterns.every((pattern) => pattern === "**")) return { patterns: undefined, malformed: false }
-  return { patterns, malformed: false }
+  // A rule whose patterns were all dropped still waits, and matches nothing.
+  if (patterns.length === 0 && dropped > 0) return { patterns, malformed: false, dropped }
+  if (patterns.every((pattern) => pattern === "**")) return { patterns: undefined, malformed: false, dropped }
+  return { patterns, malformed: false, dropped }
 }
 
 // The parts of a string between the commas that are outside braces, trimmed, without the empty ones. A closing brace with
@@ -1122,31 +1136,55 @@ function expandBraces(pattern: string): string[] {
 /**
  * Whether a rule applies to a file. Both paths are real, which is the one way `FSUtil.contains` may decide containment:
  * a file outside the base, or the base itself, matches nothing. What is left is the path from the base, written with
- * forward slashes, which the patterns meet under the rules of a `.gitignore`: a pattern with no slash matches a name at any
- * depth, one with a slash is anchored to the base, a folder that matches covers what is below it, wildcards match names that
- * start with a dot, `!` takes a match back unless a folder above it matched, and case is ignored.
+ * forward slashes, which the patterns meet under the rules of a `.gitignore`: a pattern with no slash other than a trailing
+ * one matches a name at any depth, one with a slash is anchored to the base, a trailing slash matches folders only, a folder
+ * that matches covers what is below it, wildcards match names that start with a dot, patterns are read in order and the last
+ * match wins, `!` takes a match back unless a folder above it matched, and case is ignored. Bun's glob matcher does the
+ * matching and does not backtrack, so a read takes time that grows with the path and the patterns and no faster.
  */
 export function ruleMatches(patterns: readonly string[], base: string, target: string) {
   const from = relative(base, target)
   if (from === "" || !FSUtil.contains(base, target)) return false
-  const real = from.replaceAll("\\", "/")
-  // A path this long or this deep matches nothing, so the matcher's work cannot grow with what a repository names.
-  if (real.length > RULE_PATH_LENGTH || real.split("/").length > RULE_PATH_DEPTH) return false
-  const usable = patterns.filter(cheapPattern)
-  if (usable.length === 0) return false
-  return ignore().add(usable).ignores(real)
+  const real = from.replaceAll("\\", "/").toLowerCase()
+  // A path this long or this deep matches nothing, so the work of a read has a bound whatever a repository names.
+  const segments = real.split("/")
+  if (real.length > RULE_PATH_LENGTH || segments.length > RULE_PATH_DEPTH) return false
+  const compiled = patterns.flatMap((pattern) => compileRulePattern(pattern) ?? [])
+  if (compiled.length === 0) return false
+  // A folder above the file that a positive pattern leaves matched covers the file, whatever a `!` below says.
+  for (let end = 1; end < segments.length; end++) {
+    if (matchedAt(compiled, segments.slice(0, end).join("/"), true)) return true
+  }
+  return matchedAt(compiled, real, false)
 }
 
 const RULE_PATH_LENGTH = 1_024
 const RULE_PATH_DEPTH = 32
 
-// `ignore` compiles a pattern to a backtracking regular expression, and the work multiplies across the segments, so a pattern
-// with many wildcards can take minutes on one file name. Only a pattern with at most two runs of stars in all is matched,
-// a `**` segment counting as one run. The rest are dropped, as if they matched nothing.
-export function cheapPattern(pattern: string) {
-  const runs = pattern
-    .split("/")
-    .reduce((total, segment) => total + (segment === "**" ? 1 : (segment.match(/\*+/g)?.length ?? 0)), 0)
-  return runs <= 2
+type CompiledRulePattern = { readonly glob: Bun.Glob; readonly negated: boolean; readonly folderOnly: boolean }
+
+// The last pattern that matches decides, and a `!` pattern decides "not matched".
+function matchedAt(compiled: readonly CompiledRulePattern[], at: string, folder: boolean) {
+  return compiled.reduce(
+    (matched, pattern) => ((pattern.folderOnly && !folder) || !pattern.glob.match(at) ? matched : !pattern.negated),
+    false,
+  )
+}
+
+/**
+ * A pattern as a glob from the base, or `undefined` when nothing is left of it or Bun's matcher refuses it. A repository
+ * writes the pattern, so a refusal costs that pattern alone. `rulePatterns` uses it to count what it drops.
+ */
+export function compileRulePattern(pattern: string): CompiledRulePattern | undefined {
+  const negated = pattern.startsWith("!")
+  const body = (negated ? pattern.slice(1) : pattern).toLowerCase()
+  const name = body.replace(/\/+$/, "")
+  const rest = name.startsWith("/") ? name.slice(1) : name
+  if (rest === "") return undefined
+  try {
+    return { glob: new Bun.Glob(name.includes("/") ? rest : `**/${rest}`), negated, folderOnly: body.endsWith("/") }
+  } catch {
+    return undefined
+  }
 }
 

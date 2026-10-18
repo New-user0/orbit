@@ -1,35 +1,33 @@
 /**
- * Runs `ConfigInstructionFile.ruleMatches` over the worst shapes a cloned repository could write as patterns and file names,
- * and prints how long each took and whether it matched as JSON. It is a script of its own because the work is synchronous:
- * the test starts it with a deadline.
+ * Runs `ConfigInstructionFile.ruleMatches` over the worst shapes a cloned repository could write as patterns, against a path of
+ * four 254-character folders and a file (1,021 characters, the most a read keeps), and prints how long each took and whether
+ * it matched as JSON. It is a script of its own because the work is synchronous: the test starts it with a deadline.
+ *
+ * The matcher is Bun's, which does not backtrack, so each row costs time that grows with the path and the patterns and no more.
  */
 import path from "path"
 import { ConfigInstructionFile } from "@orbit/core/config/instruction-file"
 
 const base = path.resolve("rule-stress-base")
-const file = (...parts: string[]) => path.join(base, ...parts)
-const deep = (n: number, name: string) => file(...Array.from({ length: n }, () => name))
+const folder = "a".repeat(254)
+const target = path.join(base, folder, folder, folder, folder, "a")
 
-// worstKept256, worstKeptStars256, twoStarRuns and twoGlobstarsAtLimit run patterns `cheapPattern` keeps, so their time is the
-// matcher's own; the rest are patterns it drops, which must cost nothing, and a control.
-const rows: Record<string, { patterns: string[]; target: string }> = {
-  manyStars: { patterns: [`${"*a".repeat(20)}*ab`], target: file("a".repeat(60)) },
-  crossSegment: { patterns: [`${"*a*a/".repeat(7)}x`], target: deep(8, "a".repeat(20)) },
-  crossSegmentWide: { patterns: [`${"*a*a/".repeat(6)}x`], target: deep(7, "a".repeat(30)) },
-  threeGlobstars: { patterns: ["**/a/**/a/**/b"], target: deep(1_000, "a") },
-  twoGlobstarsDeep: { patterns: ["**/a/**/a/b"], target: deep(1_000, "a") },
-  twoGlobstarsAtLimit: { patterns: ["**/a/**/a/b"], target: deep(31, "a") },
-  worstKept256: { patterns: Array.from({ length: 256 }, () => "**/a/**/b"), target: deep(31, "a".repeat(30)) },
-  worstKeptStars256: { patterns: Array.from({ length: 256 }, () => "*a*a*b"), target: file("a".repeat(255)) },
-  twoStarRuns: { patterns: ["*a*a*b"], target: file("a".repeat(255)) },
-  control: { patterns: ["*.ts"], target: file("src", "x.ts") },
+const repeated = (pattern: string) => Array.from({ length: 255 }, () => pattern)
+const rows: Record<string, string[]> = {
+  starThenNotStarAStar: ["*", ...repeated("!*a**")],
+  starThenNotGlobstarAGlobstar: ["*", ...repeated("!**a**")],
+  starThenNotStarAThreeStars: ["*", ...repeated("!*a***")],
+  starThenNotStarAStarA: ["*", ...repeated("!*a*a")],
+  twentyStarAThenB: repeated(`${"*a".repeat(20)}b`),
+  anchoredStars: repeated(`${"*a".repeat(20)}b/**/${"*a".repeat(20)}b`),
+  control: ["*"],
 }
 
 console.log(
   JSON.stringify(
-    Object.entries(rows).map(([name, row]) => {
+    Object.entries(rows).map(([name, patterns]) => {
       const started = performance.now()
-      const matched = ConfigInstructionFile.ruleMatches(row.patterns, base, row.target)
+      const matched = ConfigInstructionFile.ruleMatches(patterns, base, target)
       return { name, ms: performance.now() - started, matched }
     }),
   ),

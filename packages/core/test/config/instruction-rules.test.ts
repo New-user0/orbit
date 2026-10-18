@@ -44,19 +44,19 @@ describe("ConfigInstructionFile.rulePatterns", () => {
   ]
   for (const [name, written, patterns] of rows)
     test(`reads ${name}`, () => {
-      expect(ConfigInstructionFile.rulePatterns(front(written))).toEqual({ patterns, malformed: false })
+      expect(ConfigInstructionFile.rulePatterns(front(written))).toEqual({ patterns, malformed: false, dropped: 0 })
     })
 
   test("says a file without front matter applies from the start", () => {
-    expect(ConfigInstructionFile.rulePatterns(undefined)).toEqual({ patterns: undefined, malformed: false })
+    expect(ConfigInstructionFile.rulePatterns(undefined)).toEqual({ patterns: undefined, malformed: false, dropped: 0 })
   })
 
   test("reports an unquoted list item that starts with an asterisk, which neither read nor the retry accepts", () => {
-    expect(ConfigInstructionFile.rulePatterns(front("paths:\n  - **/*.ts"))).toEqual({ patterns: undefined, malformed: true })
+    expect(ConfigInstructionFile.rulePatterns(front("paths:\n  - **/*.ts"))).toEqual({ patterns: undefined, malformed: true, dropped: 0 })
   })
 
   test("reports front matter that does not parse", () => {
-    expect(ConfigInstructionFile.rulePatterns(front('paths: "src/**'))).toEqual({ patterns: undefined, malformed: true })
+    expect(ConfigInstructionFile.rulePatterns(front('paths: "src/**'))).toEqual({ patterns: undefined, malformed: true, dropped: 0 })
   })
 
   test("keeps at most 256 patterns and drops one over 1,024 characters, however many braces a file writes", () => {
@@ -85,8 +85,8 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     }
   }, 90_000)
 
-  // `ignore` backtracks, and the repository writes both the pattern and the file name: a read must cost a small fixed amount.
-  test("matches a read in bounded time, whatever wildcards and depth a repository writes", async () => {
+  // Bun's matcher does not backtrack, and the repository writes both the pattern and the file name: a read must stay cheap.
+  test("matches a read in bounded time, whatever wildcards a repository writes", async () => {
     const child = Bun.spawn({
       cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "rule-match-stress.ts")],
       stdout: "pipe",
@@ -98,32 +98,27 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     expect(code).toBe(0)
     const report = JSON.parse(out) as { readonly name: string; readonly ms: number; readonly matched: boolean }[]
     expect(report.map((item) => item.name)).toEqual([
-      "manyStars",
-      "crossSegment",
-      "crossSegmentWide",
-      "threeGlobstars",
-      "twoGlobstarsDeep",
-      "twoGlobstarsAtLimit",
-      "worstKept256",
-      "worstKeptStars256",
-      "twoStarRuns",
+      "starThenNotStarAStar",
+      "starThenNotGlobstarAGlobstar",
+      "starThenNotStarAThreeStars",
+      "starThenNotStarAStarA",
+      "twentyStarAThenB",
+      "anchoredStars",
       "control",
     ])
-    for (const item of report) expect(item.ms).toBeLessThan(1_000)
+    // Mutation: matching with a backtracking engine (a regular expression per pattern) takes seconds to minutes on these rows.
+    for (const item of report) expect(item.ms).toBeLessThan(100)
     expect(report.find((item) => item.name === "control")?.matched).toBe(true)
-    expect(report.find((item) => item.name === "manyStars")?.matched).toBe(false)
+    expect(report.find((item) => item.name === "twentyStarAThenB")?.matched).toBe(false)
   }, 90_000)
 
-  test("drops a pattern with many wildcards and keeps the realistic ones", () => {
-    const cheap = ConfigInstructionFile.cheapPattern
-    expect(["*.ts", "src/**/*.test.ts", "**/*.{ts}", "/src/*.ts", "!a/*.md"].filter(cheap)).toHaveLength(5)
-    expect(cheap(`${"*a".repeat(20)}*ab`)).toBe(false)
-    expect(cheap("**/a/**/b/**/c")).toBe(false)
-    // Two runs in each of several segments multiply, so the runs are counted over the whole pattern.
-    expect(cheap(`${"*a*a/".repeat(7)}x`)).toBe(false)
-    expect(cheap("*a/*b/c")).toBe(true)
-    expect(cheap("*a/*b/*c")).toBe(false)
-    expect(cheap("**/*a/b")).toBe(true)
+  test("keeps a rule whose patterns were all dropped as a rule that waits, and counts what it dropped", () => {
+    const dropped = ConfigInstructionFile.rulePatterns(front(`paths: "${"x".repeat(1_025)}"`))
+    // Mutation: returning `undefined` patterns for an empty list makes the rule apply from the start.
+    expect(dropped).toEqual({ patterns: [], malformed: false, dropped: 1 })
+    const capped = ConfigInstructionFile.rulePatterns(front(`paths: "${"{a,b}".repeat(30)}, tail"`))
+    expect(capped.dropped).toBeGreaterThan(0)
+    expect(ConfigInstructionFile.ruleMatches([], path.resolve("/repo"), path.resolve("/repo/a.ts"))).toBe(false)
   })
 
   test("matches nothing for a path over 32 segments or 1,024 characters", () => {
@@ -136,7 +131,7 @@ describe("ConfigInstructionFile.rulePatterns", () => {
 
   test("reads the block with plain delimiters, whatever spaces follow the dashes on its own lines", () => {
     const frontmatter = ConfigMarkdown.split("---  \npaths: a\n---\t\nBody.").frontmatter
-    expect(ConfigInstructionFile.rulePatterns(frontmatter)).toEqual({ patterns: ["a"], malformed: false })
+    expect(ConfigInstructionFile.rulePatterns(frontmatter)).toEqual({ patterns: ["a"], malformed: false, dropped: 0 })
   })
 
   // Only `split` finds front matter, and only YAML reads it: a block that names a language is not front matter at all, and
@@ -150,6 +145,7 @@ describe("ConfigInstructionFile.rulePatterns", () => {
       expect(ConfigInstructionFile.rulePatterns(ConfigMarkdown.split(text).frontmatter)).toEqual({
         patterns: undefined,
         malformed: false,
+        dropped: 0,
       })
       expect(await Bun.file(marker).exists()).toBe(false)
     })
@@ -161,7 +157,7 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     ConfigInstructionFile.rulePatterns(front(`paths: ${tag}`))
     ConfigInstructionFile.rulePatterns(front(`other: ${tag}\npaths: src/**`))
     expect(await Bun.file(marker).exists()).toBe(false)
-    expect(ConfigInstructionFile.rulePatterns(front("paths: src/**"))).toEqual({ patterns: ["src"], malformed: false })
+    expect(ConfigInstructionFile.rulePatterns(front("paths: src/**"))).toEqual({ patterns: ["src"], malformed: false, dropped: 0 })
   })
 })
 
@@ -184,10 +180,44 @@ describe("ConfigInstructionFile.ruleMatches and isRuleName", () => {
   const base = path.resolve("/repo")
   const at = (...parts: string[]) => path.join(base, ...parts)
 
-  test("matches the path from the base under the rules of a .gitignore", () => {
-    expect(ConfigInstructionFile.ruleMatches(["*.ts"], base, at("a", "b", "c.ts"))).toBe(true)
-    expect(ConfigInstructionFile.ruleMatches(["/src/*.ts"], base, at("lib", "src", "a.ts"))).toBe(false)
-    expect(ConfigInstructionFile.ruleMatches(["src", "!src/gen"], base, at("src", "gen", "x.ts"))).toBe(true)
+  // Each row is a meaning of the .gitignore rules, the patterns, the path from the base, the answer, and the mutation of
+  // `ruleMatches` or `compileRulePattern` that makes the row fail.
+  const meanings: ReadonlyArray<readonly [string, string[], string[], boolean, string]> = [
+    ["no slash matches at depth", ["*.ts"], ["a", "b", "c.ts"], true, "anchor every pattern (drop the `**/` prefix)"],
+    ["no slash matches at the base", ["*.ts"], ["c.ts"], true, "require a slash before the name"],
+    ["a slash anchors", ["src/*.ts"], ["lib", "src", "a.ts"], false, "prefix `**/` to every pattern"],
+    ["a slash anchors, and matches at the base", ["src/*.ts"], ["src", "a.ts"], true, "never match an anchored pattern"],
+    ["a leading slash is the base", ["/src/*.ts"], ["lib", "src", "a.ts"], false, "keep the leading slash in the glob"],
+    ["a leading slash, matched", ["/a.ts"], ["a.ts"], true, "treat a leading slash as no slash and add `**/`"],
+    ["a leading slash is the only slash", ["/a.ts"], ["lib", "a.ts"], false, "count the leading slash as part of a no-slash name"],
+    ["a trailing slash is not an anchor", ["gen/"], ["x", "gen", "a.ts"], true, "count the trailing slash as a slash"],
+    ["a trailing slash is for folders", ["gen/"], ["x", "gen"], false, "ignore folderOnly"],
+    ["a folder covers what is below it", ["src"], ["src", "a", "b.ts"], true, "test the path alone"],
+    ["a folder with a slash covers below", ["src/"], ["src", "a", "b.ts"], true, "test only the file against folderOnly patterns"],
+    ["an anchored folder covers below", ["src/lib"], ["src", "lib", "a", "b.ts"], true, "test the path alone"],
+    ["a wildcard takes a dot name", ["*.ts"], ["src", ".hidden.ts"], true, "pass dot: false semantics (skip dot names)"],
+    ["a wildcard takes a dot folder", ["*"], [".git", "config"], true, "skip dot folders"],
+    ["a later negation takes a match back", ["*.ts", "!a.ts"], ["a.ts"], false, "ignore `!`"],
+    ["a negation before the match is overridden", ["!a.ts", "*.ts"], ["a.ts"], true, "let a `!` win whatever its order"],
+    ["the last match wins, again", ["*.ts", "!a.ts", "a.ts"], ["a.ts"], true, "stop at the first match"],
+    ["a negation cannot rescue under a matched folder", ["src", "!src/gen"], ["src", "gen", "x.ts"], true, "do not test ancestors first"],
+    ["a negation of a folder pattern takes the folder back", ["src", "!src"], ["src", "x.ts"], false, "never let a folder be unmatched"],
+    ["a negation alone matches nothing", ["!a.ts"], ["a.ts"], false, "treat `!` as a positive pattern"],
+    ["case is ignored in the pattern", ["SRC/*.TS"], ["src", "a.ts"], true, "do not lower-case the pattern"],
+    ["case is ignored in the path", ["src/*.ts"], ["SRC", "A.TS"], true, "do not lower-case the path"],
+    ["a double asterisk alone matches every file", ["**"], ["a", "b.ts"], true, "refuse a pattern of only stars"],
+    ["a double asterisk in the middle", ["src/**/x.ts"], ["src", "a", "b", "x.ts"], true, "treat `**` as one segment"],
+    ["a double asterisk in the middle, no depth", ["src/**/x.ts"], ["src", "x.ts"], true, "require a segment between"],
+  ]
+  for (const [name, patterns, parts, expected] of meanings)
+    test(`matches by the .gitignore meaning: ${name}`, () => {
+      expect(ConfigInstructionFile.ruleMatches(patterns, base, at(...parts))).toBe(expected)
+    })
+
+  test("matches a spelling of braces that rulePatterns expanded", () => {
+    const kept = ConfigInstructionFile.rulePatterns(ConfigMarkdown.split('---\npaths: "src/*.{ts,tsx}"\n---\nB').frontmatter)
+    expect(ConfigInstructionFile.ruleMatches(kept.patterns ?? [], base, at("src", "a.tsx"))).toBe(true)
+    expect(ConfigInstructionFile.ruleMatches(kept.patterns ?? [], base, at("src", "a.js"))).toBe(false)
   })
 
   test("matches nothing for the base itself, a file outside it, a sibling whose name starts with the base's, or another drive", () => {
