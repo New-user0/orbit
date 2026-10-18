@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Credential } from "@orbit/core/credential"
+import { ManagedSettings } from "@orbit/core/managed-settings"
 import { WellKnown } from "@orbit/core/wellknown"
 
 export const emptyCredentialNode = makeGlobalNode({
@@ -33,5 +34,12 @@ export const emptyWellknownNode = makeGlobalNode({
       resolve: () => Effect.die("unused Wellknown.resolve"),
     }),
   ),
+  deps: [],
+})
+
+// No managed settings, so that a test never reads the machine's own managed folder.
+export const emptyManagedNode = makeGlobalNode({
+  service: ManagedSettings.Service,
+  layer: ManagedSettings.emptyLayer,
   deps: [],
 })

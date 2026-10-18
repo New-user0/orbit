@@ -3453,3 +3453,14 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 **Affects:** plugins that read the `Agent` or `Workflow` tool description for the agent list, and people with many skills.
 
 **What to do:** Read the agent list from the conversation context instead of the tool description; shorten skill descriptions that matter early.
+
+## Instruction files run from general to specific, with local variants and a managed file
+
+- The instruction files in the first request now run from general to specific, because the later one takes precedence: the managed file, the global file, then the project's folders from the farthest ancestor to the one the session started in (they ran nearest first before). The baseline opens with a short header that says so, and that the files are standing background to apply where they bear on the task.
+- `ORBIT.local.md` (and the reference vendor's local file while compatibility is on) is looked up in every folder of the walk, after that folder's shared file, and loads even in a folder with no shared file. Keep it out of version control. The first-of rule for shared names (`ORBIT.md`, then `AGENTS.md`) is unchanged and applies to the local names separately.
+- A file named `ORBIT.md` in the managed folder (`%ProgramFiles%\Orbit` on Windows, `/Library/Application Support/Orbit` on macOS, `/etc/orbit` elsewhere, or `ORBIT_MANAGED_DIR`) is organisation policy: it loads in every project, trusted or not, and `instructions_exclude` cannot remove it. Its imports outside the project load only once the project is trusted. Only `ORBIT_DISABLE_INSTRUCTIONS` and `orb run --bare` switch it off.
+- A session that already has two or more instruction files sees one short note that the order changed, and takes one prompt-cache miss when its baseline is rendered again. A worktree inside its main checkout skips the main checkout's shared files above the worktree and keeps its local ones.
+
+**Affects:** people whose instruction files conflict across folders, and administrators who deploy policy.
+
+**What to do:** Put the more specific instruction in the nearer folder; add `ORBIT.local.md` to `.gitignore`.

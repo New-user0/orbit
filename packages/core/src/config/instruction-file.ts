@@ -6,7 +6,7 @@ import { Glob } from "@orbit/util/glob"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
 import { Effect } from "effect"
-import { dirname, extname, posix, win32 } from "path"
+import { basename, dirname, extname, posix, win32 } from "path"
 import { ConfigMarkdown } from "./markdown.js"
 
 /** The most characters an instruction file may hold before it is flagged. A flagged file is still sent whole. */
@@ -18,6 +18,47 @@ export const LIMIT = 40_000
  */
 export function names(compat: boolean) {
   return CompatInstructions.filenames(compat)
+}
+
+/** The names of a person's private variants, which have a slot of their own in each directory (`pick`). */
+export function localNames(compat: boolean) {
+  return CompatInstructions.localFilenames(compat)
+}
+
+/** Every name a walk looks for: the shared ones, then the local ones. */
+export function walkNames(compat: boolean) {
+  return [...names(compat), ...localNames(compat)]
+}
+
+/**
+ * Picks the files a walk loads from what it found, in render order: directory by directory, the farthest first, and in
+ * each directory the first shared name and then the first local name. The first-of rule applies to each slot, so a shared
+ * file never hides the local one beside it, and a directory with only a local file loads it. `found` is in the order of a
+ * walk that starts at the nearest directory and goes up. `skipShared` names the directories whose shared files another
+ * checkout supplies: only their local files load.
+ */
+export function pick<T>(
+  found: readonly T[],
+  options: {
+    readonly compat: boolean
+    /** The path the walk built for the item, whose folder and name say which directory and slot it is in. */
+    readonly file: (item: T) => string
+    readonly skipShared?: (directory: string) => boolean
+    /** Keep the nearest directory first, as the walk found them, instead of the farthest. */
+    readonly nearestFirst?: boolean
+  },
+): T[] {
+  const locals = localNames(options.compat)
+  const walked = [...new Set(found.map((item) => dirname(options.file(item))))]
+  const directories = options.nearestFirst ? walked : walked.reverse()
+  return directories.flatMap((directory) => {
+    const inside = found.filter((item) => dirname(options.file(item)) === directory)
+    const shared = options.skipShared?.(directory)
+      ? undefined
+      : inside.find((item) => !locals.includes(basename(options.file(item))))
+    const local = inside.find((item) => locals.includes(basename(options.file(item))))
+    return [shared, local].filter((item): item is T => item !== undefined)
+  })
 }
 
 /** Whether a processed instruction file is long enough to be flagged: more than `LIMIT` characters, as the string counts them. */

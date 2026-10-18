@@ -56,6 +56,7 @@ import { Job } from "../job.js"
 import { KV } from "../kv.js"
 import { Location } from "../location.js"
 import { ManagedPolicy } from "../managed-policy.js"
+import { ManagedSettings } from "../managed-settings.js"
 import { ModelsDev } from "../models-dev.js"
 import { Mcp } from "../mcp/index.js"
 import { Npm } from "@orbit/util/npm"
@@ -151,6 +152,7 @@ const services = [
   LLMClient.Service,
   Location.Service,
   ManagedPolicy.Service,
+  ManagedSettings.Service,
   ModelsDev.Service,
   Mcp.Service,
   Npm.Service,
@@ -209,6 +211,7 @@ export const requirements = LayerNode.group([
   llmClient,
   Location.node,
   ManagedPolicy.node,
+  ManagedSettings.node,
   ModelsDev.node,
   Mcp.node,
   Npm.node,

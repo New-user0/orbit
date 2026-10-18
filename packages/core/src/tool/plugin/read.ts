@@ -111,8 +111,9 @@ export const Plugin = {
                 const root = yield* fs.resolve(location.directory)
                 // The Location and its ancestors are already supplied by initial instructions,
                 // even when an upward walk from elsewhere in the project cannot reach root.
+                const compat = yield* config.compatEnabled()
                 const discovered = yield* fs.up({
-                  targets: [...ConfigInstructionFile.names(yield* config.compatEnabled())],
+                  targets: [...ConfigInstructionFile.walkNames(compat)],
                   start: result.content.type === "list-page" ? resolved : dirname(resolved),
                   stop: root,
                   type: "file",
@@ -123,9 +124,13 @@ export const Plugin = {
                   ConfigInstructionFile.excludes(yield* config.entries()),
                   fs.resolve,
                 )
-                const candidates = (yield* ConfigInstructionFile.included(patterns, discovered, fs.resolve))
+                // Each folder gives its first shared name and its first local name, so a local file loads beside a shared
+                // one and alone. The order of the folders is the walk's, nearest first.
+                const candidates = ConfigInstructionFile.pick(
+                  yield* ConfigInstructionFile.included(patterns, discovered, fs.resolve),
+                  { compat, file: (candidate) => candidate.file, nearestFirst: true },
+                )
                   .map((candidate) => candidate.real)
-                  .filter((file, index, all) => all.findIndex((other) => dirname(other) === dirname(file)) === index)
                   .filter((file) => !FSUtil.contains(dirname(file), root) && file !== resolved)
                 if (candidates.length === 0) return
                 yield* sessionInstructions.load({ sessionID: context.sessionID, paths: candidates })
