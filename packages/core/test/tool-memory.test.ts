@@ -23,7 +23,7 @@ import { executeTool, expectRegistryAsks, registerToolPlugin, toolIdentity, tool
 
 const node = makeLocationNode({
   name: "test/memory-tool-plugin",
-  layer: Layer.effectDiscard(registerToolPlugin(MemoryTool.Plugin)),
+  layer: Layer.effectDiscard(registerToolPlugin(MemoryTool.Plugin).pipe(Effect.andThen(registerToolPlugin(MemoryTool.IndexPlugin)))),
   deps: [Tool.node, FSUtil.node, Global.node, Location.node, InstructionDiscovery.node],
 })
 const call = (input: unknown) => ({
@@ -44,6 +44,7 @@ const afterFilesNode = makeLocationNode({
         editor.add(new InstructionDiscovery.File({ path: AbsolutePath.make("/repo/ORBIT.md"), content: "project rules" }))
       })
       yield* registerToolPlugin(MemoryTool.Plugin)
+      yield* registerToolPlugin(MemoryTool.IndexPlugin)
     }),
   ),
   deps: [Tool.node, FSUtil.node, Global.node, Location.node, InstructionDiscovery.node],

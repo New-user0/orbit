@@ -1,7 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { describe, expect } from "bun:test"
-import { Context, Deferred, Duration, Effect, Layer, LayerMap, Schedule, Stream } from "effect"
+import { Schema, Context, Deferred, Duration, Effect, Layer, LayerMap, Schedule, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { define } from "@orbit/plugin/effect/plugin"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -13,6 +13,7 @@ import { Instance } from "@orbit/core/instance"
 import { LocationServiceMap } from "@orbit/core/location-services"
 import { Location } from "@orbit/core/location"
 import { Plugin } from "@orbit/core/plugin"
+import { Tool } from "@orbit/core/tool"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ManagedSettings } from "@orbit/core/managed-settings"
 import type { ConfigManaged } from "@orbit/schema/config/managed"
@@ -247,6 +248,47 @@ describe("PluginSupervisor", () => {
           }),
         ),
       ),
+    )
+  }
+
+  // The memory index activates late so it renders last, but the Memory tool itself stays an early built-in that
+  // SDK, instance and package plugins can remove or replace.
+  for (const mode of ["remove", "replace"] as const) {
+    it.effect(`lets an SDK plugin ${mode} the built-in Memory tool`, () =>
+      Effect.gen(function* () {
+        const sdk = yield* SdkPlugins.Service
+        yield* sdk.register(
+          define({
+            id: `memory-${mode}`,
+            effect: (ctx) =>
+              ctx.tool
+                .transform((editor) => {
+                  if (mode === "remove") return editor.remove("Memory")
+                  editor.add({
+                    name: "Memory",
+                    options: { codemode: false },
+                    description: "plugin memory",
+                    input: Schema.Struct({}),
+                    execute: () => Effect.succeed({ content: "ok" }),
+                  })
+                })
+                .pipe(Effect.asVoid),
+          }),
+        )
+        const directory = yield* tmpdirScoped()
+        const locations = yield* LocationServiceMap.Service
+        const memory = yield* Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          yield* plugins.awaitActivation
+          const tools = yield* Tool.Service
+          return (yield* tools.list()).find((tool) => tool.name === "Memory")
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+        )
+        if (mode === "remove") return expect(memory).toBeUndefined()
+        expect(memory?.description).toBe("plugin memory")
+      }),
     )
   }
 

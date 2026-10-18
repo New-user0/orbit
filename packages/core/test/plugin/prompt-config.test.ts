@@ -315,8 +315,9 @@ describe("the memory index", () => {
       )
       const at = (name: string) => source.indexOf(name, source.indexOf("const post = ["))
       expect(at("ConfigInstructionPlugin.Plugin")).toBeGreaterThan(-1)
-      expect(at("ConfigInstructionPlugin.Plugin")).toBeLessThan(at("MemoryTool.Plugin"))
-      expect(source.indexOf("MemoryTool.Plugin", source.indexOf("const pre = ["))).toBeGreaterThan(source.indexOf("const post = ["))
+      expect(at("ConfigInstructionPlugin.Plugin")).toBeLessThan(at("MemoryTool.IndexPlugin"))
+      // The tool itself stays in the early list, where plugins can remove or replace it.
+      expect(source.indexOf("MemoryTool.Plugin")).toBeLessThan(source.indexOf("const post = ["))
     }),
   )
 })

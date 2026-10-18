@@ -279,6 +279,7 @@ const pre = [
   LspTool.Plugin,
   TaskTools.Plugin,
   WorktreeTools.Plugin,
+  MemoryTool.Plugin,
   GlobTool.Plugin,
   GrepTool.Plugin,
   OrbitTools.Plugin,
@@ -299,7 +300,7 @@ const pre = [
 const post = [
   ConfigInstructionPlugin.Plugin,
   // Right after the instruction files, so the memory index renders last: the later a file, the more it outranks.
-  MemoryTool.Plugin,
+  MemoryTool.IndexPlugin,
   LifecycleHooksPlugin.Plugin,
   LspPlugin.Plugin,
   ConfigReferencePlugin.Plugin,
