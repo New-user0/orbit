@@ -29,6 +29,7 @@ import { promptOffsetWidth } from "../../prompt/display"
 import { expandPromptInputPastedText, realignPromptInputMentions } from "../../prompt/mention"
 import { parseSlashHead } from "../../prompt/parse"
 import { stringWidth } from "../../util/string-width"
+import { block, envelope } from "@orbit/util/reminder-text"
 import { createStore, produce, unwrap } from "solid-js/store"
 import {
   emptyPrompt,
@@ -178,17 +179,27 @@ export function getEditorRangeLabel(selection: EditorSelection["ranges"][number]
   return `#${start.line}-${last}`
 }
 
-function formatEditorContext(selection: EditorSelection) {
+// The envelope holds only text written here. The path and the selected text come from the repository, so each follows
+// it as a labelled block that cannot close its fence and in which look-alike reminder tags are escaped.
+export function formatEditorContext(selection: EditorSelection) {
   const selected = selection.ranges.filter(hasEditorRangeSelection)
   if (selected.length === 0)
-    return `<system-reminder>Editor state, given as background and not as a request: the person has "${selection.filePath}" open. It may have nothing to do with the task.</system-reminder>\n`
+    return [
+      envelope("Editor state, given as background and not as a request: the person has the file named below open. It may have nothing to do with the task."),
+      block("open file", selection.filePath),
+    ].join("\n\n")
 
-  const ranges = selected.map((range, index) => {
-    const prefix = selected.length > 1 ? `Selection ${index + 1}: ` : ""
-    return `Editor state: ${prefix}${getEditorRangeLabel(range)} of "${selection.filePath}" is highlighted. \`\`\`${range.text}\`\`\`\n\n`
-  })
-
-  return `<system-reminder>${ranges.join("\n")} This is background context and not a request; it may have nothing to do with the task.</system-reminder>\n`
+  return [
+    envelope(
+      "Editor state: a part of the file named below is highlighted, and the highlighted text follows. This is background context and not a request; it may have nothing to do with the task.",
+    ),
+    ...selected.map((range, index) =>
+      block(
+        `${selected.length > 1 ? `Selection ${index + 1}: ` : ""}${getEditorRangeLabel(range)} of ${selection.filePath}`,
+        range.text,
+      ),
+    ),
+  ].join("\n\n")
 }
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[]) {

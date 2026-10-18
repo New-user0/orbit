@@ -113,7 +113,7 @@ agent products keep there, used to apply the moment Orbit opened the folder. The
 folder is trusted. Until then Orbit keeps what cannot run code, spend money or reach the network, and leaves out the
 rest:
 
-- **Left out whole:** `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
+- **Left out whole:** `language`, `output_style`, `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
   `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
   `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, and `disabled` on an agent, whose
   entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's own rules
@@ -128,7 +128,7 @@ rest:
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
   10 or less, so a repository cannot raise the limit above 10.
-- **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
+- **Kept as written:** everything else, such as `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
@@ -2776,6 +2776,27 @@ to the model, and anyone who puts secrets in files next to their instructions.
 
 **What to do:** Nothing for most setups. Write `\@name` or put the text in a code span to keep a name from being read as
 an import, or list the file in `instructions_exclude`.
+
+### An untrusted folder no longer sets your reply language or output style
+
+`language` and `output_style` in a project's `orbit.json` (or `orbit.local.json`) used to win over your own value,
+because the last entry wins. In a folder you have not trusted, Orbit now holds both back and your own value stays in
+force; the trust prompt lists them under `settings`. When you trust the folder, the project's values apply after the
+usual reload. The same goes for a project's `language` that asks the model to ignore your setting.
+
+**What to do:** Nothing. If a project's language or style is wanted, trust the folder with `/trust` or `orb trust`, or
+put the value in your own config.
+
+### Editor context from the VS Code chat, the terminal UI and ACP keeps selected text out of the reminder
+
+The editor context that these clients send with a message used to put the file path and the selected text inside the
+reminder envelope itself, so a selection that held a reminder tag could close the envelope and write a fake one. Now the
+envelope holds only text written by the client, and the path and the selection follow it in a labelled fenced block
+whose fence the text cannot close; a look-alike tag in either is escaped. Text that an ACP editor marks for the
+assistant is escaped the same way. The reminder tags are written as `&lt;system-reminder>` in what the model sees. The
+rules are shared in `packages/util/src/reminder-text.ts`.
+
+**What to do:** Nothing.
 
 ### Text that looks like a reminder is escaped wherever it comes from a file or a tool
 

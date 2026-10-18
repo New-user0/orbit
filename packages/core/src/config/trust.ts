@@ -248,9 +248,10 @@ export const classification = {
     git_status: inert,
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
-    output_style: inert,
-    // Text in the prompt: it cannot run code, spend money or reach the network.
-    language: inert,
+    // Both are text that reaches the model and, as the last entry wins, a repository's value would outrank the person's own.
+    // An untrusted folder is held to the person's choice; a grant applies them through the usual reload.
+    output_style: withhold("settings"),
+    language: withhold("settings"),
     // Left whole because the reader takes the three prompt keys only from the person's own and the organization's
     // documents (`PromptConfigPlugin.promptKeys`), as it does `compatibility`; withholding them here would list
     // `settings` in the trust prompt for keys that a grant never applies.
