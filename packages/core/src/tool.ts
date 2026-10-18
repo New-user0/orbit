@@ -345,32 +345,44 @@ const layer = Layer.effect(
           }
           editor.namespaces.set(namespace.name, { ...namespace })
         },
-        add: (tool) => {
+        add: (given) => {
+          // A plugin's fields are read once, here. A getter that throws refuses that tool alone, like any invalid one.
+          const read = readFields(given)
+          if (Result.isFailure(read)) {
+            editor.errors.push({ kind: "tool", name: readableName(given), namespace: undefined, error: read.failure })
+            return
+          }
+          const tool = read.success
           const error = registrationError(tool)
           if (error) {
             editor.errors.push({ kind: "tool", name: tool.name, namespace: tool.options?.namespace, error })
             return
           }
           const id = effectiveName(tool)
-          editor.tools.set(id, {
-            ...tool,
-            id,
-            options: tool.options && { ...tool.options },
-            traits: tool.traits && { ...tool.traits },
-          })
+          editor.tools.set(id, { ...tool, id })
         },
         update: (given, update) => {
           const id = held(editor.tools, given)
           const current = editor.tools.get(id)
           if (!current) return
-          const tool = {
+          const edited = {
             ...current,
             options: current.options && { ...current.options },
             traits: current.traits && { ...current.traits },
           }
-          update(tool)
+          update(edited)
+          const read = readFields(edited, current.name)
+          if (Result.isFailure(read)) {
+            editor.errors.push({
+              kind: "tool",
+              name: current.name,
+              namespace: current.options?.namespace,
+              error: read.failure,
+            })
+            return
+          }
+          const tool = { ...read.success, id }
           tool.name = current.name
-          tool.id = id
           if (tool.options?.namespace !== current.options?.namespace)
             tool.options = { ...tool.options, namespace: current.options?.namespace }
           const error = registrationError(tool)
@@ -558,6 +570,34 @@ function schemaMakeError(error: unknown) {
 // up under its current name, and an exact entry wins, as in `ToolNames.aliased`.
 function held(tools: Map<string, unknown>, id: string) {
   return tools.has(id) ? id : ToolNames.canonical(id)
+}
+
+// The fields of a tool, as plain values. A plugin can hand over an object whose getter throws.
+function readFields<T extends Tool.Info>(tool: T, known?: string) {
+  return Result.try({
+    try: () => ({
+      ...tool,
+      options: copyRecord(tool.options),
+      traits: copyRecord(tool.traits),
+    }),
+    catch: (cause) => {
+      const name = known ?? readableName(tool)
+      return new RegistrationError({
+        name,
+        message: `Unreadable tool ${name}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      })
+    },
+  })
+}
+
+// Plugins are not bound by the types: a value that is not an object goes to the checks as it is, and they refuse it.
+function copyRecord<V>(value: V): V {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? { ...value } : value
+}
+
+// The name to report for a tool whose fields cannot be read, when its name still can be.
+function readableName(tool: Tool.Info) {
+  return Result.try({ try: () => String(tool.name), catch: () => "unknown" }).pipe(Result.getOrElse((name) => name))
 }
 
 function registrationError(tool: Tool.Info) {

@@ -21,7 +21,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema, SchemaGetter } from "effect"
 import { testEffect } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
-import { invalidTraits } from "./lib/tool"
+import { invalidTraits, unreadableFields, withThrowingField } from "./lib/tool"
 import { PluginTestLayer } from "./plugin/fixture"
 
 const registryLayer = AppNodeBuilder.build(LayerNode.group([Tool.node, PluginHooks.node]), [
@@ -344,6 +344,63 @@ describe("ToolTraits", () => {
             displayName: "Counter",
           })
           expect(yield* snapshot.traits({ call: toolCall("echo") })).toEqual(declared)
+        }).pipe(Effect.provide(Logger.layer([logger])))
+      })
+    }
+
+    // FU-M1-087: a field whose getter throws costs that tool alone, never the plugin that registered it.
+    for (const field of unreadableFields) {
+      it.effect(`logs and skips a tool whose ${field} cannot be read, and keeps its neighbours`, () => {
+        const output: unknown[] = []
+        const logger = Logger.map(Logger.formatStructured, (entry) => {
+          output.push(entry.message)
+        })
+        return Effect.gen(function* () {
+          const service = yield* Tool.Service
+          yield* service.transform((editor) => {
+            editor.add({ ...make(declared), name: "healthy", options: { codemode: false } })
+            editor.add(withThrowingField({ ...make(), name: "broken", options: { codemode: false } }, field))
+            editor.add({ ...make(declared), name: "after", options: { codemode: false } })
+          })
+
+          expect(output).toEqual([
+            [
+              "Skipping invalid tool registration",
+              {
+                name: field === "name" ? "unknown" : "broken",
+                namespace: undefined,
+                error: `Unreadable tool ${field === "name" ? "unknown" : "broken"}: boom`,
+              },
+            ],
+          ])
+          const snapshot = yield* service.snapshot()
+          expect(snapshot.definitions.map((definition) => definition.name).toSorted()).toEqual(["Execute", "after", "healthy"])
+        }).pipe(Effect.provide(Logger.layer([logger])))
+      })
+
+      it.effect(`keeps the earlier definition when an update leaves a ${field} that cannot be read`, () => {
+        const output: unknown[] = []
+        const logger = Logger.map(Logger.formatStructured, (entry) => {
+          output.push(entry.message)
+        })
+        return Effect.gen(function* () {
+          const service = yield* Tool.Service
+          yield* register(service, make(declared))
+          yield* service.transform((editor) => {
+            editor.update("echo", (tool) => {
+              Object.defineProperty(tool, field, {
+                enumerable: true,
+                get: () => {
+                  throw new Error("boom")
+                },
+              })
+            })
+          })
+
+          expect(output).toEqual([
+            ["Skipping invalid tool registration", { name: "echo", namespace: undefined, error: "Unreadable tool echo: boom" }],
+          ])
+          expect((yield* service.snapshot()).definitions.map((definition) => definition.name)).toEqual(["echo", "Execute"])
         }).pipe(Effect.provide(Logger.layer([logger])))
       })
     }

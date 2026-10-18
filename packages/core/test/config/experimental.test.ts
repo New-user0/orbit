@@ -18,7 +18,7 @@ const document = (scope: Scope, experimental: unknown) =>
   })
 
 describe("Config.experimental", () => {
-  const keys = ["allow_local_fetch", "portable_shell_scanner", "subagent_depth"] as const
+  const keys: Array<"allow_local_fetch" | "portable_shell_scanner" | "subagent_depth"> = ["allow_local_fetch", "portable_shell_scanner", "subagent_depth"]
   const person = { allow_local_fetch: true, portable_shell_scanner: true, subagent_depth: 3 }
   const project = { allow_local_fetch: false, portable_shell_scanner: false, subagent_depth: 2 }
 

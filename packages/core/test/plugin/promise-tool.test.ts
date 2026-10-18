@@ -11,7 +11,7 @@ import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Cause, Deferred, Effect, Exit, Fiber, Logger, Schema } from "effect"
 import { testEffect } from "../lib/effect"
-import { invalidTraits, invalidValidateProblem, invalidValidates } from "../lib/tool"
+import { invalidTraits, invalidValidateProblem, invalidValidates, unreadableFields, withThrowingField } from "../lib/tool"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
@@ -186,6 +186,78 @@ it.live("a Promise predicate that rejects or throws makes the call take the cons
 // reach it, so the plugin stays active, the tools beside the bad one register, and one line says what was skipped.
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+// FU-M1-087: a field whose getter throws costs that tool alone. The plugin's setup and its other tools carry on.
+for (const field of unreadableFields) {
+  const logged = (name: string) => [
+    ["Skipping invalid tool registration", { name, namespace: undefined, error: `Unreadable tool ${name}: boom` }],
+  ]
+  it.live(`a Promise plugin that adds a tool whose ${field} cannot be read stays active`, () => {
+    const output: unknown[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      output.push(entry.message)
+    })
+    return Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      const tools = yield* Tool.Service
+      const exit = yield* PluginPromise.fromPromise({
+        id: "unreadable-add",
+        async setup(context) {
+          await context.tool.transform((editor) => {
+            editor.add({ ...classified([]), name: "before" })
+            editor.add(withThrowingField({ ...classified([]), name: "broken" }, field))
+            editor.add({ ...classified([]), name: "after" })
+          })
+        },
+      })
+        .effect(yield* PluginHost.make(plugins))
+        .pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(output).toEqual(logged(field === "name" ? "unknown" : "broken"))
+      const snapshot = yield* tools.snapshot()
+      expect(snapshot.describe("before")).toBeDefined()
+      expect(snapshot.describe("after")).toBeDefined()
+      expect(snapshot.describe("broken")).toBeUndefined()
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  it.live(`a Promise plugin update that leaves a ${field} that cannot be read keeps the earlier definition`, () => {
+    const output: unknown[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      output.push(entry.message)
+    })
+    return Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      const tools = yield* Tool.Service
+      const exit = yield* PluginPromise.fromPromise({
+        id: "unreadable-update",
+        async setup(context) {
+          await context.tool.transform((editor) => editor.add(classified([])))
+          await context.tool.transform((editor) => {
+            editor.update("classified", (tool) => {
+              Object.defineProperty(tool, field, {
+                enumerable: true,
+                get: () => {
+                  throw new Error("boom")
+                },
+              })
+            })
+            editor.add({ ...classified([]), name: "after" })
+          })
+        },
+      })
+        .effect(yield* PluginHost.make(plugins))
+        .pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(output).toEqual(logged("classified"))
+      const snapshot = yield* tools.snapshot()
+      expect(snapshot.describe("classified")).toBeDefined()
+      expect(snapshot.describe("after")).toBeDefined()
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+}
 
 for (const [name, traits, problem] of invalidTraits) {
   it.live(`a Promise plugin that adds a tool with ${name} stays active and registers the tools beside it`, () => {
