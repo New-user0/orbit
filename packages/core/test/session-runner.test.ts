@@ -7781,6 +7781,55 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests.every((request) => request.model === model)).toBe(true)
   })
 
+  // Spend recorded for a failed attempt can pass a turn limit; the handlers fail with it before they leave a notice.
+  const limitRows = [
+    {
+      name: "a continuation after a failed partial response",
+      turn: { maxTokens: 50 },
+      requests: 1,
+      attempts: () => [
+        TestLLM.failAfter(
+          incompleteStream(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "spent-partial" }),
+          LLMEvent.textDelta({ id: "spent-partial", text: "x".repeat(680) }),
+        ),
+        TestLLM.text("Never", "spent-never"),
+      ],
+    },
+    {
+      name: "a fallback after repeated overloads",
+      turn: { maxTokens: 8700, fallbackModel },
+      requests: 3,
+      attempts: () => [
+        ...Array.from({ length: 3 }, () => TestLLM.failAfter(overloaded(), LLMEvent.stepStart({ index: 0 }))),
+        TestLLM.text("Never", "spent-never"),
+      ],
+    },
+  ]
+  limitRows.forEach((row) =>
+    scenario(`leaves no synthetic message behind when a limit is spent at ${row.name}`, function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Spent", turn: row.turn, resume: false })
+      yield* s.llm.push(...row.attempts())
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.flip, Effect.forkChild)
+      while (true) {
+        const retrying = yield* Effect.raceFirst(
+          Queue.take(scheduled).pipe(Effect.as(true)),
+          Fiber.await(run).pipe(Effect.as(false)),
+        )
+        if (!retrying) break
+        yield* TestClock.adjust("1 minute")
+      }
+      const error = yield* Fiber.join(run)
+
+      expect(error).toBeInstanceOf(StepFailedError)
+      expect((error as StepFailedError).error).toMatchObject({ type: "limit.tokens" })
+      expect(s.requests).toHaveLength(row.requests)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+    }),
+  )
+
   scenario("does not switch when another failure interrupts the overloads", function* (s) {
     yield* s.session.prompt({ sessionID, text: "Mixed", turn: { fallbackModel }, resume: false })
     yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(rateLimited()), Stream.fail(overloaded()))

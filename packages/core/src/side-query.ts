@@ -161,11 +161,15 @@ export const layer = Layer.effect(
         Effect.timeoutOrElse({
           duration: timeout,
           orElse: () =>
-            Effect.suspend(() => (sent ? bus.publish(SessionEvent.SideQueryRecorded, {
-              sessionID: session.id,
-              purpose: input.purpose,
-              ...sent,
-            }) : Effect.void)).pipe(
+            Effect.suspend(() =>
+              sent
+                ? bus.publish(SessionEvent.SideQueryRecorded, {
+                    sessionID: session.id,
+                    purpose: input.purpose,
+                    ...sent,
+                  })
+                : Effect.void,
+            ).pipe(
               Effect.andThen(
                 Effect.fail(
                   new TimeoutError({
@@ -178,7 +182,9 @@ export const layer = Layer.effect(
         // A throwing plugin hook or an incompatible provider context is a defect, and still only costs the caller its answer.
         Effect.catchDefect((defect) =>
           Effect.logWarning("side query failed", { purpose: input.purpose, defect }).pipe(
-            Effect.andThen(Effect.fail(new UnavailableError({ message: "The side query could not run", cause: defect }))),
+            Effect.andThen(
+              Effect.fail(new UnavailableError({ message: "The side query could not run", cause: defect })),
+            ),
           ),
         ),
         // A provider failure (401, 429, 5xx) reaches the caller only as "could not run", so this is the one place that

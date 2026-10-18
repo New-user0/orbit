@@ -328,7 +328,8 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
   const untokened = sql`(${ended} AND ${read} = 0)
     OR (json_extract(m.data, '$.finish') = 'error' AND json_extract(m.data, '$.tokens') IS NULL)`
   // A text-only reply that was cut off is continued, in the same logical step, by the escalation or resume notice
-  // recorded after it and before the Session's next response. A cut-off that called a tool is a step of its own.
+  // recorded after it and before the Session's next response. A cut-off that holds a tool part (a call, an input the cap
+  // cut off, or a hosted call) is a step of its own.
   const textOnly = sql`NOT EXISTS (SELECT 1 FROM json_each(m.data, '$.content') WHERE json_extract(value, '$.type') = 'tool')`
   const continued = sql`json_extract(m.data, '$.finish') = 'length'
     AND ${textOnly}
@@ -414,7 +415,6 @@ const openUsage = Effect.fnUntraced(function* (db: DatabaseService, sessionID: S
   }
   return sum
 })
-
 
 /**
  * The limit the turn has reached, as the error that ends it (`limit.cost-unknown` or `limit.tokens-unknown` when a limit
