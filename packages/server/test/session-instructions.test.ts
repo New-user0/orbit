@@ -16,6 +16,7 @@ import { Agent } from "@orbit/schema/agent"
 import { Location } from "@orbit/schema/location"
 import { AbsolutePath } from "@orbit/schema/schema"
 import { FSUtil } from "@orbit/util/fs-util"
+import { ManagedSettings } from "@orbit/core/managed-settings"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { Context, Effect, Layer } from "effect"
@@ -66,7 +67,7 @@ const model = SessionRunnerModel.resolved(
  * A real server over an in-memory database with a temporary home, global config folder and project. `trusted: false`
  * leaves the project untrusted. `instructions` switches instruction loading off, as `orb run --bare` does.
  */
-const server = (options: { readonly trusted?: boolean; readonly instructions?: boolean; readonly provider?: boolean } = {}) =>
+const server = (options: { readonly trusted?: boolean; readonly instructions?: boolean; readonly provider?: boolean; readonly managed?: string } = {}) =>
   Effect.gen(function* () {
     const root = (yield* tmpdirScoped("orbit-instructions-")).path
     const home = path.join(root, "home")
@@ -107,6 +108,9 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
               Layer.succeed(SessionRunnerModel.Service, { resolve: () => Effect.succeed(model) }),
             ),
           ]),
+      ...(options.managed
+        ? [ManagedSettings.node.replace(ManagedSettings.configured({ directory: options.managed }))]
+        : []),
       ...(options.instructions === false
         ? [InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: false, global: false }))]
         : []),
@@ -161,10 +165,10 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
       instances,
       write,
       /** A session started in `directory`, which is the project by default. */
-      session: (directory = project) =>
+      session: (directory = project, agent = "build") =>
         sessions.create({
           id: Session.ID.create(),
-          agent: Agent.ID.make("build"),
+          agent: Agent.ID.make(agent),
           model: model.ref,
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         }),
@@ -177,7 +181,8 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
 // An import token spells a path with forward slashes on every platform.
 const token = (file: string) => file.replaceAll("\\", "/")
 
-const headers =(text: string) => Array.from(text.matchAll(/^Instructions from: (.+)$/gm), (match) => match[1])
+const headers = (text: string) =>
+  Array.from(text.matchAll(/^Instructions from: (.+?)(?: \(.*\))?$/gm), (match) => match[1])
 
 it.live("lists files in render order with kinds, and the import right after its importer", () =>
   Effect.gen(function* () {
@@ -201,6 +206,64 @@ it.live("lists files in render order with kinds, and the import right after its 
     const root = files.find((file) => file.path === path.join(s.project, "ORBIT.md"))
     expect(files[files.indexOf(root!) + 1]).toMatchObject({ importedBy: root!.path })
     expect(files.filter((file) => file.importedBy !== undefined)).toHaveLength(1)
+  }).pipe(Effect.scoped),
+)
+
+it.live("reports managed and local kinds, and an import takes its importer's kind", () =>
+  Effect.gen(function* () {
+    const root = (yield* tmpdirScoped("orbit-managed-")).path
+    const managed = path.join(root, "managed")
+    const s = yield* server({ managed })
+    yield* s.write(path.join(managed, "ORBIT.md"), "policy\n@./policy-more.md")
+    yield* s.write(path.join(managed, "policy-more.md"), "more policy")
+    yield* s.write(path.join(s.config, "ORBIT.md"), "global rules")
+    yield* s.write(path.join(s.project, "ORBIT.md"), "project rules")
+    yield* s.write(path.join(s.project, "ORBIT.local.md"), "local rules\n@./local-more.md")
+    yield* s.write(path.join(s.project, "local-more.md"), "more local")
+    const preview = yield* s.preview((yield* s.session()).id)
+    const files = preview.status.files
+
+    expect(files.map((file) => [path.basename(file.path), file.kind, file.importedBy && path.basename(file.importedBy)])).toEqual([
+      ["ORBIT.md", "managed", undefined],
+      ["policy-more.md", "managed", "ORBIT.md"],
+      ["ORBIT.md", "user", undefined],
+      ["ORBIT.md", "project", undefined],
+      ["ORBIT.local.md", "local", undefined],
+      ["local-more.md", "local", "ORBIT.local.md"],
+    ])
+    expect(files.map((file) => file.path)).toEqual(headers(preview.initial ?? ""))
+  }).pipe(Effect.scoped),
+)
+
+it.live("is read only: a preview records nothing and a repeat gives the same update", () =>
+  Effect.gen(function* () {
+    const s = yield* server()
+    const file = path.join(s.project, "ORBIT.md")
+    yield* s.write(file, "first rules")
+    const session = yield* s.session()
+    yield* s.step(session.id, "go")
+    yield* s.write(file, "second rules")
+    const first = yield* s.until(session.id, (preview) => (preview.update ?? "") !== "")
+    const second = yield* s.preview(session.id)
+
+    expect(first.update).not.toBe("")
+    expect(second.update).toBe(first.update)
+    const messages = yield* s.sessions.messages({ sessionID: session.id })
+    expect(JSON.stringify(messages)).not.toContain("second rules")
+  }).pipe(Effect.scoped),
+)
+
+it.live("lists no files for an agent that leaves instruction files out of its context", () =>
+  Effect.gen(function* () {
+    const s = yield* server()
+    yield* s.write(path.join(s.project, "ORBIT.md"), "project rules")
+    const build = yield* s.preview((yield* s.session()).id)
+    const explore = yield* s.preview((yield* s.session(s.project, "explore")).id)
+
+    expect(build.status.files).toHaveLength(1)
+    expect(explore.initial ?? "").not.toContain("project rules")
+    expect(explore.status.files).toEqual([])
+    expect(explore.status.warnings).toEqual([])
   }).pipe(Effect.scoped),
 )
 
@@ -352,10 +415,11 @@ it.live("warns once for an import outside the project, names the real target, an
     const s = yield* server({ trusted: false })
     const outside = path.join(s.root, "outside.md")
     yield* s.write(outside, "OUTSIDE-MARKER")
-    // Two spellings of the same target.
+    // Four spellings of one target: absolute, `..` once, `..` through a subfolder, and a lower-case drive on Windows.
+    const lower = token(outside).replace(/^[A-Z]:/, (drive) => drive.toLowerCase())
     yield* s.write(
       path.join(s.project, "ORBIT.md"),
-      `root\n@${token(outside)}\n@${token(path.join(s.project, "..", "outside.md"))}`,
+      `root\n@${token(outside)}\n@../outside.md\n@./sub/../../outside.md\n@${lower}`,
     )
     const preview = yield* s.preview((yield* s.session()).id)
 
@@ -368,7 +432,7 @@ it.live("warns once for an import outside the project, names the real target, an
   }).pipe(Effect.scoped),
 )
 
-it.live("separates an import nothing would load from one inside the project, trusted or not", () =>
+it.live("separates an import left out from one inside the project, trusted or not", () =>
   Effect.gen(function* () {
     const { canLinkFile } = yield* Effect.promise(() => import("../../core/test/fixture/symlink"))
     for (const trusted of [false, true]) {

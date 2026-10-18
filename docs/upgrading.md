@@ -2850,8 +2850,8 @@ A prompt you send that starts a turn and holds the word `ultrathink` (any case, 
 
 `GET /api/experimental/session/:sessionID/instructions` (`client.session.instructions.preview` in the SDK, `orb api
 GET /api/experimental/session/<id>/instructions` on the command line) answers with `status`, `initial` and `update`.
-`status.files` lists the instruction files the session's location has loaded in the order the model reads them, each with
-its real path, its scope (`user` or `project` today), its length in characters after front matter and comment blocks are
+`status.files` lists the instruction files the session's location has loaded in the order the model reads them (none for an agent that leaves instruction files out of its context), each with
+its real path, its scope (`managed`, `user`, `project` or `local`), its length in characters after front matter and comment blocks are
 off, and the file that imported it when it was imported. `status.warnings` names each file longer than 40,000
 characters, which is still sent whole, and each import that was left out because it leads outside what the project may
 supply (`import-external`, or `import-untrusted` when trusting the folder would load it). `status.available` is false

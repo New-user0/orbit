@@ -1,6 +1,6 @@
 export * as SessionInstructionPreview from "./instruction-preview.js"
 
-import type { Instruction } from "@orbit/schema/instruction"
+import { Instruction } from "@orbit/schema/instruction"
 import { Effect } from "effect"
 import { Database } from "../database/database.js"
 import { Instance } from "../instance/service.js"
@@ -36,7 +36,10 @@ export const preview = Effect.fn("SessionInstructionPreview.preview")(function* 
     const discovery = yield* InstructionDiscovery.Service
     const database = yield* Database.Service
     const selection = yield* context.select(session.id)
-    const status = yield* discovery.status()
+    // An agent that leaves the instruction files out of its context sends none of them, so none are listed.
+    const status = selection.agent.info.context?.instructions === false
+      ? new Instruction.Status({ files: [], warnings: [], available: (yield* discovery.status()).available })
+      : yield* discovery.status()
     return yield* SessionHistory.preview(database.db, session.id, selection.instructions, "local").pipe(
       Effect.map((history): Result => ({ status, initial: history.initial, update: history.instructionUpdate ?? "" })),
       Effect.catchIf(
