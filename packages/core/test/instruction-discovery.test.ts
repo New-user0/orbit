@@ -2855,3 +2855,134 @@ describe("InstructionDiscovery renders kinds, the header and order notes", () =>
     }),
   )
 })
+
+describe("InstructionDiscovery.section", () => {
+  const name = "Compaction instructions"
+  const hit = (target: string, text: string) => ({ path: AbsolutePath.make(target), text })
+  const managedOf = (where: Folders) => path.join(path.dirname(where.home), "managed")
+  const guidance = (text: string) => `# Notes\nother\n\n## ${name}\n${text}\n\n## After\nelse\n`
+
+  it.live("returns the sections of the files in render order, with their paths, a folder's local file after its shared one", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const local = path.join(where.repo, "ORBIT.local.md")
+      yield* write(where.globalFile, guidance("global"))
+      yield* write(where.rootFile, guidance("project"))
+      yield* write(local, guidance("local"))
+      yield* write(where.packageFile, "no section here")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(yield* discovery.section(name)).toEqual([
+          hit(where.globalFile, "global"),
+          hit(where.rootFile, "project"),
+          hit(local, "local"),
+        ])
+        expect(yield* discovery.section("Something else")).toEqual([])
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("returns an import's section as its own entry, with the imported file's path, right after its importer's", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const imported = path.join(where.repo, "docs", "more.md")
+      yield* write(where.globalFile, guidance("global"))
+      yield* write(where.rootFile, `${guidance("root")}\nSee @./docs/more.md\n`)
+      yield* write(imported, guidance("imported"))
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(yield* discovery.section(name)).toEqual([
+          hit(where.globalFile, "global"),
+          hit(where.rootFile, "root"),
+          hit(imported, "imported"),
+        ])
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("returns nothing from a file that instructions_exclude names", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.globalFile, guidance("global"))
+      yield* write(where.rootFile, guidance("project"))
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(yield* discovery.section(name)).toEqual([hit(where.globalFile, "global")])
+      }).pipe(Effect.provide(layerFor(where, { configLayer: Config.testLayer([excluding([slashed(where.rootFile)])]) })))
+    }),
+  )
+
+  it.live("does not return a heading that is inside a comment block of the file", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.rootFile, `<!--\n# ${name}\nhidden\n-->\n\n# ${name}\nshown\n`)
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(yield* discovery.section(name)).toEqual([hit(where.rootFile, "shown")])
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("returns nothing when no file is listed, and when the files are unavailable", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.globalFile, guidance("global"))
+      yield* write(where.rootFile, guidance("project"))
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(yield* discovery.list()).toEqual([])
+        expect(yield* discovery.section(name)).toEqual([])
+      }).pipe(Effect.provide(layerFor(where, { project: false, global: false })))
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect((yield* discovery.section(name)).length).toBe(2)
+        yield* discovery.transform((editor) => editor.unavailable())
+        expect(yield* discovery.section(name)).toEqual([])
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("returns the administrator's section with the project scope off, because the baseline shows that file", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      const managed = path.join(managedOf(where), "ORBIT.md")
+      yield* write(managed, guidance("policy"))
+      yield* write(where.rootFile, guidance("project"))
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toEqual([managed])
+        expect(yield* discovery.section(name)).toEqual([hit(managed, "policy")])
+      }).pipe(Effect.provide(layerFor(where, { managed: managedOf(where), project: false })))
+    }),
+  )
+
+  it.live("leaves the stored value whole, section included, and unchanged by a lookup", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.rootFile, guidance("project"))
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const before = yield* readBody(yield* discovery.load())
+        expect(before.values["core/instructions"]).toEqual([{ path: where.rootFile, content: guidance("project") }])
+        yield* discovery.section(name)
+        const after = yield* readBody(yield* discovery.load())
+        expect(after.values).toEqual(before.values)
+        expect(after.text).toBe(`Instructions from: ${where.rootFile}\n${guidance("project")}`)
+      }).pipe(scoped(where))
+    }),
+  )
+
+  it.live("returns the new body once a file is edited and discovery rescans", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(where.rootFile, guidance("before"))
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        expect(yield* discovery.section(name)).toEqual([hit(where.rootFile, "before")])
+        yield* Effect.promise(() => fs.writeFile(where.rootFile, guidance("after")))
+        yield* emitAndWait({ type: "update", path: where.rootFile })
+        expect(yield* discovery.section(name)).toEqual([hit(where.rootFile, "after")])
+      }).pipe(scoped(where))
+    }),
+  )
+})
