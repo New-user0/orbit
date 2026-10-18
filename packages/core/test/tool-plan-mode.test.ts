@@ -133,6 +133,7 @@ describe("plan mode tools", () => {
 
         const approved = yield* callTool("ExitPlanMode", { plan: "# Plan\n1. a\n2. b" })
         expect(approved.output).toEqual({ approved: true })
+        expect(approved.metadata).toEqual({ approved: true, file: path.join(paths.home, ".orbit", "plan", `${sessionID}.md`) })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: general })
         expect(test.asked[1]?.fields[0]).toMatchObject({ description: "# Plan\n1. a\n2. b" })
         expect(

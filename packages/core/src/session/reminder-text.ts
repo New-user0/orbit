@@ -107,6 +107,33 @@ export const humanTurnsSince = (
   anchor: (message: SessionMessage.Info) => boolean,
 ) => since(messages, anchor, (message) => message.type === "user")
 
+/** One run of the epoch: what lies before an assistant step, and the step. The newest run has no step yet. */
+export interface Run {
+  readonly anchor: Anchor
+  /** Messages of the run other than assistant messages, in order. */
+  readonly messages: ReadonlyArray<SessionMessage.Info>
+  readonly step?: Extract<SessionMessage.Info, { type: "assistant" }>
+}
+
+/**
+ * The runs of the epoch, as `toLLMMessages` lowers them: the first run, then one after each assistant message. A
+ * derived producer folds over these in order so that each run decides from history up to itself.
+ */
+export const runs = (messages: ReadonlyArray<SessionMessage.Info>): ReadonlyArray<Run> => {
+  const epoch = messages.slice(epochStart(messages))
+  const out: Array<{ anchor: Anchor; messages: SessionMessage.Info[]; step?: Run["step"] }> = [
+    { anchor: "start", messages: [] },
+  ]
+  epoch.forEach((message) => {
+    const current = out[out.length - 1]
+    if (message.type !== "assistant") return current.messages.push(message)
+    current.step = message
+    out.push({ anchor: message.id, messages: [] })
+  })
+  out[out.length - 1].anchor = "tail"
+  return out
+}
+
 /** The newest user message, and whether the current step is the first one since it (no assistant message follows). */
 export const newestPrompt = (messages: ReadonlyArray<SessionMessage.Info>) => {
   const index = messages.findLastIndex((message) => message.type === "user")
