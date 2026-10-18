@@ -167,8 +167,10 @@ describe("editor context at admission", () => {
   )
 
   // The class matrix of the editor path: every spelling of the denied file, then of the home folder. A row is kept (true)
-  // only when the rule does not cover it.
-  const matrix = (project: string, home: string) => {
+  // only when the rule does not cover it. The last column says why a dropped row is dropped: "deny" rows are kept by an
+  // allow-only control run, "refused" rows are refused by the resolver whatever the rules say, and "relative" rows are
+  // not absolute for the platform the resolver runs on.
+  const matrix = (project: string) => {
     const secret = path.join(project, "secret", "key.txt")
     const posix = (value: string) => value.replaceAll("\\", "/")
     const drive = secret[0].toLowerCase()
@@ -176,50 +178,67 @@ describe("editor context at admission", () => {
     fs.mkdirSync(path.join(project, "secret"), { recursive: true })
     fs.mkdirSync(path.join(project, "open"), { recursive: true })
     if (windowsOnly) fs.symlinkSync(path.join(project, "secret"), path.join(project, "open", "link"), "junction")
-    return [
-      ["plain path", secret, false],
-      ["dot-dot segments", path.join(project, "open", "..", "secret", "key.txt"), false],
-      ["trusted control", path.join(project, "open", "a.txt"), true],
-      ["~/ home spelling", "~/.ssh/id_rsa", false],
-      ["~/ home spelling, allowed file", "~/notes/a.txt", true],
-      ["~name is a relative path", "~root/.ssh/id_rsa", false],
-      ["~name with a backslash", "~root\\.ssh\\id_rsa", false],
-      ...(windowsOnly
-        ? ([
-            ["forward slashes", posix(secret), false],
-            ["upper-case folder", secret.toUpperCase(), false],
-            ["other drive-letter case", secret.replace(/^./, (c) => c.toLowerCase()), false],
-            ["Git Bash drive form", `/${drive}${posix(secret).slice(2)}`, false],
-            ["WSL drive form", `/mnt/${drive}${posix(secret).slice(2)}`, false],
-            ["extended-length prefix", `\\\\?\\${secret}`, false],
-            ["trailing dot", `${secret}.`, false],
-            ["trailing space", `${secret} `, false],
-            ["alternate data stream", `${secret}::$DATA`, false],
-            ["administrative share on localhost", `\\\\localhost\\${secret[0]}$${secret.slice(2)}`, false],
-            ["junction into the folder", path.join(project, "open", "link", "key.txt"), false],
-            ["~\\ home spelling", "~\\.ssh\\id_rsa", false],
-            ["~\\ home spelling, allowed file", "~\\notes\\a.txt", true],
-          ] as const)
-        : []),
-    ] as const
+    type Row = readonly [name: string, file: string, kept: boolean, why: "deny" | "refused" | "relative"]
+    const common: ReadonlyArray<Row> = [
+      ["plain path", secret, false, "deny"],
+      ["dot-dot segments", path.join(project, "open", "..", "secret", "key.txt"), false, "deny"],
+      ["trusted control", path.join(project, "open", "a.txt"), true, "deny"],
+      ["~/ home spelling", "~/.ssh/id_rsa", false, "deny"],
+      ["~/ home spelling, allowed file", "~/notes/a.txt", true, "deny"],
+      ["~name is a relative path", "~root/.ssh/id_rsa", false, "relative"],
+      ["~name with a backslash", "~root\\.ssh\\id_rsa", false, "relative"],
+    ]
+    const windows: ReadonlyArray<Row> = [
+      ["forward slashes", posix(secret), false, "deny"],
+      ["upper-case folder", secret.toUpperCase(), false, "deny"],
+      ["other drive-letter case", secret.replace(/^./, (c) => c.toLowerCase()), false, "deny"],
+      ["Git Bash drive form", `/${drive}${posix(secret).slice(2)}`, false, "deny"],
+      ["WSL drive form", `/mnt/${drive}${posix(secret).slice(2)}`, false, "deny"],
+      ["extended-length prefix", `\\\\?\\${secret}`, false, "deny"],
+      ["trailing dot", `${secret}.`, false, "deny"],
+      ["trailing space", `${secret} `, false, "deny"],
+      ["alternate data stream (refused by the resolver)", `${secret}::$DATA`, false, "refused"],
+      ["administrative share on localhost (refused by the resolver)", `\\\\localhost\\${secret[0]}$${secret.slice(2)}`, false, "refused"],
+      ["junction into the folder", path.join(project, "open", "link", "key.txt"), false, "deny"],
+      ["~\\ home spelling", "~\\.ssh\\id_rsa", false, "deny"],
+      ["~\\ home spelling, allowed file", "~\\notes\\a.txt", true, "deny"],
+    ]
+    // A server on POSIX with a Windows-side editor: these are joined under the session folder by the resolver, so they are
+    // relative there and never name the file the label would show.
+    const posixRows: ReadonlyArray<Row> = [
+      ["drive letter with backslashes", secret.replaceAll("/", "\\").replace(/^/, "C:"), false, "relative"],
+      ["drive letter with slashes", `C:${secret}`, false, "relative"],
+      ["rooted backslash path", secret.replaceAll("/", "\\"), false, "relative"],
+      ["UNC share", `\\\\localhost${secret.replaceAll("/", "\\")}`, false, "relative"],
+      ["device namespace", `\\\\.\\C:${secret.replaceAll("/", "\\")}`, false, "relative"],
+    ]
+    return [...common, ...(windowsOnly ? windows : posixRows)]
   }
 
   it.live("every spelling of a denied path is dropped, and an allowed one is kept", () =>
     Effect.gen(function* () {
       const project = (yield* tmpdirScoped()).path
       const home = Global.Path.home.replaceAll("\\", "/")
-      const rows = matrix(project, home)
-      const results = yield* Effect.gen(function* () {
-        yield* prepare(project, [
-          allow,
-          { action: "Read", resource: "secret/*", effect: "deny" },
-          { action: "Read", resource: `${home}/.ssh/*`, effect: "deny" },
-        ])
-        return yield* Effect.forEach(rows, ([name, file]) =>
-          admit({ text: "hi", editor: { path: file } }).pipe(Effect.map((payload) => [name, payload.editor !== undefined] as const)),
-        )
-      }).pipe(provide(project))
-      expect([...results]).toEqual(rows.map(([name, , kept]) => [name, kept] as const))
+      const rows = matrix(project)
+      const run = (rules: Parameters<typeof prepare>[1]) =>
+        Effect.gen(function* () {
+          yield* prepare(project, rules)
+          return yield* Effect.forEach(rows, ([name, file]) =>
+            admit({ text: "hi", editor: { path: file } }).pipe(
+              Effect.map((payload) => [name, payload.editor !== undefined] as const),
+            ),
+          )
+        }).pipe(provide(project))
+      const denied = yield* run([
+        allow,
+        { action: "Read", resource: "secret/*", effect: "deny" },
+        { action: "Read", resource: `${home}/.ssh/*`, effect: "deny" },
+      ])
+      // Control: with no deny rule a "deny" row is kept, so the rule is what drops it. "refused" and "relative" rows stay
+      // dropped, which is what marks them as not deny cells.
+      const control = yield* run([allow])
+      expect([...denied]).toEqual(rows.map(([name, , kept]) => [name, kept] as const))
+      expect([...control]).toEqual(rows.map(([name, , kept, why]) => [name, why === "deny"] as const))
     }),
   )
 

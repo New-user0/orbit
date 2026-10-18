@@ -147,7 +147,7 @@ const readableEditor = Effect.fn("SessionPrompt.readableEditor")(function* (
   // (`~name/...`) would resolve under the session folder, so it is a relative path like the rest.
   const home =
     editor.path === "~" || editor.path.startsWith("~/") || (process.platform === "win32" && editor.path.startsWith("~\\"))
-  if (!home && !path.posix.isAbsolute(editor.path) && !path.win32.isAbsolute(editor.path))
+  if (!home && !path.isAbsolute(editor.path))
     return yield* dropped("path is not absolute")
   if (editor.selection && editor.selection.end < editor.selection.start) return yield* dropped("selection ends before it starts")
   const access = yield* FileAccess.Service

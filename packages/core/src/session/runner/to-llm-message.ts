@@ -329,14 +329,14 @@ const queuedNote = (origin: unknown) =>
   ReminderText.render({
     text:
       origin === "agent"
-        ? "The agent that started you added the message below partway through. Deal with it before you wrap up your current task, and do not let it be dropped."
-        : "After you began your current task the person added the message below. When that task is done you MUST act on it; skipping it is not allowed.",
+        ? "The agent that started you added the message below partway through. It must not be dropped; handle it once your current task is done."
+        : "After you began your current task the person added the message below. It must not be ignored; handle it once that task is done.",
   })
 
 const agentHints = (agents: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["agents"]>) =>
   [...new Set(agents.map((agent) => agent.name))].map((name) =>
     ReminderText.render({
-      text: `The person would like the agent named below to be used. Launch it with the ${ToolNames.tools.subagent} tool, passing along the context it will need.`,
+      text: `The person would like the agent named below to be used. Launch it with the ${ToolNames.tools.subagent} tool and give it the context it needs.`,
       data: { label: "requested agent", content: name },
     }),
   )

@@ -12,6 +12,7 @@ import type { SessionContext } from "@orbit/core/session/context"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
@@ -93,6 +94,45 @@ const it = testEffect(
     ]),
     [Bus.node.replace(Bus.configured({ persist: true })), llmClient.replace(client)],
   ),
+)
+
+const lean = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionCompaction.node,
+      SessionModelRequest.node,
+      PluginHooks.node,
+    ]),
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      llmClient.replace(client),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.minimal(SessionReminders.production))),
+    ],
+  ),
+)
+
+lean.effect("a minimal instance's summary request carries neither the hint nor the editor note", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_lean_compaction"))
+    const prompt = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Lean compaction keeps this text.",
+      agents: [{ name: "helper" }],
+      editor: { path: "/project/src/open-file.ts" },
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compactManually(session, [prompt])).toEqual({ status: "completed" })
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).toContain("Lean compaction keeps this text.")
+    expect(sent).not.toContain("agent named below")
+    expect(sent).not.toContain("open-file.ts")
+  }),
 )
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
@@ -457,9 +497,9 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("Manual compaction should include this short conversation.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("Use Effect services and generators.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("User shell pwd completed: /project")
-    // A summary does not carry the hint or the editor note that belonged to the original prompt's request.
-    expect(JSON.stringify(requests[0]?.messages)).not.toContain("requested agent")
-    expect(JSON.stringify(requests[0]?.messages)).not.toContain("open-file.ts")
+    // A normal instance sends the summary request the way the main request lowers the prompt: hint and editor note stay.
+    expect(JSON.stringify(requests[0]?.messages)).toContain("agent named below")
+    expect(JSON.stringify(requests[0]?.messages)).toContain("open-file.ts")
     expect(requests[0]?.messages).toHaveLength(hooked + 1)
     expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("Summarize only what")
     expect(JSON.stringify(requests[0]?.messages)).not.toContain("display-only-output")

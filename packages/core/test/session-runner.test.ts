@@ -5158,7 +5158,7 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[1])).toEqual([
       "Look and echo",
       // A steer that follows a round of tool calls carries the mid-turn note first.
-      "<system-reminder>\nAfter you began your current task the person added the message below. When that task is done you MUST act on it; skipping it is not allowed.\n</system-reminder>",
+      "<system-reminder>\nAfter you began your current task the person added the message below. It must not be ignored; handle it once that task is done.\n</system-reminder>",
       "STEER",
     ])
     expect(toolResultIDs(s.requests[1])).toEqual(["call-cancelable", "call-echo"])
