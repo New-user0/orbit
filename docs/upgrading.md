@@ -3446,6 +3446,18 @@ as a recorded request in a test or a plugin that looks for the heading `# Safety
 
 **What to do:** Nothing. Refresh a recorded request that holds the default prompt.
 
+### A web page question is answered with its own instructions, not the session's prompt
+
+WebFetch asks a second model about a fetched page with instructions of its own (answer from the page alone, short
+quotes, no lyrics). Before, a model overlay (for example the OpenAI prompt), the prompt keys `system_prompt` and
+`append_system_prompt`, or the subagent template could replace those instructions, so a subagent such as Explore, or a
+session on an overlay model, sent the page question under the wrong prompt. The request now keeps its own text in every
+one of those cases. Pinned by `packages/core/test/plugin/side-query-prompt.test.ts`.
+
+**Affects:** sessions on models with a prompt overlay, sessions with the prompt keys set, and subagents that fetch pages.
+
+**What to do:** Nothing.
+
 ### An output style keeps the coding sections only when it asks for them, and the opening line follows the style
 
 A custom output style used to keep the coding sections of the default prompt (Scope, Working in code and
