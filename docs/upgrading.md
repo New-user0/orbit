@@ -3456,3 +3456,14 @@ error types.
 
 **What to do:** Nothing; expect a cost or token limit to stop a little earlier than before when side queries ran, and
 treat `limit.tokens-unknown` as a refusal to count (for example, use a provider that reports usage, or drop the token limit).
+
+## Agent and skill listings are context, not tool text
+
+- The agent types the `Agent` and `Workflow` tools can start are no longer appended to those tools' descriptions. They arrive as their own instruction source (`core/agent-guidance`), so the tool definitions stay the same when agents change and the model is told only what changed.
+- The skill listing is one bullet per skill (`- id: description`), each description is cut to 250 characters, and the whole listing is held to about 1% of the model's context window (4 characters per token): descriptions are shortened evenly, then dropped to names only. Every skill stays listed. Switching to a model with a different window can restate the listing.
+- The skill listing is offered only when the request has the `Skill` tool, and the agent listing only when it has `Agent` or `Workflow`.
+- Agent ids, descriptions and tool names, and skill ids and descriptions, are flattened to one line (control characters become a space) and envelope look-alikes are escaped before they are listed, and the agent picker, the skill picker, the `@` and `/` autocomplete and every Mini menu (including the `/` composer) escape control characters in what they draw (`dialog-listings.test.tsx`, `autocomplete-hostile.test.tsx`, `footer.view.test.tsx`). In a Plan-mode session the agent listing names only the agents Plan mode lets it start, and the `explore` agent is listed with the tools it has (Grep, Glob, Read, WebFetch, WebSearch).
+
+**Affects:** plugins that read the `Agent` or `Workflow` tool description for the agent list, and people with many skills.
+
+**What to do:** Read the agent list from the conversation context instead of the tool description; shorten skill descriptions that matter early.

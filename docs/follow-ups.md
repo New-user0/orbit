@@ -178,13 +178,12 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-152 | Not built: 5 GB cap for moved commands, killing a subagent's moved shells, numeric-string coercion, opt-out | parity | Runaway output or orphan shells. | low | M | shell-safety-6 | PR #91 body Deviations; C0-C2 | PR #91 body |
 | FU-M3-174 | Question maxResultChars declared but not consumed; traits and deferral | parity | No spill test for results over 100,000 characters. | n/a | S | tool-runtime-8 | PR #96 C0-C4 | Result spilling not built |
 
-### M6 (37)
+### M6 (36)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
 | FU-M1-021 | Saved approvals are shared through the remote URL: a shipped .git chooses an untrusted folder's project ID through remote.origin.url | 3, 5 | A never-trusted clone naming the same remote inherits saved 'always allow' answers; an archived clone shares another project's saved grants. | low | S + decision | foundations-14 | Known gaps; plan M1 table; PR #22 round 11 'Noticed'; M3 r6 fu172 | packages/core/src/project.ts:273-278 derives the project ID from the git remote; project.ts:380 remote(repo) is used before the trust check; no .git/orbit untrusted row |
 | FU-M2-010 | Grep and Glob authorize only the search root; Read denies are not applied to the files found or to LSP results | 8, 4 | Grep of '.' reads a .env under a Read deny of `*.env`, and Grep `path=~/.ssh` searches id_rsa despite a Read deny on `~/.ssh/*`. | low to medium | M: evaluate-only per-file check | permissions-3 | Known gaps; plan M3 prerequisites (permissions-3 amendment); #65 final-check 56; PR #75 C5 FU4; PR #78 C4/C6 spec §5; PR #92 C0-C4 | packages/core/src/tool/plugin/grep.ts:130-132 checks only the searched path; glob.ts:69-71 the same |
-| FU-M1-045 | Plan session's subagent description offers agents Plan refuses | behaviour | In Plan mode the model tries general first and gets a rejection. | high in Plan mode | S | permissions-7 | PR #2 review minor 1 | packages/core/src/tool/plugin/subagent.ts:327-340 lists every non-denied agent |
 | FU-M1-046 | Plan refusal for unknown or primary agents promises they work later | behaviour | A bad agent name is reported as a permission rejection with a misleading reason. | low | S | permissions-7 | PR #2 review minor 2 | packages/core/src/tool/plugin/subagent.ts:137 'cannot be spawned until Plan mode ends' |
 | FU-M1-047 | Plan-mode subagent branches are untested | tests | Those refusals can break unseen. | low | S | permissions-7 | PR #2 review minor 3 | no test in packages/core/test hits 'Plan mode does not allow subagents.' (subagent.ts:135) or spawning plan |
 | FU-M1-048 | Plan mode trusts the agent id, so a widened explore can edit | 8 | A person's config that widens explore lets Plan mode edit through it. | low; needs the person's own widening | M: check effective permissions | permissions-7 | PR #2 conflict-resolution review minor 1 | packages/core/src/plan-mode.ts:14-20 'Enforcement trusts the id' |
@@ -364,7 +363,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 | FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | agents-extensibility-43 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
 
-### Sweep (154)
+### Sweep (153)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -397,7 +396,6 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M2-071 | agent.test.ts shell check is vacuous and explore has no Memory-deny row | 14 | A built-in agent opted into the shell would pass. | low | S: one-line test change | sweep | #62 follow-up 32; #65 round 5 follow-up 18 | packages/core/test/agent.test.ts:222 compares rule.action === 'bash' |
 | FU-M2-073 | The fallback notice description is stored unescaped | 9 | A provider-supplied model name with control characters is stored raw. | very low | S | sweep | #62 follow-up 40 | packages/core/src/session/runner/llm.ts:397 interpolates model names |
 | FU-M2-080 | The /diff viewer draws diff lines and file names raw | 9 | A repository's diff writes OSC and bidi controls to the terminal. | low to moderate | S | sweep | #62 follow-up 45 | packages/tui/src/feature-plugins/system/diff-viewer.tsx has no bodyText/plain |
-| FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | 9 | An untrusted folder's command or skill description writes control characters. | low to moderate | S | sweep | #62 follow-up 46 | packages/tui/src/component/prompt/autocomplete.tsx:431,480 |
 | FU-M2-083 | VS Code chat draws resources, tool text and model text with bidi controls | 9 | Reordered text can hide what a tool did. | low | S | sweep | #62 follow-up 48 | packages/vscode/src/controller.ts error notes and tool errors (lines `~502-568`) not passed through plain (not re-probed) |
 | FU-M2-084 | workflowModels leaves out retry.retryOn | 2 | A workflow field that changes spend is not listed for the gate. | low | S | sweep | #62 follow-up 50 | packages/flow/src/load.ts:177 AGENT_CHOICES has no retryOn |
 | FU-M2-086 | util.flock load flake is not on known-failures | tests | The flake looks like a new failure. | intermittent under load | S | sweep | #62 follow-up 54 | docs/known-failures.md has no flock row |
@@ -633,6 +631,8 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 
 | id | title | fixed by | test |
 |---|---|---|---|
+| FU-M1-045 | Plan session's subagent description offers agents Plan refuses | ea36dfdf | test packages/core/test/session-context-listings.test.ts 'lists only the agents Plan mode allows to a Plan session, and every agent to a Build session' (the session's agent reaches the filter), and the filter itself in agent-instructions-fields.test.ts |
+| FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | commit 4b063090 and the Mini menu fix (fix(tui): draw Mini menu text through plain) | tests packages/tui/test/prompt/autocomplete-hostile.test.tsx (@ skills and / commands), packages/tui/test/component/dialog-listings.test.tsx, packages/tui/test/mini/footer.view.test.tsx (Mini agent picker and Mini slash menu) |
 | FU-M3-043 | vim_mode and output_style are not in the status line watch list | 43822725 | test packages/tui/test/status-line-app.test.tsx 'the status line reruns when the vim mode or the output style changes' (and status-line-trust.test.tsx 'a vim mode change in an untrusted start folder starts no status line command') |
 | FU-M1-017 | Git.clean compared paths with startsWith | 97cb7e7 | test packages/flow/test/git.test.ts 'a run is cleaned up whatever case the repository path is spelled with'. Known gaps entry and class 5 text are stale |
 | FU-M1-025 | No in-repo list of known test failures | 933be24 | Known gaps entry 'No list of known failures' is stale |
@@ -853,9 +853,9 @@ placement, a requirement that was written against code that no longer exists). T
 
 - Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) = 725.
 - Output: 643 rows plus 83 listed duplicates = 726. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 643 register rows have a table entry.
-- Open minors by carrier: M4: 8, M5: 5, M6: 37, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 154, Owner: 95.
+- Open minors by carrier: M4: 8, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 153, Owner: 95.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
-- Fixed: 126.
+- Fixed: 128.
 - Duplicates: 83.
-- Check: 423 open + 86 owner + 126 fixed + 83 duplicates = 718, the 718 inputs.
+- Check: 421 open + 86 owner + 128 fixed + 83 duplicates = 718, the 718 inputs.

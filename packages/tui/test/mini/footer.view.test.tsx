@@ -2637,3 +2637,60 @@ test.each([
     app.cleanup()
   }
 })
+
+// Repository-supplied agent names and descriptions reach the picker through `plain`: no control byte survives.
+test.each([
+  ["description", { id: "build", description: "line\u001b]0;pwned\u0007 one\r\ntwo three" }],
+  ["name", { id: "ev\u001b[2Jil", description: "ok" }],
+])("direct agent panel draws a hostile agent %s without control characters", async (_name, row) => {
+  const theme = await nativeLightTheme()
+  const [agents] = createSignal<RunAgent[]>([
+    { ...row, name: "x", mode: "primary", hidden: false },
+    { id: "trusted", name: "Trusted", description: "fine", mode: "primary", hidden: false },
+  ])
+  const app = await testRender(
+    () => (
+      <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
+        <RunAgentSelectBody
+          theme={() => theme.footer}
+          agents={agents}
+          current={() => "trusted"}
+          onClose={() => {}}
+          onSelect={() => {}}
+        />
+      </box>
+    ),
+    { width: 100, height: RUN_COMMAND_PANEL_ROWS },
+  )
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("trusted")
+    expect(frame).toContain("fine")
+    expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct footer draws a hostile command name and description in the slash menu without control characters", async () => {
+  const app = await renderFooter({
+    commands: [
+      command({ name: "zzcmd\u001b[2J", description: "line\u001b]0;pwned\u0007 o‮ne" }),
+      command({ name: "zzgood", description: "fine" }),
+    ],
+  })
+
+  try {
+    await app.renderOnce()
+    "/zz".split("").forEach((key) => app.mockInput.pressKey(key))
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("zzgood")
+    expect(frame).toContain("fine")
+    expect(frame).toContain("zzcmd")
+    expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
+  } finally {
+    app.cleanup()
+  }
+})

@@ -36,7 +36,7 @@ export const Input = Schema.Struct({
 const AgentInput = Schema.Struct({
   description: Schema.String.annotate({ description: "A short 3-5 word label for this agent" }),
   prompt: Schema.String.annotate({ description: "The complete task; the agent starts with no other context" }),
-  agent: Schema.optionalKey(Schema.String).annotate({ description: "Subagent type; default general" }),
+  agent: Schema.optionalKey(Schema.String).annotate({ description: "Subagent type, chosen from the roster of agents in your context; default general" }),
   model: Schema.optionalKey(Schema.String).annotate({ description: "providerID/modelID; only when asked for" }),
   phase: Schema.optionalKey(Schema.String).annotate({
     description: "A one-word stage this agent belongs to, such as Discover, Build or Verify; shown to the user",
@@ -225,10 +225,5 @@ export const Plugin = {
         }),
       )
       .pipe(Effect.orDie)
-
-    const hook = SubagentTool.describeAgents(agents, name)
-    yield* ctx.session.hook("context", hook)
-    yield* ctx.session.hook("compaction", hook)
-    yield* ctx.session.hook("generate", hook)
   }),
 }

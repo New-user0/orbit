@@ -5,6 +5,9 @@ import { Model } from "../model.js"
 import { Permission } from "../permission.js"
 import { Context, Effect, Layer } from "effect"
 import { Agent } from "../agent.js"
+import { AgentInstructions } from "../agent/instructions.js"
+import { SkillTool } from "../tool/plugin/skill.js"
+import { WorkflowTool } from "../tool/plugin/workflow.js"
 import { CodeModeInstructions } from "../codemode/instructions.js"
 import { Database } from "../database/database.js"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
@@ -95,6 +98,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const agents = yield* Agent.Service
+    const agentInstructions = yield* AgentInstructions.Service
     const builtins = yield* InstructionBuiltIns.Service
     const model = yield* Model.Service
     const db = (yield* Database.Service).db
@@ -179,12 +183,25 @@ const layer = Layer.effect(
       if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: session.agent ?? agent.id })
       // Session permissions narrow discovery the same way they narrow the tool snapshot.
       const permissions = Permission.merge(agent.info.permissions, session.permissions ?? [])
+      const tools = yield* registry.snapshot(permissions)
+      const offered = (name: string) => tools.definitions.some((definition) => definition.name === name)
       const loaded = yield* Effect.all(
         {
-          tools: registry.snapshot(permissions),
           builtins: builtins.load(),
           discovery: discovery.load({ removed: agent.info.context?.instructions === false }),
-          skills: skillInstructions.load(permissions),
+          skills: Effect.gen(function* () {
+            // The skill listing is budgeted against the window of the model that runs this request.
+            const pinned = session.model && (yield* model.get(session.model.providerID, session.model.id))
+            const known = (pinned || (yield* model.default()))?.limit.context
+            // A catalog entry with no known window reports 0, which is not a window.
+            const contextWindow = known !== undefined && known > 0 ? known : DEFAULT_CONTEXT_WINDOW
+            return yield* skillInstructions.load(permissions, { contextWindow, enabled: offered(SkillTool.name) })
+          }),
+          agents: agentInstructions.load({
+            permissions,
+            enabled: offered(AgentInstructions.NAME) || offered(WorkflowTool.name),
+            agent: agent.info.id,
+          }),
           references: referenceInstructions.load(),
           mcp: mcpInstructions.load(permissions),
           entries: entries.load(sessionID),
@@ -200,17 +217,20 @@ const layer = Layer.effect(
         // varies by the moment the session began, then the scratchpad, which varies by the session
         // the lineage goes back to.
         instructions: Instructions.combine([
-          CodeModeInstructions.make(loaded.tools.codeModeCatalog),
+          // `core/mcp-guidance` and `core/codemode` carry the MCP and deferred-tool deltas. The native deferred-tool
+          // source that file-web-tools adds belongs in this group, before the references.
+          CodeModeInstructions.make(tools.codeModeCatalog),
           loaded.mcp,
           loaded.references,
           loaded.skills,
+          loaded.agents,
           loaded.discovery,
           loaded.builtins,
           vcsInstructions.source(session, { enabled: agent.info.context?.git_status !== false }),
           scratchpad.source(session),
           loaded.entries,
         ]),
-        tools: loaded.tools,
+        tools,
       }
     })
 
@@ -237,6 +257,9 @@ const layer = Layer.effect(
   }),
 )
 
+/** The window assumed when neither the session's model nor the default model reports one. */
+const DEFAULT_CONTEXT_WINDOW = 200_000
+
 /** Variant IDs that minimize reasoning output, in preference order. */
 const MINIMAL_REASONING_VARIANTS = ["none", "minimal", "low"].map((id) => Model.VariantID.make(id))
 
@@ -245,6 +268,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Agent.node,
+    AgentInstructions.node,
     Config.node,
     Model.node,
     Database.node,

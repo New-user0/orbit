@@ -22,6 +22,7 @@ import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { displayCharAt, mentionTriggerIndex, slashTriggerIndex } from "../../prompt/display"
 import type { FileSystemEntry } from "@orbit/client"
 import { Skill } from "@orbit/schema/skill"
+import { plain } from "@orbit/flow/plain"
 import { stringWidth } from "../../util/string-width"
 import { parseFileLineRange, stripFileLineRange } from "../../prompt/parse"
 import { moveSelection, reconcileSelectionWindow, revealSelectionOffset } from "../../ui/select-controller"
@@ -921,7 +922,7 @@ export function Autocomplete(props: {
                   wrapMode="none"
                 >
                   {Locale.truncateMiddle(
-                    confirmingAction() ? (destructive()?.confirm ?? "") : option().display,
+                    plain(confirmingAction() ? (destructive()?.confirm ?? "") : option().display),
                     contentWidth(),
                   )}
                 </text>
@@ -932,7 +933,7 @@ export function Autocomplete(props: {
                     flexShrink={1}
                     minWidth={0}
                   >
-                    {" " + option().description?.replace(/\s+/g, " ").trim()}
+                    {" " + plain(option().description ?? "").replace(/\s+/g, " ").trim()}
                   </text>
                 </Show>
                 <Show when={!confirmingAction() && label()}>

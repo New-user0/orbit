@@ -15,6 +15,7 @@ import {
   type RunFooterMenuItem,
 } from "./footer.menu"
 import { stringWidth } from "../util/string-width"
+import { plain } from "@orbit/flow/plain"
 import { bodyText } from "../util/renderer"
 import { monoShortcut } from "./mono"
 import type { RunFooterTheme } from "./theme"
@@ -643,8 +644,8 @@ export function RunAgentSelectBody(props: {
       .filter((agent) => agent.mode !== "subagent" && !agent.hidden)
       .map((agent) => ({
         category: "",
-        display: agent.id,
-        description: agent.description,
+        display: plain(agent.id),
+        description: agent.description === undefined ? undefined : plain(agent.description),
         footer: props.current() === agent.id ? "current" : undefined,
         footerTone: "selection" as const,
         keywords: `${agent.id} ${agent.name} ${agent.description ?? ""}`,

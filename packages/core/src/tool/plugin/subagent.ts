@@ -2,7 +2,6 @@ export * as SubagentTool from "./subagent.js"
 
 import { ToolFailure } from "@orbit/ai"
 import type { Context } from "@orbit/plugin/effect/plugin"
-import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Effect, Predicate, Schema } from "effect"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
@@ -31,7 +30,7 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
 export const Input = Schema.Struct({
   agent: Schema.String.annotate({
     description:
-      "The type of specialized agent to use for this task. If the user asks for a subagent by a name that is not one of the available subagents, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
+      "Which agent should take this job. Your context carries a roster of the agents you may pick from. If the user asks for a subagent by a name that is not one of them, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
   }),
   description: Schema.String.annotate({ description: "A short 3-5 word label for the task, displayed to the user" }),
   prompt: Schema.String.annotate({ description: "The task for the subagent to perform" }),
@@ -61,6 +60,7 @@ export const description = [
   "Foreground (default) runs the subagent to completion and returns its final response.",
   "Background mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.",
   "Use background only for independent work that can run while you continue elsewhere.",
+  "Pick the agent from the roster of startable agents that your context carries; each entry says what the agent is for and what it can use.",
 ].join("\n")
 
 /** Admission checks and model resolution shared by every tool that spawns subagents. */
@@ -312,39 +312,5 @@ export const Plugin = {
         event.input = input
       }),
     )
-
-    const hook = describeAgents(agents, name)
-    yield* ctx.session.hook("context", hook)
-    yield* ctx.session.hook("compaction", hook)
-    yield* ctx.session.hook("generate", hook)
   }),
-}
-
-/** A session hook that lists the subagents the selected agent may spawn in the description of tool `tool`. */
-export function describeAgents(agents: Agent.Interface, tool: string) {
-  return (event: SessionHooks["context"]) =>
-    Effect.gen(function* () {
-      const definition = event.tools[tool]
-      if (!definition) return
-      const selected = yield* agents.resolve(event.agent)
-      if (!selected) return
-      const available = (yield* agents.list())
-        .filter(
-          (agent) =>
-            agent.mode !== "primary" &&
-            !agent.hidden &&
-            Permission.evaluate(name, agent.id, selected.permissions).effect !== "deny",
-        )
-        .toSorted((a, b) => a.id.localeCompare(b.id))
-      if (available.length === 0) return
-      definition.description = [
-        definition.description,
-        "",
-        "Available subagents:",
-        ...available.map(
-          (agent) =>
-            `- ${agent.id}: ${agent.description ?? "This subagent should only be called when explicitly requested."}`,
-        ),
-      ].join("\n")
-    })
 }
