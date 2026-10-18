@@ -103,8 +103,12 @@ Orbit's own that is not seeded from the repository (undo still works, and `.giti
 taken before the folder was trusted stay usable once it is trusted, but not the other way round), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
 folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`; the other `orb
-flow` commands find the repository root from its files. A repository with no remote keeps one project ID when it becomes
-trusted, so its earlier sessions stay in the project.
+flow` commands find the repository root from its files. A repository with no remote is named by its path until it is
+trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
+`project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
+path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
+grant, before the folder was opened again, can be restored (`snapshot-trust-restart.test.ts`). Saved "always allow"
+answers stay with the old ID, so Orbit asks again.
 
 ### A project's config waits for its folder to be trusted
 
@@ -3793,3 +3797,11 @@ the provider's prompt cache is cold for it).
 **Affects:** clients of the generated API gain `instruction.note.targets` and `instruction.note.add`; code that implements `InstructionDiscovery.Interface` gains `addRescan` and `rescan`.
 
 **What to do:** Nothing. A client that offers a `#` note asks the targets first and shows `loaded: false` and the refusal reasons.
+
+## An untrusted folder cannot change the prompt of an agent that exists
+
+A project or local config in a folder that is not trusted can no longer set `agents.<id>.system` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged.
+
+**Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
+
+**What to do:** Trust the folder if you want its prompt to apply.

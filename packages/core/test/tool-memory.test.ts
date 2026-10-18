@@ -1,6 +1,9 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import fs from "fs/promises"
 import path from "path"
+import { Hash } from "@orbit/util/hash"
+import { Project } from "@orbit/core/project"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -133,5 +136,51 @@ describe("memory tool", () => {
         ),
       )
     }),
+  )
+
+  // A repository with no remote is named by its path until it is trusted and by its first commit afterwards.
+  const canonical = AbsolutePath.make(path.resolve("/orbit-memory-test/main"))
+  const linked = AbsolutePath.make(path.resolve("/orbit-memory-test/linked"))
+  const pathID = (folder: string) => Hash.fast(`directory:${folder}`)
+  ;[
+    { name: "the checkout's own path ID", from: () => pathID(canonical), directory: canonical },
+    { name: "the main checkout's path ID, from a linked checkout", from: () => pathID(canonical), directory: linked },
+    { name: "the linked checkout's own path ID", from: () => pathID(linked), directory: linked },
+  ].forEach((row) =>
+    it.live(`lists a note saved under ${row.name} once the project has its first-commit ID`, () =>
+      Effect.gen(function* () {
+        const data = (yield* tmpdirScoped()).path
+        const trustedID = Project.ID.make("a".repeat(40))
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(data, "memory", row.from()), { recursive: true })
+          await fs.writeFile(path.join(data, "memory", row.from(), "before-trust.md"), "# Saved before trust\n")
+          await fs.mkdir(path.join(data, "memory", trustedID), { recursive: true })
+          await fs.writeFile(path.join(data, "memory", trustedID, "kept.md"), "# Already here\n")
+        })
+        const ref = Location.Ref.make({ directory: row.directory })
+        const bound = Layer.succeed(
+          Location.Service,
+          Location.Service.of({
+            directory: ref.directory,
+            project: { id: trustedID, directory: row.directory, canonical },
+            vcs: undefined,
+          }),
+        )
+        yield* Effect.gen(function* () {
+          const registry = yield* Tool.Service
+          const listed = text(yield* executeTool(registry, call({ action: "list" })))
+          expect(listed).toContain("[before-trust](before-trust.md): Saved before trust")
+          expect(listed).toContain("[kept](kept.md): Already here")
+        }).pipe(
+          Effect.provide(
+            AppNodeBuilder.build(LayerNode.group([Tool.node, node, Bus.node, InstructionDiscovery.node]), [
+              Location.node.replace(bound),
+              Global.node.replace(Global.layerWith({ data })),
+              Permission.node.replace(allowAllPermission),
+            ]),
+          ),
+        )
+      }),
+    ),
   )
 })

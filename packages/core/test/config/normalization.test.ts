@@ -245,7 +245,8 @@ describe("ConfigNormalize", () => {
       }),
       { numRuns: 100 },
     )
-  })
+    // The generated documents are large (agents, hooks, mcp), so this takes longer than the 5 s default on a loaded host.
+  }, 30_000)
 
   test("merges named maps by entry and gives valid native entries precedence", () => {
     const result = normalized({

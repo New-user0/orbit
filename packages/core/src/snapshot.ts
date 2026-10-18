@@ -103,8 +103,7 @@ const layer = Layer.effect(
           const found = source ?? (trusted ? undefined : yield* GitLayout.locate(fs, location.project.directory))
           if (!found) return yield* new Error({ operation: "capture", message: "Project is not a Git repository" })
           const worktree = AbsolutePath.make(yield* fs.realPath(found.worktree).pipe(Effect.orDie))
-          // Untrusted snapshots are keyed by the work tree alone, not by the project ID, which can change when trust is
-          // granted, so a snapshot taken before trust is found after it.
+          // Untrusted snapshots are keyed by the work tree alone, not by the project ID.
           const untrustedDirectory = path.join(global.data, "snapshot", "untrusted", Hash.fast(worktree))
           const gitDirectory = AbsolutePath.make(
             trusted ? path.join(global.data, "snapshot", location.project.id, Hash.fast(worktree)) : untrustedDirectory,
@@ -114,17 +113,33 @@ const layer = Layer.effect(
             : yield* git.repo
                 .create({ worktree, gitDirectory, seed: source })
                 .pipe(Effect.mapError((cause) => failure("capture", cause)))
-          // Trees captured before trust live in the untrusted repository, which is Orbit's own. Listing its objects as an
-          // alternate of the trusted one lets those snapshots be compared and restored once the folder is trusted; it
-          // opens nothing that the folder chose.
-          if (trusted && (yield* fs.existsSafe(path.join(untrustedDirectory, "HEAD")))) {
+          // Trees captured earlier live in Orbit's own repositories for this work tree: the untrusted one, and the one filed
+          // under the project ID that the Location held when it captured them. A Location keeps the ID it was bound with,
+          // and the ID of a folder with no remote changes when trust is granted, so a grant without a reload files its
+          // snapshots under the old ID. Listing every such repository's objects as alternates lets those snapshots be
+          // compared and restored after the next resolve; it opens nothing that the folder chose.
+          if (trusted) {
+            const root = path.join(global.data, "snapshot")
+            const siblings = yield* fs.readDirectory(root).pipe(
+              Effect.orElseSucceed(() => [] as string[]),
+              Effect.map((names) => names.map((name) => path.join(root, name, Hash.fast(worktree)))),
+              Effect.flatMap((items) =>
+                Effect.filter(
+                  items.filter((item) => item !== gitDirectory),
+                  (item) => fs.existsSafe(path.join(item, "HEAD")),
+                ),
+              ),
+            )
             const alternates = path.join(gitDirectory, "objects", "info", "alternates")
-            const line = path.join(untrustedDirectory, "objects")
             const current = yield* fs.readFileString(alternates).pipe(Effect.orElseSucceed(() => ""))
-            if (!current.split("\n").includes(line))
+            const lines = siblings.map((item) => path.join(item, "objects")).filter((line) => !current.split("\n").includes(line))
+            if (lines.length)
               yield* fs.ensureDir(path.dirname(alternates)).pipe(
                 Effect.andThen(
-                  fs.writeFileString(alternates, current + (current && !current.endsWith("\n") ? "\n" : "") + line + "\n"),
+                  fs.writeFileString(
+                    alternates,
+                    current + (current && !current.endsWith("\n") ? "\n" : "") + lines.join("\n") + "\n",
+                  ),
                 ),
                 Effect.orDie,
               )
