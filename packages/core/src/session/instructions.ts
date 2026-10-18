@@ -85,10 +85,12 @@ const layer = Layer.effect(
       // A file that was found as a real path may have been replaced by a link since, so the guard is asked of where it leads now.
       const lead = yield* trust.leads(path)
       if (yield* trust.importable(path, lead)) return true
-      // A rule in a folder above the project passed `reachable` and `supplies` when the session started. It is asked the same
+      // A rule in a folder above the project (never one inside it, whose link out stays refused) passed `reachable` and
+      // `supplies` when the session started. It is asked the same
       // again of where it leads now, and it must still be the file that was found: a swapped link is not that rule.
       if (
         base !== undefined &&
+        !FSUtil.contains(root, base) &&
         FSUtil.contains(path, lead) &&
         FSUtil.contains(lead, path) &&
         (yield* trust.reachable(lead)) &&

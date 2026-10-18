@@ -247,6 +247,37 @@ describe("ConfigInstructionRules.scan", () => {
     }),
   )
 
+  // Class 6: the folder itself is a link to a share. Its spelling is a local path, so only the answer of `leads` says so, and
+  // nothing is stat'ed or listed before that answer is read.
+  it.live("never stats or lists a rules folder whose real path is a network share", () =>
+    Effect.gen(function* () {
+      const root = path.resolve("/rules")
+      const touched: string[] = []
+      const found = yield* ConfigInstructionRules.scan({
+        directory: root,
+        fs: {
+          isDir: (target) => Effect.succeed(touched.push(target) > 0),
+          isFile: (target) => Effect.succeed(touched.push(target) > 0),
+          readDirectoryEntries: (target) =>
+            Effect.succeed((touched.push(target), [{ name: "x.md", type: "file" }])) as ReturnType<
+              FSUtil.Interface["readDirectoryEntries"]
+            >,
+        },
+        leads: (spelling) =>
+          Effect.succeed(
+            spelling === root
+              ? process.platform === "win32"
+                ? "\\\\decoy-host.invalid\\share\\rules"
+                : "//decoy-host.invalid/share/rules"
+              : spelling,
+          ),
+        allow: () => Effect.succeed(true),
+      })
+      expect(found).toEqual([])
+      expect(touched).toEqual([])
+    }),
+  )
+
   // Class 6: a link in the folder that leads to a share is named as the share by `leads`, and nothing then stats or lists it.
   const share = process.platform === "win32" ? "\\\\decoy-host.invalid\\share\\x.md" : "//decoy-host.invalid/share/x.md"
   for (const [name, entry] of [

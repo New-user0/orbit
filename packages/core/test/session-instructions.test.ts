@@ -2017,6 +2017,50 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
       }),
     )
 
+  // Class 4: a rule of the project that was already a link out of it when it was found (`real` is the outside file, the base
+  // is the project) is refused at injection in a trusted project, as an import is. Only a folder above the project may
+  // vouch for a rule that lies outside it. A plain rule of the project is the control.
+  ;(canLinkFile ? it.live : it.live.skip)("injects a rule of the project that leads out of it, but not one that stays inside", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const outside = yield* outsideFolder
+      const secret = path.resolve(outside, "secret.md")
+      const inner = path.resolve(dir, ".orbit", "rules", "i.md")
+      yield* mkdir(path.dirname(inner))
+      yield* writeAgents(inner, "INNER MARKER")
+      yield* writeAgents(secret, "SECRET MARKER")
+      yield* writeAgents(path.resolve(dir, "a.ts"), "a")
+      yield* found(waiting(secret, ["*.ts"], dir), waiting(inner, ["*.ts"], dir))
+      const sessionID = yield* sessionIn(dir)
+      yield* read(sessionID, "a.ts")
+      const injected = (yield* texts(sessionID)).join("\n")
+      expect(injected).toContain("INNER MARKER")
+      expect(injected).not.toContain("SECRET MARKER")
+    }),
+  )
+
+  // Class 6: a rule of the person that is a link to a network share is named as the share and never read. The recording file
+  // system shows that nothing opens the link, which a check of the spelling alone would.
+  ;(process.platform === "win32" && canLinkFile ? recorded.live : recorded.live.skip)(
+    "never reads a rule of the person that is a link to a network share",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const outside = yield* outsideFolder
+        const user = path.resolve(outside, "u.md")
+        const control = path.resolve(outside, "c.md")
+        yield* writeAgents(control, "CONTROL MARKER")
+        yield* Effect.promise(() => fs.symlink("\\\\192.0.2.77\\share\\r.md", user, "file"))
+        yield* writeAgents(path.resolve(dir, "a.ts"), "a")
+        yield* found(waiting(user, ["*.ts"], dir, "user"), waiting(control, ["*.ts"], dir, "user"))
+        touchedPaths.length = 0
+        const sessionID = yield* sessionIn(dir)
+        yield* read(sessionID, "a.ts")
+        expect((yield* texts(sessionID)).join("\n")).toContain("CONTROL MARKER")
+        expect(touchedPaths.filter((target) => target === user || /^[\\/]{2}/.test(target))).toEqual([])
+      }),
+  )
+
   untrusted.live("injects the rule of the person in a project that is not trusted, and refuses a network path without a lookup", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory

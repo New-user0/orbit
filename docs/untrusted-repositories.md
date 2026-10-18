@@ -334,7 +334,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
   `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
   a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
-  through, of `ProjectTrust.importable`, or for a rule of a folder above the project, `reachable` and `supplies` again
+  through, of `ProjectTrust.importable`, or for a rule of a folder above the project (never one inside it), `reachable` and `supplies` again
   on where it leads now. So a rules folder, a subfolder or a file that is a link out of the project is skipped alone,
   trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
   The person's and the administrator's rules are theirs: only the network refusal applies. The `paths` key is read only

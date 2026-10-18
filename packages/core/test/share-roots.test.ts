@@ -2,6 +2,7 @@ import { describe, expect, setDefaultTimeout } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
+import { ConfigInstructionRules } from "@orbit/core/config/instruction-rules"
 import { CompatMcpJson } from "@orbit/compat/mcp-json"
 import { CompatNames } from "@orbit/compat/names"
 import { CompatRoots } from "@orbit/compat/roots"
@@ -76,6 +77,25 @@ const loaders = [
       Effect.gen(function* () {
         for (const folder of [".orbit/skills", `${CompatNames.vendor.directory}/skills`])
           yield* LinkShare.scan(files, path.join(project, folder), ["{*.md,**/SKILL.md}"])
+      }),
+  },
+  {
+    name: "ConfigInstructionRules.scan",
+    links: [".orbit/rules", ".orbit/rules/sub", ".orbit/rules/x.md", `${CompatNames.vendor.directory}/rules`],
+    run: (files: FSUtil.Interface, project: string) =>
+      Effect.gen(function* () {
+        // `leads` names a share as ProjectTrust.leads does, without opening it.
+        const leads = (spelling: string) =>
+          LinkShare.of(files, spelling).pipe(
+            Effect.flatMap((shared) => (shared === undefined ? files.resolve(spelling) : Effect.succeed(shared))),
+          )
+        for (const folder of [".orbit/rules", `${CompatNames.vendor.directory}/rules`])
+          yield* ConfigInstructionRules.scan({
+            directory: path.join(project, folder),
+            fs: files,
+            leads,
+            allow: () => Effect.succeed(true),
+          })
       }),
   },
 ] as const
