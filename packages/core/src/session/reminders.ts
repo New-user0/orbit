@@ -5,6 +5,7 @@ import { plain } from "@orbit/util/plain"
 import { Cause, Context, Duration, Effect, Layer, Option } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
+import { Database } from "../database/database.js"
 import { LspDiagnostics } from "../lsp/collector.js"
 import { LspReminder } from "../lsp/reminder.js"
 import { Location } from "../location.js"
@@ -17,6 +18,7 @@ import { ReminderText, render } from "./reminder-text.js"
 import type { SessionRunnerModel } from "./runner/model.js"
 import { withoutReplaced, type LoweredInsertion } from "./runner/to-llm-message.js"
 import type { SessionSchema } from "./schema.js"
+import { TurnReminder } from "./turn-reminder.js"
 import { Verification } from "./verification.js"
 
 export {
@@ -156,9 +158,9 @@ export const configured = (lists: Lists) =>
   })
 
 /**
- * The production node. The language-server producer reads a service, and a producer's `run` has no requirements, so it
- * is built here from that service and appended to the durable list. `orb run --bare` switches instruction files off, and
- * a bare run adds nothing else to the conversation either.
+ * The production node. The language-server and turn-budget producers read services, and a producer's `run` has no
+ * requirements, so they are built here from those services and appended to the durable list. `orb run --bare`
+ * switches instruction files off, and a bare run adds nothing else to the conversation either.
  */
 export const node = makeLocationNode({
   service: Service,
@@ -168,11 +170,20 @@ export const node = makeLocationNode({
       const bus = yield* Bus.Service
       const diagnostics = yield* LspDiagnostics.Service
       const location = yield* Location.Service
-      const lists: Lists = { ...production, durable: [...production.durable, LspReminder.durable(diagnostics, location.directory)] }
+      const database = yield* Database.Service
+      // Diagnostics come before the budget report.
+      const lists: Lists = {
+        ...production,
+        durable: [
+          ...production.durable,
+          LspReminder.durable(diagnostics, location.directory),
+          TurnReminder.durable(database.db),
+        ],
+      }
       return make(bus, process.env.ORBIT_DISABLE_INSTRUCTIONS === "1" ? minimal(lists) : lists)
     }),
   ),
-  deps: [Bus.node, LspDiagnostics.node, Location.node],
+  deps: [Bus.node, LspDiagnostics.node, Location.node, Database.node],
 })
 
 const make = (bus: Bus.Interface, lists: Lists) => {
