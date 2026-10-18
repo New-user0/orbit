@@ -2343,6 +2343,28 @@ describe("ShellTool", () => {
       ),
     )
 
+    // FU-M3-186: the text for the model says "Exited with code N" only when the code is a failure of its command.
+    posix("writes the exit code into the text of a failing exit only", () =>
+      withFiles((registry) =>
+        Effect.gen(function* () {
+          const text = (command: string, id: string) =>
+            executeTool(registry, call({ command }, id)).pipe(
+              Effect.map((settled) => (settled.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("\n")),
+            )
+          for (const command of ["grep nomatch a", "diff a b", "test 1 = 2", ...answers]) {
+            const content = yield* text(command, `call-quiet-${command}`)
+            expect({ command, content }).toEqual({ command, content: expect.not.stringContaining("Exited with code") })
+          }
+          for (const command of failures) {
+            const content = yield* text(command, `call-loud-${command}`)
+            expect({ command, content }).toEqual({ command, content: expect.stringContaining("Exited with code") })
+          }
+          // A non-failing empty run reads as a successful empty run.
+          expect(yield* text("grep nomatch a", "call-empty-a")).toBe(yield* text("true", "call-empty-b"))
+        }),
+      ),
+    )
+
     posix("judges the command that ran, after the hooks", () =>
       withFiles((_registry, run) =>
         Effect.gen(function* () {
@@ -2877,7 +2899,8 @@ describe("ShellTool", () => {
 
   const killCommand = "kill -9 $$"
   const flagCases = [
-    ["a timeout", { command: idleCommand, timeout: 50 }, { settled: "completed", flag: true }, true],
+    // Only a bash-dialect shell cancels sibling calls; a PowerShell call never does (FU-M3-183).
+    ["a timeout", { command: idleCommand, timeout: 50 }, { settled: "completed", flag: isWindows ? undefined : true }, true],
     ["a signal kill", { command: killCommand }, { settled: "completed", flag: true }, !isWindows],
     // A failing exit cancels siblings except under PowerShell, where an exit code carries no meaning.
     [
@@ -2905,6 +2928,46 @@ describe("ShellTool", () => {
     )
   }
 
+  // FU-M3-183: the shell decides whether a failed call cancels the calls beside it, whatever the machine's default is.
+  // PowerShell never does, whether the call times out or is removed; the same failures under a bash-dialect shell do.
+  const explicitShells = [
+    ["powershell", "Start-Sleep -Seconds 60", isWindows],
+    ["sh", "sleep 60", which("sh") !== null],
+  ] as const
+  for (const [shellName, sleeping, available] of explicitShells)
+    for (const [name, remove] of [
+      ["times out", false],
+      ["is removed while it runs", true],
+    ] as const)
+      (available ? it.live : it.live.skip)(
+        `a ${shellName} call that ${name} ${shellName === "powershell" ? "leaves its siblings alone" : "cancels its siblings"}`,
+        () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => tmpdir()),
+            (tmp) => {
+              reset()
+              return withSession(tmp.path, (registry) =>
+                Effect.gen(function* () {
+                  const selection = yield* ShellSelect.Service
+                  yield* selection.transform((editor) => editor.configure(shellName))
+                  const input = call(remove ? { command: sleeping } : { command: sleeping, timeout: 50 }, "call-explicit-shell")
+                  const running = yield* failureFlag(registry, input).pipe(Effect.forkChild({ startImmediately: true }))
+                  if (remove) {
+                    const shell = yield* Shell.Service
+                    for (let attempt = 0; attempt < 1000 && (yield* shell.list()).length === 0; attempt++)
+                      yield* Effect.promise(() => Bun.sleep(5))
+                    yield* shell.remove((yield* shell.list())[0]!.id)
+                  }
+                  const outcome = yield* Fiber.join(running)
+                  expect(outcome.flag).toBe(shellName === "powershell" ? undefined : true)
+                }),
+              )
+            },
+            (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+          ),
+        { timeout: 15_000 },
+      )
+
   // A foreground call whose command record disappears while it waits ends through the job-error path. A client's
   // shell.remove is a deliberate stop, and it counts as a failure here (unlike shell.kill, which settles "killed").
   it.live(
@@ -2929,7 +2992,7 @@ describe("ShellTool", () => {
                   return yield* first(remaining - 1)
                 })
               yield* shell.remove((yield* first()).id)
-              expect(yield* Fiber.join(running)).toEqual({ settled: "failed", flag: true })
+              expect(yield* Fiber.join(running)).toEqual({ settled: "failed", flag: isWindows ? undefined : true })
             }),
           )
         },

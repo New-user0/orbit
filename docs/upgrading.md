@@ -3037,9 +3037,16 @@ and the ones not started yet, because commands in a step often depend on each ot
 program that ends the command line, as written: `grep`, `rg`, `find`, `diff`, `test` and `[` only fail at exit code 2 or
 more, since 1 means no match, differences, unreadable folders or a false condition. `grep x f && echo found` is judged
 by `echo`, and a line the analysis cannot model (a `$(...)`, an unknown variable, a syntax error) fails on any non-zero
-code. Under PowerShell an exit code never cancels anything, and under `cmd.exe` any non-zero code does. The text the
-model sees is unchanged. Timeouts, signals and commands that cannot start already cancelled their siblings. Background
-commands are not affected.
+code. Under PowerShell nothing cancels anything: not an exit code, and not a timeout, a kill by a signal, a command that
+cannot start or one that is removed while it runs (pinned by the explicit-shell rows in `test/tool-shell.test.ts`). Under
+`cmd.exe` any non-zero code does. Under the POSIX shells timeouts, signals and commands that cannot start already
+cancelled their siblings. Background commands are not affected.
+
+The text the model sees says "Exited with code N" only when the code is a failure by the same reading: a `grep` with no
+match, a `diff` that found differences and a false `test` come back with their output alone (an empty run reads as the
+empty run of a command that succeeded), while `false`, `exit 3` and a `grep` of a missing file still carry the line. A
+timeout and a kill by a signal always carry theirs. PowerShell keeps the line for every non-zero code, and the output
+of a background command keeps it too. The structured `exit` field is unchanged.
 
 The shell tool also reports `readOnly` and `destructive` for each call (advisory; nothing
 is allowed or asked differently because of them). `rm -rf x`, `git reset --hard`, `git push --force`, `DROP TABLE` and

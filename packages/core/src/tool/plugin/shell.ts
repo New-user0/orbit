@@ -114,8 +114,12 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
-const resultMessages = (output: Output) => {
-  const notice = output.status === "running" ? BACKGROUND_INSTRUCTION : ShellResult.notice(output)
+// `exitNotice` says whether a non-zero exit code is written into the text. A timeout and a kill by a signal always are.
+const resultMessages = (output: Output, exitNotice = true) => {
+  const notice =
+    output.status === "running"
+      ? BACKGROUND_INSTRUCTION
+      : ShellResult.notice(exitNotice ? output : { ...output, exit: undefined })
   return [...(output.output ? [output.output] : []), ...(notice ? [notice] : [])]
 }
 
@@ -133,15 +137,23 @@ const exitFailed = (output: Output, analysis: ShellAnalysis.Analysis | undefined
   output.signal === undefined &&
   ShellExit.failed(analysis, output.exit)
 
-const toolResult = (output: Output, failed = false) => {
+// What the scheduler reads to cancel the calls beside a failed one. Only a bash-dialect shell cancels them, because its
+// steps depend on each other; a PowerShell call cancels nothing, whatever way it fails (a timeout, a signal, a start
+// that fails or a removed command included).
+const failedMetadata = (powershell: boolean) => (powershell ? {} : { error: true })
+
+const toolResult = (output: Output, failed = false, powershell = false) => {
   return {
     output,
-    content: resultMessages(output).map((text) => ({ type: "text" as const, text })),
+    // A foreground run says "Exited with code N" only when that code is a failure of its command (a grep with no match,
+    // a diff that found differences and a false test are answers, and say nothing). PowerShell keeps its notice: its
+    // codes are not judged.
+    content: resultMessages(output, failed || powershell).map((text) => ({ type: "text" as const, text })),
     metadata: {
       status: output.status,
       ...ShellResult.metadata(output),
       // A timeout, a kill by signal and an exit code that reads as a failure (see `exitFailed`) cancel sibling calls.
-      ...(output.timeout === true || output.signal !== undefined || failed ? { error: true } : {}),
+      ...(output.timeout === true || output.signal !== undefined || failed ? failedMetadata(powershell) : {}),
       ...(output.shellID !== undefined ? { shellID: output.shellID } : {}),
     },
   }
@@ -357,15 +369,16 @@ export const Plugin = {
           description: description(undefined, limits()),
           input: Input,
           output: Output,
-          execute: (input, context) =>
-            Effect.gen(function* () {
+          execute: (input, context) => {
+            let powershell = false
+            return Effect.gen(function* () {
               // Read at call time, so a config change applies to the next call.
               const timeout = budget(input, limits(Config.latest(yield* config.entries(), "shell_tool")))
               let finalTimeout = timeout
               let autoBackground = false
               let analysis: ShellAnalysis.Analysis | undefined
               const selected = yield* compatibleShell
-              const powershell = ["powershell", "pwsh"].includes(ShellSelect.name(selected))
+              powershell = ["powershell", "pwsh"].includes(ShellSelect.name(selected))
               const info = yield* shell.create(
                 {
                   command: input.command,
@@ -481,12 +494,12 @@ export const Plugin = {
               if (result?.info.status === "error")
                 return yield* new ToolFailure({
                   message: result.info.error ?? "Command failed",
-                  metadata: { error: true },
+                  metadata: failedMetadata(powershell),
                 })
               if (result?.info.status === "cancelled") return yield* Effect.fail(new Error("Command cancelled"))
 
               const output = yield* Deferred.await(settled)
-              return toolResult(output, exitFailed(output, analysis, powershell))
+              return toolResult(output, exitFailed(output, analysis, powershell), powershell)
             }).pipe(
               Effect.mapError(
                 (error) =>
@@ -498,11 +511,12 @@ export const Plugin = {
                     ...(error instanceof ToolFailure
                       ? { metadata: error.metadata }
                       : error instanceof AppProcess.AppProcessError
-                        ? { metadata: { error: true } }
+                        ? { metadata: failedMetadata(powershell) }
                         : {}),
                   }),
               ),
-            ),
+            )
+          },
         }),
       )
       .pipe(Effect.orDie)
