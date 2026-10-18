@@ -5,6 +5,7 @@ import { PromptInput } from "@orbit/schema/prompt-input"
 import { Session } from "@orbit/schema/session"
 import { SessionStats } from "@orbit/schema/session-stats"
 import { InstructionEntry } from "@orbit/schema/instruction-entry"
+import { Instruction } from "@orbit/schema/instruction"
 import { Project } from "@orbit/schema/project"
 import {
   AbsolutePath,
@@ -646,6 +647,29 @@ export const makeSessionGroup = <
           description: "Change a pending inbox item's delivery mode. Steering wakes session execution.",
         }),
       ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.instructions.preview", "/api/experimental/session/:sessionID/instructions", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({
+          data: Schema.Struct({
+            status: Instruction.Status,
+            initial: Schema.optional(Schema.String),
+            update: Schema.optional(Schema.String),
+            blocked: Schema.optional(Schema.Array(Schema.String)),
+          }).annotate({ identifier: "SessionInstructionsPreview" }),
+        }),
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.instructions.preview",
+            summary: "Preview instructions",
+            description:
+              "List the instruction files the session's location has loaded in the order the model reads them, with their sizes and warnings, and the baseline and pending instruction update the next step would send. `blocked` names the unavailable sources that keep an uninitialized session from having a baseline.",
+          }),
+        ),
     )
     .add(
       HttpApiEndpoint.get(

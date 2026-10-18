@@ -2846,6 +2846,28 @@ A prompt you send that starts a turn and holds the word `ultrathink` (any case, 
 
 **What to do:** Nothing. Set `language` in `orbit.json` to use the reply language.
 
+### A call that lists the loaded instruction files, their sizes and the baseline the next step sends
+
+`GET /api/experimental/session/:sessionID/instructions` (`client.session.instructions.preview` in the SDK, `orb api
+GET /api/experimental/session/<id>/instructions` on the command line) answers with `status`, `initial` and `update`.
+`status.files` lists the instruction files the session's location has loaded in the order the model reads them, each with
+its real path, its scope (`user` or `project` today), its length in characters after front matter and comment blocks are
+off, and the file that imported it when it was imported. `status.warnings` names each file longer than 40,000
+characters, which is still sent whole, and each import that was left out because it leads outside what the project may
+supply (`import-external`, or `import-untrusted` when trusting the folder would load it). `status.available` is false
+when a source could not be read, so the list is incomplete. `initial` is the baseline the next request sends and `update`
+the instruction update the next step boundary would record, empty when nothing changed. Neither starts a model request
+or needs a provider. When a source is unavailable and the session has no baseline yet, `initial` and `update` are left
+out and `blocked` names the sources. Warnings never reach the model.
+
+`orb api` now prints a JSON response again with C1 controls and bidi format characters written as `\uXXXX`, and other
+bodies as message text, because a response can carry text from a project's files. JSON bodies are indented by two spaces.
+
+**Affects:** SDK callers and scripts that call the experimental endpoint, and scripts that read the raw output of `orb api`
+(the same JSON, re-indented).
+
+**What to do:** Nothing.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs

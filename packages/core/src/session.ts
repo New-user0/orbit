@@ -46,6 +46,7 @@ import { SessionEvent } from "./session/event.js"
 import { SessionInbox } from "./session/inbox.js"
 import { InstructionState } from "./session/instruction-state.js"
 import { SessionGenerate } from "./session/generate.js"
+import { SessionInstructionPreview } from "./session/instruction-preview.js"
 import { SessionCommand } from "./session/command.js"
 import {
   SessionMove,
@@ -196,6 +197,10 @@ export interface Interface {
     sessionID: SessionSchema.ID
     prompt: string
   }) => Effect.Effect<string, NotFoundError | SessionGenerate.Error>
+  /** The loaded instruction files and the baseline and pending update the next step would send, without mutating the Session. */
+  readonly instructions: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<SessionInstructionPreview.Result, NotFoundError | SessionInstructionPreview.Error>
   readonly command: (input: {
     sessionID: SessionSchema.ID
     command: string
@@ -448,6 +453,13 @@ const layer = Layer.effect(
           Effect.provideService(Instance.Service, instances),
           Effect.provideService(Database.Service, database),
           Effect.provideService(LLMClient.Service, llm),
+        )
+      }),
+      instructions: Effect.fn("Session.instructions")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        return yield* SessionInstructionPreview.preview(session).pipe(
+          Effect.provideService(Instance.Service, instances),
+          Effect.provideService(Database.Service, database),
         )
       }),
       command: Effect.fn("Session.command")(function* (input) {

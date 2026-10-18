@@ -24,17 +24,20 @@ type Contribution = {
   readonly warnings: (InstructionDiscovery.Warning | InstructionDiscovery.ImportWarning)[]
   readonly imports: InstructionDiscovery.Import[]
   readonly read: string[]
+  /** The scope each file comes from, kept beside the files so that it changes no hash. */
+  readonly kinds: (readonly [string, "user" | "project"])[]
 }
 
 type Loaded = ({ readonly type: "available" } & Contribution) | { readonly type: "unavailable" }
 
-const nothing: Contribution = { files: [], warnings: [], imports: [], read: [] }
+const nothing: Contribution = { files: [], warnings: [], imports: [], read: [], kinds: [] }
 
 const merge = (contributions: readonly Contribution[]): Contribution => ({
   files: contributions.flatMap((item) => item.files),
   warnings: contributions.flatMap((item) => item.warnings),
   imports: contributions.flatMap((item) => item.imports),
   read: contributions.flatMap((item) => item.read),
+  kinds: contributions.flatMap((item) => item.kinds),
 })
 
 const available = (source: Contribution | Instructions.Unavailable): source is Contribution =>
@@ -210,6 +213,7 @@ export const Plugin = define({
                 ],
           ),
           read: loaded.read,
+          kinds: loaded.files.map((item) => [item.path, scope] as const),
         }
       })
 
@@ -369,6 +373,7 @@ export const Plugin = define({
           return
         }
         for (const file of loaded.current.files) editor.add(file)
+        for (const [path, kind] of loaded.current.kinds) editor.kind(path, kind)
         for (const warning of loaded.current.warnings) editor.warn(warning)
         for (const item of loaded.current.imports) editor.imported(item.path, item.importedBy)
       })

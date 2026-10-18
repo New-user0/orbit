@@ -3,6 +3,7 @@ export * as InstructionDiscovery from "./instruction-discovery.js"
 import { Context, Effect, Layer, Schema, Types } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { createPatch } from "diff"
+import { Instruction } from "@orbit/schema/instruction"
 import { Bus } from "./bus.js"
 import { ConfigInstructionFile } from "./config/instruction-file.js"
 import { Instructions } from "./instructions/index.js"
@@ -72,6 +73,8 @@ export type Data = {
   files: Map<AbsolutePath, Types.DeepMutable<File>>
   warnings: (Types.DeepMutable<Warning> | Types.DeepMutable<ImportWarning>)[]
   imports: Types.DeepMutable<Import>[]
+  /** The scope of the files that have one. Kept beside the files for the same reason as `imports`. */
+  kinds: Map<AbsolutePath, "user" | "project">
   available: boolean
 }
 
@@ -84,6 +87,8 @@ export type Editor = {
   warn: (warning: Warning | ImportWarning) => void
   /** Records that `path`, which is also added as a file, was imported by `importedBy`. */
   imported: (path: string, importedBy: string) => void
+  /** Records the scope `path`, which is also added as a file, comes from. A file with none counts as `user`. */
+  kind: (path: string, kind: "user" | "project") => void
   update: (path: string, update: (file: Types.DeepMutable<File>) => void) => void
   remove: (path: string) => void
   unavailable: () => void
@@ -99,6 +104,11 @@ export interface Interface extends State.Transformable<Editor> {
   readonly warnings: () => Effect.Effect<readonly (Warning | ImportWarning)[]>
   /** Which of the files that `list` returns an instruction file imported, and which file imported it. Nothing here reaches the model. */
   readonly imports: () => Effect.Effect<readonly Import[]>
+  /**
+   * What a client shows about the loaded files, in the order the model reads them. It is built from what the loader
+   * already read: it opens no file and asks no trust question, and it changes no hash.
+   */
+  readonly status: () => Effect.Effect<Instruction.Status>
   /**
    * The text under each heading named `names` in the files that `list` returns, in the order of `list` and, within a file, of
    * the file. A file's path is the one `list` reports, so an imported file has its own. The text is a file's, so a caller
@@ -127,7 +137,7 @@ export const layer = (options?: Options) =>
       const bus = yield* Bus.Service
       const state = State.create<Data, Editor>({
         name: "instruction-discovery",
-        initial: () => ({ files: new Map(), warnings: [], imports: [], available: true }),
+        initial: () => ({ files: new Map(), warnings: [], imports: [], kinds: new Map(), available: true }),
         editor: (editor) => ({
           list: () => Array.from(editor.files.values()),
           add: (file) => editor.files.set(file.path, new File(file) as Types.DeepMutable<File>),
@@ -139,6 +149,7 @@ export const layer = (options?: Options) =>
             ),
           imported: (path, importedBy) =>
             editor.imports.push(new Import({ path: AbsolutePath.make(path), importedBy: AbsolutePath.make(importedBy) })),
+          kind: (path, kind) => editor.kinds.set(AbsolutePath.make(path), kind),
           update: (path, update) => {
             const current = editor.files.get(AbsolutePath.make(path))
             if (!current) return
@@ -149,6 +160,7 @@ export const layer = (options?: Options) =>
             editor.files.delete(AbsolutePath.make(path))
             editor.warnings = editor.warnings.filter((warning) => warning.path !== path)
             editor.imports = editor.imports.filter((item) => item.path !== path)
+            editor.kinds.delete(AbsolutePath.make(path))
           },
           unavailable: () => {
             editor.available = false
@@ -187,6 +199,9 @@ export const layer = (options?: Options) =>
         }),
         imports: Effect.fn("InstructionDiscovery.imports")(function* () {
           return Array.from(state.get().imports)
+        }),
+        status: Effect.fn("InstructionDiscovery.status")(function* () {
+          return status(state.get())
         }),
         section: Effect.fn("InstructionDiscovery.section")(function* (names) {
           const files = yield* list()
@@ -234,6 +249,53 @@ const labels: Record<Kind, string> = {
 
 function renderInitial(files: ReadonlyArray<File>) {
   return `${HEADER}\n\n${render(files)}`
+}
+
+// An import has the scope of the file that imported it, found by following the links up to a file with its own.
+function status(data: Data) {
+  // The link of an import whose importer was removed names a file that is not in the list, so it is not shown.
+  const importers = new Map(
+    data.imports.filter((item) => data.files.has(item.importedBy)).map((item) => [item.path, item.importedBy]),
+  )
+  const kind = (path: AbsolutePath, seen = 0): Instruction.FileKind => {
+    const file = data.files.get(path)
+    const own = file?.kind === "managed" || file?.kind === "local" ? file.kind : data.kinds.get(path)
+    const parent = importers.get(path)
+    if (own !== undefined || parent === undefined || seen > importers.size) return own ?? "user"
+    return kind(parent, seen + 1)
+  }
+  return new Instruction.Status({
+    available: data.available,
+    files: Array.from(data.files.values(), (file) => {
+      const importedBy = importers.get(file.path)
+      return new Instruction.StatusFile({
+        path: file.path,
+        kind: kind(file.path),
+        chars: file.content.length,
+        ...(importedBy === undefined ? {} : { importedBy }),
+      })
+    }),
+    warnings: data.warnings.map((warning) => {
+      if (warning.kind === "size")
+        return new Instruction.StatusWarning({
+          path: warning.path,
+          type: "size",
+          chars: warning.characters,
+          limit: warning.limit,
+          message: `This file is ${warning.characters.toLocaleString("en-US")} characters, over the recommended ${warning.limit.toLocaleString("en-US")}. It is still sent whole and takes up context on every request. Shortening it, or moving parts that are rarely needed out of it, saves context.`,
+        })
+      return new Instruction.StatusWarning({
+        path: warning.path,
+        type: warning.directory === undefined ? "import-external" : "import-untrusted",
+        target: warning.target,
+        ...(warning.directory === undefined ? {} : { directory: warning.directory }),
+        message:
+          warning.directory === undefined
+            ? `The import of ${warning.target} was left out because it leads outside what this project may supply.`
+            : `The import of ${warning.target} was left out. The folder ${warning.directory} has to be trusted before the import is read; run \`orb trust\` in it to allow that.`,
+      })
+    }),
+  })
 }
 
 function render(files: ReadonlyArray<File>) {

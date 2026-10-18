@@ -534,6 +534,35 @@ export type SessionInboxUpdateOperation<E = never> = (
   input: SessionInboxUpdateInput,
 ) => Effect.Effect<SessionInboxUpdateOutput, E>
 
+export type SessionInstructionsPreviewInput = { readonly sessionID: Session.ID }
+export type SessionInstructionsPreviewOutput = {
+  readonly status: {
+    readonly files: ReadonlyArray<{
+      readonly path: string
+      readonly kind: "managed" | "user" | "project" | "local"
+      readonly chars: number
+      readonly importedBy?: string | undefined
+      readonly paths?: ReadonlyArray<string> | undefined
+    }>
+    readonly warnings: ReadonlyArray<{
+      readonly path: string
+      readonly type: "size" | "import-untrusted" | "import-external"
+      readonly message: string
+      readonly chars?: number | undefined
+      readonly limit?: number | undefined
+      readonly target?: string | undefined
+      readonly directory?: string | undefined
+    }>
+    readonly available: boolean
+  }
+  readonly initial?: string | undefined
+  readonly update?: string | undefined
+  readonly blocked?: ReadonlyArray<string> | undefined
+}
+export type SessionInstructionsPreviewOperation<E = never> = (
+  input: SessionInstructionsPreviewInput,
+) => Effect.Effect<SessionInstructionsPreviewOutput, E>
+
 export type SessionInstructionsEntryListInput = { readonly sessionID: Session.ID }
 export type SessionInstructionsEntryListOutput = ReadonlyArray<InstructionEntry.Info>
 export type SessionInstructionsEntryListOperation<E = never> = (
@@ -1644,6 +1673,7 @@ export interface SessionApi<E = never> {
     readonly update: SessionInboxUpdateOperation<E>
   }
   readonly instructions: {
+    readonly preview: SessionInstructionsPreviewOperation<E>
     readonly entry: {
       readonly list: SessionInstructionsEntryListOperation<E>
       readonly put: SessionInstructionsEntryPutOperation<E>

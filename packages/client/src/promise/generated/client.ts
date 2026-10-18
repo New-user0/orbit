@@ -78,6 +78,8 @@ import type {
   SessionInboxCancelOutput,
   SessionInboxUpdateInput,
   SessionInboxUpdateOutput,
+  SessionInstructionsPreviewInput,
+  SessionInstructionsPreviewOutput,
   SessionInstructionsEntryListInput,
   SessionInstructionsEntryListOutput,
   SessionInstructionsEntryPutInput,
@@ -970,6 +972,17 @@ export function make(options: ClientOptions) {
           ),
       },
       instructions: {
+        preview: (input: SessionInstructionsPreviewInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionInstructionsPreviewOutput }>(
+            {
+              method: "GET",
+              path: `/api/experimental/session/${encodeURIComponent(input.sessionID)}/instructions`,
+              successStatus: 200,
+              declaredStatuses: [400, 401, 404, 503],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
         entry: {
           list: (input: SessionInstructionsEntryListInput, requestOptions?: RequestOptions) =>
             request<{ readonly data: SessionInstructionsEntryListOutput }>(

@@ -3913,6 +3913,92 @@
         }
       }
     },
+    "/api/experimental/session/{sessionID}/instructions": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "experimental.session.instructions.preview",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SessionInstructionsPreview"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "List the instruction files the session's location has loaded in the order the model reads them, with their sizes and warnings, and the baseline and pending instruction update the next step would send. `blocked` names the unavailable sources that keep an uninitialized session from having a baseline.",
+        "summary": "Preview instructions"
+      }
+    },
     "/api/experimental/session/{sessionID}/instructions/entries": {
       "get": {
         "tags": ["session"],
@@ -16707,6 +16793,125 @@
         "required": ["data"],
         "additionalProperties": false
       },
+      "Instruction.StatusEncoded": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.StatusFileEncoded"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.StatusWarningEncoded"
+            }
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": ["files", "warnings", "available"],
+        "additionalProperties": false
+      },
+      "Instruction.StatusFileEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["managed", "user", "project", "local"]
+          },
+          "chars": {
+            "type": "integer"
+          },
+          "importedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["path", "kind", "chars"],
+        "additionalProperties": false
+      },
+      "Instruction.StatusWarningEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["size", "import-untrusted", "import-external"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["path", "type", "message"],
+        "additionalProperties": false
+      },
       "InstructionEntry.Info": {
         "type": "object",
         "properties": {
@@ -20763,6 +20968,49 @@
           }
         },
         "required": ["data"],
+        "additionalProperties": false
+      },
+      "SessionInstructionsPreview": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/Instruction.StatusEncoded"
+          },
+          "initial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "update": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocked": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["status"],
         "additionalProperties": false
       },
       "SessionInterruptResponse": {
