@@ -1,6 +1,10 @@
 export * as LegacyAgent from "./legacy-agent.js"
 
 import { ConfigAgent } from "@orbit/schema/config/agent"
+import { Schema } from "effect"
+import { ConfigPermissionV1 } from "../v1/config/permission.js"
+
+const isAction = Schema.is(ConfigPermissionV1.Action)
 
 const tiers = new Set<string>(["inherit", "small", "large"])
 // Another product spells these keys in camelCase. The legacy decoder forwards a key it does not know to the provider as
@@ -33,7 +37,7 @@ export function isTier(value: unknown) {
  */
 export function prepare(entry: Record<string, unknown>) {
   const notes: { key: string; message: string }[] = []
-  const kept = Object.fromEntries(
+  const unforeign = Object.fromEntries(
     Object.entries(entry).filter(([key]) => {
       const native = Object.hasOwn(foreign, key) ? foreign[key] : undefined
       if (native === undefined) return true
@@ -41,6 +45,13 @@ export function prepare(entry: Record<string, unknown>) {
       return false
     }),
   )
+  // A tools map and a permission object are lists of independent entries: one bad entry costs only itself, so a deny
+  // written beside it still holds.
+  const kept = {
+    ...unforeign,
+    ...(isToolMap(unforeign.tools) ? { tools: onlyBooleans(unforeign.tools, notes) } : {}),
+    ...(isRecord(unforeign.permission) ? { permission: onlyActions(unforeign.permission, notes) } : {}),
+  }
   if (!("variant" in kept)) return { entry: kept, notes }
   const { variant, ...unvaried } = kept
   // A tier is no model, so a variant has nowhere to go; it becomes the effort when none is given.
@@ -61,6 +72,37 @@ export function prepare(entry: Record<string, unknown>) {
   )
     return { entry: { ...unvaried, model: `${kept.model}#${variant}` }, notes }
   return { entry: kept, notes }
+}
+
+function onlyBooleans(tools: Record<string, unknown>, notes: { key: string; message: string }[]) {
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name, value]) => {
+      if (typeof value === "boolean") return true
+      notes.push({ key: `tools.${name}`, message: `dropped the invalid "tools.${name}"; it must be true or false` })
+      return false
+    }),
+  )
+}
+
+function onlyActions(permission: Record<string, unknown>, notes: { key: string; message: string }[]) {
+  return Object.fromEntries(
+    Object.entries(permission).flatMap(([name, rule]) => {
+      if (isAction(rule)) return [[name, rule]]
+      if (isRecord(rule)) {
+        const patterns = Object.entries(rule).filter(([pattern, action]) => {
+          if (isAction(action)) return true
+          notes.push({
+            key: `permission.${name}.${pattern}`,
+            message: `dropped the invalid "permission.${name}.${pattern}"; use ask, allow or deny`,
+          })
+          return false
+        })
+        return patterns.length === 0 ? [] : [[name, Object.fromEntries(patterns)]]
+      }
+      notes.push({ key: `permission.${name}`, message: `dropped the invalid "permission.${name}"; use ask, allow or deny` })
+      return []
+    }),
+  )
 }
 
 /**

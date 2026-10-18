@@ -4,6 +4,7 @@ import { Document, Info } from "@orbit/schema/config"
 import { ConfigAgent } from "@orbit/schema/config/agent"
 import { FSUtil } from "@orbit/util/fs-util"
 import path from "path"
+import { Permission } from "@orbit/schema/permission"
 import { Effect, Option, Schema } from "effect"
 import { AbsolutePath } from "../../schema.js"
 import { ConfigAgentV1 } from "../../v1/config/agent.js"
@@ -19,6 +20,7 @@ const legacySources = [
 const decodeAgent = Schema.decodeUnknownOption(ConfigAgent.Info)
 const encodeAgent = Schema.encodeUnknownOption(ConfigAgent.Info)
 const decodeLegacyAgent = Schema.decodeUnknownOption(ConfigAgentV1.Info)
+const decodeRule = Schema.decodeUnknownOption(Permission.Rule)
 const decodeConfig = Schema.decodeUnknownOption(Info)
 const agentKeys = new Set(["variant", ...Object.keys(ConfigAgent.Info.fields)])
 const decodeOptions = { errors: "all", propertyOrder: "original" } as const
@@ -128,7 +130,18 @@ function migrate(filepath: string, name: string, front: Record<string, unknown>,
 }
 
 // A field with a bad value costs only itself: the file still defines the agent without it.
-function native(filepath: string, data: Record<string, unknown>, notes: string[]) {
+function native(filepath: string, given: Record<string, unknown>, notes: string[]) {
+  // The rules are a list of independent entries, so a bad rule costs only itself and the denies beside it stay.
+  const data = Array.isArray(given.permissions)
+    ? {
+        ...given,
+        permissions: given.permissions.filter((rule, index) => {
+          if (Option.isSome(decodeRule(rule))) return true
+          notes.push(`${filepath}: dropped the invalid "permissions.${index}"`)
+          return false
+        }),
+      }
+    : given
   const whole = decodeAgent(data, decodeOptions)
   if (Option.isSome(whole)) return unescape(whole.value)
   const kept = Object.fromEntries(
