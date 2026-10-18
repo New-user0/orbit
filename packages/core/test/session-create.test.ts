@@ -1407,6 +1407,7 @@ describe("SessionTransfer", () => {
               id: sourceMessageID,
               type: "user",
               text: "Imported message",
+              editor: { path: "/private/project/secret.ts", selection: { start: 3, end: 4, text: "private selection" } },
               skills: [
                 {
                   id: Skill.ID.make("effect"),
@@ -1457,6 +1458,10 @@ describe("SessionTransfer", () => {
         {
           id: sourceMessageID,
           text: `[redacted:text:${sourceMessageID}]`,
+          editor: {
+            path: `[redacted:editor-path:${sourceMessageID}]`,
+            selection: { start: 3, end: 4, text: `[redacted:editor-selection:${sourceMessageID}]` },
+          },
           skills: [{ id: "effect", name: "[redacted:skill-name:0]", text: "[redacted:skill:0]" }],
         },
         { id: errorMessageID, error: { type: "test_error", message: "Original error" } },

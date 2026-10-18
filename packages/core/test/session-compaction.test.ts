@@ -12,6 +12,7 @@ import type { SessionContext } from "@orbit/core/session/context"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
@@ -93,6 +94,45 @@ const it = testEffect(
     ]),
     [Bus.node.replace(Bus.configured({ persist: true })), llmClient.replace(client)],
   ),
+)
+
+const lean = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionCompaction.node,
+      SessionModelRequest.node,
+      PluginHooks.node,
+    ]),
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      llmClient.replace(client),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.minimal(SessionReminders.production))),
+    ],
+  ),
+)
+
+lean.effect("a minimal instance's summary request carries neither the hint nor the editor note", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_lean_compaction"))
+    const prompt = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Lean compaction keeps this text.",
+      agents: [{ name: "helper" }],
+      editor: { path: "/project/src/open-file.ts" },
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compactManually(session, [prompt])).toEqual({ status: "completed" })
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).toContain("Lean compaction keeps this text.")
+    expect(sent).not.toContain("agent named below")
+    expect(sent).not.toContain("open-file.ts")
+  }),
 )
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
@@ -264,6 +304,8 @@ it.effect("auto compaction estimates current content against the buffered prompt
       id: SessionMessage.ID.create(),
       type: "user",
       text: "",
+      // A queued prompt waited for the work to end, so it carries no mid-turn note to add to the estimate.
+      delivery: "queue",
       files: media.map((file) => ({ mime: file.mime, data: "a".repeat(100_000), source: { type: "inline" } })),
       time: { created: 0 },
     })
@@ -397,6 +439,8 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       id: SessionMessage.ID.create(),
       type: "user" as const,
       text: "Manual compaction should include this short conversation.",
+      agents: [{ name: "helper" }],
+      editor: { path: "/project/src/open-file.ts" },
       skills: [
         {
           id: Skill.ID.make("effect"),
@@ -453,6 +497,9 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("Manual compaction should include this short conversation.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("Use Effect services and generators.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("User shell pwd completed: /project")
+    // A normal instance sends the summary request the way the main request lowers the prompt: hint and editor note stay.
+    expect(JSON.stringify(requests[0]?.messages)).toContain("agent named below")
+    expect(JSON.stringify(requests[0]?.messages)).toContain("open-file.ts")
     expect(requests[0]?.messages).toHaveLength(hooked + 1)
     expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("Summarize only what")
     expect(JSON.stringify(requests[0]?.messages)).not.toContain("display-only-output")
@@ -774,5 +821,22 @@ it.effect("a replaced attempt is not the measured anchor of a prompt estimate", 
       loaded(session, [history.user, history.cut, history.notice, history.answer]),
     )
     expect(estimate.measured).toBe(0)
+  }),
+)
+
+it.effect("a minimal estimate leaves out the editor selection that the full estimate counts", () =>
+  Effect.gen(function* () {
+    const session = yield* insertSession(Session.ID.make("ses_minimal_estimate"))
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Question",
+      editor: { path: "/p/a.ts", selection: { start: 1, end: 2, text: "x".repeat(1800) } },
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    const context = loaded(session, [user])
+    expect(SessionCompaction.estimatePrompt(context, true).estimated).toBeLessThan(
+      SessionCompaction.estimatePrompt(context, false).estimated,
+    )
   }),
 )
