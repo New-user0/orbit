@@ -171,6 +171,116 @@ describe("InstructionDiscovery", () => {
     }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
   )
 
+  it.effect("reports status in insertion order, with the scope, size and importer of each file", () =>
+    Effect.gen(function* () {
+      const discovery = yield* InstructionDiscovery.Service
+      yield* discovery.transform((editor) => {
+        editor.add(file("/global/AGENTS.md", "global"))
+        editor.kind("/global/AGENTS.md", "user")
+        editor.add(file("/repo/AGENTS.md", "repo rules"))
+        editor.kind("/repo/AGENTS.md", "project")
+        editor.add(file("/repo/more.md", "imported"))
+        editor.imported("/repo/more.md", "/repo/AGENTS.md")
+        // Added with no scope, as a contributor that is not the config plugin does: counts as the user's.
+        editor.add(file("/memory/index.md", "memory"))
+      })
+      const status = yield* discovery.status()
+
+      expect(status.available).toBe(true)
+      expect(status.files.map((item) => ({ ...item }))).toEqual([
+        { path: "/global/AGENTS.md", kind: "user", chars: 6 },
+        { path: "/repo/AGENTS.md", kind: "project", chars: 10 },
+        // An import has the scope of its importer, here with no scope of its own recorded.
+        { path: "/repo/more.md", kind: "project", chars: 8, importedBy: "/repo/AGENTS.md" },
+        { path: "/memory/index.md", kind: "user", chars: 6 },
+      ])
+    }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
+  )
+
+  it.effect("drops a removed file's warnings, import links and scope from status, and marks an unavailable source", () =>
+    Effect.gen(function* () {
+      const discovery = yield* InstructionDiscovery.Service
+      yield* discovery.transform((editor) => {
+        editor.add(file("/repo/AGENTS.md", "x".repeat(40_001)))
+        editor.kind("/repo/AGENTS.md", "project")
+        editor.warn(
+          new InstructionDiscovery.Warning({
+            path: AbsolutePath.make("/repo/AGENTS.md"),
+            kind: "size",
+            characters: 40_001,
+            limit: 40_000,
+          }),
+        )
+        editor.warn(
+          new InstructionDiscovery.ImportWarning({
+            path: AbsolutePath.make("/repo/AGENTS.md"),
+            kind: "import",
+            target: AbsolutePath.make("/outside.md"),
+          }),
+        )
+        editor.warn(
+          new InstructionDiscovery.ImportWarning({
+            path: AbsolutePath.make("/repo/AGENTS.md"),
+            kind: "import",
+            target: AbsolutePath.make("/repo/linked.md"),
+            directory: AbsolutePath.make("/repo"),
+          }),
+        )
+        editor.add(file("/repo/more.md", "more"))
+        editor.imported("/repo/more.md", "/repo/AGENTS.md")
+      })
+      const before = yield* discovery.status()
+      // A warning is for the person: the stored value has none of it, so it has the same hash with or without.
+      const stored = yield* discovery.list()
+      const hash = Instructions.hash(Array.isArray(stored) ? stored.map((item) => ({ ...item })) : [])
+
+      expect(before.warnings.map((item) => [item.type, item.path, item.chars, item.limit, item.target])).toEqual([
+        ["size", "/repo/AGENTS.md", 40_001, 40_000, undefined],
+        ["import-external", "/repo/AGENTS.md", undefined, undefined, "/outside.md"],
+        ["import-untrusted", "/repo/AGENTS.md", undefined, undefined, "/repo/linked.md"],
+      ])
+      expect(before.warnings.every((item) => item.message.length > 0)).toBe(true)
+      expect(before.warnings[0].message).toContain("40,001")
+
+      yield* discovery.transform((editor) => editor.remove("/repo/AGENTS.md"))
+      const after = yield* discovery.status()
+      expect(after.warnings).toEqual([])
+      expect(after.files.map((item) => ({ ...item }))).toEqual([{ path: "/repo/more.md", kind: "user", chars: 4 }])
+
+      const again = yield* discovery.list()
+      expect(Instructions.hash(Array.isArray(again) ? again.map((item) => ({ ...item })) : [])).not.toBe(hash)
+
+      yield* discovery.transform((editor) => editor.unavailable())
+      expect((yield* discovery.status()).available).toBe(false)
+    }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
+  )
+
+  it.effect("status adds and removes warnings without changing the stored value or its hash", () =>
+    Effect.gen(function* () {
+      const discovery = yield* InstructionDiscovery.Service
+      yield* discovery.transform((editor) => editor.add(file("/repo/AGENTS.md", "x".repeat(40_001))))
+      const hashOf = Effect.gen(function* () {
+        const initial = yield* readInitial(yield* discovery.load())
+        return Instructions.hash(initial.values["core/instructions"])
+      })
+      const without = yield* hashOf
+      yield* discovery.transform((editor) => {
+        editor.kind("/repo/AGENTS.md", "project")
+        editor.warn(
+          new InstructionDiscovery.Warning({
+            path: AbsolutePath.make("/repo/AGENTS.md"),
+            kind: "size",
+            characters: 40_001,
+            limit: 40_000,
+          }),
+        )
+      })
+
+      expect((yield* discovery.status()).warnings).toHaveLength(1)
+      expect(yield* hashOf).toBe(without)
+    }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([InstructionDiscovery.node, Bus.node])))),
+  )
+
   it.effect("escapes look-alikes of an envelope tag in an instruction file, in the baseline and in its updates", () =>
     Effect.gen(function* () {
       const discovery = yield* InstructionDiscovery.Service

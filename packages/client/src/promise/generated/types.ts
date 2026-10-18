@@ -245,6 +245,24 @@ export type SessionInboxSyntheticPayload = { text: string; description?: string;
 
 export type SessionInboxCompactionPayload = {}
 
+export type InstructionStatusFile = {
+  path: string
+  kind: "managed" | "user" | "project" | "local"
+  chars: number
+  importedBy?: string | undefined
+  paths?: Array<string> | undefined
+}
+
+export type InstructionStatusWarning = {
+  path: string
+  type: "size" | "import-untrusted" | "import-external"
+  message: string
+  chars?: number | undefined
+  limit?: number | undefined
+  target?: string | undefined
+  directory?: string | undefined
+}
+
 export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
@@ -709,6 +727,12 @@ export type SessionInboxCompaction = {
   type: "compaction"
   payload: SessionInboxCompactionPayload
   delivery: SessionInboxDelivery
+}
+
+export type InstructionStatus = {
+  files: Array<InstructionStatusFile>
+  warnings: Array<InstructionStatusWarning>
+  available: boolean
 }
 
 export type InstructionEntryInfo = { key: InstructionEntryKey; value: JsonValue }
@@ -2001,6 +2025,13 @@ export type SessionCompactionEnded = {
     cost?: MoneyUSD
     tokens?: TokenUsageInfo
   }
+}
+
+export type SessionInstructionsPreview = {
+  status: InstructionStatus
+  initial?: string | undefined
+  update?: string | undefined
+  blocked?: Array<string> | undefined
 }
 
 export type SessionForked = {
@@ -5164,6 +5195,10 @@ export type SessionInboxUpdateInput = {
 }
 
 export type SessionInboxUpdateOutput = void
+
+export type SessionInstructionsPreviewInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionInstructionsPreviewOutput = { data: SessionInstructionsPreview }["data"]
 
 export type SessionInstructionsEntryListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

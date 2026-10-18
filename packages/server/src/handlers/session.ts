@@ -570,6 +570,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.instructions.preview",
+        Effect.fn(function* (ctx) {
+          const preview = yield* session
+            .instructions(ctx.params.sessionID)
+            .pipe(
+              Effect.mapError((error) =>
+                error._tag === "Session.NotFoundError"
+                  ? missingSession(error)
+                  : new ServiceUnavailableError({ message: error.message, service: "instruction preview" }),
+              ),
+            )
+          return { data: preview }
+        }),
+      )
+      .handle(
         "session.instructions.entry.list",
         Effect.fn(function* (ctx) {
           const instructions = yield* InstructionEntry.Service
