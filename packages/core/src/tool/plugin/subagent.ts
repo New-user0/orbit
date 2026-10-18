@@ -21,8 +21,8 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,
   status: "running" as const,
   output: [
-    `Session ${sessionID} is working in the background. You will be notified when it finishes, so checking on it earlier gains nothing.`,
-    "Meanwhile do other work that does not depend on it, or, if there is none, say in one sentence what you started and end your response.",
+    `Session ${sessionID} was started detached. Its result arrives by itself as a message, so there is nothing to look up in the meantime.`,
+    "Take on work the subagent is not covering; when none remains, finish the reply with one line naming what is still running.",
   ].join("\n"),
 })
 

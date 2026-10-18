@@ -528,6 +528,8 @@ describe("OutputStylePlugin", () => {
       expect(text).toContain("Pick one small piece of a larger change")
       expect(text).toContain("place a single `ORBIT:YOURS` comment")
       expect(text).toContain("pause until they answer")
+      expect(text).toContain("rather than a line number")
+      expect(text).toContain("Do not compliment or grade the piece")
     }),
   )
 

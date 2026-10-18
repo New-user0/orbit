@@ -80,6 +80,10 @@ describe("the git and pull request section", () => {
     for (const anchor of anchors) expect([anchor, none.includes(anchor)]).toEqual([anchor, true])
   })
 
+  test("asks when it is unclear whether the user wanted a commit", () => {
+    expect(none).toContain("If it is unclear whether they did, ask before acting.")
+  })
+
   test("reuses the base prompt's ask-first sentence byte for byte", () => {
     const askFirst = lines(PROMPT).find((line) => line.startsWith("Commit, push or open a pull request only when"))
     expect(askFirst).toBeDefined()
@@ -413,8 +417,8 @@ describe("the base system prompt", () => {
       expect(writing).toContain("No emojis unless the user asks")
       expect(writing).toContain("`path:line`")
       expect(writing).toContain("`owner/repo#123`")
-      expect(writing).toContain("with a full stop, since the call may be hidden")
-      expect(writing).toContain("Before the first tool call, say in one sentence what you are about to do")
+      expect(writing).toContain("ends in a full stop, since the call itself may not show")
+      expect(writing).toContain("Begin the work with one sentence of intent")
       expect(writing).toContain("speak only when something changes")
       expect(writing).toContain("someone who did not watch the work")
       expect(writing).toContain("opens with what happened or what you did")
@@ -423,6 +427,8 @@ describe("the base system prompt", () => {
       expect(writing).toContain("in about 25 words")
       expect(writing).toContain("about 100 words unless the task needs more")
       expect(writing).toContain("Code and tool inputs are exempt")
+      expect(writing).toContain("never carries reasoning")
+      expect(writing).toContain("no headings")
     })
   })
 

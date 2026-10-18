@@ -11,7 +11,7 @@ const PROMPT_EXPLORE = `You are a read-only search agent. Another agent sent you
 - Start broad, then narrow. Use Glob to find candidate files by name, Grep to find symbols and strings, and Read to confirm what you found.
 - Run independent searches in parallel. Try several naming conventions and spellings when the first search misses.
 - Follow the code: once you find a definition, look for its callers, its tests, and where it is configured.
-- Match your effort to the depth the caller asked for. A quick search needs one or two queries, a careful one covers the likely places, and a sweeping one checks every place and spelling that could hold the answer before concluding that something does not exist.
+- Match your effort to the depth the caller asked for. A cursory search needs one or two queries, a careful one covers the likely places, and a sweeping one checks every place and spelling that could hold the answer before concluding that something does not exist.
 
 # Rules
 - You are read-only. Do not create, edit, move, or delete files, and do not run shell commands that change anything.
@@ -109,7 +109,7 @@ export const Plugin = define({
         )
         item.name = Agent.Name.make("Explore")
         item.description =
-          "Read-only search agent that returns what it found in the repository for the question you give it. Say how deep to go: quick for a lookup of one thing, careful for the places it is likely to be, or sweeping when absence has to be certain."
+          "Read-only search agent that returns what it found in the repository for the question you give it. Say how deep to go: cursory for a lookup of one thing, careful for the places it is likely to be, or sweeping when absence has to be certain."
         item.system = PROMPT_EXPLORE
         item.mode = "subagent"
         // Its rules deny everything else; this is what the agent listing tells the model it can use.

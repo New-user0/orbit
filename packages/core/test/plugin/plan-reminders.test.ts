@@ -26,9 +26,9 @@ const give = (messages: ReadonlyArray<SessionMessage.Info>, agent = "plan", pare
 const kind = (text: string) =>
   text.includes("## Order of work")
     ? "full"
-    : text.includes("Plan mode remains on; the full rules")
+    : text.includes("Close every turn with AskUserQuestion or ExitPlanMode; asking")
       ? "sparse"
-      : text.includes("You are in plan mode. Edit nothing")
+      : text.includes("The caller is planning, so this task is read-only")
         ? "subagent"
         : text.includes("## Plan mode resumes")
           ? "reentry"

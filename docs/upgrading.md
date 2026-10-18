@@ -3682,7 +3682,7 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 - The built-in Explanatory style marks its notes with `Design note:` instead of `Insight:`, and the Learning style
   leaves a comment reading `ORBIT:YOURS` in the source instead of `TODO(human)`, for one small piece at a time. A
   comment that an earlier session left behind under the old marker is ordinary text now.
-- The explore agent's description names the depth levels quick, careful and sweeping.
+- The explore agent's description names the depth levels cursory, careful and sweeping.
 - The idle reminder of the terminal UI now reads "The session has stopped and the next step is yours" (the notification
   title stays `Orbit`).
 

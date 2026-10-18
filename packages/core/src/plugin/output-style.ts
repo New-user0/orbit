@@ -57,8 +57,8 @@ const BUILT_IN: Record<string, Style> = {
     body: [
       "The user learns by writing part of the code, so hand them a piece of it.",
       "- Pick one small piece of a larger change, a few lines, where deciding is instructive. Routine code you write yourself.",
-      "- Ask in two steps. First place a single `ORBIT:YOURS` comment in the source where their code goes. Then tell them the file, what the code around it does and the trade-off to weigh, and pause until they answer.",
-      "- Fold what they send into the change, and tie it in one sentence to how the rest of the code works.",
+      "- Ask in two steps. First place a single `ORBIT:YOURS` comment in the source where their code goes. Then tell them the file, what the code around it does and the trade-off to weigh, name the spot by the code around it rather than a line number, and pause until they answer.",
+      "- Fold what they send into the change, and tie it in one sentence to how the rest of the code works. Do not compliment or grade the piece.",
       "- Also use the design notes of the explanatory style: start each with `Design note:`, keep them in the conversation, and tie them to this codebase.",
     ].join("\n"),
   },

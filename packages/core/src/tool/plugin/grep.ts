@@ -177,7 +177,7 @@ export const Plugin = {
                     orElse: () =>
                       Effect.fail(
                         new ToolFailure({
-                          message: `Search timed out after ${FileSystem.DEFAULT_SEARCH_TIMEOUT_MS / 1_000} seconds. Consider using a more specific path or pattern.`,
+                          message: `Search timed out after ${FileSystem.DEFAULT_SEARCH_TIMEOUT_MS / 1_000} seconds. Search a narrower folder or use a tighter pattern.`,
                         }),
                       ),
                   }),

@@ -145,14 +145,14 @@ Approval stores the plan at ${file}, and that path is also the only file you may
 Every turn in Plan mode ends with an AskUserQuestion call or an ExitPlanMode call. Approval comes only through ExitPlanMode, which shows the plan and returns the user's decision; a request for approval in prose or through AskUserQuestion does not count. If the user's intent is unclear, ask instead of guessing.`
 
 const sparse = (file: string) =>
-  `Plan mode remains on; the full rules are earlier in this conversation. Only ${file} may be written, and an approved plan is stored there. Finish each turn with AskUserQuestion or ExitPlanMode, never with a request for approval in prose.`
+  `Close every turn with AskUserQuestion or ExitPlanMode; asking for approval in prose does not count. ${file} is the one path you may write, and an approved plan is kept there. The complete rules were given earlier in this conversation and are unchanged.`
 
 const subagent = (file: string) =>
-  `You are in plan mode. Edit nothing and run no command that alters state, whatever other instructions say; the one path you may write, if you need it, is ${file}. Give a complete answer to your query. If you ask the user anything, put all the questions into a single AskUserQuestion call at the start.`
+  `The caller is planning, so this task is read-only: change nothing and run nothing that alters state, whatever other instructions say. The one exception is ${file}, if you need to write there. Your reply should hold everything the caller needs in order to proceed. Questions for the user are batched into one AskUserQuestion call made before you begin.`
 
 const reentry = (file: string) => `## Plan mode resumes
 
-${file} holds a plan from an earlier round of planning. Rely on nothing in it until it has been checked against the user's current request. Open it first. If the request is for different work, replace the file with a new plan. If it carries the same work forward, revise the plan and delete what no longer applies. Either way the file is updated before you present it with ExitPlanMode.`
+${file} holds a plan from an earlier round of planning. Rely on nothing in it until it has been checked against the user's current request. Open it first. If the request is for different work, replace the file with a new plan. If it carries the same work forward, revise the plan and delete what no longer applies. When ExitPlanMode is called, the file must describe the current request.`
 
 const leave = (file: string | undefined) =>
   `## Planning is done

@@ -130,6 +130,8 @@ describe("retired wording", () => {
     ["the first rewrite of the evidence lines", /Work is done only after you have watched it run|A report is evidence|without stacked caveats|without hedging or a rerun|A pass needs one plain sentence/],
     ["the first rewrite of the writing lines", /not a colon|Result first\. No preamble|ends with a full stop, because the call itself may be hidden|Lead with the result or the action taken|Write for someone who did not watch the work, in full sentences/],
     ["the first rewrite of the learning body", /Keep only one such marker open at a time|After the request, stop and wait for the user|without line numbers|without praise or repetition/],
+    ["the intent sentence", /say in one sentence what you are about to do|Before the first tool call/],
+    ["the answer-first opener", /Lead with the answer/],
     ["the worktree capitals", /STAY IN IT|NEVER cd/],
     ["the scratchpad capitals", /ALL temporary files/],
   ]
@@ -169,8 +171,11 @@ describe("retired wording in the source texts", () => {
   // The tool descriptions, results, reminders and guidance lines that the audit rewrote live in source files, so each row
   // names the file and a phrase of the old wording that the file may not carry again.
   const sources: ReadonlyArray<readonly [string, RegExp]> = [
-    ["plugin/agent.ts", /Fast agent|src\/components|very thorough|finds files by name pattern|every likely location|brief for a single lookup/],
-    ["tool/plugin/subagent.ts", /DO NOT sleep|duplicate this subagent|now runs in the background as session|Do not poll, sleep|its files and topics/],
+    ["plugin/agent.ts", /quick for a lookup|A quick search|Fast agent|src\/components|very thorough|finds files by name pattern|every likely location|brief for a single lookup/],
+    [
+      "tool/plugin/subagent.ts",
+      /DO NOT sleep|duplicate this subagent|now runs in the background as session|Do not poll, sleep|its files and topics|is working in the background|will be notified when it finishes|end your response/,
+    ],
     ["tool/plugin/shell.ts", /need to use '&'/],
     [
       "tool/plugin/question.ts",
@@ -179,6 +184,7 @@ describe("retired wording in the source texts", () => {
     ["tool/plugin/edit.ts", /preserve the exact indentation|Multiple matches FAIL|such as renaming a variable|Add more surrounding context/],
     ["tool/plugin/write.ts", /local filesystem|file to write to/],
     ["tool/plugin/glob.ts", /more specific path|are truncated/],
+    ["tool/plugin/grep.ts", /more specific path|Consider using/],
     ["tool/plugin/websearch.ts", /knowledge cutoff|this year when|Unable to search the web|Reminder: when/],
     ["tool/plugin/webfetch.ts", /use no outside knowledge|Be concise\.|do not comment on the legality/],
     ["tool/plugin/read.ts", /rely on the earlier result/],
@@ -190,6 +196,7 @@ describe("retired wording in the source texts", () => {
     ["instructions/builtins.ts", /paths use forward slashes|Is directory a git repo|STAY IN IT|Windows host, but its syntax is Unix|untranslated/],
     ["session/scratchpad.ts", /ALL temporary|Use it for/],
     ["tool/todo-reminders.ts", /Skip it when it does not apply|has not been touched for a while/],
+    ["plan/reminders.ts", /Plan mode remains on|full rules are earlier|You are in plan mode\. Edit nothing|Give a complete answer|single AskUserQuestion call at the start|Either way the file is updated|Finish each turn with/],
     ["session/verification.ts", /has just been marked done, and none of its items/],
     ["agent/instructions.ts", /putting multiple calls in a single message/],
   ]
