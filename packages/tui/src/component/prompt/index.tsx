@@ -628,7 +628,7 @@ export function Prompt(props: PromptProps) {
                 input.insertText(text + " ")
                 const extmarkId = input.extmarks.create({
                   start,
-                  end: start + promptOffsetWidth(text),
+                  end: start + promptOffsetWidth(text, renderer.widthMethod),
                   virtual: true,
                   styleId: skillStyleId,
                   typeId: promptPartTypeId,
@@ -640,7 +640,7 @@ export function Prompt(props: PromptProps) {
                     const index = skills.length
                     skills.push({
                       id: Skill.ID.make(skill),
-                      mention: { start, end: start + promptOffsetWidth(text), text },
+                      mention: { start, end: start + promptOffsetWidth(text, renderer.widthMethod), text },
                     })
                     draft.extmarkToPart.set(extmarkId, { type: "skill", index })
                   }),
@@ -1088,7 +1088,7 @@ export function Prompt(props: PromptProps) {
         group: "Prompt",
         run: () => {
           const snap = VimAdapter.snapshot(input, promptPartRanges())
-          input.cursorOffset = VimAdapter.toOffset(snap.text, Vim.leaveInsert(snap))
+          input.cursorOffset = VimAdapter.toOffset(snap.text, Vim.leaveInsert(snap), input.ctx.widthMethod)
           setVim({ ...vim(), mode: "normal", pending: { kind: "idle" }, clipboard: false })
         },
       },
@@ -1555,7 +1555,7 @@ export function Prompt(props: PromptProps) {
   function pasteText(text: string, virtualText: string) {
     const currentOffset = input.cursorOffset
     const extmarkStart = currentOffset
-    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText)
+    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText, renderer.widthMethod)
 
     input.insertText(virtualText + " ")
 
@@ -1773,7 +1773,8 @@ export function Prompt(props: PromptProps) {
       notice={() => {
         if (!config.status_line?.command) return undefined
         if (local.permission.hooks === "disabled") return "Status line off: managed settings turn hooks off"
-        if (local.permission.hooks === "managed_only") return "Status line off: managed settings allow only managed hooks"
+        if (local.permission.hooks === "managed_only")
+          return "Status line off: managed settings allow only managed hooks"
         return undefined
       }}
       interval={() => config.status_line?.interval}

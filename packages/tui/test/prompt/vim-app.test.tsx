@@ -275,7 +275,9 @@ test("the register survives a submit in the same prompt and is never written to 
   expect(app.textarea().plainText).toBe("zebrafish ")
   const files = await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: app.state, onlyFiles: true, dot: true }))
   const holders = await Promise.all(
-    files.map(async (file) => ((await Bun.file(`${app.state}/${file}`).text()).includes("zebrafish ") ? file : undefined)),
+    files.map(async (file) =>
+      (await Bun.file(`${app.state}/${file}`).text()).includes("zebrafish ") ? file : undefined,
+    ),
   )
   // The submitted prompt may be kept as history; the yanked text with its trailing space is the register alone.
   expect(holders.filter((file) => file !== undefined && !file.includes("history"))).toEqual([])

@@ -1,37 +1,39 @@
-import { EditBuffer } from "@opentui/core"
+import { EditBuffer, type WidthMethod } from "@opentui/core"
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
 // Offsets are the textarea's own cell counts (a newline one, a tab its tab width, a heart or a double exclamation
-// mark two, an invisible direction mark one). Each grapheme is measured by an edit buffer of the same kind instead of
-// a width table kept in step by hand, and the result is cached.
-const cells = new Map<string, number>()
-let probe: EditBuffer | undefined
+// mark two, an invisible direction mark one). Each grapheme is measured by an edit buffer in the width mode the caller
+// names, because the renderer decides the textarea's mode (some terminals use wcwidth, most use unicode). One probe
+// and one cache exist per mode; a caller without a renderer in reach gets "unicode".
+const cells: Partial<Record<WidthMethod, Map<string, number>>> = {}
+const probes: Partial<Record<WidthMethod, EditBuffer>> = {}
 
-export function promptOffsetWidth(value: string) {
+export function promptOffsetWidth(value: string, method: WidthMethod = "unicode") {
   let width = 0
-  for (const part of graphemes.segment(value)) width += graphemeCells(part.segment)
+  for (const part of graphemes.segment(value)) width += graphemeCells(part.segment, method)
   return width
 }
 
-function graphemeCells(grapheme: string) {
+function graphemeCells(grapheme: string, method: WidthMethod) {
   if (grapheme === "\n" || (grapheme.length === 1 && grapheme >= " " && grapheme <= "~")) return 1
-  const known = cells.get(grapheme)
+  const cache = (cells[method] ??= new Map<string, number>())
+  const known = cache.get(grapheme)
   if (known !== undefined) return known
-  probe ??= EditBuffer.create("unicode")
+  const probe = (probes[method] ??= EditBuffer.create(method))
   probe.setText(grapheme)
   probe.setCursor(0, Number.MAX_SAFE_INTEGER)
   const measured = probe.getCursorPosition().offset
-  cells.set(grapheme, measured)
+  cache.set(grapheme, measured)
   return measured
 }
 
-function displayOffsetIndex(value: string, offset: number) {
+function displayOffsetIndex(value: string, offset: number, method: WidthMethod) {
   if (offset <= 0) return 0
 
   let width = 0
   for (const part of graphemes.segment(value)) {
-    const next = width + graphemeCells(part.segment)
+    const next = width + graphemeCells(part.segment, method)
     if (next > offset) return part.index
     width = next
   }
@@ -39,14 +41,17 @@ function displayOffsetIndex(value: string, offset: number) {
   return value.length
 }
 
-export function displaySlice(value: string, start = 0, end = promptOffsetWidth(value)) {
-  return value.slice(displayOffsetIndex(value, start), displayOffsetIndex(value, end))
+export function displaySlice(value: string, start = 0, end?: number, method: WidthMethod = "unicode") {
+  return value.slice(
+    displayOffsetIndex(value, start, method),
+    displayOffsetIndex(value, end ?? promptOffsetWidth(value, method), method),
+  )
 }
 
-export function displayCharAt(value: string, offset: number) {
+export function displayCharAt(value: string, offset: number, method: WidthMethod = "unicode") {
   let width = 0
   for (const part of graphemes.segment(value)) {
-    const next = width + graphemeCells(part.segment)
+    const next = width + graphemeCells(part.segment, method)
     if (offset === width || offset < next) return part.segment
     width = next
   }

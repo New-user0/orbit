@@ -192,3 +192,39 @@ test("dw and D after a double-cell pictograph delete the right text", async () =
   isolate.press("D")
   expect(isolate.input.plainText).toBe("⁦ab⁩ ")
 })
+
+// The renderer picks the textarea's width mode (wcwidth under tmux, Apple Terminal or OPENTUI_FORCE_WCWIDTH), so the
+// adapter measures with `input.ctx.widthMethod`. Mutation: hard-coding "unicode" in the adapter fails every row here.
+test("offsets and edits follow the renderer's wcwidth mode for ZWJ, skin tone, variation and flag sequences", async () => {
+  const before = process.env.OPENTUI_FORCE_WCWIDTH
+  process.env.OPENTUI_FORCE_WCWIDTH = "1"
+  try {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    for (const symbol of ["👍🏽", "✔️", "👨‍👩‍👧", "1️⃣", "🏳️‍🌈"]) {
+      using e = await mount(`a ${symbol} b`)
+      expect(e.setup.renderer.widthMethod).toBe("wcwidth")
+      const text = e.input.plainText
+      for (const part of [...[...segmenter.segment(text)].map((s) => s.index), text.length]) {
+        const offset = VimAdapter.toOffset(text, part, "wcwidth")
+        e.input.cursorOffset = offset
+        expect(e.input.getTextRange(0, e.input.cursorOffset)).toBe(text.slice(0, part))
+        expect(VimAdapter.toIndex(text, offset, "wcwidth")).toBe(part)
+      }
+    }
+    const rows: Array<[string, string, string]> = [
+      ["ok 👍🏽 thanks so much", "$bdw", "ok 👍🏽 thanks so "],
+      ["✔️ done and dusted", "0wwD", "✔️ done "],
+      ["👨‍👩‍👧 fix this bug", "0wwD", "👨‍👩‍👧 fix "],
+      ["1️⃣ first item here", "0wwD", "1️⃣ first "],
+    ]
+    for (const [text, keys, expected] of rows) {
+      using e = await mount(text, 40)
+      expect(e.setup.renderer.widthMethod).toBe("wcwidth")
+      e.press(keys)
+      expect(e.input.plainText).toBe(expected)
+    }
+  } finally {
+    if (before === undefined) delete process.env.OPENTUI_FORCE_WCWIDTH
+    else process.env.OPENTUI_FORCE_WCWIDTH = before
+  }
+})

@@ -1,6 +1,6 @@
 export * as VimAdapter from "./vim-adapter"
 
-import type { TextareaRenderable } from "@opentui/core"
+import type { TextareaRenderable, WidthMethod } from "@opentui/core"
 import { displaySlice, promptOffsetWidth } from "../../prompt/display"
 import { Vim } from "./vim-state"
 
@@ -11,24 +11,34 @@ import { Vim } from "./vim-state"
 
 type Input = Pick<
   TextareaRenderable,
-  "plainText" | "cursorOffset" | "setSelection" | "deleteSelection" | "insertText" | "moveCursorUp" | "moveCursorDown"
+  | "ctx"
+  | "plainText"
+  | "cursorOffset"
+  | "setSelection"
+  | "deleteSelection"
+  | "insertText"
+  | "moveCursorUp"
+  | "moveCursorDown"
 >
 
-export const toOffset = (text: string, index: number) => promptOffsetWidth(text.slice(0, index))
-export const toIndex = (text: string, offset: number) => displaySlice(text, 0, offset).length
+export const toOffset = (text: string, index: number, method?: WidthMethod) =>
+  promptOffsetWidth(text.slice(0, index), method)
+export const toIndex = (text: string, offset: number, method?: WidthMethod) =>
+  displaySlice(text, 0, offset, method).length
 
 /** `parts` are the prompt parts' ranges in the textarea's offset model. */
 export function snapshot(input: Input, parts: ReadonlyArray<{ start: number; end: number }>): Vim.Snapshot {
   const text = input.plainText
+  const method = input.ctx.widthMethod
   return {
     text,
-    cursor: toIndex(text, input.cursorOffset),
-    parts: parts.map((part) => ({ start: toIndex(text, part.start), end: toIndex(text, part.end) })),
+    cursor: toIndex(text, input.cursorOffset, method),
+    parts: parts.map((part) => ({ start: toIndex(text, part.start, method), end: toIndex(text, part.end, method) })),
     row(cursor, direction) {
-      input.cursorOffset = toOffset(text, cursor)
+      input.cursorOffset = toOffset(text, cursor, method)
       if (direction === "down") input.moveCursorDown()
       if (direction === "up") input.moveCursorUp()
-      return toIndex(text, input.cursorOffset)
+      return toIndex(text, input.cursorOffset, method)
     },
   }
 }
@@ -39,16 +49,17 @@ export function snapshot(input: Input, parts: ReadonlyArray<{ start: number; end
  */
 export function apply(input: Input, snap: Vim.Snapshot, result: Vim.Result) {
   // One pass over the text instead of one per edit boundary: a count like 500>> has hundreds of edits.
+  const method = input.ctx.widthMethod
   const offsets = new Map<number, number>()
   const total = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(snap.text)].reduce(
     (at, part) => {
       offsets.set(part.index, at)
-      return at + promptOffsetWidth(part.segment)
+      return at + promptOffsetWidth(part.segment, method)
     },
     0,
   )
   offsets.set(snap.text.length, total)
-  const offsetOf = (index: number) => offsets.get(index) ?? toOffset(snap.text, index)
+  const offsetOf = (index: number) => offsets.get(index) ?? toOffset(snap.text, index, method)
   const steps = [...result.edits].reverse().reduce((count, edit) => {
     const start = offsetOf(edit.start)
     const end = offsetOf(edit.end)
@@ -63,6 +74,6 @@ export function apply(input: Input, snap: Vim.Snapshot, result: Vim.Result) {
     }
     return count + (removed ? 1 : 0) + (edit.insert ? 1 : 0)
   }, 0)
-  input.cursorOffset = toOffset(Vim.apply(snap.text, result.edits), result.cursor)
+  input.cursorOffset = toOffset(Vim.apply(snap.text, result.edits), result.cursor, method)
   return steps
 }
