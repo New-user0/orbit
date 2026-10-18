@@ -154,7 +154,7 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (21)
+### M4 (17)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -175,10 +175,6 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file; share stat after the write; lexical fallback when a hook strips Write output | 14,13 | Misleading reason; regressions unnoticed. | low | S | file-web-tools-9 | PR #84 C0-C8 | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
 | FU-M3-154 | LSP: content-modified retry re-sends the document; server starts before the size cap and read; git check-ignore batch fails whole on one bad path; junction Location hides nothing | perf,7 | Extra didChange; one bad path shows every ignored file. | low | S | file-web-tools-9 | PR #92 C0-C4 | packages/core/src/lsp/index.ts ignored() |
 | FU-M4-37 | The reminder tests carry a 699-line copy of the runner harness beside the one in session-runner.test.ts | test hygiene | Two harnesses must be kept in step; a change to one can leave the other testing old behaviour. | low | M: move session-runner.test.ts onto packages/core/test/lib/runner.ts and delete the copy | loop-robustness-17 | prompts-context-5 review (minor) | packages/core/test/lib/runner.ts, packages/core/test/session-runner.test.ts |
-| FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
-| FU-M4-40 | The verification nudge does not name a verification agent (ae-3) | parity | The nudge asks for checks in general because Orbit has no verification agent to point to. | low | S once the agent exists | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/session/reminders.ts (verification nudge) |
-| FU-M4-41 | A compaction drops a Plan mode leave or re-entry note that was still owed, and the plan path | behaviour | Messages start at the checkpoint, so the first step after it gets the plain reminder or none; the reference keeps both flags across a compaction. | low | M: have the checkpoint record the owed state | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/plan/reminders.ts; packages/core/src/session/history.ts |
-| FU-M4-42 | Todo nudge gating and the family choice read the tool set offered now at every position | behaviour | Turning TodoWrite or TaskUpdate on or off re-derives earlier nudges and costs one prompt-cache miss; Orbit also nudges for both list families at once where the reference offers one family. | low | S: record the family with the nudge | prompts-context-6 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts |
 
 ### M5 (5)
 
@@ -337,12 +333,13 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-220 | ProjectTrust.allows re-hashes on every call and answers yes for a definition behind a link out | 1,3 | Front-matter hooks behind a junction change unnoticed once consumed. | low now | S | hooks-21 | PR #107 C0-C10 | packages/core/src/project-trust.ts allows |
 | FU-M3-333 | --auto, --yolo, flow auto and TUI auto-accept approve managed asks; docs do not say so | 8, 15 | An admin's managed ask is approved with no person asked. | moderate where managed asks exist without the bypass switch | XS docs now, L behaviour | permissions-18 | M3 r2 fu51 | docs/upgrading.md:311-314 names only disable_bypass_permissions |
 
-### M9 (2)
+### M9 (3)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
 | FU-M2-122 | A stopped background child gets a second 'succeeded' idle marker | behaviour | Clients show a stopped child as succeeded. | low | S | agents-extensibility-34 | #65 round 6 re-check 30 | not re-probed; background job stop path |
 | FU-M3-379 | git worktree add is serialised only within one process | behaviour | Two orb processes in one repository can still hit the commondir race. | low | S | agents-extensibility-28 | M3 r6 fu160 | flow/src/git.ts in-memory chain |
+| FU-M4-40 | The verification nudge does not name a verification agent (ae-3) | parity | The nudge asks for checks in general because Orbit has no verification agent to point to. | low | S once the agent exists | ae-3 | plan-todo-reminders review (follow-up) | packages/core/src/session/reminders.ts (verification nudge) |
 
 ### M10 (18)
 
@@ -367,14 +364,15 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-383 | cross-spawn's bundled `which@2` looks in the working folder first on Windows | 10 | A folder decoy is read (shebang) or chosen before PATH for a bare name started in an untrusted folder. | low (trust gate keeps MCP out) | S-M review | agents-extensibility-23 | M3 r4 fu116 (side note) | node_modules `which@2.0.2` which.js:21 prepends process.cwd(); never reviewed per surface |
 | FU-M3-300 | M3 scenario 'a 40 KB inline --settings works on Windows' cannot pass (32,767-character command line) | tests | The reworded M3 check could drift from what the overlay does. | low | S. Owner decision 2026-10-14 ("What ever reference is doing"): the reference has no long-value handling; inline JSON is bounded by the OS command line and a file path works at any size, and it writes inline JSON once to a file named by a hash of its content and gives child processes that path. The plan's M3 check is reworded to "A 40 KB `--settings` file works on Windows; inline JSON works up to the OS command-line limit (about 28 KB pinned)", which M3 shipped and pins. Remaining work: check that Orbit's overlay matches the hashed-file and child-path behaviour, keeping the file in clients-ux-4's per-user folder | clients-ux-17 | M3 r1 fu27, fu38; major r1 maj1; owner decision 2026-10-14 | packages/cli/test/config-overlay-flags.test.ts (the 40 KB file and near-limit inline rows) |
 
-### M12 (2)
+### M12 (3)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
 | FU-M1-098 | An AI SDK provider's own timeout is not counted as a Timeout | behaviour | A user timeout on an AI SDK provider is retried as a generic failure. | low; needs a timeout setting | S | loop-robustness-20 | PR #31 review minor 1 | packages/core/src/aisdk.ts:1009 networkFailure has no DOMException TimeoutError case |
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
+| FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | agents-extensibility-43 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
 
-### Sweep (148)
+### Sweep (149)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -528,8 +526,9 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M3-422 | core config/normalization.test.ts property test hits the 5 s limit under load (timeout only, passes alone) | 14 | 100 FastCheck round-trips took 5958 ms under 8 workers in the full Linux core run at bcfcfd7; the file passes alone (50 pass). | 1 of 1 full Linux core run in round 9 | XS: give the test an explicit 30 s limit | sweep | M3 verification round 9, follow-up 65 | packages/core/test/config/normalization.test.ts:172 |
 | FU-M4-36 | Reminder look-alikes are not escaped in skill and reference listings, plugin-supplied system parts, host-supplied instruction entries, a hosted tool's provider-format result, the opaque window of a native compaction, the descriptions of direct MCP tools (`codemode: false`) in the tools array, instruction text the person chose to run (an activated skill's body, a prompt's skill text, command templates, MCP prompt commands), image and PDF bytes, or file text that a client puts inside its own envelope (the TUI's `formatEditorContext`, VS Code's `editorContext`, ACP assistant-audience text, which lowers as an unmarked synthetic) | 9 | Text from a file or a tool that reaches the model through one of these sinks can still pose as a `<system-reminder>` block. Tool results (also when split across parts, and text or JSON files in them), attachments (also an ACP embedded text resource), shell and subagent output, instruction files, MCP server instructions, the Code Mode tool listing and the git snapshot are escaped and pinned. The client envelopes belong to prompts-context-13 as carrier. | low | S per sink | sweep | prompts-context-5 review (Known gaps) | packages/core/src/session/runner/to-llm-message.ts (syntheticText), packages/core/src/skill/instructions.ts, packages/core/src/reference/instructions.ts, packages/core/src/session/provider-context.ts; docs/untrusted-repositories.md Known gaps |
 | FU-M4-38 | ReminderText.neutralize matches ASCII hyphens and white space only | 9 | A tag spelled with a Unicode hyphen (U+2010 to U+2015, U+2212), a soft hyphen, a zero-width character, a fullwidth bracket or an ASCII underscore (`system_reminder`) is not escaped. The reference escapes nothing, and a model reads such a spelling as text, so this is hardening only. | low | S | sweep | prompts-context-5 review (follow-up) | packages/core/src/session/reminder-text.ts (TAG) |
+| FU-M4-41 | A compaction drops a Plan mode leave or re-entry note that was still owed, and the plan path | behaviour | Messages start at the checkpoint, so the first step after it gets the plain reminder or none; the reference keeps both flags across a compaction. | low | M: have the checkpoint record the owed state | sweep | plan-todo-reminders review (follow-up) | packages/core/src/plan/reminders.ts; packages/core/src/session/history.ts |
 
-### Owner (93)
+### Owner (94)
 
 These rows have no plan task and no decision to wait for. The owner gives each one a plan task or the sweep, or accepts the gap and closes it; until then the row stays here.
 
@@ -628,6 +627,7 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 | FU-M3-418 | An integration push built from a stale tree can silently undo a concurrent group's commit, and no test gate catches it | - | A fixer commits a stale tree on top of a newer head; the old code and old tests return together, so every gate stays green (3c75b11 restored the 553a7c7 Read-deny bypass this way). | demonstrated once in round 9; likely when groups push within minutes | S: before every push run git diff --stat `<fetched head>` `<new commit>` and refuse files outside the group's list. Process only: the owner decides whether the workflow script enforces it | owner | M3 verification round 9, follow-up 58; also round 9 follow-up 66 | round 9: 3c75b11 built from d2edfee on top of 4c88f0b, repaired by bcfcfd7 |
 | FU-M4-003 | A git folder that is not trusted shows no branch, changes or diff, and the terminal UI says nothing about why | behaviour, 7 | A person who opens a repository with no config of its own on a server that trusts no folder sees an empty review and no branch, and gets no dialog or Untrusted indicator, which show only while config is held back. | certain for a git folder that has not been trusted, on the background service | S-M: show the branch from the HEAD file, which the reference reads without git before trust, and a Trust.Kind for the provider so that status lists it as held back, or an indicator of its own, which is a public Protocol change and the owner's call (the Known gap for hooks and stdio MCP servers is the same question) | owner | git-untrusted PR (the same wait that Mercurial folders have had since M3) | packages/core/src/plugin/vcs/git.ts guards the provider on trust.trusted; docs/upgrading.md 'The reminder' says the indicator and /trust show only while the folder holds something of its own back |
 | FU-M2-012 | ACP finished call's diff still built from the input's text | 8 | A completed ACP call can carry a diff from model-chosen keys, so it shows straight quotes and substring deletes where curly quotes and whole lines were written. | medium for ACP clients that render it | S: build only for Edit from declared fields | owner | Known gaps; #65 round 6 re-check 32; #65 final-check 36; PR #85 C0-C4; PR #85 C0-C4 also names FU-M3-116 (carrier owner) | packages/cli/src/acp/tool.ts:214-215 reads old_string/new_string from the input |
+| FU-M4-42 | Todo nudge gating and the family choice read the tool set offered now at every position | behaviour | Turning TodoWrite or TaskUpdate on or off re-derives earlier nudges and costs one prompt-cache miss; Orbit also nudges for both list families at once where the reference offers one family. | low | S: record the family with the nudge | owner | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts |
 
 ## Fixed
 
@@ -838,9 +838,9 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-42) = 717.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-42, carried by later tasks) = 717.
 - Output: 634 rows plus 83 listed duplicates = 717. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 634 register rows have a table entry.
-- Open minors by carrier: M4: 21, M5: 5, M6: 37, M7: 68, M8: 27, M9: 2, M10: 18, M12: 2, Sweep: 148, Owner: 93.
+- Open minors by carrier: M4: 17, M5: 5, M6: 37, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 149, Owner: 94.
 - Open majors: 14 open, plus 5 marked major in "For the owner" that wait for a decision = 19.
 - For the owner: 86.
 - Fixed: 113.
