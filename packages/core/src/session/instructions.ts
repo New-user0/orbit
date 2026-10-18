@@ -1,6 +1,6 @@
 export * as SessionInstructions from "./instructions.js"
 
-import { relative } from "path"
+import { join, relative } from "path"
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
@@ -35,6 +35,11 @@ export interface Entry {
    * not sent, because the ones without patterns of their own are already part of the baseline.
    */
   readonly patterns?: readonly string[]
+  /**
+   * The folder a rule that waits for a read is matched from, set for a project rule so that injecting it asks again what
+   * the start of the session asked, even for a folder above the folders the session may import from.
+   */
+  readonly base?: string
   /** The file is in a rules folder, so a file it imports that has patterns of its own waits for a read of its own. */
   readonly rule?: boolean
 }
@@ -76,9 +81,20 @@ const layer = Layer.effect(
     // repository points at, such as a key or a credentials file, is left out before it can go into the conversation, in a
     // trusted project as in one that is not. A session at the home folder or a filesystem root has no root until that
     // folder is trusted.
-    const reachable = Effect.fnUntraced(function* (path: string) {
+    const reachable = Effect.fnUntraced(function* (path: string, base?: string) {
       // A file that was found as a real path may have been replaced by a link since, so the guard is asked of where it leads now.
-      if (yield* trust.importable(path, yield* trust.leads(path))) return true
+      const lead = yield* trust.leads(path)
+      if (yield* trust.importable(path, lead)) return true
+      // A rule in a folder above the project passed `reachable` and `supplies` when the session started. It is asked the same
+      // again of where it leads now, and it must still be the file that was found: a swapped link is not that rule.
+      if (
+        base !== undefined &&
+        FSUtil.contains(path, lead) &&
+        FSUtil.contains(lead, path) &&
+        (yield* trust.reachable(lead)) &&
+        (yield* trust.supplies({ path: join(base, ".orbit"), scope: "project", trusted: false }, lead))
+      )
+        return true
       if (skipped.has(path)) return false
       skipped.add(path)
       yield* Effect.logWarning("instruction file skipped", {
@@ -127,7 +143,7 @@ const layer = Layer.effect(
             // No pattern of `instructions_exclude` applies to the administrator's files.
             if (scope !== "managed" && ConfigInstructionFile.excluded(patterns, [path]))
               return Effect.logDebug("instruction file excluded", { path }).pipe(Effect.as(false))
-            return scope === "project" ? reachable(path) : owned(path)
+            return scope === "project" ? reachable(path, entries.get(path)!.base) : owned(path)
           },
         )
         if (toInject.length === 0) return

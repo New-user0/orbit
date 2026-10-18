@@ -1054,33 +1054,40 @@ export function rulePatterns(frontmatter: string | undefined): {
       : Array.isArray(value)
         ? value.filter((item): item is string => typeof item === "string")
         : []
-  const patterns = strings
-    .flatMap(splitCommas)
-    .flatMap((part) => expandBraces(part))
-    .map((pattern) => pattern.replace(/\/\*\*$/, "").trim())
-    .filter((pattern) => pattern !== "" && pattern.length <= RULE_PATTERN_LENGTH)
-    .slice(0, RULE_PATTERNS)
+  // Parts are taken one at a time and the work stops once the cap is kept, so what a file spells out past it costs nothing.
+  const patterns: string[] = []
+  for (const text of strings) {
+    for (const part of splitCommas(text)) {
+      // A part this long is dropped before its braces are expanded: each group is a level of recursion.
+      if (part.length > RULE_PATTERN_LENGTH) continue
+      for (const spelling of expandBraces(part)) {
+        const pattern = spelling.replace(/\/\*\*$/, "").trim()
+        if (pattern !== "" && pattern.length <= RULE_PATTERN_LENGTH) patterns.push(pattern)
+        if (patterns.length >= RULE_PATTERNS) break
+      }
+      if (patterns.length >= RULE_PATTERNS) break
+    }
+    if (patterns.length >= RULE_PATTERNS) break
+  }
   if (patterns.every((pattern) => pattern === "**")) return { patterns: undefined, malformed: false }
   return { patterns, malformed: false }
 }
 
 // The parts of a string between the commas that are outside braces, trimmed, without the empty ones. A closing brace with
 // no opener takes the depth below zero, and then no later comma splits.
-function splitCommas(value: string) {
-  const parts: string[] = []
+function* splitCommas(value: string) {
   let depth = 0
   let from = 0
-  for (let at = 0; at < value.length; at++) {
+  for (let at = 0; at <= value.length; at++) {
     const char = value[at]
-    if (char === "{") depth++
-    else if (char === "}") depth--
-    else if (char === "," && depth === 0) {
-      parts.push(value.slice(from, at))
+    if (at < value.length && char === "{") depth++
+    else if (at < value.length && char === "}") depth--
+    else if (at === value.length || (char === "," && depth === 0)) {
+      const part = value.slice(from, at).trim()
       from = at + 1
+      if (part !== "") yield part
     }
   }
-  parts.push(value.slice(from))
-  return parts.map((part) => part.trim()).filter((part) => part !== "")
 }
 
 // Every spelling of a pattern once its first brace group is replaced by each alternative, then the next, depth first. A

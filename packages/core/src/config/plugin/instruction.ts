@@ -426,7 +426,16 @@ export const Plugin = define({
                 join(folder, ".orbit", "rules"),
               ],
               // Until the folder is trusted its rules are only what is inside it, as for every file of the project.
-              allow: (real) => trust.supplies({ path: join(folder, ".orbit"), scope: "project", trusted: false }, real),
+              // A folder above the project is not the repository's to vouch for, so what it holds also waits for the project
+              // to be trusted, as the instruction file in that folder does: the stricter answer wins.
+              allow: (real) =>
+                trust.reachable(real).pipe(
+                  Effect.flatMap((reachable) =>
+                    reachable
+                      ? trust.supplies({ path: join(folder, ".orbit"), scope: "project", trusted: false }, real)
+                      : Effect.succeed(false),
+                  ),
+                ),
               patterns,
               visited,
             })

@@ -332,8 +332,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `InstructionTriggers` and `SessionInstructions`; classes 1, 4, 6, 7, 11 and 14). The scan opens nothing before the gate:
   a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), a folder is
   entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
-  `ProjectTrust.supplies` on its real path at start and of `ProjectTrust.importable` when a read passes through, so a
-  rules folder, a subfolder or a file that is a link out of the project is skipped alone, trusted or not at injection.
+  `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
+  a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
+  through, of `ProjectTrust.importable`, or for a rule of a folder above the project, `reachable` and `supplies` again
+  on where it leads now. So a rules folder, a subfolder or a file that is a link out of the project is skipped alone,
+  trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
   The person's and the administrator's rules are theirs: only the network refusal applies. The `paths` key is read only
   from the block `ConfigMarkdown.split` finds, only by `ConfigMarkdown.parseOption` (YAML, never evaluated; a block that
   does not parse makes the rule unconditional, with one debug line), and a pattern only chooses when text the folder

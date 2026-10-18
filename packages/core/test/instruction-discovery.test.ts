@@ -3485,6 +3485,33 @@ describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
       }),
     )
 
+    // Class 1 and 3: the folders above the project are not the repository's to vouch for. A rule there waits for the project
+    // to be trusted, as the instruction file beside it does, and loads once it is (the trusted run is the control).
+    it.live("skips a rule in a folder above the project as it skips the instruction file there, and loads both once trusted", () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const above = path.dirname(where.repo)
+        yield* write(path.join(above, "AGENTS.md"), "ABOVE FILE")
+        yield* write(path.join(rulesOf(above), "above.md"), "ABOVE RULE")
+        yield* write(path.join(above, ".orbit", "rules", "waits.md"), "---\npaths: src\n---\nABOVE WAITING RULE")
+        yield* write(path.join(rulesOf(where.repo), "inside.md"), "INSIDE RULE")
+        const run = (trusted: boolean) =>
+          Effect.gen(function* () {
+            const { discovery, text } = yield* baseline()
+            return { text, waiting: names(yield* discovery.conditionalRules()) }
+          }).pipe(Effect.provide(layerFor(where, { trusted })))
+        const closed = yield* run(false)
+        expect(closed.text).not.toContain("ABOVE FILE")
+        expect(closed.text).not.toContain("ABOVE RULE")
+        expect(closed.text).toContain("INSIDE RULE")
+        expect(closed.waiting).toEqual([])
+        const open = yield* run(true)
+        expect(open.text).toContain("ABOVE FILE")
+        expect(open.text).toContain("ABOVE RULE")
+        expect(open.waiting).toEqual(["waits.md"])
+      }),
+    )
+
     it.live("still loads the person's rules and the administrator's", () =>
       Effect.gen(function* () {
         const where = yield* folders

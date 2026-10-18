@@ -1929,6 +1929,94 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
     }),
   )
 
+  // A rule in a folder above the project is listed at the start, so a matching read injects it, in a trusted project; in one
+  // that is not trusted the folder above is not the repository's to vouch for (classes 1 and 3).
+  const above = (trusted: boolean) =>
+    testEffect(
+      Layer.unwrap(
+        Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ).pipe(
+          Effect.map((tmp) =>
+            sessionLayer(Config.testLayer(), trusted, undefined, {
+              home: tmp.path,
+              directory: path.join(tmp.path, "code", "repo"),
+              project: path.join(tmp.path, "code", "repo"),
+            }),
+          ),
+        ),
+      ),
+    )
+  const readAbove = Effect.gen(function* () {
+    const dir = (yield* Location.Service).directory
+    const outer = path.dirname(dir)
+    const outerRule = path.join(outer, ".orbit", "rules", "o.md")
+    const innerRule = path.join(dir, ".orbit", "rules", "i.md")
+    yield* mkdir(path.dirname(outerRule))
+    yield* mkdir(path.dirname(innerRule))
+    yield* writeAgents(outerRule, "OUTER MARKER")
+    yield* writeAgents(innerRule, "INNER MARKER")
+    yield* writeAgents(path.resolve(dir, "a.ts"), "a")
+    yield* found(waiting(outerRule, ["*.ts"], outer), waiting(innerRule, ["*.ts"], dir))
+    const sessionID = yield* sessionIn(dir)
+    yield* read(sessionID, "a.ts")
+    return { injected: yield* texts(sessionID) }
+  })
+  above(true).live("injects a rule that waits in a folder above the project, in a trusted project", () =>
+    Effect.gen(function* () {
+      const { injected } = yield* readAbove
+      expect(injected.join("\n")).toContain("OUTER MARKER")
+      expect(injected.join("\n")).toContain("INNER MARKER")
+    }),
+  )
+  above(false).live("injects only the rule inside the project, in a project that is not trusted", () =>
+    Effect.gen(function* () {
+      const { injected } = yield* readAbove
+      expect(injected.join("\n")).not.toContain("OUTER MARKER")
+      expect(injected.join("\n")).toContain("INNER MARKER")
+    }),
+  )
+
+  // Class 4: a nested rules folder, or a nested rule file, that is a link out of the project is not listed or read at all.
+  // The recording file system lists every path it is asked to list, stat or read.
+  const touchedPaths: string[] = []
+  const listing = Layer.effect(
+    FSUtil.Service,
+    FSUtil.Service.pipe(
+      Effect.map((fsUtil) =>
+        FSUtil.Service.of({
+          ...fsUtil,
+          readDirectoryEntries: (target) => (touchedPaths.push(target), fsUtil.readDirectoryEntries(target)),
+          readFileStringSafe: (target) => (touchedPaths.push(target), fsUtil.readFileStringSafe(target)),
+        }),
+      ),
+    ),
+  ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+  const recorded = testEffect(sessionLayer(Config.testLayer(), true, listing))
+  for (const mode of ["folder", "file"] as const)
+    (canLinkFile ? recorded.live : recorded.live.skip)(`never lists or reads a nested rules ${mode} that is a link out of the project`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const outside = (yield* tmpdirScoped()).path
+        const secret = path.join(outside, "secret.md")
+        const rules = path.resolve(dir, "sub", ".orbit", "rules")
+        yield* writeAgents(secret, "OUTSIDE MARKER")
+        yield* mkdir(path.resolve(dir, "sub"))
+        yield* writeAgents(path.resolve(dir, "sub", "a.ts"), "a")
+        yield* mkdir(mode === "folder" ? path.dirname(rules) : rules)
+        yield* Effect.promise(() =>
+          mode === "folder" ? fs.symlink(outside, rules, "junction") : fs.symlink(secret, path.join(rules, "link.md")),
+        )
+        touchedPaths.length = 0
+        const sessionID = yield* sessionIn(dir)
+        yield* read(sessionID, "sub/a.ts")
+        expect((yield* texts(sessionID)).join("\n")).not.toContain("OUTSIDE MARKER")
+        // What the link leads to is never listed or read.
+        expect(touchedPaths.filter((target) => FSUtil.contains(outside, target))).toEqual([])
+      }),
+    )
+
   untrusted.live("injects the rule of the person in a project that is not trusted, and refuses a network path without a lookup", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory

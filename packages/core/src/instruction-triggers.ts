@@ -129,7 +129,13 @@ const layer = Layer.effect(
           (rule) => applies(rule, real),
         ).pipe(
           Effect.map((rules) =>
-            rules.map((rule) => ({ path: rule.path as string, scope, patterns: rule.patterns, rule: true })),
+            rules.map((rule) => ({
+              path: rule.path as string,
+              scope,
+              patterns: rule.patterns,
+              rule: true,
+              ...(scope === "project" ? { base: rule.base as string } : {}),
+            })),
           ),
         )
       // The administrator's rules and the person's come first, then the folders the read went through, from the outermost

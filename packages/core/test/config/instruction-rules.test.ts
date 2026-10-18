@@ -60,13 +60,30 @@ describe("ConfigInstructionFile.rulePatterns", () => {
   })
 
   test("keeps at most 256 patterns and drops one over 1,024 characters, however many braces a file writes", () => {
-    const groups = "{a,b}".repeat(30)
-    const started = performance.now()
-    const result = ConfigInstructionFile.rulePatterns(front(`paths: "${groups}"`))
-    expect(performance.now() - started).toBeLessThan(2_000)
+    const result = ConfigInstructionFile.rulePatterns(front(`paths: "${"{a,b}".repeat(30)}"`))
     expect(result.patterns).toHaveLength(ConfigInstructionFile.RULE_PATTERNS)
     expect(ConfigInstructionFile.rulePatterns(front(`paths: "${"x".repeat(1_025)}, ok"`)).patterns).toEqual(["ok"])
   })
+
+  // The work stops once the cap is kept, so a value of a megabyte costs the parse and no more. It is synchronous, so it runs
+  // in a child process with a deadline.
+  test("stops expanding once 256 patterns are kept, for a value of a megabyte", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "rule-patterns-stress.ts")],
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 60_000)
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    const report = JSON.parse(out) as { readonly name: string; readonly ms: number; readonly kept: number }[]
+    expect(report.map((item) => item.name)).toEqual(["commaString", "commaList", "braceString", "oneHugePart"])
+    for (const item of report) {
+      expect(item.kept).toBe(item.name === "oneHugePart" ? 0 : ConfigInstructionFile.RULE_PATTERNS)
+      expect(item.ms).toBeLessThan(1_500)
+    }
+  }, 90_000)
 
   test("reads the block with plain delimiters, whatever spaces follow the dashes on its own lines", () => {
     const frontmatter = ConfigMarkdown.split("---  \npaths: a\n---\t\nBody.").frontmatter
@@ -229,4 +246,32 @@ describe("ConfigInstructionRules.scan", () => {
       expect(touched).toEqual([])
     }),
   )
+
+  // Class 6: a link in the folder that leads to a share is named as the share by `leads`, and nothing then stats or lists it.
+  const share = process.platform === "win32" ? "\\\\decoy-host.invalid\\share\\x.md" : "//decoy-host.invalid/share/x.md"
+  for (const [name, entry] of [
+    ["a rule file", "x.md"],
+    ["a subfolder", "sub"],
+  ] as const)
+    it.live(`never stats, lists or reads a link to a network share that is ${name}`, () =>
+      Effect.gen(function* () {
+        const root = path.resolve("/rules")
+        const touched: string[] = []
+        const found = yield* ConfigInstructionRules.scan({
+          directory: root,
+          fs: {
+            isDir: (target) => Effect.succeed(touched.push(target) > 0 && target === root),
+            isFile: (target) => Effect.succeed(touched.push(target) < 0),
+            readDirectoryEntries: (target) =>
+              Effect.succeed(
+                target === root ? [{ name: entry, type: "symlink" }, { name: "kept.md", type: "file" }] : (touched.push(target), []),
+              ) as ReturnType<FSUtil.Interface["readDirectoryEntries"]>,
+          },
+          leads: (spelling) => Effect.succeed(spelling === path.join(root, entry) ? share : spelling),
+          allow: () => Effect.succeed(true),
+        })
+        expect(found.map((item) => path.basename(item.file))).toEqual(["kept.md"])
+        expect(touched.filter((target) => /decoy-host/.test(target))).toEqual([])
+      }),
+    )
 })
