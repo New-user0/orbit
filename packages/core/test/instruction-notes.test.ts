@@ -49,6 +49,7 @@ type Setup = {
   readonly global?: boolean
   readonly excludes?: readonly string[]
   readonly spelled?: string
+  readonly vcs?: "git" | "hg"
 }
 
 const layerFor = (input: Setup) => {
@@ -85,7 +86,10 @@ const layerFor = (input: Setup) => {
             Location.Service.of(
               location(
                 { directory: AbsolutePath.make(input.directory ?? input.root) },
-                { projectDirectory: AbsolutePath.make(input.spelled ?? input.root) },
+                {
+                  projectDirectory: AbsolutePath.make(input.spelled ?? input.root),
+                  vcs: input.vcs ? { type: input.vcs, store: AbsolutePath.make(path.join(input.root, input.vcs === "git" ? ".git" : ".hg")) } : undefined,
+                },
               ),
             ),
           ),
@@ -384,6 +388,33 @@ describe("InstructionNotes.add", () => {
     }),
   )
 
+  it.live("fails with WriteError and creates nothing when the file's place holds a directory", () =>
+    Effect.gen(function* () {
+      const where = yield* scratch
+      yield* Effect.promise(() => fs.mkdir(path.join(where.root, "AGENTS.md")))
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        const error = yield* notes.add({ scope: "project", text: "n" }).pipe(Effect.flip)
+        expect(error).toBeInstanceOf(InstructionNotes.WriteError)
+        expect(yield* Effect.promise(() => fs.readdir(where.root))).toEqual(["AGENTS.md"])
+        expect(yield* Effect.promise(() => fs.readdir(path.join(where.root, "AGENTS.md")))).toEqual([])
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  it.live("treats the project's file as disabled when the project root is the config folder and global files are off", () =>
+    Effect.gen(function* () {
+      const where = yield* scratch
+      yield* write(path.join(where.root, "AGENTS.md"), "x\n")
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect((yield* notes.targets())[1]?.enabled).toBe(false)
+        expect(yield* outcome(notes.add({ scope: "project", text: "n" }))).toBe("disabled")
+        expect(yield* read(path.join(where.root, "AGENTS.md"))).toBe("x\n")
+      }).pipe(Effect.provide(layerFor({ ...where, config: where.root, global: false })))
+    }),
+  )
+
   it.live("reports each scope's file in the order user, project, local, current after an edit with no watcher event", () =>
     Effect.gen(function* () {
       const where = yield* scratch
@@ -445,6 +476,35 @@ describe("InstructionNotes.add", () => {
       }),
     )
 
+    it.live("lists a root file that is a link to a file outside as the spelled file and not enabled, and a trusted project as enabled", () =>
+      Effect.gen(function* () {
+        if (!canLinkFile) return
+        const where = yield* scratch
+        yield* write(outsideFile(where), "secret\n")
+        const link = path.join(where.root, "AGENTS.md")
+        yield* Effect.promise(() => fs.symlink(outsideFile(where), link))
+        yield* Effect.gen(function* () {
+          const { notes } = yield* start
+          expect((yield* notes.targets())[1]).toMatchObject({ path: link, exists: true, enabled: false })
+        }).pipe(Effect.provide(layerFor({ ...where, trusted: false })))
+        yield* Effect.gen(function* () {
+          const { notes } = yield* start
+          expect((yield* notes.targets())[1]).toMatchObject({ path: link, enabled: true })
+        }).pipe(Effect.provide(layerFor({ ...where, trusted: true })))
+      }),
+    )
+
+    it.live("lists a file that instructions_exclude drops as not enabled", () =>
+      Effect.gen(function* () {
+        const where = yield* scratch
+        yield* write(path.join(where.root, "AGENTS.md"), "x\n")
+        yield* Effect.gen(function* () {
+          const { notes } = yield* start
+          expect((yield* notes.targets())[1]).toMatchObject({ exists: true, enabled: false })
+        }).pipe(Effect.provide(layerFor({ ...where, excludes: [path.join(where.root, "AGENTS.md").replaceAll("\\", "/")] })))
+      }),
+    )
+
     it.live("refuses a dangling link and creates nothing at the place it leads to", () =>
       Effect.gen(function* () {
         if (!canLinkFile) return
@@ -478,7 +538,7 @@ describe("InstructionNotes.add", () => {
     const repo = Effect.gen(function* () {
       const where = yield* scratch
       yield* Effect.promise(() => initRepo(where.root))
-      return where
+      return { ...where, vcs: "git" as const }
     })
     const exclude = (root: string) => read(path.join(root, ".git", "info", "exclude")).pipe(Effect.orElseSucceed(() => ""))
     const lines = (text: string) => text.split(/\r?\n/).filter((line) => line === "/ORBIT.local.md")
@@ -498,6 +558,42 @@ describe("InstructionNotes.add", () => {
           expect(lines(yield* exclude(where.root))).toHaveLength(1)
           expect((yield* read(path.join(where.root, "ORBIT.local.md")))).toBe("- private\n- again\n")
         }).pipe(Effect.provide(layerFor(where)))
+      }),
+    )
+
+    // Untrusted, so the "already ignored" question is not asked and only the exclude file's own text can stop a second line.
+    it.live("does not repeat the line when the file is created again", () =>
+      Effect.gen(function* () {
+        const where = yield* repo
+        yield* Effect.gen(function* () {
+          const { notes } = yield* start
+          yield* notes.add({ scope: "local", text: "one" })
+          yield* Effect.promise(() => fs.rm(path.join(where.root, "ORBIT.local.md")))
+          expect((yield* notes.add({ scope: "local", text: "two" })).created).toBe(true)
+          expect(lines(yield* exclude(where.root))).toHaveLength(1)
+        }).pipe(Effect.provide(layerFor({ ...where, trusted: false })))
+      }),
+    )
+
+    // A Mercurial project that sits inside a git repository has no exclude step, and the repository above it is not its own.
+    it.live("leaves the outer git repository alone for a Mercurial project inside it, and starts no git process", () =>
+      Effect.gen(function* () {
+        for (const trusted of [false, true]) {
+          const where = yield* scratch
+          yield* Effect.promise(() => initRepo(where.root))
+          const inner = path.join(where.root, "sub")
+          yield* Effect.promise(() => fs.mkdir(path.join(inner, ".hg"), { recursive: true }))
+          const before = yield* exclude(where.root)
+          const result = yield* traced(
+            Effect.gen(function* () {
+              const { notes } = yield* start
+              expect((yield* notes.add({ scope: "local", text: "n" })).created).toBe(true)
+            }).pipe(Effect.provide(layerFor({ base: where.base, root: inner, config: where.config, trusted, vcs: "hg" }))),
+          )
+          expect(result.git).toEqual([])
+          expect(yield* exclude(where.root)).toBe(before)
+          expect(yield* read(path.join(inner, "ORBIT.local.md"))).toBe("- n\n")
+        }
       }),
     )
 
@@ -526,14 +622,15 @@ describe("InstructionNotes.add", () => {
           expect(lines(yield* exclude(where.root))).toHaveLength(1)
           const entry = path.join(where.root, ".git", "worktrees", "linked", "info", "exclude")
           expect(yield* exists(entry)).toBe(false)
-        }).pipe(Effect.provide(layerFor({ base: where.base, root: real, config: where.config })))
+        }).pipe(Effect.provide(layerFor({ base: where.base, root: real, config: where.config, vcs: "git" })))
       }),
     )
 
-    it.live("writes the note but no line for a .git file that names another repository, and says so once", () =>
+    for (const [name, forge] of forgeries)
+    it.live(`writes the note but no line for ${name}, and says so at most once`, () =>
       Effect.gen(function* () {
         const found: Found = yield* folders
-        yield* Effect.promise(() => forgeries[0]![1](found))
+        yield* Effect.promise(() => forge(found))
         const victim = path.join(found.victim, ".git", "info", "exclude")
         const before = yield* read(victim).pipe(Effect.orElseSucceed(() => ""))
         const warnings: unknown[] = []
@@ -545,13 +642,15 @@ describe("InstructionNotes.add", () => {
           const { notes } = yield* start
           expect((yield* notes.add({ scope: "local", text: "n" })).created).toBe(true)
         }).pipe(
-          Effect.provide(layerFor({ base: found.root, root: found.crafted, config: path.join(found.root, "config") })),
+          Effect.provide(layerFor({ base: found.root, root: found.crafted, config: path.join(found.root, "config"), vcs: "git" })),
           Effect.provide(Logger.layer([logger])),
         )
         expect(yield* read(victim).pipe(Effect.orElseSucceed(() => ""))).toBe(before)
         expect(yield* read(path.join(found.crafted, "ORBIT.local.md"))).toBe("- n\n")
         expect(yield* exists(path.join(found.crafted, "gd", "info"))).toBe(false)
-        expect(warnings).toMatchObject([["instruction note not excluded from git", { reason: "unverified git directory" }]])
+        // A layout that git would not take for a repository gets no step at all; one it might take is named and left alone.
+        expect(warnings.length).toBeLessThanOrEqual(1)
+        for (const warning of warnings) expect(warning).toMatchObject(["instruction note not excluded from git", { reason: "unverified git directory" }])
       }),
     )
 

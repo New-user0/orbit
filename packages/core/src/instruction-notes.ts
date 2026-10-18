@@ -147,11 +147,14 @@ export const layer = Layer.effect(
       return yield* Effect.forEach(scopes, (scope) =>
         Effect.gen(function* () {
           const item = yield* target(scope)
+          // Enabled means a note would be taken, so a file that add refuses is not enabled. The project and local scopes
+          // name the file as the walk spelled it, which is the one the checks are asked of.
+          const refused = item.excluded || (yield* outside(item))
           return new Instruction.NoteTarget({
             scope,
-            path: item.path,
+            path: scope === "user" ? item.path : item.file,
             exists: item.exists,
-            enabled: item.enabled,
+            enabled: item.enabled && !refused,
             loaded: item.exists && (yield* loaded(item.path)),
           })
         }),
@@ -181,7 +184,7 @@ export const layer = Layer.effect(
       if (item.excluded) return yield* refuse(input.scope, "excluded", `${item.path} is excluded by instructions_exclude, so a note in it would not load.`)
       if (yield* outside(item)) return yield* refuse(input.scope, "outside", `${item.file} leads outside the project, which is not trusted.`)
 
-      const layout = input.scope === "local" ? yield* gitLayout(item.file) : undefined
+      const layout = input.scope === "local" ? yield* gitLayout() : undefined
       const excludePath = layout?.verified ? join(layout.commonDirectory, "info", "exclude") : undefined
       const written = yield* mutation.withLock(excludePath === undefined ? [item.path] : [item.path, excludePath])(
         Effect.gen(function* () {
@@ -227,11 +230,12 @@ export const layer = Layer.effect(
       return false
     })
 
-    // Where the repository's own exclude file is, when the folder's git directory is one git made for it. Nothing is run.
-    const gitLayout = Effect.fnUntraced(function* (file: string) {
-      const marker = (yield* fs.up({ targets: [".git"], start: dirname(file), mode: "first" }).pipe(Effect.orElseSucceed(() => [])))[0]
-      if (marker === undefined) return undefined
-      return yield* GitLayout.locate(fs, dirname(marker))
+    // Where the repository's own exclude file is, when the project is a git one and the folder's git directory is one git
+    // made for it. Only the project root the Location resolved is asked: a Mercurial project nested in a repository has no
+    // exclude step, and the repository above it is not this project's (class 1, 3, 4). Nothing is run.
+    const gitLayout = Effect.fnUntraced(function* () {
+      if (location.vcs?.type !== "git") return undefined
+      return yield* GitLayout.locate(fs, yield* fs.resolve(location.project.directory))
     })
 
     // Best effort: a failure here is logged and the note stands.

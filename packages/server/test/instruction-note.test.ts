@@ -158,6 +158,17 @@ it.live("rejects empty, blank and over-long text and an unknown scope with a 400
   }).pipe(Effect.scoped),
 )
 
+it.live("answers 503 for the instructions service when the file's place holds a directory, and creates nothing", () =>
+  Effect.gen(function* () {
+    const s = yield* server()
+    yield* Effect.promise(() => fs.mkdir(path.join(s.project, "AGENTS.md")))
+    const response = yield* s.post({ scope: "project", text: "x" })
+    expect(response.status).toBe(503)
+    expect(yield* Effect.promise(() => response.json())).toMatchObject({ _tag: "ServiceUnavailableError", service: "instructions" })
+    expect(yield* Effect.promise(() => fs.readdir(path.join(s.project, "AGENTS.md")))).toEqual([])
+  }).pipe(Effect.scoped),
+)
+
 it.live("carries a refusal as field scope with the reason as kind", () =>
   Effect.gen(function* () {
     const s = yield* server({ excludes: (project) => [path.join(project, "ORBIT.md").replaceAll("\\", "/")] })

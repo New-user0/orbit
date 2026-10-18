@@ -3126,18 +3126,16 @@ describe("InstructionDiscovery.rescan", () => {
     }),
   )
 
-  it.live("only publishes when the loader is off, and runs nothing else", () =>
+  it.live("publishes the list when the loader is off", () =>
     Effect.gen(function* () {
       const where = yield* folders
       yield* write(where.rootFile, "x")
       yield* Effect.gen(function* () {
         const discovery = yield* start()
         const seen = yield* updates
-        const ran = { count: 0 }
         yield* discovery.rescan()
         yield* Effect.sleep("50 millis")
         expect(seen.count).toBe(1)
-        expect(ran.count).toBe(0)
         expect(yield* discovery.list()).toEqual([])
       }).pipe(Effect.provide(layerFor(where, { project: false, global: false })))
     }),
