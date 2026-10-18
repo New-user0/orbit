@@ -81,6 +81,76 @@ export function parse(text: string, options?: { readonly frontmatter?: boolean }
   return { content: content ?? body, stripped: split.frontmatter !== undefined || content !== undefined }
 }
 
+/** A heading of a document: `depth` is its number of hash characters and `body` the text under it. */
+export type Section = { readonly heading: string; readonly depth: number; readonly body: string }
+
+/**
+ * The ATX headings of an instruction file (`#` to `######`, then a space, a tab or the end of the line, with at most three
+ * columns of indentation) and the text under each, in file order. A body runs to the next heading of the same or a
+ * shallower depth, so subsections stay inside it. It has LF line endings and no blank line at either end, and may be
+ * empty. Only headings at the top level of the document count: one inside fenced or indented code, an HTML block, a quote
+ * or a list item opens nothing, and a `#` line inside a fence does not end a body. Underlined (Setext) headings are not
+ * recognised. The function reads the text once, in linear time, and does not throw.
+ */
+export function sections(text: string): Section[] {
+  return scan(text).map((item) => item.section)
+}
+
+/**
+ * The bodies of the sections of `text` whose heading is one of `names`, in file order, without the empty ones. A name and
+ * a heading are compared whole, ignoring case, runs of spaces and tabs, and one colon at the end. A section inside a
+ * section that matched is part of its body and is not returned again.
+ */
+export function section(text: string, names: string | readonly string[]) {
+  const wanted = new Set((typeof names === "string" ? [names] : names).map(normalize))
+  let covered = -1
+  return scan(text).flatMap((item) => {
+    if (item.line < covered || !wanted.has(normalize(item.section.heading))) return []
+    covered = item.end
+    return item.section.body === "" ? [] : [item.section.body]
+  })
+}
+
+function normalize(value: string) {
+  return value
+    .replaceAll(/[ \t]+/g, " ")
+    .trim()
+    .replace(/ ?:$/, "")
+    .toLowerCase()
+}
+
+// The sections, each with the index of its heading line and of the line after its body.
+function scan(text: string) {
+  const lines = (text.startsWith("﻿") ? text.slice(1) : text).replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n")
+  const starts: number[] = []
+  removeComments(lines.join("\n"), starts)
+  const headings = starts.map((line) => {
+    const rest = lines[line]!.replace(/^[ \t]*/, "")
+    const depth = /^#+/.exec(rest)![0].length
+    const after = rest.slice(depth)
+    let end = after.length
+    while (after[end - 1] === "#") end--
+    // A closing run of hashes counts only after a space or a tab, or when it is all the text.
+    const title = end === 0 || after[end - 1] === " " || after[end - 1] === "\t" ? after.slice(0, end) : after
+    return { line, depth, heading: title.trim() }
+  })
+  // The body of a heading ends at the next one that is not deeper: the stack holds the headings still waiting for it.
+  const ends = new Map<number, number>()
+  const open: typeof headings = []
+  for (const item of headings) {
+    while (open.length > 0 && open.at(-1)!.depth >= item.depth) ends.set(open.pop()!.line, item.line)
+    open.push(item)
+  }
+  return headings.map((item) => {
+    const end = ends.get(item.line) ?? lines.length
+    let from = item.line + 1
+    let to = end
+    while (from < to && isBlank(lines[from]!)) from++
+    while (to > from && isBlank(lines[to - 1]!)) to--
+    return { line: item.line, end, section: { heading: item.heading, depth: item.depth, body: lines.slice(from, to).join("\n") } }
+  })
+}
+
 /**
  * Every pattern of `instructions_exclude` that the documents in `entries` set, in the order of the entries and without
  * repeats. The lists of all scopes add together, as other settings' lists do, and a document that is not trusted has
@@ -193,8 +263,10 @@ type Fence = { readonly char: string; readonly length: number }
 // What ends an HTML block that is open: a pattern that a line holds, or a blank line.
 type End = RegExp | "blank"
 
-function removeComments(text: string) {
-  if (!text.includes("<!--")) return undefined
+// When `headings` is given the walk also records the index of every line that opens a heading at the top level of the
+// document (`sections`), and it runs on text that holds no comment too.
+function removeComments(text: string, headings?: number[]) {
+  if (!headings && !text.includes("<!--")) return undefined
   const lines = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n")
   const kept: string[] = []
   let removed = false
@@ -314,7 +386,9 @@ function removeComments(text: string) {
       kept.push(line)
       continue
     }
-    if (/^#{1,6}(?:[ \t]|$)/.test(rest) || isBreak(rest) || (paragraph && /^(?:=+|-+)[ \t]*$/.test(rest))) {
+    const heading = /^#{1,6}(?:[ \t]|$)/.test(rest)
+    if (heading || isBreak(rest) || (paragraph && /^(?:=+|-+)[ \t]*$/.test(rest))) {
+      if (heading) headings?.push(at)
       paragraph = false
       kept.push(line)
       continue

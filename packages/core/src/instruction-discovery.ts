@@ -4,6 +4,7 @@ import { Context, Effect, Layer, Schema, Types } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { createPatch } from "diff"
 import { Bus } from "./bus.js"
+import { ConfigInstructionFile } from "./config/instruction-file.js"
 import { Instructions } from "./instructions/index.js"
 import { AbsolutePath, PositiveInt } from "./schema.js"
 import { State } from "./state.js"
@@ -98,6 +99,15 @@ export interface Interface extends State.Transformable<Editor> {
   readonly warnings: () => Effect.Effect<readonly (Warning | ImportWarning)[]>
   /** Which of the files that `list` returns an instruction file imported, and which file imported it. Nothing here reaches the model. */
   readonly imports: () => Effect.Effect<readonly Import[]>
+  /**
+   * The text under each heading named `names` in the files that `list` returns, in the order of `list` and, within a file, of
+   * the file. A file's path is the one `list` reports, so an imported file has its own. The text is a file's, so a caller
+   * that shows it to the model neutralises it (`ReminderText.neutralize`). Nothing is read from disk, and the baseline is
+   * unchanged: sections are not taken out of it. It is empty when `list` is unavailable or lists no files.
+   */
+  readonly section: (
+    names: string | ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<{ readonly path: AbsolutePath; readonly text: string }>>
   /** `removed` reads nothing: the session's agent leaves the instruction files out of its context (`context.instructions`). */
   readonly load: (options?: { readonly removed?: boolean }) => Effect.Effect<Instructions.List>
 }
@@ -177,6 +187,13 @@ export const layer = (options?: Options) =>
         }),
         imports: Effect.fn("InstructionDiscovery.imports")(function* () {
           return Array.from(state.get().imports)
+        }),
+        section: Effect.fn("InstructionDiscovery.section")(function* (names) {
+          const files = yield* list()
+          if (!Array.isArray(files)) return []
+          return files.flatMap((file) =>
+            ConfigInstructionFile.section(file.content, names).map((text) => ({ path: file.path, text })),
+          )
         }),
         load: Effect.fn("InstructionDiscovery.load")(function* (loadOptions) {
           if (loadOptions?.removed) return source(Instructions.removed)
