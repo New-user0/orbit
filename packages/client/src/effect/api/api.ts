@@ -179,6 +179,35 @@ export type LocationTrustUpdateOperation<E = never> = (
   input: LocationTrustUpdateInput,
 ) => Effect.Effect<LocationTrustUpdateOutput, E>
 
+export type LocationInstructionNoteTargetsInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+}
+export type LocationInstructionNoteTargetsOutput = ReadonlyArray<{
+  readonly scope: "user" | "project" | "local"
+  readonly path: string
+  readonly exists: boolean
+  readonly enabled: boolean
+  readonly loaded: boolean
+}>
+export type LocationInstructionNoteTargetsOperation<E = never> = (
+  input?: LocationInstructionNoteTargetsInput,
+) => Effect.Effect<LocationInstructionNoteTargetsOutput, E>
+
+export type LocationInstructionNoteAddInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+  readonly scope: "user" | "project" | "local"
+  readonly text: string
+}
+export type LocationInstructionNoteAddOutput = {
+  readonly scope: "user" | "project" | "local"
+  readonly path: string
+  readonly created: boolean
+  readonly loaded: boolean
+}
+export type LocationInstructionNoteAddOperation<E = never> = (
+  input: LocationInstructionNoteAddInput,
+) => Effect.Effect<LocationInstructionNoteAddOutput, E>
+
 export type LocationTrustListOutput = ReadonlyArray<{
   readonly directory: AbsolutePath
   readonly time: number
@@ -200,6 +229,12 @@ export interface LocationApi<E = never> {
     readonly update: LocationTrustUpdateOperation<E>
     readonly list: LocationTrustListOperation<E>
     readonly revoke: LocationTrustRevokeOperation<E>
+  }
+  readonly instruction: {
+    readonly note: {
+      readonly targets: LocationInstructionNoteTargetsOperation<E>
+      readonly add: LocationInstructionNoteAddOperation<E>
+    }
   }
 }
 

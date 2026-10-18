@@ -367,6 +367,8 @@ export const Plugin = define({
         Effect.forkScoped({ startImmediately: true }),
       )
       yield* refresh()
+      // An explicit rescan reads the files again behind the same lock as the watcher, config and trust refreshes.
+      yield* discovery.addRescan(refresh())
       yield* discovery.transform((editor) => {
         if (loaded.current.type === "unavailable") {
           editor.unavailable()

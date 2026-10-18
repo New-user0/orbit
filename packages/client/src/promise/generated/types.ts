@@ -26,6 +26,21 @@ export type TrustKind =
   | "network"
   | "settings"
 
+export type InstructionNoteTarget = {
+  scope: "user" | "project" | "local"
+  path: string
+  exists: boolean
+  enabled: boolean
+  loaded: boolean
+}
+
+export type InstructionNoteAdded = {
+  scope: "user" | "project" | "local"
+  path: string
+  created: boolean
+  loaded: boolean
+}
+
 export type TrustGrant = { directory: string; time: number; via: string }
 
 export type LocationPublicRef = { directory: string }
@@ -3143,6 +3158,20 @@ export type LocationTrustUpdateInput = {
 }
 
 export type LocationTrustUpdateOutput = TrustStatus
+
+export type LocationInstructionNoteTargetsInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type LocationInstructionNoteTargetsOutput = { data: Array<InstructionNoteTarget> }["data"]
+
+export type LocationInstructionNoteAddInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+  readonly scope: { readonly scope: "user" | "project" | "local"; readonly text: string }["scope"]
+  readonly text: { readonly scope: "user" | "project" | "local"; readonly text: string }["text"]
+}
+
+export type LocationInstructionNoteAddOutput = { data: InstructionNoteAdded }["data"]
 
 export type LocationTrustListOutput = Array<TrustGrant>
 

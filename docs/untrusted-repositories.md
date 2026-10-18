@@ -80,6 +80,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Server** (`packages/core`):
 
+- `InstructionNotes.add` (`packages/core/src/instruction-notes.ts`, served at `POST /api/location/instructions/note`)
+  appends a bullet to the project or local instruction file, so it writes into the folder a repository supplied. It reads
+  only the one file it is about to append to, and only after the checks. The target is the file the loader reads in that
+  scope (the loader's own exclusion and `ProjectTrust.reachable` filters, in the loader's order), asked of the spelling the
+  walk builds, never of a real path alone. While the project is untrusted, `ProjectTrust.escapes` and `reachable` on that
+  spelling refuse a file that leads outside (a link to a file, a dangling link) as
+  `outside`, before any write and again under the file's lock (a link swapped in between); the GET listing reports such a
+  file, and one that `instructions_exclude` drops, as not enabled, by its spelled name. A note for a file that
+  `instructions_exclude` drops is `excluded`, with no second file made beside it. A new `ORBIT.local.md` is kept out of git
+  through the repository's own `info/exclude` only, and only for a Location whose project is a git one, asked at the project
+  root the Location resolved and never by walking up (a Mercurial project nested in a repository gets no step, and no git
+  process starts for it): `GitLayout.locate` must report `verified` (the nine forged layouts of `git-forged.ts` get no line
+  and at most one log line), `info` and `exclude` must not be links, the exclude file's folder must
+  stay inside the verified common directory, and no git process starts while the folder is untrusted (the "already
+  ignored" question is asked of git, with fsmonitor off, only once it is trusted). A failure of that step is logged and
+  keeps the note. The text is the person's own and is not filtered; an import token in it meets the import gate when the
+  file loads. Proof: `test/instruction-notes.test.ts`, `server/test/instruction-note.test.ts`.
 - `system_prompt_file` in `PromptConfigPlugin` (`packages/core/src/plugin/prompt-config.ts`) reads a UTF-8 file into
   `system[0]` of each request of the main thread, so `ConfigTrust` withholds the key (kind `settings`) from an untrusted
   project or local document, and the gate is the config's own, at each request. The loader also refuses, for every
