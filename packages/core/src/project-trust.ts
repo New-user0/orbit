@@ -105,6 +105,17 @@ export interface Interface {
    */
   readonly importable: (spelling: string, real: string) => Effect.Effect<boolean>
   /**
+   * Whether the folder that holds an instruction file lets it import from outside the folders `importable` accepts, and
+   * the folder a person would trust to make it so (`directory`, unset when no grant made from this session could). Ask it
+   * only after `importable` refused, with the importing file's real path. A file in the project's folders is held by the
+   * project, whose decision is the canonical root's: it opens when that is trusted now and either can be trusted for good
+   * or is the folder the session started in, so a session below the home directory stays bounded even when the home
+   * project is trusted for the session. A file outside them is held by the folder that owns it, found as `trustedAt`
+   * finds an owner, which must be trusted now and able to be trusted for good as well as the project opening: a chain does
+   * not inherit, and the stricter answer wins. Files that the model's reads load never ask this.
+   */
+  readonly outward: (importer: string) => Effect.Effect<{ readonly open: boolean; readonly directory?: string }>
+  /**
    * Whether a file that a config directory, or a root of another product, holds may be read now: its agents, commands,
    * skills and output styles. Any file may while the folder that holds the source is trusted. Until then only a file
    * whose real path is inside the folders that decision covers may, which are the project's for a source in them and
@@ -415,6 +426,20 @@ const layer = Layer.effect(
         if (!roots.some((folder) => FSUtil.contains(folder, real))) return false
         if ((yield* trust.status(root)).trusted) return true
         return yield* stays([...folders, ...(yield* Effect.forEach(folders, fs.resolve))], spelling)
+      }),
+      outward: Effect.fn("ProjectTrust.outward")(function* (importer) {
+        const project = yield* trust.status(root)
+        const top = yield* fs.resolve(root)
+        const start = yield* fs.resolve(location.directory)
+        const reachable = project.persistent || (FSUtil.contains(top, start) && FSUtil.contains(start, top))
+        if (real.some((folder) => FSUtil.contains(folder, importer)))
+          return reachable ? { open: project.trusted, directory: root } : { open: false }
+        const owner = (yield* Project.root(fs, AbsolutePath.make(path.dirname(importer)))) ?? path.dirname(importer)
+        const holder = yield* trust.status(owner)
+        // A home directory or a filesystem root never stands for the files below it, as for config above the project.
+        if (!holder.persistent) return { open: false }
+        if (!reachable) return { open: false }
+        return project.trusted ? { open: holder.trusted, directory: owner } : { open: false, directory: root }
       }),
       escapes: Effect.fn("ProjectTrust.escapes")(function* (file) {
         if ((yield* trust.status(root)).trusted) return undefined

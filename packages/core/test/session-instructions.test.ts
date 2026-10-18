@@ -851,6 +851,28 @@ describe("SessionInstructions follows @imports in the files it injects", () => {
     }),
   )
 
+  // A file that the model's read loads never imports from outside the project, even when the project is trusted: only the
+  // files found at the start do (`ProjectTrust.outward`).
+  it.live("does not inject an import from outside the project that a nested file names, in a project that is trusted", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const outside = path.join((yield* tmpdirScoped()).path, "outside.md")
+      yield* writeAgents(outside, "OUTSIDE MARKER")
+      const subPath = yield* nested(dir, "AGENTS.md", `sub rules @${slashed(outside)} @./more.md`)
+      const morePath = path.resolve(dir, "sub", "more.md")
+      yield* writeAgents(morePath, "more rules")
+      const registry = yield* Tool.Service
+      const sessionID = yield* sessionIn(dir)
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.metadata).toEqual({ instruction: { paths: [subPath, morePath] } })
+      expect(injected[0]!.text).not.toContain("OUTSIDE MARKER")
+    }),
+  )
+
   it.live("injects a file that two nested files import once, and again after compaction drops it", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory

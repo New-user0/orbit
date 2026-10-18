@@ -317,14 +317,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   really lie (real paths, whatever the trust decision) inside a project folder that can be trusted for good, or inside the folder
   the session started in when that folder can be or is trusted now; the home directory and a filesystem root can count only once a person trusts them for the session, and then only as the folder the session started in, so a session or repository at `~` that nobody trusted does not open the home
   folder to a downloaded folder's `@~/.ssh/id_rsa` (`ProjectTrust.importable`), and be accepted by
-  `ProjectTrust.reachable`; one that does not is skipped with one `ImportWarning` per importer and target, and a
-  user-level file's import is gated by the network refusal alone. Files the model's reads load later never import
-  outside the project. `instructions_exclude` is asked before the file is opened, a name outside the text extensions and
+  `ProjectTrust.reachable`. An import that fails that rule is skipped with one `ImportWarning` per importer and target
+  unless the folder that holds the importing file opens it (`ProjectTrust.outward`, asked only after `importable` refused,
+  and kept for one pass). A file in the project's folders is held by the project, the canonical root's decision and not
+  the folder the session started in, so a grant for a subfolder opens nothing and a linked worktree follows its
+  repository; it opens when that is trusted now and can be trusted for good, or is the folder the session started in, so a
+  session below `~` stays bounded even when the home project is trusted for the session. A file outside the project's
+  folders (one above it, or one a trusted file brought in) is held by the folder that owns it (found as `trustedAt`
+  finds an owner), which must be trusted now and able to be trusted for good, and the project must open as well; a home
+  directory or a filesystem root never holds. A chain does not inherit: what `~/team/rules.md` imports waits for
+  `~/team`. The warning carries the `directory` whose trust would lift it, unset when no grant made from this session
+  could. A user-level file's import is gated by the network refusal alone, and the network refusal holds in every scope,
+  trusted or not. Files the model's reads load later never import outside the project, even when it is trusted. `instructions_exclude` is asked before the file is opened, a name outside the text extensions and
   a NUL in the text are refused, and a missing target, a folder or a pipe is skipped silently. The watch set is the real
   path of each import that was read, and nothing refused is ever subscribed. Managed and local files do not exist in
   Orbit yet (prompts-context-10): when they arrive they take the project rule. Proof: the `imports` and `load` blocks of
-  `test/config/instruction-file.test.ts`, the "follows @imports" and "keeps a project's imports inside the project" blocks
-  of `test/instruction-discovery.test.ts`, and `test/session-instructions.test.ts`, whose "home folder" blocks pin the repository-at-home row.
+  `test/config/instruction-file.test.ts`, the "follows @imports", "keeps a project's imports inside the project until its holder is trusted" and "lets a trusted
+  holder import from outside the project" blocks of `test/instruction-discovery.test.ts`, and `test/session-instructions.test.ts`, whose "home folder" blocks pin the repository-at-home row.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
   reads the file before any permission is asked, so it reads only when `resolve` reports no `externalDirectory`: a link
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
