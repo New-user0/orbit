@@ -264,6 +264,8 @@ it.effect("auto compaction estimates current content against the buffered prompt
       id: SessionMessage.ID.create(),
       type: "user",
       text: "",
+      // A queued prompt waited for the work to end, so it carries no mid-turn note to add to the estimate.
+      delivery: "queue",
       files: media.map((file) => ({ mime: file.mime, data: "a".repeat(100_000), source: { type: "inline" } })),
       time: { created: 0 },
     })
