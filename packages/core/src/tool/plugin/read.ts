@@ -122,13 +122,6 @@ export const Plugin = {
             }).pipe(
               Effect.flatMap((result) =>
                 Effect.gen(function* () {
-                  // The read has produced what the model gets, so the instruction files near it are due. An external read, a
-                  // PDF and a failed read trigger nothing, and a failure to load them never fails the read.
-                  if (!result.external && !(result.output.type === "file" && result.output.mime === "application/pdf"))
-                    yield* triggers.touched({
-                      sessionID: context.sessionID,
-                      targets: [{ path: result.absolute, listing: result.output.type === "list-page" }],
-                    })
                   const content = toModelContent(result.path, input.offset, result.output)
                   const metadata = {
                     truncated: result.output.type === "file" ? false : result.output.truncated,
@@ -149,7 +142,17 @@ export const Plugin = {
                       `${input.offset ?? 1}:${input.limit ?? "default"}`,
                       createHash("sha256").update(content).digest("hex"),
                     ))
-                  if (!unchanged) return { output: result.output, content, metadata }
+                  if (!unchanged) {
+                    // The read has produced what the model gets, so the instruction files near it are due. An external
+                    // read, a PDF and a failed read trigger nothing, and a repeat read answered with the stub brings
+                    // nothing new. A failure to load them never fails the read.
+                    if (!result.external && !(result.output.type === "file" && result.output.mime === "application/pdf"))
+                      yield* triggers.touched({
+                        sessionID: context.sessionID,
+                        targets: [{ path: result.absolute, listing: result.output.type === "list-page" }],
+                      })
+                    return { output: result.output, content, metadata }
+                  }
                   return {
                     output: result.output,
                     content: unchangedStub(result.path),

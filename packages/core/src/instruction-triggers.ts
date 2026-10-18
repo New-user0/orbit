@@ -64,11 +64,15 @@ const layer = Layer.effect(
       )
       const candidates = (yield* ConfigInstructionFile.included(patterns, discovered, fs.resolve))
         .map((item) => ({ real: item.real, folder: dirname(item.file) }))
-        .filter((item) => item.real !== real && folders.has(item.folder))
+        .filter((item) => folders.has(item.folder))
       // `up` walks from the target's folder outward and names the folder's files in order, so the first of a folder is the
-      // one it loads. The model reads the outermost folder's file first.
+      // one it loads, as it is when the session starts. The file being read is dropped after that choice, not before it:
+      // reading a folder's first file must not bring the second. The model reads the outermost folder's file first.
       const paths = candidates
-        .filter((item, index) => candidates.findIndex((other) => other.folder === item.folder) === index)
+        .filter(
+          (item, index) =>
+            candidates.findIndex((other) => other.folder === item.folder) === index && item.real !== real,
+        )
         .map((item) => item.real)
         .reverse()
         .filter((path, index, all) => all.indexOf(path) === index)

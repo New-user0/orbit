@@ -305,9 +305,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `instructions_exclude` names files to leave out. Exclusion only removes files, and comes before `reachable` in both
   readers. `SessionInstructions` (the files a read brings, found by `InstructionTriggers`) asks `ProjectTrust.importable`
   on the file's real path just before it reads it instead, so a nested file that a link leads out of the project's
-  folders sends nothing in a trusted project as well, and a session at the home folder or a drive root has no root until
-  that folder is trusted. Proof: `test/session-instructions.test.ts` ("a symlink to, trusted or not", "InstructionTriggers"). A project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind
-  `settings`): the lists of every scope are added up, so a repository's would hide the user's own files from the model.
+  folders sends nothing in a trusted project as well, and a session at the home folder has no root until that folder is
+  trusted. A filesystem root is treated the same way by `ProjectTrust`, but no test here pins a session started at one
+  (FU-M4-44). Proof: `test/session-instructions.test.ts` ("a symlink to, trusted or not", "InstructionTriggers"). A
+  project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind `settings`): the lists
+  of every scope are added up, so a repository's would hide the user's own files from the model.
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.

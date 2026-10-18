@@ -2744,7 +2744,7 @@ When the model reads a file or lists a folder below the folder the session start
 - A read of a path outside the folder the session started in, such as a sibling package in the same repository, no longer loads that folder's instruction file. Only the folders below the started folder count. A read of a PDF, and a read that fails, load nothing either; a text file, an image, a notebook and a folder listing do.
 - `orb run --bare` and instances created with discovery off load no nested instruction files on read. They did before.
 
-A nested instruction file that is a link leading out of the project is no longer loaded, in a trusted project as well as in one that is not. A session started at the home folder or at a filesystem root loads nested files only once that folder has been trusted for the session. A file that the model edits or writes does not load nested files; the read the edit tools require beforehand does.
+A nested instruction file that is a link leading out of the project is no longer loaded, in a trusted project as well as in one that is not. A session started at the home folder loads nested files only once that folder has been trusted for the session. A file that the model edits or writes does not load nested files; the read the edit tools require beforehand does. A repeat read that is answered with the "has not changed" note loads nothing either.
 
 **Affects:** projects with instruction files in subfolders, repositories that link an instruction file to a file outside them, and `orb run --bare`.
 
