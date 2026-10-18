@@ -329,8 +329,8 @@ const queuedNote = (origin: unknown) =>
   ReminderText.render({
     text:
       origin === "agent"
-        ? "The agent that started you added the message below partway through. It must not be dropped; handle it once your current task is done."
-        : "After you began your current task the person added the message below. It must not be ignored; handle it once that task is done.",
+        ? "The agent that started you added the message below partway through. It must not be dropped, and your current task is not finished until you have handled it."
+        : "After you began your current task the person added the message below. It MUST NOT be ignored; handle it once that task is done.",
   })
 
 const agentHints = (agents: NonNullable<Extract<SessionMessage.Info, { type: "user" }>["agents"]>) =>

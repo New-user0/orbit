@@ -65,7 +65,7 @@ describe("the note on input sent while work was in progress", () => {
     expect(body).toHaveLength(2)
     expect(body[0]).toStartWith("<system-reminder>\n")
     expect(body[0]).toEndWith("\n</system-reminder>")
-    expect(body[0]).toContain("must not be ignored")
+    expect(body[0]).toContain("MUST NOT be ignored")
     expect(body[0]).not.toContain("words of b")
     expect(body[1]).toBe("words of b")
   })
@@ -138,6 +138,10 @@ describe("the note on input sent while work was in progress", () => {
     const note = parts(out, "b")[0]
     expect(note).toContain("agent that started you")
     expect(note).not.toContain("the person added")
+    expect(note).toContain("not finished until you have handled it")
+    expect(parts(toLLMMessages([user("a"), toolStep("s1"), user("c")], model), "c")[0]).not.toContain(
+      "not finished until",
+    )
   })
 
   test("a history prefix lowers to the same bytes when two more steps are added", () => {
@@ -281,7 +285,7 @@ test("a steer delivered mid-turn lowers to the note and the text only", () => {
   const message = user("b", { agents: [AgentAttachment.make({ name: "alpha" })], editor: { path: "/p/a", selection: { start: 1, end: 2, text: "x" } } })
   const body = parts(toLLMMessages([user("a"), toolStep("s1"), message], model), "b")
   expect(body).toHaveLength(2)
-  expect(body[0]).toContain("must not be ignored")
+  expect(body[0]).toContain("MUST NOT be ignored")
   expect(body[1]).toBe("words of b")
 })
 

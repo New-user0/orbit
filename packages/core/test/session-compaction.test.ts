@@ -823,3 +823,20 @@ it.effect("a replaced attempt is not the measured anchor of a prompt estimate", 
     expect(estimate.measured).toBe(0)
   }),
 )
+
+it.effect("a minimal estimate leaves out the editor selection that the full estimate counts", () =>
+  Effect.gen(function* () {
+    const session = yield* insertSession(Session.ID.make("ses_minimal_estimate"))
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Question",
+      editor: { path: "/p/a.ts", selection: { start: 1, end: 2, text: "x".repeat(1800) } },
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    const context = loaded(session, [user])
+    expect(SessionCompaction.estimatePrompt(context, true).estimated).toBeLessThan(
+      SessionCompaction.estimatePrompt(context, false).estimated,
+    )
+  }),
+)

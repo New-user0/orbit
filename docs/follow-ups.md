@@ -153,7 +153,7 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (7)
+### M4 (10)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
@@ -164,6 +164,9 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M4-004 | The run result prints the spend of responses only, while turn limits also count side queries and generations | behaviour | A run stopped by side-query spend prints a cost below its own --max-cost. | low | S | loop-robustness-18 | turn-spend study, section 4 | packages/cli/src/run/noninteractive.ts reconcile and packages/cli/src/run/stream.ts spentFromHistory sum assistant rows; SessionTurn.usage also reads session_usage |
 | FU-M4-005 | A provider-hosted tool fee (web search per call) is not priced | behaviour | A hosted tool fee is free under --max-cost. | low | S | loop-robustness-18 | turn-spend study, section 4 | packages/core/src/session/usage.ts calculateCost prices tokens only; needs a per-call price in the catalog |
 | FU-M4-37 | The reminder tests carry a 699-line copy of the runner harness beside the one in session-runner.test.ts | test hygiene | Two harnesses must be kept in step; a change to one can leave the other testing old behaviour. | low | M: move session-runner.test.ts onto packages/core/test/lib/runner.ts and delete the copy | loop-robustness-17 | prompts-context-5 review (minor) | packages/core/test/lib/runner.ts, packages/core/test/session-runner.test.ts |
+| FU-M4-45 | Nested instruction files have no trigger from an @-mention, the file open in the editor, a post-compaction restore or a hook payload (spec 2.8) | behaviour | Only a read brings nested files (an edit or write already does, pinned by a row); the other hand-offs of the reference are not built. | low | M per carrier; each must call InstructionTriggers.touched and be gated the same way (class 12). Carriers: @-mentioned files (session/prompt.ts), the file open in the editor (prompts-context-13), files restored after compaction (context-memory-5), the hook fields (hooks-14) | prompts-context-13 | prompts-context-12 review (minor) | packages/core/src/instruction-triggers.ts; packages/core/src/tool/plugin/read.ts |
+| FU-M4-51 | A nested instruction file the session already read or wrote is injected again (spec 2.5) | behaviour | The reference skips a nested file the session has already loaded; here it costs tokens twice. | low | S: record loaded nested files per session and skip them | prompts-context-13 | prompts-context-12 review (minor) | packages/core/src/instruction-triggers.ts |
+| FU-M4-46 | The started-folder bound compares spellings with === and !== | 4 | Safe today because FileAccess re-anchors the read target to the Location spelling; a caller that passes another spelling is not. | low | S: use FSUtil.contains both ways before FU-M4-45 adds callers | prompts-context-13 | prompts-context-12 review (follow-up) | packages/core/src/instruction-triggers.ts (walk) |
 
 ### M5 (5)
 
@@ -175,13 +178,12 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M3-152 | Not built: 5 GB cap for moved commands, killing a subagent's moved shells, numeric-string coercion, opt-out | parity | Runaway output or orphan shells. | low | M | shell-safety-6 | PR #91 body Deviations; C0-C2 | PR #91 body |
 | FU-M3-174 | Question maxResultChars declared but not consumed; traits and deferral | parity | No spill test for results over 100,000 characters. | n/a | S | tool-runtime-8 | PR #96 C0-C4 | Result spilling not built |
 
-### M6 (37)
+### M6 (36)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
 | FU-M1-021 | Saved approvals are shared through the remote URL: a shipped .git chooses an untrusted folder's project ID through remote.origin.url | 3, 5 | A never-trusted clone naming the same remote inherits saved 'always allow' answers; an archived clone shares another project's saved grants. | low | S + decision | foundations-14 | Known gaps; plan M1 table; PR #22 round 11 'Noticed'; M3 r6 fu172 | packages/core/src/project.ts:273-278 derives the project ID from the git remote; project.ts:380 remote(repo) is used before the trust check; no .git/orbit untrusted row |
 | FU-M2-010 | Grep and Glob authorize only the search root; Read denies are not applied to the files found or to LSP results | 8, 4 | Grep of '.' reads a .env under a Read deny of `*.env`, and Grep `path=~/.ssh` searches id_rsa despite a Read deny on `~/.ssh/*`. | low to medium | M: evaluate-only per-file check | permissions-3 | Known gaps; plan M3 prerequisites (permissions-3 amendment); #65 final-check 56; PR #75 C5 FU4; PR #78 C4/C6 spec §5; PR #92 C0-C4 | packages/core/src/tool/plugin/grep.ts:130-132 checks only the searched path; glob.ts:69-71 the same |
-| FU-M1-045 | Plan session's subagent description offers agents Plan refuses | behaviour | In Plan mode the model tries general first and gets a rejection. | high in Plan mode | S | permissions-7 | PR #2 review minor 1 | packages/core/src/tool/plugin/subagent.ts:327-340 lists every non-denied agent |
 | FU-M1-046 | Plan refusal for unknown or primary agents promises they work later | behaviour | A bad agent name is reported as a permission rejection with a misleading reason. | low | S | permissions-7 | PR #2 review minor 2 | packages/core/src/tool/plugin/subagent.ts:137 'cannot be spawned until Plan mode ends' |
 | FU-M1-047 | Plan-mode subagent branches are untested | tests | Those refusals can break unseen. | low | S | permissions-7 | PR #2 review minor 3 | no test in packages/core/test hits 'Plan mode does not allow subagents.' (subagent.ts:135) or spawning plan |
 | FU-M1-048 | Plan mode trusts the agent id, so a widened explore can edit | 8 | A person's config that widens explore lets Plan mode edit through it. | low; needs the person's own widening | M: check effective permissions | permissions-7 | PR #2 conflict-resolution review minor 1 | packages/core/src/plan-mode.ts:14-20 'Enforcement trusts the id' |
@@ -361,7 +363,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 | FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | agents-extensibility-43 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
 
-### Sweep (150)
+### Sweep (153)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -394,7 +396,6 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M2-071 | agent.test.ts shell check is vacuous and explore has no Memory-deny row | 14 | A built-in agent opted into the shell would pass. | low | S: one-line test change | sweep | #62 follow-up 32; #65 round 5 follow-up 18 | packages/core/test/agent.test.ts:222 compares rule.action === 'bash' |
 | FU-M2-073 | The fallback notice description is stored unescaped | 9 | A provider-supplied model name with control characters is stored raw. | very low | S | sweep | #62 follow-up 40 | packages/core/src/session/runner/llm.ts:397 interpolates model names |
 | FU-M2-080 | The /diff viewer draws diff lines and file names raw | 9 | A repository's diff writes OSC and bidi controls to the terminal. | low to moderate | S | sweep | #62 follow-up 45 | packages/tui/src/feature-plugins/system/diff-viewer.tsx has no bodyText/plain |
-| FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | 9 | An untrusted folder's command or skill description writes control characters. | low to moderate | S | sweep | #62 follow-up 46 | packages/tui/src/component/prompt/autocomplete.tsx:431,480 |
 | FU-M2-083 | VS Code chat draws resources, tool text and model text with bidi controls | 9 | Reordered text can hide what a tool did. | low | S | sweep | #62 follow-up 48 | packages/vscode/src/controller.ts error notes and tool errors (lines `~502-568`) not passed through plain (not re-probed) |
 | FU-M2-084 | workflowModels leaves out retry.retryOn | 2 | A workflow field that changes spend is not listed for the gate. | low | S | sweep | #62 follow-up 50 | packages/flow/src/load.ts:177 AGENT_CHOICES has no retryOn |
 | FU-M2-086 | util.flock load flake is not on known-failures | tests | The flake looks like a new failure. | intermittent under load | S | sweep | #62 follow-up 54 | docs/known-failures.md has no flock row |
@@ -517,8 +518,12 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M4-38 | ReminderText.neutralize matches ASCII hyphens and white space only | 9 | A tag spelled with a Unicode hyphen (U+2010 to U+2015, U+2212), a soft hyphen, a zero-width character, a fullwidth bracket or an ASCII underscore (`system_reminder`) is not escaped. The reference escapes nothing, and a model reads such a spelling as text, so this is hardening only. | low | S | sweep | prompts-context-5 review (follow-up) | packages/core/src/session/reminder-text.ts (TAG) |
 | FU-M4-41 | A compaction drops a Plan mode leave or re-entry note that was still owed, and the plan path | behaviour | Messages start at the checkpoint, so the first step after it gets the plain reminder or none; the reference keeps both flags across a compaction. | low | M: have the checkpoint record the owed state | sweep | plan-todo-reminders review (follow-up) | packages/core/src/plan/reminders.ts; packages/core/src/session/history.ts |
 | FU-M4-43 | A session ID is used as stored, so an imported session's ID can reach a plan file path and the plan reminder text | security (class 5) | SessionTransfer.import keeps the file's ID and SessionID checks only the ses prefix; the ID is joined into the plan file path (ExitPlanMode write, plan reminders). | low | S: validate the exact ID shape at SessionTransfer.import | sweep | plan-todo-reminders review round 4 | packages/core/src/session/transfer.ts; packages/core/src/plan/reminders.ts; packages/core/src/tool/plugin/plan-mode.ts |
+| FU-M4-44 | No test pins a session started at a filesystem root: nested files load only once that folder is trusted | 4 | ProjectTrust treats a root like the home folder, but a test would have to create files in a real drive root. | low | S: a fake root through a Location over a mounted tmp folder, or a ProjectTrust root override | sweep | prompts-context-12 review (minor) | packages/core/src/project-trust.ts (importRoots); packages/core/test/session-instructions.test.ts |
+| FU-M4-47 | Parallel reads in one step can publish a deeper folder file before its parent one | behaviour | Claims settle in completion order; the reference handles triggers one at a time, in order. | low | S-M: serialise touched per session | sweep | prompts-context-12 review (follow-up) | packages/core/src/instruction-triggers.ts (touched) |
+| FU-M4-49 | No recording-FSUtil test for network share links in the nested walk (spec row 23) | 14 | Behaviour is correct (fs.up skips share links through LinkShare.blocked), but no test counts the connections. | low | S | sweep | prompts-context-12 review (follow-up) | packages/core/test/session-instructions.test.ts |
+| FU-M4-50 | Spec rows not built: a Linux FIFO as instruction file, Windows drive-letter case, child and fork sessions, and a revoke between two reads | 14 | Each is covered by the shared guard but has no row of its own here. | low | S per row | sweep | prompts-context-12 review (minor) | packages/core/test/session-instructions.test.ts |
 
-### Owner (96)
+### Owner (97)
 
 These rows have no plan task and no decision to wait for. The owner gives each one a plan task or the sweep, or accepts the gap and closes it; until then the row stays here.
 
@@ -620,11 +625,14 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 | FU-M4-003 | A git folder that is not trusted shows no branch, changes or diff, and the terminal UI says nothing about why | behaviour, 7 | A person who opens a repository with no config of its own on a server that trusts no folder sees an empty review and no branch, and gets no dialog or Untrusted indicator, which show only while config is held back. | certain for a git folder that has not been trusted, on the background service | S-M: show the branch from the HEAD file, which the reference reads without git before trust, and a Trust.Kind for the provider so that status lists it as held back, or an indicator of its own, which is a public Protocol change and the owner's call (the Known gap for hooks and stdio MCP servers is the same question) | owner | git-untrusted PR (the same wait that Mercurial folders have had since M3) | packages/core/src/plugin/vcs/git.ts guards the provider on trust.trusted; docs/upgrading.md 'The reminder' says the indicator and /trust show only while the folder holds something of its own back |
 | FU-M2-012 | ACP finished call's diff still built from the input's text | 8 | A completed ACP call can carry a diff from model-chosen keys, so it shows straight quotes and substring deletes where curly quotes and whole lines were written. | medium for ACP clients that render it | S: build only for Edit from declared fields | owner | Known gaps; #65 round 6 re-check 32; #65 final-check 36; PR #85 C0-C4; PR #85 C0-C4 also names FU-M3-116 (carrier owner) | packages/cli/src/acp/tool.ts:214-215 reads old_string/new_string from the input |
 | FU-M4-42 | Todo nudge gating and the family choice read the tool set offered now at every position | behaviour | Turning TodoWrite or TaskUpdate on or off re-derives earlier nudges and costs one prompt-cache miss; Orbit also nudges for both list families at once where the reference offers one family. | low | S: record the family with the nudge | owner | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts |
+| FU-M4-48 | A nested instruction file is read whole with no size cap | behaviour | A very large nested file is sent whole; the reference shares this. | low | S | owner | prompts-context-12 review (follow-up) | packages/core/src/session/instructions.ts |
 
 ## Fixed
 
 | id | title | fixed by | test |
 |---|---|---|---|
+| FU-M1-045 | Plan session's subagent description offers agents Plan refuses | ea36dfdf | test packages/core/test/session-context-listings.test.ts 'lists only the agents Plan mode allows to a Plan session, and every agent to a Build session' (the session's agent reaches the filter), and the filter itself in agent-instructions-fields.test.ts |
+| FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | commit 4b063090 and the Mini menu fix (fix(tui): draw Mini menu text through plain) | tests packages/tui/test/prompt/autocomplete-hostile.test.tsx (@ skills and / commands), packages/tui/test/component/dialog-listings.test.tsx, packages/tui/test/mini/footer.view.test.tsx (Mini agent picker and Mini slash menu) |
 | FU-M3-043 | vim_mode and output_style are not in the status line watch list | 43822725 | test packages/tui/test/status-line-app.test.tsx 'the status line reruns when the vim mode or the output style changes' (and status-line-trust.test.tsx 'a vim mode change in an untrusted start folder starts no status line command') |
 | FU-M1-017 | Git.clean compared paths with startsWith | 97cb7e7 | test packages/flow/test/git.test.ts 'a run is cleaned up whatever case the repository path is spelled with'. Known gaps entry and class 5 text are stale |
 | FU-M1-025 | No in-repo list of known test failures | 933be24 | Known gaps entry 'No list of known failures' is stale |
@@ -843,11 +851,11 @@ placement, a requirement that was written against code that no longer exists). T
 
 ## Counts
 
-- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) = 718.
-- Output: 635 rows plus 83 listed duplicates = 718. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 635 register rows have a table entry.
-- Open minors by carrier: M4: 5, M5: 5, M6: 37, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 150, Owner: 94.
+- Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) = 725.
+- Output: 643 rows plus 83 listed duplicates = 726. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 643 register rows have a table entry.
+- Open minors by carrier: M4: 8, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 153, Owner: 95.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
-- Fixed: 126.
+- Fixed: 128.
 - Duplicates: 83.
-- Check: 423 open + 86 owner + 126 fixed + 83 duplicates = 718, the 718 inputs.
+- Check: 421 open + 86 owner + 128 fixed + 83 duplicates = 718, the 718 inputs.

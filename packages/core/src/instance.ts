@@ -45,11 +45,13 @@ import { SessionReminders } from "./session/reminders.js"
 import { SessionContext } from "./session/context.js"
 import { Skill } from "./skill.js"
 import { SkillInstructions } from "./skill/instructions.js"
+import { AgentInstructions } from "./agent/instructions.js"
 import { Snapshot } from "./snapshot.js"
 import { InstructionDiscovery } from "./instruction-discovery.js"
 import { InstructionBuiltIns } from "./instructions/builtins.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
 import { SessionInstructions } from "./session/instructions.js"
+import { InstructionTriggers } from "./instruction-triggers.js"
 import { SessionScratchpad } from "./session/scratchpad.js"
 import { McpTool } from "./tool/mcp.js"
 import { ReadToolFileSystem } from "./tool/read-filesystem.js"
@@ -100,6 +102,7 @@ const nodes = [
   ToolOutput.node,
   Image.node,
   SkillInstructions.node,
+  AgentInstructions.node,
   ReferenceInstructions.node,
   InstructionEntry.node,
   Form.node,
@@ -107,6 +110,7 @@ const nodes = [
   ReadToolFileSystem.node,
   McpTool.node,
   SessionInstructions.node,
+  InstructionTriggers.node,
   SessionScratchpad.node,
   SessionRunnerModel.node,
   SessionCompaction.node,
@@ -136,9 +140,9 @@ export interface Options {
   // AGENTS.md discovery. Wellknown integration config and host-injected values
   // still apply, and a config value that explicitly names something
   // file-backed (a skill path, an MCP command) is a request, not discovery.
-  // Use-triggered behavior also stays: reading a file still injects nested
-  // AGENTS.md instructions — that is session-time context, not boot-time
-  // population.
+  // Use-triggered project instructions are off too: reading a file injects no nested
+  // instruction files, as `--bare` does. Other use-triggered behavior stays, being
+  // session-time context and not boot-time population.
   readonly discovery?: boolean
   readonly replacements?: LayerNode.Replacements
 }

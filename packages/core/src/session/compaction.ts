@@ -590,7 +590,7 @@ export const layer = Layer.effect(
       budget: number,
       webSocket?: "session",
     ) => {
-      // Hints and the editor note belong to the request they were written for; a summary does not carry them.
+      // Hints and the editor note belong to the request they were written for; the summary request lowers prompts the way the main request does on this instance.
       const base = transcript(context, messages, reminders.minimal)
       return requests.compaction({
         session: context.session,

@@ -53,15 +53,17 @@ const layer = Layer.effect(
     // Files already reported as skipped, so that one the model's reads keep finding is reported once.
     const skipped = new Set<string>()
 
-    // Until the project is trusted it supplies only what is inside it. The paths here are real, so a file that a link in
-    // the repository points at, such as a key or a credentials file, is left out before it can go into the conversation.
+    // The import guard, asked just before the file is read. The paths here are real, so a file that a link in the
+    // repository points at, such as a key or a credentials file, is left out before it can go into the conversation, in a
+    // trusted project as in one that is not. A session at the home folder or a filesystem root has no root until that
+    // folder is trusted.
     const reachable = Effect.fnUntraced(function* (path: string) {
-      if (yield* trust.reachable(path)) return true
+      if (yield* trust.importable(path, path)) return true
       if (skipped.has(path)) return false
       skipped.add(path)
       yield* Effect.logWarning("instruction file skipped", {
         path,
-        reason: "outside the project, which is not trusted",
+        reason: "leads outside the folders the session may load instruction files from",
       })
       return false
     })

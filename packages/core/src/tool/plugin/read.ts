@@ -7,11 +7,8 @@ import { Tool } from "../../tool.js"
 import { createHash } from "crypto"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
-import { Config } from "../../config.js"
-import { ConfigInstructionFile } from "../../config/instruction-file.js"
-import { Location } from "../../location.js"
+import { InstructionTriggers } from "../../instruction-triggers.js"
 import { FileAccess } from "../../file-access.js"
-import { SessionInstructions } from "../../session/instructions.js"
 import { FileLedger } from "../../file-ledger.js"
 import { FileMutation } from "../../file-mutation.js"
 import { Notebook } from "../notebook.js"
@@ -39,14 +36,12 @@ const Output = Schema.Union([ReadToolFileSystem.FileContent, ReadToolFileSystem.
 export const Plugin = {
   id: "orbit.tool.read",
   effect: Effect.fn("ReadTool.Plugin")(function* (ctx: Context) {
-    const config = yield* Config.Service
     const reader = yield* ReadToolFileSystem.Service
     const access = yield* FileAccess.Service
-    const sessionInstructions = yield* SessionInstructions.Service
+    const triggers = yield* InstructionTriggers.Service
     const ledger = yield* FileLedger.Service
     const environment = yield* Environment.Service
     const fs = yield* FSUtil.Service
-    const location = yield* Location.Service
 
     yield* ctx.tool
       .transform((editor) =>
@@ -100,39 +95,6 @@ export const Plugin = {
                     }),
                 ),
               )
-              // After a successful read, discover nearby instruction files walking up to the Location
-              // root exclusive and inject them as durable synthetic instructions. For a
-              // directory listing the walk starts at the directory itself (so its own AGENTS.md
-              // is discovered); for a file it starts at the file's dirname. External reads are
-              // skipped, and discovery failures never fail the read.
-              yield* Effect.gen(function* () {
-                if (result.target.externalDirectory !== undefined) return
-                const resolved = yield* fs.resolve(result.target.absolute)
-                const root = yield* fs.resolve(location.directory)
-                // The Location and its ancestors are already supplied by initial instructions,
-                // even when an upward walk from elsewhere in the project cannot reach root.
-                const discovered = yield* fs.up({
-                  targets: [...ConfigInstructionFile.names(yield* config.compatEnabled())],
-                  start: result.content.type === "list-page" ? resolved : dirname(resolved),
-                  stop: root,
-                  type: "file",
-                })
-                // A name that the settings exclude is as good as absent, as it is when the session starts, so the next name
-                // in its folder is the one that loads. `SessionInstructions` asks again for every path it is given.
-                const patterns = yield* ConfigInstructionFile.prepare(
-                  ConfigInstructionFile.excludes(yield* config.entries()),
-                  fs.resolve,
-                )
-                const candidates = (yield* ConfigInstructionFile.included(patterns, discovered, fs.resolve))
-                  .map((candidate) => candidate.real)
-                  .filter((file, index, all) => all.findIndex((other) => dirname(other) === dirname(file)) === index)
-                  .filter((file) => !FSUtil.contains(dirname(file), root) && file !== resolved)
-                if (candidates.length === 0) return
-                yield* sessionInstructions.load({ sessionID: context.sessionID, paths: candidates })
-              }).pipe(
-                Effect.catch(() => Effect.void),
-                Effect.catchDefect(() => Effect.void),
-              )
               if (
                 result.content.type === "file" &&
                 result.content.encoding === "base64" &&
@@ -145,16 +107,18 @@ export const Plugin = {
                   output: (yield* read(result.target, true)).content,
                   path: result.path,
                   absolute: result.target.absolute,
+                  external: result.target.externalDirectory !== undefined,
                 }
               if (result.seen) yield* ledger.recordRead(context.sessionID, result.target.absolute, result.seen)
               const absolute = result.target.absolute
+              const external = result.target.externalDirectory !== undefined
               if (result.content.type !== "list-page" && Notebook.isNotebook(absolute)) {
                 const notebook = yield* readNotebook(absolute, input.offset, input.limit)
-                if (notebook) return { output: notebook, path: result.path, absolute }
+                if (notebook) return { output: notebook, path: result.path, absolute, external }
                 // Not a notebook after all: read it as the text it is, from the offset asked for.
-                return { output: (yield* read(result.target, true)).content, path: result.path, absolute }
+                return { output: (yield* read(result.target, true)).content, path: result.path, absolute, external }
               }
-              return { output: result.content, path: result.path, absolute }
+              return { output: result.content, path: result.path, absolute, external }
             }).pipe(
               Effect.flatMap((result) =>
                 Effect.gen(function* () {
@@ -178,7 +142,17 @@ export const Plugin = {
                       `${input.offset ?? 1}:${input.limit ?? "default"}`,
                       createHash("sha256").update(content).digest("hex"),
                     ))
-                  if (!unchanged) return { output: result.output, content, metadata }
+                  if (!unchanged) {
+                    // The read has produced what the model gets, so the instruction files near it are due. An external
+                    // read, a PDF and a failed read trigger nothing, and a repeat read answered with the stub brings
+                    // nothing new. A failure to load them never fails the read.
+                    if (!result.external && !(result.output.type === "file" && result.output.mime === "application/pdf"))
+                      yield* triggers.touched({
+                        sessionID: context.sessionID,
+                        targets: [{ path: result.absolute, listing: result.output.type === "list-page" }],
+                      })
+                    return { output: result.output, content, metadata }
+                  }
                   return {
                     output: result.output,
                     content: unchangedStub(result.path),

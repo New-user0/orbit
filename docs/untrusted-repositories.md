@@ -303,8 +303,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   blocks are found by a scanner that reads the file once, line by line, because the block lexer of a Markdown library
   takes seconds on a list item of a few thousand lines, and a clone chooses the file before anyone has trusted it.
   `instructions_exclude` names files to leave out. Exclusion only removes files, and comes before `reachable` in both
-  readers. A project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind
-  `settings`): the lists of every scope are added up, so a repository's would hide the user's own files from the model.
+  readers. `SessionInstructions` (the files a read brings, found by `InstructionTriggers`) asks `ProjectTrust.importable`
+  on the file's real path just before it reads it instead, so a nested file that a link leads out of the project's
+  folders sends nothing in a trusted project as well, and a session at the home folder has no root until that folder is
+  trusted. A filesystem root is treated the same way by `ProjectTrust`, but no test here pins a session started at one
+  (FU-M4-44). Proof: `test/session-instructions.test.ts` ("a symlink to, trusted or not", "InstructionTriggers"). A
+  project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind `settings`): the lists
+  of every scope are added up, so a repository's would hide the user's own files from the model.
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
@@ -532,6 +537,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
+- Agent, skill and command names and descriptions that a folder supplies: the TUI agent and skill dialogs, the `@` and `/` autocomplete and every Mini menu (`RunFooterMenu` in `src/mini/footer.menu.tsx`, the single render site for the Mini `/` and `@` composer) draw them through `plain`. Proof: `test/component/dialog-listings.test.tsx`, `test/prompt/autocomplete-hostile.test.tsx`, `test/mini/footer.view.test.tsx` (hostile row beside a trusted one).
 - Message bodies on the session screen and in Mini: `bodyText` and `outputText` (`src/util/renderer.ts`),
   `entryBody` (`src/mini/entry.body.ts`) and `permissionPresentation` (`src/util/permission.ts`). Proof: one
   table-driven `captureCharFrame` test on the real components, each with a hostile row and a trusted control row that

@@ -2752,6 +2752,20 @@ Sessions that already hold steered messages gain the note once when first lowere
 
 **What to do:** Nothing.
 
+### Nested instruction files load outermost first, and only for what a read returned
+
+When the model reads a file or lists a folder below the folder the session started in, the instruction files of the folders between them are added to the conversation. Three things about that changed.
+
+- The files now come outermost folder first, so a folder's file is read before the file of a folder inside it. They came innermost first.
+- A read of a path outside the folder the session started in, such as a sibling package in the same repository, no longer loads that folder's instruction file. Only the folders below the started folder count. A read of a PDF, and a read that fails, load nothing either; a text file, an image, a notebook and a folder listing do.
+- `orb run --bare` and instances created with discovery off load no nested instruction files on read. They did before.
+
+A nested instruction file that is a link leading out of the project is no longer loaded, in a trusted project as well as in one that is not. A session started at the home folder loads nested files only once that folder has been trusted for the session. A file that the model edits or writes does not load nested files; the read the edit tools require beforehand does. A repeat read that is answered with the "has not changed" note loads nothing either.
+
+**Affects:** projects with instruction files in subfolders, repositories that link an instruction file to a file outside them, and `orb run --bare`.
+
+**What to do:** Nothing. Copy a linked instruction file into the project if you want it loaded.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
@@ -3458,3 +3472,14 @@ error types.
 
 **What to do:** Nothing; expect a cost or token limit to stop a little earlier than before when side queries ran, and
 treat `limit.tokens-unknown` as a refusal to count (for example, use a provider that reports usage, or drop the token limit).
+
+## Agent and skill listings are context, not tool text
+
+- The agent types the `Agent` and `Workflow` tools can start are no longer appended to those tools' descriptions. They arrive as their own instruction source (`core/agent-guidance`), so the tool definitions stay the same when agents change and the model is told only what changed.
+- The skill listing is one bullet per skill (`- id: description`), each description is cut to 250 characters, and the whole listing is held to about 1% of the model's context window (4 characters per token): descriptions are shortened evenly, then dropped to names only. Every skill stays listed. Switching to a model with a different window can restate the listing.
+- The skill listing is offered only when the request has the `Skill` tool, and the agent listing only when it has `Agent` or `Workflow`.
+- Agent ids, descriptions and tool names, and skill ids and descriptions, are flattened to one line (control characters become a space) and envelope look-alikes are escaped before they are listed, and the agent picker, the skill picker, the `@` and `/` autocomplete and every Mini menu (including the `/` composer) escape control characters in what they draw (`dialog-listings.test.tsx`, `autocomplete-hostile.test.tsx`, `footer.view.test.tsx`). In a Plan-mode session the agent listing names only the agents Plan mode lets it start, and the `explore` agent is listed with the tools it has (Grep, Glob, Read, WebFetch, WebSearch).
+
+**Affects:** plugins that read the `Agent` or `Workflow` tool description for the agent list, and people with many skills.
+
+**What to do:** Read the agent list from the conversation context instead of the tool description; shorten skill descriptions that matter early.
