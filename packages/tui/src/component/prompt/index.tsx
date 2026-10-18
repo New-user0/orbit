@@ -58,6 +58,7 @@ import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
 import { useTrust } from "../../context/trust"
 import { Vim } from "./vim-state"
+import { VimAdapter } from "./vim-adapter"
 import { StatusLine } from "./status-line"
 import { configuredOutputStyle } from "../dialog-output-style"
 import { statusLinePayload } from "../../util/status-line-payload"
@@ -225,8 +226,15 @@ export function Prompt(props: PromptProps) {
   const config = useConfig().data
   const trust = useTrust()
   // With prompt.vim on, Escape leaves insert mode and normal-mode keys move and edit instead of typing.
-  const [vim, setVim] = createSignal<Vim.State>({ mode: "insert" })
+  // The mode, the half-typed command and the unnamed register live as long as the prompt does; a submit leaves them.
+  const [vim, setVim] = createSignal<Vim.State>(Vim.initial)
   const vimNormal = () => config.prompt?.vim === true && vim().mode === "normal"
+  // The textarea cannot take an undefined style once it has had one, and the block cursor is normal mode's cue, so with
+  // vim on and no cursor configured, insert mode gets a line.
+  const insertCursor = () =>
+    config.cursor ?? (config.prompt?.vim === true ? ({ style: "line", blinking: true } as const) : undefined)
+  // How many native undo steps each normal-mode command took, so that one `u` undoes one whole command.
+  const vimUndo: Array<{ steps: number; text: string }> = []
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
@@ -620,7 +628,7 @@ export function Prompt(props: PromptProps) {
                 input.insertText(text + " ")
                 const extmarkId = input.extmarks.create({
                   start,
-                  end: start + promptOffsetWidth(text),
+                  end: start + promptOffsetWidth(text, renderer.widthMethod),
                   virtual: true,
                   styleId: skillStyleId,
                   typeId: promptPartTypeId,
@@ -632,7 +640,7 @@ export function Prompt(props: PromptProps) {
                     const index = skills.length
                     skills.push({
                       id: Skill.ID.make(skill),
-                      mention: { start, end: start + promptOffsetWidth(text), text },
+                      mention: { start, end: start + promptOffsetWidth(text, renderer.widthMethod), text },
                     })
                     draft.extmarkToPart.set(extmarkId, { type: "skill", index })
                   }),
@@ -830,6 +838,52 @@ export function Prompt(props: PromptProps) {
         })
       }
     })
+  }
+
+  const promptPartRanges = () => input.extmarks.getAllForTypeId(promptPartTypeId)
+
+  // One normal-mode key: the engine says what to do, and this applies it to the textarea.
+  function runVim(event: KeyEvent) {
+    const snap = VimAdapter.snapshot(input, promptPartRanges())
+    const result = Vim.step(vim(), event, snap)
+    setVim(result.state)
+    // Escape, Enter, an idle arrow and Ctrl chords are the ordinary editor's (and the session interrupt's) to handle.
+    if (result.pass) return
+    event.preventDefault()
+    applyVim(snap, result)
+  }
+
+  function applyVim(snap: Vim.Snapshot, result: Vim.Result) {
+    if (result.undo) {
+      const group = vimUndo.at(-1)
+      if (group && group.text === input.plainText) {
+        vimUndo.pop()
+        for (let step = 0; step < group.steps; step++) input.undo()
+        return
+      }
+      vimUndo.length = 0
+      input.undo()
+      return
+    }
+    const steps = VimAdapter.apply(input, snap, result)
+    if (steps > 0) vimUndo.push({ steps, text: input.plainText })
+    const clip = result.clipboard
+    if (!clip) return
+    if ("write" in clip) {
+      void clipboard.write(clip.write).catch(() => undefined)
+      return
+    }
+    // The clipboard is read asynchronously: the paste lands at the cursor then, unless the prompt changed meanwhile.
+    const before = input.plainText
+    void clipboard
+      .read()
+      .catch(() => undefined)
+      .then((content) => {
+        const text = Vim.clipboardText(content)
+        if (text === undefined || input.isDestroyed || input.plainText !== before || !vimNormal()) return
+        const current = VimAdapter.snapshot(input, promptPartRanges())
+        applyVim(current, Vim.paste(vim(), current, text, clip.read.before, clip.read.count))
+      })
   }
 
   function syncExtmarksWithPromptParts() {
@@ -1033,8 +1087,9 @@ export function Prompt(props: PromptProps) {
         title: "Vim normal mode",
         group: "Prompt",
         run: () => {
-          input.moveCursorLeft()
-          setVim({ mode: "normal" })
+          const snap = VimAdapter.snapshot(input, promptPartRanges())
+          input.cursorOffset = VimAdapter.toOffset(snap.text, Vim.leaveInsert(snap), input.ctx.widthMethod)
+          setVim({ ...vim(), mode: "normal", pending: { kind: "idle" }, clipboard: false })
         },
       },
     ],
@@ -1154,8 +1209,7 @@ export function Prompt(props: PromptProps) {
     context: "prompt",
     priority: 1,
     target: inputTarget,
-    // In Vim normal mode the same key is redo, which the key handler on the textarea runs.
-    enabled: inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined && !vimNormal(),
+    enabled: inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined,
     commands: [
       {
         id: "prompt.history.search",
@@ -1501,7 +1555,7 @@ export function Prompt(props: PromptProps) {
   function pasteText(text: string, virtualText: string) {
     const currentOffset = input.cursorOffset
     const extmarkStart = currentOffset
-    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText)
+    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText, renderer.widthMethod)
 
     input.insertText(virtualText + " ")
 
@@ -1719,7 +1773,8 @@ export function Prompt(props: PromptProps) {
       notice={() => {
         if (!config.status_line?.command) return undefined
         if (local.permission.hooks === "disabled") return "Status line off: managed settings turn hooks off"
-        if (local.permission.hooks === "managed_only") return "Status line off: managed settings allow only managed hooks"
+        if (local.permission.hooks === "managed_only")
+          return "Status line off: managed settings allow only managed hooks"
         return undefined
       }}
       interval={() => config.status_line?.interval}
@@ -1735,6 +1790,9 @@ export function Prompt(props: PromptProps) {
         statusLineModel()?.id,
         statusLineModel()?.variant,
         data.location.info(statusLineLocation())?.project.directory,
+        // The line shows the vim mode and the output style, so a change of either asks for a new run.
+        config.prompt?.vim === true ? vim().mode : undefined,
+        configuredOutputStyle(data, statusLineLocation()),
       ]}
       payload={() => {
         const session = props.sessionID ? data.session.get(props.sessionID) : undefined
@@ -1937,7 +1995,7 @@ export function Prompt(props: PromptProps) {
               focusedTextColor={muted() ? theme.text.muted : theme.text.base}
               minHeight={1}
               maxHeight={maxHeight()}
-              cursorStyle={vimNormal() ? { ...config.cursor, style: "block" } : config.cursor}
+              cursorStyle={vimNormal() ? { ...config.cursor, style: "block" } : insertCursor()}
               onContentChange={() => {
                 const value = input.plainText
                 setStore("prompt", "text", value)
@@ -1952,10 +2010,7 @@ export function Prompt(props: PromptProps) {
                   return
                 }
                 if (!vimNormal()) return
-                const next = Vim.normal(vim(), e, input)
-                if (!next) return
-                e.preventDefault()
-                setVim(next)
+                runVim(e)
               }}
               onSubmit={() => {
                 if (disabled()) return
@@ -2028,6 +2083,12 @@ export function Prompt(props: PromptProps) {
           <box flexDirection="row" flexShrink={0} gap={1} paddingLeft={1}>
             <PromptMetadataRow
               mode={store.mode}
+              vimInsert={
+                config.prompt?.vim === true &&
+                vim().mode === "insert" &&
+                store.mode !== "shell" &&
+                dialog.stack.length === 0
+              }
               agent={agentLabel()}
               auto={local.permission.mode === "autoaccept"}
               model={promptDisplay().modelLabel}

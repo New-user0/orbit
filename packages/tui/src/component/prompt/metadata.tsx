@@ -5,8 +5,13 @@ import { useTheme } from "../../context/theme"
 import { Locale } from "../../util/locale"
 import { stringWidth } from "../../util/string-width"
 
+// Vim's own wording for its insert-mode indicator. Normal mode shows nothing: the block cursor is its cue.
+export const VIM_INSERT_LABEL = "-- INSERT --"
+
 export function PromptMetadataRow(props: {
   mode: "normal" | "shell"
+  /** Show the insert-mode label first in the row. */
+  vimInsert?: boolean
   agent?: string
   auto: boolean
   model: string
@@ -23,7 +28,13 @@ export function PromptMetadataRow(props: {
   const layout = createMemo(() => {
     if (props.mode === "shell") return { agent: props.agent ?? "Shell", model: "" }
     return promptMetadataLayout({
-      width: Math.max(0, dimensions().width - (dimensions().width < 44 ? 9 : 13)),
+      // The label's width (and the gap after it) comes off the budget first, so the model name truncates, not the label.
+      width: Math.max(
+        0,
+        dimensions().width -
+          (dimensions().width < 44 ? 9 : 13) -
+          (props.vimInsert ? stringWidth(VIM_INSERT_LABEL) + 1 : 0),
+      ),
       terminalWidth: dimensions().width,
       agent: props.agent ?? "",
       auto: props.auto,
@@ -35,6 +46,11 @@ export function PromptMetadataRow(props: {
 
   return (
     <box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} minWidth={0}>
+      <Show when={props.vimInsert && props.mode !== "shell"}>
+        <text flexShrink={0} fg={theme.text.muted}>
+          {VIM_INSERT_LABEL}
+        </text>
+      </Show>
       <Show
         when={(props.mode === "shell" || props.agent) && (layout().agent || layout().model)}
         fallback={<box height={1} />}

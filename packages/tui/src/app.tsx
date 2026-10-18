@@ -112,7 +112,7 @@ import { StorageProvider, useStorage } from "./context/storage"
 import { SessionTerminalsProvider } from "./context/session-terminals"
 import { PanelProvider, usePanel } from "./context/panel"
 import { SessionFrame } from "./component/session-frame"
-import { createTuiClipboard } from "./clipboard"
+import { createTuiClipboard, type OwnedClipboardService } from "./clipboard"
 
 registerOrbitSpinner()
 
@@ -212,6 +212,8 @@ export type TuiInput = {
     | undefined
   >
   log?: LogSink
+  /** A test passes its own to see what is written and to supply what is read. */
+  clipboard?: OwnedClipboardService
 }
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
@@ -280,7 +282,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       })
       renderer.setMaxListeners(15)
       const clipboard = yield* Effect.acquireRelease(
-        Effect.sync(() => createTuiClipboard(renderer)),
+        Effect.sync(() => input.clipboard ?? createTuiClipboard(renderer)),
         (clipboard) =>
           Effect.tryPromise(() => clipboard.dispose()).pipe(
             Effect.catch((error) => Effect.sync(() => log("error", "Failed to dispose TUI clipboard", { error }))),
