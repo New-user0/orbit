@@ -120,7 +120,7 @@ export const initialize = Effect.fn("InstructionState.initialize")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   seq: number,
-  values: { readonly initial: Instructions.Values; readonly current: Instructions.Values },
+  seeded: { readonly initial: Instructions.Values; readonly current: Instructions.Values },
 ) {
   yield* db
     .insert(InstructionStateTable)
@@ -128,8 +128,8 @@ export const initialize = Effect.fn("InstructionState.initialize")(function* (
       session_id: sessionID,
       epoch_start: seq,
       through_seq: seq,
-      initial_values: values.initial,
-      current_values: values.current,
+      initial_values: seeded.initial,
+      current_values: seeded.current,
     })
     .onConflictDoNothing()
     .run()

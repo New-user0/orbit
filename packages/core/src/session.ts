@@ -97,7 +97,11 @@ type CompactInput = Parameters<Session.Handle["compact"]>[0] & { sessionID: Sess
 type ForkInput = {
   sessionID: SessionSchema.ID
   before?: SessionMessage.ID
-  /** "exact" repeats the source's latest request; it needs the source's settled tail as the boundary. */
+  /**
+   * "exact" makes the fork's first request repeat the source's latest one; it needs the source's settled tail as the
+   * boundary. The cache key and scratchpad folder repeat too only when the source is not itself a fork or a subagent
+   * child, because those carry their own affinity.
+   */
   prompt?: "default" | "exact"
 }
 
@@ -311,29 +315,25 @@ const layer = Layer.effect(
       }),
       fork: Effect.fn("Session.fork")(function* (input) {
         const parent = yield* result.get(input.sessionID)
-        const boundary = yield* db
-          .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
-          .from(SessionMessageTable)
-          .where(
-            and(
-              eq(SessionMessageTable.session_id, input.sessionID),
-              input.before ? eq(SessionMessageTable.id, input.before) : undefined,
-            ),
-          )
-          .orderBy(desc(SessionMessageTable.seq))
-          .limit(1)
-          .get()
-          .pipe(Effect.orDie)
-        if (!boundary && input.before)
-          return yield* new MessageNotFoundError({
-            sessionID: input.sessionID,
-            messageID: input.before,
-          })
-        if (!boundary) return yield* new ForkEmptyError({ sessionID: input.sessionID })
         const sessionID = SessionSchema.ID.create()
         const inherited = yield* db
           .transaction(() =>
             Effect.gen(function* () {
+              // The boundary and the tail check read one snapshot, so a row that settles in between cannot split them.
+              const boundary = yield* db
+                .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
+                .from(SessionMessageTable)
+                .where(
+                  and(
+                    eq(SessionMessageTable.session_id, input.sessionID),
+                    input.before ? eq(SessionMessageTable.id, input.before) : undefined,
+                  ),
+                )
+                .orderBy(desc(SessionMessageTable.seq))
+                .limit(1)
+                .get()
+                .pipe(Effect.orDie)
+              if (!boundary) return undefined
               const state = yield* InstructionState.values(db, parent.id)
               const exact = input.prompt === "exact"
               // Settled means what the fork copies: unfinished assistants, shells and compactions stay behind.
@@ -347,9 +347,7 @@ const layer = Layer.effect(
                         input.before
                           ? gte(SessionMessageTable.seq, boundary.seq)
                           : gt(SessionMessageTable.seq, boundary.seq),
-                        sql`${SessionMessageTable.type} != 'assistant' or json_extract(${SessionMessageTable.data}, '$.time.completed') is not null`,
-                        sql`${SessionMessageTable.type} != 'shell' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
-                        sql`${SessionMessageTable.type} != 'compaction' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
+                        ...SessionProjector.settledRows,
                       ),
                     )
                     .limit(1)
@@ -357,6 +355,7 @@ const layer = Layer.effect(
                     .pipe(Effect.orDie)
                 : undefined
               return {
+                boundary,
                 notTail: settledAfter !== undefined,
                 instructions: state?.current,
                 baseline: exact ? state?.initial : undefined,
@@ -365,15 +364,20 @@ const layer = Layer.effect(
             }),
           )
           .pipe(Effect.orDie)
+        if (!inherited) {
+          if (input.before)
+            return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.before })
+          return yield* new ForkEmptyError({ sessionID: input.sessionID })
+        }
         if (inherited.notTail)
-          return yield* new ForkBoundaryError({ sessionID: input.sessionID, messageID: boundary.id })
+          return yield* new ForkBoundaryError({ sessionID: input.sessionID, messageID: inherited.boundary.id })
         // The fork adopts the parent's newest instruction values rather than the
         // values in effect at the boundary; copied history may contain frozen
         // instruction-update text the initial baseline already reflects.
         yield* bus.publish(SessionEvent.Forked, {
           sessionID,
           parentID: parent.id,
-          boundary: { type: input.before ? "before" : "through", messageID: boundary.id },
+          boundary: { type: input.before ? "before" : "through", messageID: inherited.boundary.id },
           instructions: inherited.instructions,
           baseline: inherited.baseline,
           instructionEntries: inherited.instructionEntries,
