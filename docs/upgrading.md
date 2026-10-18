@@ -283,8 +283,11 @@ An organization can now put settings in a folder that only an administrator can 
 `managed-settings.json`, then the `managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux,
 `/Library/Application Support/Orbit` on macOS and `%ProgramFiles%\Orbit` on Windows (`C:\Program Files\Orbit` when that
 variable is unset). Windows does not use `%ProgramData%`, because a standard user can create and write under it.
-`ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it), and
-`orb debug paths managed` prints the one in use. Objects merge by key, lists of independent entries (permissions,
+In a run from source, `ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it).
+The released `orb` binary ignores that variable: its build replaces the one place that reads it, so no environment
+can move an organization's policy folder (pinned by `packages/cli/test/managed-define.test.ts`); an application that
+embeds the server picks the folder with `ServerOptions.managed.directory`. `orb debug paths managed` prints the one in
+use. Objects merge by key, lists of independent entries (permissions,
 policies, instructions, plugins, restriction lists) concatenate and lose their repeats, and any other value takes the
 later file's: a `command` argument list, a tiered `cost`, a model, and a whole entry of `mcp.servers`, `lsp`,
 `formatter`, `references` and `commands` (each entry is one definition, so a later `url` never keeps an earlier
@@ -303,8 +306,8 @@ checked, and neither is a key that another variant of the same value knows (`hea
 the managed files by name and each problem it found. The permission rules and restrictions go to the policy service,
 which enforces them (see "Managed permission rules, hook limits and the bypass switch are enforced").
 
-**Affects:** machines that already have a file at one of those paths, and people who run a server with
-`ORBIT_MANAGED_DIR` set.
+**Affects:** machines that already have a file at one of those paths, and people who run a server from source with
+`ORBIT_MANAGED_DIR` set. A released `orb` no longer honours the variable.
 
 **What to do:** Nothing unless your organization manages Orbit.
 

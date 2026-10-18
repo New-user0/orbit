@@ -280,8 +280,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   folders are ones only an administrator (root, or on Windows a member of Administrators) can create or add a file to;
   Windows uses Program Files, not ProgramData, because a standard user can create and write under ProgramData and
   what they put there would run as every other user (owner decision 2026-10-10, "Program Files (Recommended)"; no ACL
-  check is built, and an `ORBIT_MANAGED_DIR` that a user can write is the user's own choice), and no project file can name its location (the override is the server's environment or
-  `ServerOptions.managed.directory`); a config `env` cannot set `ORBIT_MANAGED_DIR` or the other `ORBIT_*` control names
+  check is built), and no project file can name its location (the override is the server's environment, in a run from
+  source only, or `ServerOptions.managed.directory`). The released CLI replaces the one read of `ORBIT_MANAGED_DIR`
+  (`ManagedPath.override`) with `undefined` at build time, so no person's environment can move the policy folder of an
+  organization there (`packages/cli/script/managed-define.ts`, `packages/cli/test/managed-define.test.ts`); a config `env` cannot set `ORBIT_MANAGED_DIR` or the other `ORBIT_*` control names
   for the programs Orbit starts either (`EnvConfig.isReserved`, pinned in `env.test.ts`). A repository file cannot write the `managed` key: `ConfigNormalize` drops it
   with a diagnostic. An empty or relative override is refused with one log line and the per-OS default applies
   (`ManagedPath.directory` and `ManagedSettings`), so the working folder is never read. Each file and each entry decodes

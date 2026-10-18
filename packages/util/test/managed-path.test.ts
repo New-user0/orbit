@@ -42,6 +42,23 @@ describe("ManagedPath.directory", () => {
     )
   })
 
+  test("override reads the variable of the environment it is given", () => {
+    expect(ManagedPath.override({ ORBIT_MANAGED_DIR: "/tmp/managed" })).toBe("/tmp/managed")
+    expect(ManagedPath.override({})).toBeUndefined()
+  })
+
+  test("override reads the process environment when it is given none", () => {
+    const before = process.env.ORBIT_MANAGED_DIR
+    process.env.ORBIT_MANAGED_DIR = "/tmp/from-process"
+    try {
+      expect(ManagedPath.override()).toBe("/tmp/from-process")
+      expect(ManagedPath.override(process.env)).toBe("/tmp/from-process")
+    } finally {
+      if (before === undefined) delete process.env.ORBIT_MANAGED_DIR
+      else process.env.ORBIT_MANAGED_DIR = before
+    }
+  })
+
   test("asking for a missing folder does not create it", () => {
     const missing = "/definitely/not/here/orbit-managed"
     expect(ManagedPath.directory("linux", { ORBIT_MANAGED_DIR: missing })).toBe(missing)
