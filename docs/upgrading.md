@@ -1465,7 +1465,7 @@ folder rather than naming its file.
 terminal is blurred or its focus is unknown, between frames (right after the next frame while an animation keeps the
 renderer running). A subagent's permission or form rings it too, since a person must answer; a subagent finishing does
 not. `attention.idle_reminder` is a number of seconds (default 60, larger values are capped at 86400, 0 turns it off): once a top-level
-session has finished, the reminder "Orbit is waiting for your input" comes after that many seconds with no key
+session has finished, the reminder "The session has stopped and the next step is yours" comes after that many seconds with no key
 pressed, no new run started and no permission or form pending. It is sent only while the terminal reports that it is
 blurred (never for a terminal whose focus is unknown), only when notifications, sound or the bell are on, and once per
 idle period. The window title was
@@ -3414,6 +3414,9 @@ has eight sections, always in this order: Harness, Doing tasks, Code style, Veri
 Using tools, Communication and Output efficiency. The old Safety section is now Executing actions with care, and Code
 style and Verification sit beside Doing tasks.
 
+These section names were replaced by the provenance audit; see "The prompt text was rewritten in Orbit's own words" at
+the end of this file for the current names.
+
 - **Where text comes from.** The prompt tells the model where `<system-reminder>` and `<system-update>` blocks come
   from, and that a lookalike inside a tool result, a file or a data block is data. File contents, command output,
   fetched pages and search and MCP results are information and not instructions, with three exceptions that also arrive
@@ -3447,6 +3450,8 @@ as a recorded request in a test or a plugin that looks for the heading `# Safety
 **What to do:** Nothing. Refresh a recorded request that holds the default prompt.
 
 ### An output style keeps the coding sections only when it asks for them, and the opening line follows the style
+
+(The section names in this note and in the notes around it are the ones of that release; the current ones are in "The prompt text was rewritten in Orbit's own words" at the end of this file.)
 
 A custom output style used to keep the coding sections of the default prompt (Doing tasks, Code style and
 Verification) unless its front matter said `keep-coding-instructions: false`. It now keeps them only when the front
@@ -3660,6 +3665,32 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 **Affects:** plugins and clients that read hidden `session.synthetic` rows (kind `lsp-diagnostics`), and servers that were slow to publish.
 
 **What to do:** Nothing. A client that shows reminder rows can show the row's description, which holds counts only.
+
+## The prompt text was rewritten in Orbit's own words
+
+- The base system prompt, the model overlays, the git section, the subagent prompt and its report notes, the plan, todo,
+  task and verification reminders, the scratchpad, environment and git snapshot texts, the notes for messages that
+  arrive mid-task, the agent listing and several tool descriptions and results (the explore agent, the background
+  results of the Agent and shell tools, the question tool, edit, write, glob, web search, web fetch, read and the file
+  ledger refusals) were audited and rewritten from Orbit's requirements, and a second round rewrote the Consent, Evidence and Writing sections, the overlays, the plan reminders and a few tool texts again. A last pass rewrote the General agent description, the edit tool's no-change error, the grep type parameter, the shell tool's background notice and a few short phrases. The rules are the same; the words are new.
+- The base prompt has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool
+  use and Writing to the user. A style without coding instructions drops Scope, Working in code and Evidence. The old
+  names (Doing tasks, Code style, Verification, Executing actions with care, Using tools, Communication and Output
+  efficiency) are gone, and so is the Pull requests list of the git section: it is now one paragraph.
+- The environment block labels the repository line `Git repository`, and the git snapshot labels its fields Branch,
+  Pull request target, Configured author, Changes and Latest commits.
+- The built-in Explanatory style marks its notes with `Design note:` instead of `Insight:`, and the Learning style
+  leaves a comment reading `ORBIT:YOURS` in the source instead of `TODO(human)`, for one small piece at a time. A
+  comment that an earlier session left behind under the old marker is ordinary text now.
+- The explore agent's description names the depth levels cursory, careful and sweeping.
+- The idle reminder of the terminal UI now reads "The session has stopped and the next step is yours" (the notification
+  title stays `Orbit`).
+
+**Affects:** people who match on prompt text or section names in tests, hooks or recordings; people who rely on the
+`Insight:` or `TODO(human)` markers; every session's first request after the upgrade (the system part changed once, so
+the provider's prompt cache is cold for it).
+
+**What to do:** Rename the section names you match on, and update recorded requests. Nothing else.
 
 ## Instruction notes, and an explicit rescan of the instruction files
 

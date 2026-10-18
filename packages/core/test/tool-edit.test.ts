@@ -509,7 +509,7 @@ describe("EditTool", () => {
                   status: "error",
                   error: {
                     type: "file.unread",
-                    message: "secret.txt has not been read in this session. Read it before changing it.",
+                    message: "secret.txt has no read in this session behind it; read it before changing it.",
                   },
                 })
                 expect(missing).toEqual(matching)
@@ -576,7 +576,7 @@ describe("EditTool", () => {
       name: "identical strings",
       input: { file_path: "matches.txt", old_string: "same", new_string: "same" },
       type: "edit.no-change",
-      message: "No changes to apply: old_string and new_string are identical.",
+      message: "The edit would change nothing, because new_string equals old_string.",
     },
     {
       name: "an empty old_string",
@@ -595,7 +595,7 @@ describe("EditTool", () => {
       input: { file_path: "matches.txt", old_string: "same", new_string: "after" },
       type: "edit.ambiguous",
       message:
-        "Found 2 matches for old_string, but expected exactly one. Add more surrounding context to make old_string unique, or set replace_all to true to replace every occurrence.",
+        "Found 2 matches for old_string, but expected exactly one. Lengthen old_string until it matches one place, or set replace_all to true to change all of them.",
     },
     {
       name: "a file that does not exist",
@@ -614,14 +614,14 @@ describe("EditTool", () => {
       input: { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true },
       ledger: "unread",
       type: "file.unread",
-      message: "matches.txt has not been read in this session. Read it before changing it.",
+      message: "matches.txt has no read in this session behind it; read it before changing it.",
     },
     {
       name: "a file that changed since the session read it",
       input: { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true },
       ledger: "stale",
       type: "file.stale",
-      message: "matches.txt changed since it was last read. Read it again before changing it.",
+      message: "matches.txt changed on disk after your last read, so read it again before changing it.",
     },
   ]
   for (const item of doomed)
@@ -1416,7 +1416,7 @@ describe("EditTool fidelity", () => {
       withTool(tmp.path, makeEditFixture(), (registry) =>
         Effect.gen(function* () {
           const edit = (yield* toolDefinitions(registry)).find((tool) => tool.name === "Edit")
-          expect(edit?.description).toContain("To delete whole lines, set new_string to an empty string")
+          expect(edit?.description).toContain("An empty new_string deletes the matched lines together with their line break")
         }),
       ),
     ),

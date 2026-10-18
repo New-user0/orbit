@@ -146,16 +146,10 @@ function section(directory: string) {
   return [
     "# Scratchpad",
     "",
-    "**ALL temporary files go in this session's scratchpad. Never use the system temp folder unless the user tells you to.**",
+    "This session has a scratch folder:",
     "",
     `\`${directory}\``,
     "",
-    "Use it for:",
-    "- intermediate results of multi-step work",
-    "- throwaway scripts and config files",
-    "- notes and working files for analysis",
-    "- any other file that only matters while the task runs",
-    "",
-    "Subagents of this session share the folder, and none of it lands in the user's project.",
+    "Temporary files belong there instead of in the system temp folder, unless the user says otherwise. Subagents of this session share the folder, and it is not part of the user's project.",
   ].join("\n")
 }

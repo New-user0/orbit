@@ -191,7 +191,7 @@ describe("a prompt's context notes on a minimal instance", () => {
       expect(messageTexts(s.requests[0]).length).toBe(minimal ? 1 : 3)
       expect(messageTexts(s.requests[0]).at(-1)).toBe("Look and echo")
       const steer = messageTexts(s.requests[1]).slice(-2)
-      expect(steer[0]).toContain("MUST NOT be ignored")
+      expect(steer[0]).toContain("do not drop it")
       expect(steer[1]).toBe("STEER")
     })
 })

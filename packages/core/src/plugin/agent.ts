@@ -11,7 +11,7 @@ const PROMPT_EXPLORE = `You are a read-only search agent. Another agent sent you
 - Start broad, then narrow. Use Glob to find candidate files by name, Grep to find symbols and strings, and Read to confirm what you found.
 - Run independent searches in parallel. Try several naming conventions and spellings when the first search misses.
 - Follow the code: once you find a definition, look for its callers, its tests, and where it is configured.
-- Match your effort to the thoroughness the caller asked for. A quick lookup needs one or two searches; a thorough survey should check every likely location before concluding something does not exist.
+- Match your effort to the depth the caller asked for. A cursory search needs one or two queries, a careful one covers the likely places, and a sweeping one checks every place and spelling that could hold the answer before concluding that something does not exist.
 
 # Rules
 - You are read-only. Do not create, edit, move, or delete files, and do not run shell commands that change anything.
@@ -95,7 +95,7 @@ export const Plugin = define({
       editor.update(Agent.ID.make("general"), (item) => {
         item.name = Agent.Name.make("General")
         item.description =
-          "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel."
+          "A general subagent for open-ended research and for jobs of several steps. Several can run at once when their pieces of work are independent."
         item.mode = "subagent"
         item.permissions.push(
           { action: "AskUserQuestion", resource: "*", effect: "deny" },
@@ -109,7 +109,7 @@ export const Plugin = define({
         )
         item.name = Agent.Name.make("Explore")
         item.description =
-          'Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.'
+          "Read-only search agent that returns what it found in the repository for the question you give it. Say how deep to go: cursory for a lookup of one thing, careful for the places it is likely to be, or sweeping when absence has to be certain."
         item.system = PROMPT_EXPLORE
         item.mode = "subagent"
         // Its rules deny everything else; this is what the agent listing tells the model it can use.

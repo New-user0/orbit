@@ -209,19 +209,16 @@ describe("the baseline section", () => {
             [
               "# Scratchpad",
               "",
-              "**ALL temporary files go in this session's scratchpad. Never use the system temp folder unless the user tells you to.**",
+              "This session has a scratch folder:",
               "",
               `\`${folder}\``,
               "",
-              "Use it for:",
-              "- intermediate results of multi-step work",
-              "- throwaway scripts and config files",
-              "- notes and working files for analysis",
-              "- any other file that only matters while the task runs",
-              "",
-              "Subagents of this session share the folder, and none of it lands in the user's project.",
+              "Temporary files belong there instead of in the system temp folder, unless the user says otherwise. Subagents of this session share the folder, and it is not part of the user's project.",
             ].join("\n"),
           )
+          // The retired wording, as data: the emphasised rule, the use-case list and the closing sentence.
+          for (const retired of ["ALL temporary files", "Use it for:", "throwaway scripts", "none of it lands"])
+            expect([retired, initial.text.includes(retired)]).toEqual([retired, false])
           // A second read, as a preview or a generation makes, and the path itself: still nothing on the disk.
           yield* Instructions.read(source)
           scratchpad.path(lineage({ id: "ses_root" }))

@@ -204,7 +204,7 @@ describe("attention in Mini", () => {
       const done = { type: "session.execution.succeeded", data: { sessionID: "ses_1" } }
       harness.lifecycle.observe?.(done)
       await Bun.sleep(300)
-      expect(harness.notified.map((item) => item.message)).toEqual(["Session done", "Orbit is waiting for your input"])
+      expect(harness.notified.map((item) => item.message)).toEqual(["Session done", "The session has stopped and the next step is yours"])
 
       harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
       harness.lifecycle.observe?.(done)
@@ -212,7 +212,7 @@ describe("attention in Mini", () => {
       await Bun.sleep(300)
       expect(harness.notified.map((item) => item.message)).toEqual([
         "Session done",
-        "Orbit is waiting for your input",
+        "The session has stopped and the next step is yours",
         "Session done",
       ])
     } finally {

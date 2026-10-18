@@ -36,7 +36,7 @@ const render = (agents: ReadonlyArray<Summary>) =>
     "These are the agent types the Agent and Workflow tools can start:",
     ...agents.map(line),
     "",
-    "When several agents can work independently, start them together by putting multiple calls in a single message.",
+    "Agents whose work does not depend on each other are started in the same response.",
   ].join("\n")
 
 const update = (previous: ReadonlyArray<Summary>, current: ReadonlyArray<Summary>) => {

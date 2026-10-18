@@ -181,14 +181,14 @@ export function getEditorRangeLabel(selection: EditorSelection["ranges"][number]
 function formatEditorContext(selection: EditorSelection) {
   const selected = selection.ranges.filter(hasEditorRangeSelection)
   if (selected.length === 0)
-    return `<system-reminder>Note: The user opened the file "${selection.filePath}". This may or may not be relevant to the current task.</system-reminder>\n`
+    return `<system-reminder>Editor state, given as background and not as a request: the person has "${selection.filePath}" open. It may have nothing to do with the task.</system-reminder>\n`
 
   const ranges = selected.map((range, index) => {
     const prefix = selected.length > 1 ? `Selection ${index + 1}: ` : ""
-    return `Note: The user selected ${prefix}${getEditorRangeLabel(range)} from "${selection.filePath}". \`\`\`${range.text}\`\`\`\n\n`
+    return `Editor state: ${prefix}${getEditorRangeLabel(range)} of "${selection.filePath}" is highlighted. \`\`\`${range.text}\`\`\`\n\n`
   })
 
-  return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
+  return `<system-reminder>${ranges.join("\n")} This is background context and not a request; it may have nothing to do with the task.</system-reminder>\n`
 }
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[]) {

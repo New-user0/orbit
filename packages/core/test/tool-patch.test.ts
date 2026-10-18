@@ -1613,7 +1613,7 @@ describe("PatchTool", () => {
                     status: "error",
                     error: {
                       type: "file.unread",
-                      message: "ledger.txt has not been read in this session. Read it before changing it.",
+                      message: "ledger.txt has no read in this session behind it; read it before changing it.",
                     },
                   })
 
@@ -1626,7 +1626,7 @@ describe("PatchTool", () => {
                     status: "error",
                     error: {
                       type: "file.stale",
-                      message: "ledger.txt changed since it was last read. Read it again before changing it.",
+                      message: "ledger.txt changed on disk after your last read, so read it again before changing it.",
                     },
                   })
                   expect(assertions).toEqual([])

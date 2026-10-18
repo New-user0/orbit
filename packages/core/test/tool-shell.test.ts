@@ -2586,7 +2586,7 @@ describe("ShellTool", () => {
               },
               {
                 type: "text",
-                text: "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+                text: "The command keeps running on its own, and its output comes back to you in a message when it ends. Waiting on it by sleeping, re-reading or searching its output file is polling; poll only when the user requests it, even if the next step needs the result. One look at the output so far is fine when it lets you do something useful now. Meanwhile do the work that does not depend on the result; if there is none, close the turn, and the session picks up again when the command ends.",
               },
             ])
             expect((yield* shell.list()).map((info) => info.id)).toContain(id)
@@ -2852,7 +2852,7 @@ describe("ShellTool", () => {
             })
             expect(settled.content?.[1]).toEqual({
               type: "text",
-              text: "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+              text: "The command keeps running on its own, and its output comes back to you in a message when it ends. Waiting on it by sleeping, re-reading or searching its output file is polling; poll only when the user requests it, even if the next step needs the result. One look at the output so far is fine when it lets you do something useful now. Meanwhile do the work that does not depend on the result; if there is none, close the turn, and the session picks up again when the command ends.",
             })
             yield* Effect.sleep(Duration.millis(100))
             expect((yield* shell.get(id)).status).toBe("running")

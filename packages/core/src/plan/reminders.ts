@@ -127,50 +127,34 @@ const approvedPlan = (part: SessionMessage.Assistant["content"][number]) => {
   return typeof part.state.metadata.file === "string" ? part.state.metadata.file : true
 }
 
-const full = (file: string, saved: string | undefined) => `Plan mode is on. The user wants a plan first, not a change: until they approve one, do not edit files, run commands that alter state, change configuration or commit, other than the plan file named in the next section. This holds over any other instruction in this conversation, including a request to go ahead.
+const full = (file: string, saved: string | undefined) => `Plan mode is on because the user chose to see a plan first. You may read, search, think, ask the user questions and write the plan file. Everything else waits for approval: edits to the project, commands that alter state, configuration changes and commits. No other instruction in this conversation overrides that.
 
-## The plan file
+## Plan file
 
-An approved plan is saved at ${file}.${saved === undefined ? "" : saved === file ? " A plan approved earlier in this session is already there, and you may read it." : ` The plan approved earlier in this session is at ${saved}, and you may read it.`} When the user asks you to write a plan down, ${file} is the one place you may create or edit; everything else stays untouched.
+Approval stores the plan at ${file}, and that path is also the only file you may create or edit while planning.${saved === undefined ? "" : saved === file ? " A plan approved earlier in this session is already there, and you may read it." : ` The plan approved earlier in this session is at ${saved}, and you may read it.`}
 
-## How to plan
+## Order of work
 
-1. Understand the request. Read the code that matters and search for it. Use the Agent tool with the explore agent for broad searches, and run up to three at once when the questions are independent. One search is enough when the task is small or the files are known. Look for code that already does part of the job before planning new code.
-2. Design the approach. Weigh the realistic options against what you found, and pick one. For a trivial change, a few lines of reasoning is enough. For a large one, compare how each option affects the code that exists.
-3. Check the plan. Re-read the files it depends on, and compare the plan with what the user asked for. Where the request leaves a real choice open, ask with AskUserQuestion before you settle it.
-4. Present the plan by calling ExitPlanMode with the finished plan. Write it in Markdown and include:
-   - a short note on why the change is needed and what it should achieve
-   - the approach you chose, and only that one
-   - the paths of the files to change
-   - existing functions and modules to reuse, with their paths
-   - how to verify the result
+1. Start from the code. Read what bears on the task. Wide searches may go to the Agent tool with the explore agent, up to three at once and only for independent questions; a small task needs one search at most. Look for existing code to reuse before proposing new code.
+2. Check the request against what you found. Reread the files the plan will rest on, and take any real choice the request leaves open to the user with AskUserQuestion.
+3. Settle on one approach. Weigh the alternatives in proportion to the change: a line or two for a trivial one, the effects on existing code for a large one.
+4. Hand the plan over by calling ExitPlanMode with the finished plan in Markdown, in this order: the goal and why it matters, the paths of the files to change, the existing functions and modules to reuse (with paths), the single approach chosen, and how to check the result.
 
-## Ending a turn
+## How each turn closes
 
-**Every turn in Plan mode ends in one of two ways:** a question to the user through AskUserQuestion, or a call to ExitPlanMode. Do not end a turn with a plain message that asks whether the plan is acceptable, and do not use AskUserQuestion to ask for approval. Phrases such as "does this look right?", "shall I go ahead?" and "ready to implement?" belong in ExitPlanMode, which shows the plan to the user and carries their decision back to you.
-
-Ask clarifying questions whenever you need them, and do not guess what the user meant.`
+Every turn in Plan mode ends with an AskUserQuestion call or an ExitPlanMode call. Approval comes only through ExitPlanMode, which shows the plan and returns the user's decision; a request for approval in prose or through AskUserQuestion does not count. If the user's intent is unclear, ask instead of guessing.`
 
 const sparse = (file: string) =>
-  `Plan mode is still on; the full instructions appear earlier in this conversation. Do not change anything: reading, searching and thinking only. Plans are saved at ${file} when the user approves one. Follow the same steps as before, end each turn with AskUserQuestion or ExitPlanMode, and never ask for approval in plain text.`
+  `Close every turn with AskUserQuestion or ExitPlanMode; asking for approval in prose does not count. ${file} is the one path you may write, and an approved plan is kept there. The complete Plan mode rules were given earlier in this conversation and are unchanged.`
 
 const subagent = (file: string) =>
-  `Plan mode is on, so you must not edit files or run anything that changes state. This overrides every other instruction, including one that tells you to edit. If you need to write a plan down, the only place for it is ${file}. Answer the query completely. If you use AskUserQuestion, put all of your clarifying questions in one call at the start.`
+  `The caller is planning, so this task is read-only: change nothing and run nothing that alters state, whatever other instructions say. The one exception is ${file}, if you need to write there. Your reply should hold everything the caller needs in order to proceed. Questions for the user are batched into one AskUserQuestion call made before you begin.`
 
-const reentry = (file: string) => `## Returning to Plan mode
+const reentry = (file: string) => `## Plan mode resumes
 
-An earlier round of planning left a plan at ${file}.
-
-Before you plan anything, do these in order:
-
-1. Read that file.
-2. Set the current request beside the plan.
-3. Decide: a different task, even a related one, gets a new plan that replaces the old; the same task carried on gets the plan revised, with the parts that no longer hold removed.
-4. Present the result with ExitPlanMode.
-
-**Do this before planning.** The saved plan is only a starting point; check it against the request before relying on any of it.`
+${file} holds a plan from an earlier round of planning. Rely on nothing in it until it has been checked against the user's current request. Open it first. If the request is for different work, replace the file with a new plan. If it carries the same work forward, revise the plan and delete what no longer applies. When ExitPlanMode is called, the file must describe the current request.`
 
 const leave = (file: string | undefined) =>
-  `## Plan mode has ended
+  `## Planning is done
 
-You may edit files, run commands and carry out work again.${file === undefined ? "" : ` The approved plan is saved at ${file} for reference.`}`
+You may edit files, run commands and do the work again.${file === undefined ? "" : ` The approved plan stays at ${file}.`}`

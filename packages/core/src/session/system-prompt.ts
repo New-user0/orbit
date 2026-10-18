@@ -25,7 +25,7 @@ import SUBAGENT_NOTES from "./runner/prompt/subagent-notes.txt"
  *
  * What changes during a session arrives in the message history, which is why `system[0]` can stay the same.
  *
- * The template names no tool. `${ORBIT_TOOL_GUIDANCE}` sits at the end of "Using tools", and `render` fills it with the
+ * The template names no tool. `${ORBIT_TOOL_GUIDANCE}` sits at the end of "Tool use", and `render` fills it with the
  * `GUIDANCE` lines of the tools the request offers, in `GUIDANCE` order and not in the order of the tool list, so
  * `system[0]` is the same string for the same agent, model and tool set. Orbit caches per conversation, so the guidance
  * can live inside `system[0]`. An agent with a system prompt of its own gets guidance only where its text holds the
@@ -47,20 +47,19 @@ import SUBAGENT_NOTES from "./runner/prompt/subagent-notes.txt"
 /** The top-level headings of the base template, in order. No line inside a section may start with `# `. */
 export const SECTIONS = [
   "Harness",
-  "Doing tasks",
-  "Code style",
-  "Verification",
-  "Executing actions with care",
-  "Using tools",
-  "Communication",
-  "Output efficiency",
+  "Consent",
+  "Scope",
+  "Working in code",
+  "Evidence",
+  "Tool use",
+  "Writing to the user",
 ] as const
 
 /** The sections about writing code, which an output style can drop. */
 export const CODING_SECTIONS = [
-  "Doing tasks",
-  "Code style",
-  "Verification",
+  "Scope",
+  "Working in code",
+  "Evidence",
 ] as const satisfies readonly (typeof SECTIONS)[number][]
 
 /** The template's opening paragraph, before the first heading. An output style replaces it with a line of its own. */
@@ -120,7 +119,7 @@ export const GUIDANCE = [
   {
     tool: "Bash",
     lines: [
-      "- Bash is for what only a shell can do, such as running programs, builds and system commands. If a dedicated tool might cover the job, choose that tool first.",
+      "- Bash runs programs, builds and system commands. Work on files goes through the file tools.",
       "- Do not chain shell commands with separators like `echo \"====\";` or `printf '---'`; the output becomes noisy in a way that makes the user's side of the conversation worse.",
       "- Quote paths that contain spaces. Prefer absolute paths over changing directories.",
       "- Run long-lived processes such as dev servers and watchers with `run_in_background`, then check on them instead of waiting for them to exit.",
@@ -165,8 +164,8 @@ export const GUIDANCE = [
   {
     tool: "Edit",
     lines: [
-      "- Use Edit, rather than `sed` or `awk` through Bash, for targeted changes to existing text files. It replaces the exact text in `old_string` with `new_string`, and the two must differ. By default `old_string` must occur exactly once. If it occurs several times, include more surrounding context to make it unique, or set `replace_all` to true to replace every occurrence.",
-      "- Read a file before you edit it, and read it again if it may have changed since. Copy `old_string` from the Read output without the line-number prefix.",
+      "- Use Edit, rather than `sed` or `awk` through Bash, for targeted changes to existing text files. `old_string` has to match exactly one place unless `replace_all` is true; when it matches several, lengthen the snippet or set `replace_all`. `new_string` must differ from `old_string`.",
+      "- Read a file before editing it, and again if it may have changed since. Text copied from Read output keeps its indentation but not the line-number prefix.",
     ],
   },
   {
@@ -178,13 +177,13 @@ export const GUIDANCE = [
   {
     tool: "TodoWrite",
     lines: [
-      "- Use TodoWrite for work with three or more steps. Mark one item in progress at a time, and mark each item done as soon as it is done instead of in batches.",
+      "- Keep a TodoWrite list for work of three or more steps, with one item in progress at a time; an item is marked done when it is done.",
     ],
   },
   {
     tool: "TaskCreate",
     lines: [
-      "- For long work with dependent steps, use TaskCreate, TaskUpdate and TaskList instead of TodoWrite: record dependencies with `blockedBy` and start a task only when the tasks it depends on are completed. Mark each task completed as soon as it is done, not in batches.",
+      "- For long work with dependent steps, track it with TaskCreate, TaskUpdate and TaskList in place of TodoWrite. Record dependencies with `blockedBy`, start a task only once what it depends on is completed, and complete each task when it finishes.",
     ],
   },
   {
@@ -196,24 +195,24 @@ export const GUIDANCE = [
   {
     tool: "AskUserQuestion",
     lines: [
-      "- Use AskUserQuestion when you have investigated and still cannot proceed, or when you cannot tell why the user refused a call. Offer concrete options and list the one you recommend first.",
-      "- In plan mode, use AskUserQuestion to settle requirements and choices, never to ask whether the plan is ready.",
+      "- AskUserQuestion is for a blocker that investigation did not remove, or a refusal whose reason is unclear. Give concrete options, the recommended one first.",
+      "- In plan mode it settles requirements and choices; approval of the plan is never asked through it.",
     ],
   },
   {
     tool: "Skill",
     lines: [
-      "- When a skill in the skill list matches the task, load it with Skill by its ID before you start the work. A `/name` typed by the user that names a skill is a request to load it.",
-      "- Important: use only IDs from the skill list or ones the user named. Never guess an ID, and never call Skill for a built-in command. A loaded skill's instructions apply to the task it was loaded for.",
+      "- Load a skill from the skill list with Skill, by its ID, before starting work it matches. A `/name` the user types that names a skill asks for that skill.",
+      "- Skill takes only IDs from the list or ones the user named, and it is not used for built-in commands. What a loaded skill says applies to the task it was loaded for.",
     ],
   },
   {
     tool: "Agent",
     lines: [
-      "- Reach for Agent when the task fits an agent's description and is independent of what you are doing: research that can run alongside you, or work whose bulky output would flood this conversation. Keep the habit modest, and once you hand a search to an agent, leave that search to it.",
-      "- An agent begins with a blank slate, so write its brief as for a newcomer: what you are after and why, what you have already established or excluded, whether it should edit code or only investigate, and what shape of answer you want back. Start independent agents together in a single response.",
-      "- Look something up yourself when you already know where to look, such as one file or symbol; an agent earns its cost only for open-ended exploration that would need more than about three searches.",
-      "- The user does not see what an agent returns, so tell them what matters from it. Before you report delegated implementation as done, check it yourself: run the test or read the diff.",
+      "- Agent suits work that matches an agent's description and is independent of your own: research running beside you, or output too large for this conversation. A search handed to an agent is not repeated by you.",
+      "- A new agent knows nothing of this conversation, so its brief carries the goal and its purpose, what has been established or excluded so far, whether it may edit or only investigate, and the form of answer wanted. Independent agents are started together in one response.",
+      "- A known location is looked up directly. Agent is for open-ended searching that would take more than about three queries.",
+      "- An agent's result never reaches the user directly, so pass on what matters. Delegated implementation is checked, by a test run or a read of the diff, before it is reported done.",
     ],
   },
   {

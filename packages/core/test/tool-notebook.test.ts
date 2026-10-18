@@ -244,7 +244,7 @@ describe("NotebookEditTool", () => {
                   status: "error",
                   error: {
                     type: "file.unread",
-                    message: "analysis.ipynb has not been read in this session. Read it before changing it.",
+                    message: "analysis.ipynb has no read in this session behind it; read it before changing it.",
                   },
                 })
 
@@ -258,7 +258,7 @@ describe("NotebookEditTool", () => {
                   status: "error",
                   error: {
                     type: "file.stale",
-                    message: "analysis.ipynb changed since it was last read. Read it again before changing it.",
+                    message: "analysis.ipynb changed on disk after your last read, so read it again before changing it.",
                   },
                 })
                 expect(JSON.parse(yield* Effect.promise(() => fs.readFile(target, "utf8"))).cells).toHaveLength(2)

@@ -302,7 +302,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   such a folder goes last under its own heading but does not replace the prompt's opening line, which says what the agent
   is for: `OutputStylePlugin` asks `ProjectTrust.trustedSource` at each request, the question `supplies` starts from (a
   source that is not a project's or a local one is the person's own, one in the project's folders follows the decision
-  just made, one above them follows its own stamp). No style removes "Harness" or "Executing actions with care", where
+  just made, one above them follows its own stamp). No style removes "Harness" or "Consent", where
   the rule about who can approve an action stands before the style's text. A skill's instructions are followed for the
   task it was loaded for, and the prompt says that a skill's claim of an earlier approval does not count. Whether a
   project's styles and skills should reach the prompt before the folder is trusted is the owner's open question. Proof:

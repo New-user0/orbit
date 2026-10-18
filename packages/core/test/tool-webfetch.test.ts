@@ -1830,11 +1830,11 @@ describe("WebFetchTool verbatim hosts", () => {
       yield* run(registry, { url: "https://other.example/long", prompt: "q" })
       const unlisted = lastQuery().system
 
-      expect(listed).toContain("sample code")
+      expect(listed).toContain("code samples")
       expect(listed).not.toContain("125 characters")
       expect(unlisted).toContain("125 characters")
-      expect(unlisted).not.toContain("sample code")
-      expect(unlisted).toContain("legality")
+      expect(unlisted).not.toContain("code samples")
+      expect(unlisted).toContain("is legal")
     }),
   )
 })

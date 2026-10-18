@@ -91,7 +91,7 @@ export const insertions = (input: Given): ReadonlyArray<Insertion> => {
 }
 
 const todoText = (listed: boolean) =>
-  `The todo list has not been touched for a while. Multi-step work is easier to follow with a list: if this is such work, record progress with TodoWrite, and fix or clear entries that have gone stale. Skip it when it does not apply and carry on.${listed ? " The list as it stands follows." : ""}`
+  `The todo list has sat unchanged for several steps and may no longer match the work. If the work has several steps, bring it up to date with TodoWrite and drop entries that went stale.${listed ? " The list as it stands follows." : ""}`
 
 const taskText = (listed: boolean) =>
-  `The task list has not been touched for a while. Multi-step work is easier to follow with a list: if this is such work, add tasks with TaskCreate and move them with TaskUpdate, in_progress when you begin one and completed when it is done. Fix or remove tasks that have gone stale. Skip it when it does not apply and carry on.${listed ? " The tasks as they stand follow." : ""}`
+  `The task list has sat unchanged for several steps and may no longer match the work. If the work has several steps, record new tasks with TaskCreate and update existing ones with TaskUpdate: in_progress when a task starts, completed when it ends. Remove tasks that went stale.${listed ? " The tasks as they stand follow." : ""}`

@@ -75,7 +75,7 @@ export function createAttentionEvents(input: {
       reminder = undefined
       void input.attention.notify({
         title: "Orbit",
-        message: "Orbit is waiting for your input",
+        message: "The session has stopped and the next step is yours",
         notification: { when: "blurred" },
         sound: { name: "default", when: "blurred" },
         bell: { when: "blurred" },

@@ -44,13 +44,13 @@ export function environment(input: EnvironmentInput) {
     ...(input.worktree === undefined
       ? []
       : [
-          `  Main checkout (off limits): ${input.worktree}. This directory is a linked git worktree, so STAY IN IT: NEVER cd out to the main checkout.`,
+          `  Main checkout (off limits): ${input.worktree}. This directory is a linked git worktree; run commands and make edits here, not in the main checkout.`,
         ]),
     `  Workspace root folder: ${input.root}`,
-    `  Is directory a git repo: ${input.git ? "yes" : "no"}`,
+    `  Git repository: ${input.git ? "yes" : "no"}`,
     `  Platform: ${platform === input.platform ? platform : `${platform} (${input.platform})`}`,
     windows && POSIX_SHELLS.has(input.shell)
-      ? `  Shell: ${input.shell} (Windows host, but its syntax is Unix: forward slashes in paths, and /dev/null is the null device, not NUL)`
+      ? `  Shell: ${input.shell} (runs on Windows but takes POSIX syntax)`
       : `  Shell: ${input.shell}`,
     // On Windows `os.type()` says only `Windows_NT`, and on Linux `os.version()` is the kernel's build banner.
     `  OS version: ${windows ? input.os.version || input.os.type : input.os.type} ${input.os.release}`,
@@ -85,7 +85,7 @@ const layerOf = (options: Options) =>
                   ),
                   render: {
                     initial: (language) =>
-                      `Preferred reply language: ${language}. Write your replies to the person, including explanations and comments addressed to them, in that language. Leave code, commands, file paths and technical terms untranslated.`,
+                      `Preferred reply language: ${language}. Write prose for the person in that language; code, commands, paths, identifiers and technical terms stay as they are.`,
                     changed: (_previous, language) =>
                       `The person's preferred reply language is now ${language}. From here on, write replies to the person in it; the same exceptions for code and technical terms apply.`,
                     removed: () =>

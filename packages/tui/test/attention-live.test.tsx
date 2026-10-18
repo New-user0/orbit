@@ -87,7 +87,7 @@ test("the idle reminder's options ring only a blurred terminal", async () => {
   // notifications.test.ts pins that the plugin sends exactly these options.
   const options = {
     title: "Orbit",
-    message: "Orbit is waiting for your input",
+    message: "The session has stopped and the next step is yours",
     notification: { when: "blurred" as const },
     sound: { name: "default" as const, when: "blurred" as const },
     bell: { when: "blurred" as const },

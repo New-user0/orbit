@@ -37,7 +37,7 @@ export const toModelContent = (entries: EncodedOutput, truncated = false) => {
   if (truncated)
     lines.push(
       "",
-      `(Results are truncated: showing first ${entries.length} results. Consider using a more specific path or pattern.)`,
+      `(The list stops at ${entries.length} results. Search a narrower folder or use a tighter pattern to see the rest.)`,
     )
   return lines.join("\n")
 }
@@ -109,7 +109,7 @@ export const Plugin = {
                     orElse: () =>
                       Effect.fail(
                         new ToolFailure({
-                          message: `Search timed out after ${FileSystem.DEFAULT_SEARCH_TIMEOUT_MS / 1_000} seconds. Consider using a more specific path or pattern.`,
+                          message: `The search ran out of time after ${FileSystem.DEFAULT_SEARCH_TIMEOUT_MS / 1_000} seconds. Search a narrower folder or use a tighter pattern.`,
                         }),
                       ),
                   }),

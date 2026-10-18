@@ -171,7 +171,7 @@ describe("toLLMMessages", () => {
         content: [
           {
             type: "text",
-            text: "<system-reminder>\nThe person would like the agent named below to be used. Launch it with the Agent tool and give it the context it needs.\n</system-reminder>\n\nrequested agent:\n```\nbuild\n```",
+            text: "<system-reminder>\nThe person picked the agent named below with an at-mention. Start it through the Agent tool, with a brief that stands on its own.\n</system-reminder>\n\nrequested agent:\n```\nbuild\n```",
           },
           { type: "text", text: "Inspect this image" },
           { type: "media", media: Media.base64("aGVsbG8=", "image/png"), filename: "hello.png" },

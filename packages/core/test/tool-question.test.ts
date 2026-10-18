@@ -187,7 +187,7 @@ describe("QuestionTool", () => {
         content: [
           {
             type: "text",
-            text: 'User has answered your questions: "What should happen?"="Build", "Which environment?"="Dev", "Anything else?"="Unanswered". You can now continue with the user\'s answers in mind.',
+            text: 'The user\'s answers: "What should happen?"="Build", "Which environment?"="Dev", "Anything else?"="Unanswered". Carry on with the work using them.',
           },
         ],
         metadata: { answers: [["Build"], ["Dev"], []] },
@@ -429,7 +429,7 @@ describe("QuestionTool", () => {
       expect(chosen.indexOf("WIDE-SKETCH")).toBeGreaterThan(chosen.indexOf('"Layout?"="Wide"'))
       expect(QuestionTool.toModelContent([previewed], [["Something else"]])).not.toContain("WIDE-SKETCH")
       expect(QuestionTool.toModelContent([previewed], [["Narrow"]])).toBe(
-        'User has answered your questions: "Layout?"="Narrow". You can now continue with the user\'s answers in mind.',
+        'The user\'s answers: "Layout?"="Narrow". Carry on with the work using them.',
       )
       expect(QuestionTool.toModelContent([{ ...previewed, multiple: true }], [["Wide"]])).not.toContain("WIDE-SKETCH")
       expect(QuestionTool.toModelContent([previewed], [["Wide", "Narrow"]])).not.toContain("WIDE-SKETCH")
@@ -440,7 +440,7 @@ describe("QuestionTool", () => {
     Effect.gen(function* () {
       const registry = yield* Tool.Service
       expect(yield* toolTraits(registry, "AskUserQuestion")).toMatchObject({ maxResultChars: 100000 })
-      for (const needle of ["1 to 4", "2 to 4", "multiple", "Type your own answer", "ExitPlanMode"])
+      for (const needle of ["one to four", "Two to four", "multiple", "Type your own answer", "ExitPlanMode"])
         expect(QuestionTool.description).toContain(needle)
       expect(QuestionTool.description).not.toMatch(/claude|anthropic/i)
       // No Orbit client draws previews yet, so the model must not be told the user sees them.

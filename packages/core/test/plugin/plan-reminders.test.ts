@@ -24,15 +24,15 @@ const give = (messages: ReadonlyArray<SessionMessage.Info>, agent = "plan", pare
 })
 
 const kind = (text: string) =>
-  text.includes("## How to plan")
+  text.includes("## Order of work")
     ? "full"
-    : text.includes("still on; the full instructions")
+    : text.includes("Close every turn with AskUserQuestion or ExitPlanMode; asking")
       ? "sparse"
-      : text.includes("If you need to write a plan down")
+      : text.includes("The caller is planning, so this task is read-only")
         ? "subagent"
-        : text.includes("Returning to Plan mode")
+        : text.includes("## Plan mode resumes")
           ? "reentry"
-          : text.includes("Plan mode has ended")
+          : text.includes("## Planning is done")
             ? "leave"
             : "other"
 
@@ -104,7 +104,7 @@ describe("plan reminders", () => {
     const full = result.at(-1)
     expect(reentry?.text).toContain(recorded)
     expect(reentry?.text).not.toContain(file)
-    expect(full?.text).toContain(`saved at ${file}.`)
+    expect(full?.text).toContain(`stores the plan at ${file}`)
     expect(full?.text).toContain(`earlier in this session is at ${recorded}`)
   })
 
@@ -125,8 +125,8 @@ describe("plan reminders", () => {
 
   test("puts the plan file part right after the opening paragraph and points to it there", () => {
     const text = PlanReminders.insertions(give([History.user("plan it")]), home)[0].text
-    expect(text.indexOf("## The plan file")).toBeLessThan(text.indexOf("## How to plan"))
-    expect(text.split("\n")[0]).toContain("other than the plan file named in the next section")
+    expect(text.indexOf("## Plan file")).toBeLessThan(text.indexOf("## Order of work"))
+    expect(text.split("\n")[0]).toContain("the user chose to see a plan first")
   })
 
   test.each([
@@ -276,6 +276,7 @@ Run it`],
     const result = PlanReminders.insertions(give(messages), home).map((insertion) => kind(insertion.text))
     expect(result).toEqual(["full", "leave", "reentry", "full"])
     expect(PlanReminders.insertions(give(messages), home).at(-2)?.text).toContain(file)
+    expect(PlanReminders.insertions(give(messages), home).at(-2)?.text).toContain("the file must describe the current request")
   })
 
   test("gives no re-entry note when the earlier plan was never approved", () => {
@@ -294,8 +295,51 @@ Run it`],
     ])
   })
 
+  // The provenance audit rewrote every plan text. Each row is a phrase of the old wording, kept here as data, that none of
+  // the five texts may carry again; restoring any old line fails its row.
+  test.each([
+    ["the opening chain", /do not edit files, run commands that alter state|including a request to go ahead/],
+    ["the section names", /## The plan file|## How to plan|## Ending a turn|Returning to Plan mode|Plan mode has ended/],
+    ["the explore step", /Understand the request\.|One search is enough when the task is small/],
+    ["the sample approval questions", /does this look right|shall I go ahead|ready to implement/i],
+    ["the bold turn-ending rule", /\*\*Every turn in Plan mode/],
+    ["the re-entry close", /only a starting point|\*\*Do this before planning/],
+    ["the sparse text", /still on; the full instructions|still on, and the full instructions/],
+    ["the first rewrite of the opening", /The user wants a plan before any change|apart from writing the plan file|a request to go ahead included/],
+    ["the first rewrite of the section names", /## Where the plan lives|## Working order|Back in Plan mode|Plan mode is over/],
+    ["the first rewrite of the re-entry", /even a related one|write a new plan that replaces the old/],
+    ["the first rewrite of the subagent text", /If you must write a plan down|Answer the query in full/],
+  ])("keeps the retired wording out of %s", (_, pattern) => {
+    const recorded = path.join(home, ".orbit", "plan", "ses_parent.md")
+    const approved = History.tool("ExitPlanMode", { plan: "p" }, { metadata: { approved: true, file: recorded } })
+    const returning = [
+      History.user("plan it"),
+      History.assistant("plan", approved),
+      History.switched("build", "plan"),
+      History.user("go"),
+      History.assistant("build", History.text()),
+      ...turns(5, "build"),
+      History.switched("plan", "build"),
+      History.user("again"),
+    ]
+    const left = [History.user("plan it"), History.assistant("plan", approved), History.switched("build", "plan"), History.user("go")]
+    const texts = [
+      ...PlanReminders.insertions(give([History.user("plan it")]), home),
+      ...PlanReminders.insertions(give(turns(6)), home),
+      ...PlanReminders.insertions(give(turns(6), "plan", Session.ID.make("ses_parent")), home),
+      ...PlanReminders.insertions(give(returning), home),
+      ...PlanReminders.insertions(give(left, "build"), home),
+    ].map((insertion) => insertion.text)
+    expect(new Set(texts.map(kind))).toEqual(new Set(["full", "sparse", "subagent", "reentry", "leave"]))
+    texts.forEach((text) => expect(text).not.toMatch(pattern))
+  })
+
   test("gives a child session the subagent text at full and sparse positions", () => {
     expect(where(turns(6), "plan", Session.ID.make("ses_parent"))).toEqual(["0:subagent", "6:subagent"])
+    const subagent = PlanReminders.insertions(give(turns(6), "plan", Session.ID.make("ses_parent")), home).find(
+      (insertion) => kind(insertion.text) === "subagent",
+    )
+    expect(subagent?.text).toContain(`The one exception is ${file}`)
   })
 
   test("counts a stored enter row of the old plugin as the first reminder and its leave row as the leave", () => {

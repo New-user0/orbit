@@ -59,7 +59,7 @@ export function budget(
 }
 
 const BACKGROUND_INSTRUCTION =
-  "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
+  "The command keeps running on its own, and its output comes back to you in a message when it ends. Waiting on it by sleeping, re-reading or searching its output file is polling; poll only when the user requests it, even if the next step needs the result. One look at the output so far is fine when it lets you do something useful now. Meanwhile do the work that does not depend on the result; if there is none, close the turn, and the session picks up again when the command ends."
 const duration = (ms: number) => {
   const minutes = Number((ms / 60_000).toFixed(2))
   return minutes < 1 ? `${ms} ms` : `${ms} ms (${minutes} ${minutes === 1 ? "minute" : "minutes"})`
@@ -73,9 +73,9 @@ const description = (shell: string | undefined, limit: ReturnType<typeof limits>
     "When output is large, the full result is saved to a file and a truncated preview is returned.",
     "Rely on automatic truncation unless filtering the output is more useful.",
     `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a foreground command waits ${duration(limit.timeout)}.`,
-    "A foreground command still running at its timeout is not stopped: it moves to the background and you are notified when it finishes. A command made only of sleeps is stopped instead.",
+    "A foreground command still running at its timeout is not stopped: it moves to the background and a message reports back when it ends. A command made only of sleeps is stopped instead.",
     "Background commands have no timeout unless one is given.",
-    "Background commands return immediately, and you will be notified when they complete.",
+    "Background commands return at once and report back in a message when they end.",
   ].join(" ")
 
 export const Input = Schema.Struct({
@@ -94,7 +94,7 @@ export const Input = Schema.Struct({
   }),
   run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion. To wait for a server to become ready, use TaskWatch; to stop the command, use TaskStop.",
+      "Run the command detached and return at once, which suits dev servers and long builds. No trailing ampersand is needed. A notification reports completion, so do not poll. TaskWatch waits for a server to become ready, and TaskStop ends the command.",
   }),
 })
 
