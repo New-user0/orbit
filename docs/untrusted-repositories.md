@@ -1987,6 +1987,10 @@ fixes it or asks.
 
 The program-wide register of every follow-up, these gaps included, with each one's carrier and status, is [follow-ups.md](follow-ups.md).
 
+- **A drive letter mapped to a share is not told from a local drive by an import.** A trusted project's `@Z:/x.md` on a
+  mapped network drive is read, where it was always refused before the outside rule, and an untrusted repository's one is
+  still resolved and statted before `allow` refuses it (9b order). Unmapped `\\server` and `//server` spellings are
+  refused before any disk access. No task carries it yet; it sits with the link-share follow-up above.
 - **Fingerprints stop short of three things.** The skill and agent directories of other products' roots
   are not digested, so a hook added to a skill there is not asked about, and no consumer of those hooks exists yet:
   hooks-21 must digest them before it runs one. The modules that a plugin's entry file imports are not digested

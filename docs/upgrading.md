@@ -3354,8 +3354,10 @@ the session runs in. The highest-priority config that sets a replacement decides
   whose trust would load it. Granting or revoking trust rescans the files. Before this change such an import was always
   skipped.
 - The project's own decision covers the files in the project. A file above the project, or one that a trusted file
-  imports from outside, needs its own folder trusted before it imports anything from outside, and a home folder or a
-  filesystem root never does. A file under the home folder in a session started below it stays bounded to the project.
+  imports from outside, needs the folder that owns it trusted before it imports anything from outside. When the
+  repository is the home folder itself (or a filesystem root), a session started below it imports only from the folder
+  it started in, even with home trusted for the session. A file that the home folder or a root holds never imports
+  from outside.
 - Network paths are never read, trusted or not, and files that the model's reads load later never import from outside.
 
 **Affects:** people who trust a project whose instruction files import files outside it.

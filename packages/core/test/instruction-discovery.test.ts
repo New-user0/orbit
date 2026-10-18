@@ -2063,6 +2063,86 @@ describe("ConfigInstructionPlugin.Plugin lets a trusted holder import from outsi
     }),
   )
 
+  it.live("still keeps a file in the home folder from reaching out when the home folder itself is trusted for the session", () =>
+    Effect.gen(function* () {
+      const { where } = yield* layout
+      const homeFile = path.join(where.home, "AGENTS.md")
+      const notes = path.join(where.home, "notes.md")
+      yield* write(homeFile, "HOME FILE\n@./notes.md")
+      yield* write(notes, "NOTES MARKER")
+      yield* Effect.gen(function* () {
+        // A grant of home lasts in a shared server until it restarts; it is the case the persistent rule is for.
+        yield* grantFolder(where.home)
+        yield* grantProject
+        const trust = yield* WorkspaceTrust.Service
+        expect((yield* trust.status(where.home)).trusted).toBe(true)
+        const discovery = yield* start()
+        expect(placesOf(yield* discovery.list())).toContain(homeFile)
+        expect(placesOf(yield* discovery.list())).not.toContain(notes)
+        expect(yield* warned(discovery)).toEqual([{ path: homeFile, target: notes, directory: undefined }])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("holds a file by the nearest folder with a repository marker above it, not by the folder it sits in", () =>
+    Effect.gen(function* () {
+      const { where } = yield* layout
+      const team = path.join(where.home, "team")
+      const docs = path.join(team, "docs")
+      const rules = path.join(docs, "rules.md")
+      const key = path.join(where.home, "key.txt")
+      yield* Effect.promise(() => fs.mkdir(path.join(team, ".git"), { recursive: true }))
+      yield* write(rules, "RULES MARKER\n@~/key.txt")
+      yield* write(key, "KEY MARKER")
+      yield* write(where.rootFile, "@~/team/docs/rules.md")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        yield* rescanAfter(grantProject)
+        // The control: the folder the file sits in is not its owner, so its own grant opens nothing.
+        yield* rescanAfter(grantFolder(docs))
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, rules])
+        expect(yield* warned(discovery)).toEqual([{ path: rules, target: key, directory: team }])
+        yield* rescanAfter(grantFolder(team))
+        expect(placesOf(yield* discovery.list())).toEqual([where.rootFile, rules, key])
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(untrusted(where))
+    }),
+  )
+
+  it.live("lets a linked worktree follow its repository's decision and not its own folder's", () =>
+    Effect.gen(function* () {
+      const { where, tilde } = yield* layout
+      const worktree = path.join(where.home, "code", "wt")
+      yield* write(path.join(worktree, "AGENTS.md"), "@~/x.md")
+      const linked = Layer.succeed(
+        Location.Service,
+        Location.Service.of({
+          ...location({ directory: AbsolutePath.make(worktree) }),
+          project: {
+            id: location({ directory: AbsolutePath.make(worktree) }).project.id,
+            directory: AbsolutePath.make(worktree),
+            canonical: AbsolutePath.make(where.repo),
+          },
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        yield* rescanAfter(grantFolder(worktree))
+        expect(placesOf(yield* discovery.list())).not.toContain(tilde)
+        expect(yield* warned(discovery)).toEqual([
+          { path: path.join(worktree, "AGENTS.md"), target: tilde, directory: where.repo },
+        ])
+        yield* rescanAfter(grantProject)
+        expect(placesOf(yield* discovery.list())).toContain(tilde)
+        expect(yield* warned(discovery)).toEqual([])
+      }).pipe(
+        Effect.provide(
+          instructionLayer({ config: where.global, home: where.home, locationServiceLayer: linked, trusted: false }),
+        ),
+      )
+    }),
+  )
+
   it.live("refuses a network path in a trusted project without touching it, and still loads a plain outside import", () =>
     Effect.gen(function* () {
       const { where, outside } = yield* layout
