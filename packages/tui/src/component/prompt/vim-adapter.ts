@@ -75,5 +75,11 @@ export function apply(input: Input, snap: Vim.Snapshot, result: Vim.Result) {
     return count + (removed ? 1 : 0) + (edit.insert ? 1 : 0)
   }, 0)
   input.cursorOffset = toOffset(Vim.apply(snap.text, result.edits), result.cursor, method)
+  // Setting the cursor clears a selection, so the selection goes last. A visual result has no edits.
+  if (result.selection)
+    input.setSelection(
+      toOffset(snap.text, result.selection.start, method),
+      toOffset(snap.text, result.selection.end, method),
+    )
   return steps
 }
