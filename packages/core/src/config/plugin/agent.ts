@@ -136,7 +136,13 @@ export const Plugin = define({
               // A `*` in the allow list means every tool, which is the same as no list. In the deny list it means every tool.
               if (item.tools !== undefined && item.tools.includes("*")) delete tools.allow
               else if (item.tools !== undefined) tools.allow = [...item.tools]
-              if (item.disallowed_tools !== undefined) tools.deny = [...item.disallowed_tools]
+              // A folder that is not trusted may only add to a deny list that is there: replacing it could clear the
+              // person's own denies. A trusted document replaces it, as it does the rest of the entry.
+              if (item.disallowed_tools !== undefined)
+                tools.deny =
+                  document.trusted === false
+                    ? [...new Set([...(tools.deny ?? []), ...item.disallowed_tools])]
+                    : [...item.disallowed_tools]
               agent.tools = tools
             }
             if (item.permission_mode !== undefined) agent.permissionMode = item.permission_mode

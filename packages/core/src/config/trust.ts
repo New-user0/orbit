@@ -317,7 +317,8 @@ export const classification = {
     effort: withhold("providers"),
     // The allow list chooses the tools and, through the one that starts agents, other agents.
     tools: withhold("permissions"),
-    // It only removes tools, as a deny rule does.
+    // It only removes tools, as a deny rule does. The agents plugin adds an untrusted list to the existing one instead
+    // of replacing it, so it cannot clear the person's own denies.
     disallowed_tools: inert,
     permission_mode: withhold("permissions"),
     // An MCP server is a program to start or a server of the person to reach.
