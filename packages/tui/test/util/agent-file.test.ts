@@ -137,6 +137,27 @@ test("a .orbit that is a link out of the project is refused too, before anything
   expect(await readdir(elsewhere.dir)).toEqual([])
 })
 
+test.each([
+  ["a link to a file that does not exist", false],
+  ["a link to a file that exists", true],
+])("%s at the agent's own path is refused and nothing is written outside", async (_name, target) => {
+  await using tmp = await folder()
+  await using elsewhere = await folder()
+  const project = path.join(tmp.dir, "project")
+  await mkdir(path.join(project, ".orbit", "agents"), { recursive: true })
+  const outside = path.join(elsewhere.dir, "planted.md")
+  if (target) await writeFile(outside, "theirs")
+  const made = await symlink(outside, path.join(project, ".orbit", "agents", "reviewer.md"), "file").then(
+    () => true,
+    () => false,
+  )
+  if (!made) return console.log("skipped: this machine cannot make a file link")
+  const result = await create({ configDirectory: path.join(project, ".orbit"), root: project, draft: draft() })
+  expect(result.type).toBe("escapes")
+  expect(await readdir(elsewhere.dir)).toEqual(target ? ["planted.md"] : [])
+  if (target) expect(await readFile(outside, "utf8")).toBe("theirs")
+})
+
 test("the user's own config directory has no project to stay in", async () => {
   await using tmp = await folder()
   const config = path.join(tmp.dir, "config")

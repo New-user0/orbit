@@ -1,4 +1,4 @@
-import { mkdir, open, realpath } from "node:fs/promises"
+import { lstat, mkdir, open, realpath } from "node:fs/promises"
 import path from "node:path"
 import { ConfigAgent } from "@orbit/schema/config/agent"
 import type { Permission } from "@orbit/schema/permission"
@@ -101,7 +101,7 @@ export type Created =
   | { type: "failed"; file: string; reason: string }
 
 /**
- * Writes the agent at `<configDirectory>/agents/<name>.md` and never over a file that is there. For a project the folder
+ * Writes the agent at `<configDirectory>/agents/<name>.md` and never over a file or link that is there. For a project the folder
  * it lands in must really be inside the project: the nearest folder of the path that exists is resolved on disk, and a
  * `.orbit` or `.orbit/agents` that is a link out of the project is refused before anything is made or written. The check
  * runs again once the folder exists. `root` is the project's folder; a user's own config directory has none.
@@ -124,7 +124,16 @@ export async function create(input: { configDirectory: string; root?: string; dr
   )
   if (made) return { type: "failed", file, reason: made.message }
   if (!(await inside())) return { type: "escapes", file }
-  // `wx` fails on anything at the path, a link included, so a file is never overwritten or followed.
+  // Anything at the path refuses the write, a dangling link included: on Windows `wx` creates the target of a link that
+  // leads nowhere, so the entry is looked at first instead of leaving it to the open. A link is reported as one that
+  // escapes, whatever it points to.
+  const entry = await lstat(file).then(
+    (found) => found,
+    () => undefined,
+  )
+  if (entry?.isSymbolicLink()) return { type: "escapes", file }
+  if (entry) return { type: "exists", file }
+  // `wx` still refuses a file that appeared since the look.
   const handle = await open(file, "wx").then(
     (opened) => opened,
     (error: NodeJS.ErrnoException) => error,

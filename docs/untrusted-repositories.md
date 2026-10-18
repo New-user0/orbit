@@ -722,9 +722,10 @@ every other extension):
   machine. The name passes `ConfigAgent.isName` and the 3-to-50 rule, so it is one segment; every value is written as a
   JSON string (a valid YAML scalar), so no text of the person's adds a key or ends the front matter. Before anything is
   made, for a project, the nearest existing folder of the target is resolved on disk and must lie inside the real
-  project root (`FSUtil.contains` on two real paths), and again once the folder exists; the file is opened exclusive
-  (`wx`), so nothing is overwritten and a link at the path is not followed. Errors block the save. Proof:
-  `test/util/agent-file.test.ts` (a junction at `.orbit/agents` and at `.orbit`, the existing file, the hostile
+  project root (`FSUtil.contains` on two real paths), and again once the folder exists; the file's own path is looked at
+  with `lstat` first (any entry refuses the write, and a link, a dangling one included, is `escapes`, because Windows
+  creates the target of a dangling link under `wx`), then opened exclusive (`wx`), so nothing is overwritten. Errors block the save. Proof:
+  `test/util/agent-file.test.ts` (a junction at `.orbit/agents` and at `.orbit`, a file link at the path to a missing and to an existing outside file, the existing file, the hostile
   descriptions, every refused name), `test/component/dialog-agent-create.test.tsx`.
 - `config.sources.changed` takes at most 100 paths of at most 4096 characters, keeps those that are absolute, exist and
   whose real path lies inside the real path of a user, project or local config directory entry, and passes them to
