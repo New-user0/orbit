@@ -271,7 +271,10 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
   }
   if (copiedSeq !== undefined) yield* Bus.reserveSequence(db, event.data.sessionID, copiedSeq)
   if (event.data.instructions)
-    yield* InstructionState.initialize(db, event.data.sessionID, event.durable.seq, event.data.instructions)
+    yield* InstructionState.initialize(db, event.data.sessionID, event.durable.seq, {
+      initial: event.data.baseline ?? event.data.instructions,
+      current: event.data.instructions,
+    })
 })
 
 /** An output-escalation notice keeps naming the parent's attempt unless it is remapped to that attempt's copy. */

@@ -2033,6 +2033,194 @@ describe("SessionRunnerLLM", () => {
     ).toMatchObject({ current_values: { "test/context": Instructions.hash("Latest context") } })
   })
 
+  // An exact fork of a parent whose step is still running a tool, after an instruction change in the epoch.
+  const exactSetup = function* (s: Scenario) {
+    yield* s.runPrompt("First")
+    s.systemBaseline = "Changed context"
+    yield* s.admit("Second")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "working" }),
+      TestLLM.text("Parent done", "text-parent"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    return { tools, run, parentRequest: s.requests.at(-1)! }
+  }
+  // Copied messages get their own IDs; everything else about them must match.
+  const withoutIDs = (messages: readonly LLMRequest["messages"][number][]) =>
+    messages.map((message) => ({ ...message, id: undefined }))
+  const forkEvents = (s: Scenario, id: Session.ID, type: string) =>
+    s.db
+      .select()
+      .from(EventTable)
+      .where(and(eq(EventTable.aggregate_id, id), eq(EventTable.type, type)))
+      .all()
+
+  scenario("an exact fork repeats the parent's latest request while a tool call runs", function* (s) {
+    const { tools, run, parentRequest } = yield* exactSetup(s)
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const forkedAt = s.requests.length
+    yield* s.llm.push(TestLLM.text("Child done", "text-child"))
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    const child = s.requests[forkedAt]!
+
+    expect(child.system).toEqual(parentRequest.system)
+    expect(child.system.map((part) => part.text).at(-1)).toBe("Initial context")
+    expect(child.tools).toEqual(parentRequest.tools)
+    expect(child.promptCacheKey).toBe(parentRequest.promptCacheKey)
+    expect(withoutIDs(child.messages.slice(0, parentRequest.messages.length))).toEqual(
+      withoutIDs(parentRequest.messages),
+    )
+    expect(userTexts(child)).toEqual([...userTexts(parentRequest), "Forked"])
+    // The change is stated once, by the copied update; the child adds no update of its own.
+    expect(systemTexts(child).filter((text) => text.includes("Changed context"))).toHaveLength(1)
+    expect(yield* forkEvents(s, forked.id, "session.instructions.updated.2")).toEqual([])
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("an exact fork seeds the parent's epoch baseline and a default fork the current values", function* (s) {
+    const { tools, run } = yield* exactSetup(s)
+    const exact = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const standard = yield* s.session.fork({ sessionID })
+    const state = (id: Session.ID) =>
+      s.db.select().from(InstructionStateTable).where(eq(InstructionStateTable.session_id, id)).get()
+
+    expect(yield* state(exact.id)).toMatchObject({
+      initial_values: { "test/context": Instructions.hash("Initial context") },
+      current_values: { "test/context": Instructions.hash("Changed context") },
+    })
+    expect(yield* state(standard.id)).toMatchObject({
+      initial_values: { "test/context": Instructions.hash("Changed context") },
+      current_values: { "test/context": Instructions.hash("Changed context") },
+    })
+    const forked = (id: Session.ID) => forkEvents(s, id, "session.forked.2")
+    expect((yield* forked(exact.id))[0]?.data).toHaveProperty("baseline")
+    expect((yield* forked(standard.id))[0]?.data).not.toHaveProperty("baseline")
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("exact forks of the same tail share the same first request", function* (s) {
+    const { tools, run } = yield* exactSetup(s)
+    const first = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const second = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const start = s.requests.length
+    yield* s.llm.push(TestLLM.text("One", "text-one"), TestLLM.text("Two", "text-two"))
+    yield* s.session.prompt({ sessionID: first.id, text: "Forked", resume: false })
+    yield* s.session.resume(first.id)
+    yield* s.session.prompt({ sessionID: second.id, text: "Forked", resume: false })
+    yield* s.session.resume(second.id)
+
+    expect(s.requests[start + 1]?.system).toEqual(s.requests[start]?.system)
+    expect(s.requests[start + 1]?.tools).toEqual(s.requests[start]?.tools)
+    expect(s.requests[start + 1]?.promptCacheKey).toBe(s.requests[start]?.promptCacheKey)
+    expect(withoutIDs(s.requests[start + 1]!.messages)).toEqual(withoutIDs(s.requests[start]!.messages))
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("an exact fork must start at the settled tail", function* (s) {
+    yield* s.runPrompt("First")
+    s.systemBaseline = "Changed context"
+    const second = yield* s.runPrompt("Second")
+    const sessionsBefore = (yield* s.db.select({ id: SessionTable.id }).from(SessionTable).all()).length
+    const eventsBefore = (yield* s.db.select().from(EventTable).all()).length
+
+    expect(
+      yield* s.session.fork({ sessionID, before: second.id, prompt: "exact" }).pipe(Effect.flip),
+    ).toMatchObject({ _tag: "Session.ForkBoundaryError", messageID: second.id })
+    expect((yield* s.db.select({ id: SessionTable.id }).from(SessionTable).all()).length).toBe(sessionsBefore)
+    expect((yield* s.db.select().from(EventTable).all()).length).toBe(eventsBefore)
+
+    // The same boundary is fine for a default fork, and the tail is fine for an exact one.
+    yield* s.session.fork({ sessionID, before: second.id })
+    yield* s.session.fork({ sessionID, prompt: "exact" })
+  })
+
+  scenario("an exact fork while the tool runs accepts the running assistant as its boundary", function* (s) {
+    const { tools, run } = yield* exactSetup(s)
+    const running = (yield* s.session.messages({ sessionID })).findLast((message) => message.type === "assistant")!
+    const forked = yield* s.session.fork({ sessionID, before: running.id, prompt: "exact" })
+    expect((yield* s.session.messages({ sessionID: forked.id })).some((message) => message.type === "assistant" && message.id === running.id)).toBe(false)
+    const earlier = (yield* s.session.messages({ sessionID })).find((message) => message.type === "user")!
+    expect(yield* s.session.fork({ sessionID, before: earlier.id, prompt: "exact" }).pipe(Effect.flip)).toMatchObject({
+      _tag: "Session.ForkBoundaryError",
+    })
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("an exact fork of a parent that never ran a step takes no baseline and syncs on its first step", function* (s) {
+    yield* s.runPrompt("Only")
+    yield* s.db.delete(InstructionStateTable).where(eq(InstructionStateTable.session_id, sessionID)).run()
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const recorded = (yield* forkEvents(s, forked.id, "session.forked.2"))[0]?.data
+    expect(recorded).not.toHaveProperty("baseline")
+    expect(recorded).not.toHaveProperty("instructions")
+
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    expect(s.requests.at(-1)?.system.map((part) => part.text).at(-1)).toBe("Initial context")
+  })
+
+  scenario("an exact fork still records a real change made after the fork", function* (s) {
+    const { tools, run } = yield* exactSetup(s)
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    s.systemBaseline = "Edited again"
+    yield* s.llm.push(TestLLM.text("Child done", "text-child"))
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+
+    expect(yield* forkEvents(s, forked.id, "session.instructions.updated.2")).toHaveLength(1)
+    expect(systemTexts(s.requests.at(-1)!)).toContain("Edited again")
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("replaying an exact fork reproduces its baseline", function* (s) {
+    const { tools, run } = yield* exactSetup(s)
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const state = () =>
+      s.db.select().from(InstructionStateTable).where(eq(InstructionStateTable.session_id, forked.id)).get()
+    const before = yield* state()
+    const recorded = yield* s.db
+      .select()
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, forked.id))
+      .orderBy(asc(EventTable.seq))
+      .all()
+    yield* s.bus.remove(forked.id)
+    yield* s.db.delete(SessionTable).where(eq(SessionTable.id, forked.id)).run()
+    yield* Effect.forEach(
+      recorded.map((event) => ({
+        id: event.id,
+        created: event.created,
+        aggregateID: event.aggregate_id,
+        seq: event.seq,
+        type: event.type,
+        data: event.data,
+      })),
+      (event) => s.bus.replay(event),
+      { discard: true },
+    )
+    expect(yield* state()).toMatchObject({
+      initial_values: before?.initial_values,
+      current_values: before?.current_values,
+    })
+    expect(before?.initial_values).not.toEqual(before?.current_values)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
   scenario("keeps nested forks self-contained", function* (s) {
     yield* s.runPrompt("First")
     s.systemBaseline = "Changed context"

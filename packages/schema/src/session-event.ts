@@ -213,6 +213,11 @@ export const Forked = Event.durable({
     ...Base,
     parentID: SessionID,
     boundary: SessionFork.Boundary,
+    /**
+     * The values in force when the source session's current instruction epoch began. Present only on exact forks, so
+     * the fork renders the same baseline as its source; absent means the baseline is `instructions`.
+     */
+    baseline: Instruction.Values.pipe(optional),
     instructions: Instruction.Values.pipe(optional),
     instructionEntries: InstructionEntry.Snapshot.pipe(optional),
   },

@@ -4,7 +4,7 @@ export * from "./session/schema.js"
 import { Effect, Layer, Schema, Context, Stream } from "effect"
 import { LLMClient } from "@orbit/ai"
 import { ListAnchor } from "@orbit/schema/session"
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, gt, gte, sql } from "drizzle-orm"
 import { Project } from "./project.js"
 import { Model } from "@orbit/schema/model"
 import { Location } from "./location.js"
@@ -30,6 +30,7 @@ import {
   BusyError,
   CompactionConflictError,
   ForkEmptyError,
+  ForkBoundaryError,
   InboxConflictError,
   MessageDecodeError,
   MessageNotFoundError,
@@ -96,6 +97,8 @@ type CompactInput = Parameters<Session.Handle["compact"]>[0] & { sessionID: Sess
 type ForkInput = {
   sessionID: SessionSchema.ID
   before?: SessionMessage.ID
+  /** "exact" repeats the source's latest request; it needs the source's settled tail as the boundary. */
+  prompt?: "default" | "exact"
 }
 
 export {
@@ -123,7 +126,7 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly fork: (
     input: ForkInput,
-  ) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | ForkEmptyError>
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | ForkEmptyError | ForkBoundaryError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly environment: (input: {
     readonly sessionID: SessionSchema.ID
@@ -309,7 +312,7 @@ const layer = Layer.effect(
       fork: Effect.fn("Session.fork")(function* (input) {
         const parent = yield* result.get(input.sessionID)
         const boundary = yield* db
-          .select({ id: SessionMessageTable.id })
+          .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
           .from(SessionMessageTable)
           .where(
             and(
@@ -330,12 +333,40 @@ const layer = Layer.effect(
         const sessionID = SessionSchema.ID.create()
         const inherited = yield* db
           .transaction(() =>
-            Effect.all({
-              instructions: InstructionState.current(db, parent.id),
-              instructionEntries: InstructionEntry.snapshot(db, parent.id),
+            Effect.gen(function* () {
+              const state = yield* InstructionState.values(db, parent.id)
+              const exact = input.prompt === "exact"
+              // Settled means what the fork copies: unfinished assistants, shells and compactions stay behind.
+              const settledAfter = exact
+                ? yield* db
+                    .select({ id: SessionMessageTable.id })
+                    .from(SessionMessageTable)
+                    .where(
+                      and(
+                        eq(SessionMessageTable.session_id, parent.id),
+                        input.before
+                          ? gte(SessionMessageTable.seq, boundary.seq)
+                          : gt(SessionMessageTable.seq, boundary.seq),
+                        sql`${SessionMessageTable.type} != 'assistant' or json_extract(${SessionMessageTable.data}, '$.time.completed') is not null`,
+                        sql`${SessionMessageTable.type} != 'shell' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
+                        sql`${SessionMessageTable.type} != 'compaction' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
+                      ),
+                    )
+                    .limit(1)
+                    .get()
+                    .pipe(Effect.orDie)
+                : undefined
+              return {
+                notTail: settledAfter !== undefined,
+                instructions: state?.current,
+                baseline: exact ? state?.initial : undefined,
+                instructionEntries: yield* InstructionEntry.snapshot(db, parent.id),
+              }
             }),
           )
           .pipe(Effect.orDie)
+        if (inherited.notTail)
+          return yield* new ForkBoundaryError({ sessionID: input.sessionID, messageID: boundary.id })
         // The fork adopts the parent's newest instruction values rather than the
         // values in effect at the boundary; copied history may contain frozen
         // instruction-update text the initial baseline already reflects.
@@ -343,7 +374,9 @@ const layer = Layer.effect(
           sessionID,
           parentID: parent.id,
           boundary: { type: input.before ? "before" : "through", messageID: boundary.id },
-          ...inherited,
+          instructions: inherited.instructions,
+          baseline: inherited.baseline,
+          instructionEntries: inherited.instructionEntries,
         })
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),

@@ -226,6 +226,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           return {
             data: yield* session.fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before }).pipe(
+              // Only exact forks can fail this way, and the payload cannot ask for one.
+              Effect.catchTag("Session.ForkBoundaryError", Effect.die),
               Effect.catchTag("Session.NotFoundError", missingSession),
               Effect.catchTag("Session.MessageNotFoundError", missingMessage),
               Effect.catchTag(

@@ -3467,3 +3467,13 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 **Affects:** plugins that read the `Agent` or `Workflow` tool description for the agent list, and people with many skills.
 
 **What to do:** Read the agent list from the conversation context instead of the tool description; shorten skill descriptions that matter early.
+
+## Exact forks carry the parent baseline
+
+- `Session.fork` in core takes `prompt: "exact"`. The fork then renders the same epoch baseline as its parent (its first model request repeats the parent system parts, tools, cache key and settled history), because `session.forked` carries the parent epoch-start values as an optional `baseline`. A default fork is unchanged and writes no `baseline`.
+- An exact fork must start at the parent settled tail; any other boundary fails with `Session.ForkBoundaryError` and publishes nothing. A source that really changed since the parent last request still produces a normal update in the child.
+- The HTTP fork payload and the generated clients do not change. `InstructionState.initialize` now takes `{ initial, current }` instead of one value set.
+
+**Affects:** code that calls `InstructionState.initialize` or reads `session.forked` events.
+
+**What to do:** Pass `{ initial, current }` to `initialize`; treat a missing `baseline` as the same as `instructions`.

@@ -2009,6 +2009,7 @@ export type SessionForked = {
     sessionID: string
     parentID: string
     boundary: SessionForkBoundary
+    baseline?: { [x: string]: string }
     instructions?: { [x: string]: string }
     instructionEntries?: InstructionEntrySnapshot
   }
