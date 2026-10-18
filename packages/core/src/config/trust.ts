@@ -249,12 +249,15 @@ export const classification = {
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,
-    // Text in the prompt, like `system_prompt`: it cannot run code, spend money or reach the network.
+    // Text in the prompt: it cannot run code, spend money or reach the network.
     language: inert,
-    // Text in the system prompt, like `agents.*.system`, which a repository can already set; the core rules stay after it.
+    // Left whole because the reader takes the three prompt keys only from the person's own and the organization's
+    // documents (`PromptConfigPlugin.promptKeys`), as it does `compatibility`; withholding them here would list
+    // `settings` in the trust prompt for keys that a grant never applies.
     system_prompt: inert,
     append_system_prompt: inert,
-    // It reads a file of this machine into every request, which a repository must not be able to ask for.
+    // It reads a file of this machine into every request, which a repository must not be able to ask for. Its reader
+    // also ignores repository scopes, so this is a second gate.
     system_prompt_file: withhold("settings"),
     update: withhold("network"),
     share: withhold("network"),
@@ -268,8 +271,8 @@ export const classification = {
     formatter: withhold("formatter"),
     lsp: withhold("lsp"),
     media: inert,
-    // The clone's own instruction files already steer commit format, and the value is an indented literal block.
-    attribution: inert,
+    // A project's value outranks the person's own, an empty one included, so it waits until the folder is trusted.
+    attribution: withhold("settings"),
     sandbox: withhold("sandbox"),
     // A budget: a tiny timeout turns every command into a background job whose completion wakes the session for a paid
     // request, and the atomic value would replace the user's own.

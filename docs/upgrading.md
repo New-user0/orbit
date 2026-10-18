@@ -3449,7 +3449,7 @@ as a recorded request in a test or a plugin that looks for the heading `# Safety
 ### A web page question is answered with its own instructions, not the session's prompt
 
 WebFetch asks a second model about a fetched page with instructions of its own (answer from the page alone, short
-quotes, no lyrics). Before, a model overlay (for example the OpenAI prompt), the prompt keys `system_prompt` and
+quotes, no lyrics). Before, a model overlay (a model-family prompt), the prompt keys `system_prompt` and
 `append_system_prompt`, or the subagent template could replace those instructions, so a subagent such as Explore, or a
 session on an overlay model, sent the page question under the wrong prompt. The request now keeps its own text in every
 one of those cases. Pinned by `packages/core/test/plugin/side-query-prompt.test.ts`.
@@ -3504,8 +3504,8 @@ session after the upgrade misses the prompt cache once, because the system promp
 
 The new `attribution` key sets either text. Each field is decided by the highest-priority config that sets it, so your
 own `commit: ""` and a project's `pr` combine. An empty string turns that one off and tells the agent to add none. The
-value may hold several lines, such as several trailers. A project's config can set it too, and a project's value takes
-precedence over your own, your `""` included.
+value may hold several lines, such as several trailers. A project's or local config can set it too: its value applies once the folder is trusted, and then takes precedence
+over your own, your `""` included. Until then your own value, or the default, applies.
 
 ```json
 { "attribution": { "commit": "Co-authored-by: Name <name@example.com>", "pr": "" } }
@@ -3526,13 +3526,14 @@ Three keys change the system prompt of the main thread of a session (a session w
   there are none.
 - `system_prompt_file` is the same with the text read from a UTF-8 file at each request, so an edit applies from the next
   request. The path is absolute, starts with `~/`, or is relative to the folder of the config file that names it. A file
-  that cannot be read keeps the default prompt and logs one warning. A path on a network share is refused. The key is not
-  read from a project or local config until the folder is trusted.
+  that cannot be read keeps the default prompt and logs one warning. A path on a network share is refused.
 - `append_system_prompt` adds text after the base and the git section, also on top of an agent's own prompt.
 
 An agent with a prompt of its own keeps it and gets no replacement; the appended text still applies on the main thread.
 Subagent child sessions get neither. A config with no file resolves a relative `system_prompt_file` against the folder
-the session runs in. The highest-priority config that sets a replacement decides, and an empty string counts as unset.
+the session runs in. The three keys are read only from your own config (the global and home folders), the `ORBIT_CONFIG`
+file and `ORBIT_CONFIG_CONTENT`, and managed settings. A project's or local config never sets them, trusted or not. The
+highest-priority of those that sets a replacement decides, and an empty string counts as unset.
 
 **Affects:** people who set these keys, and SDK callers.
 

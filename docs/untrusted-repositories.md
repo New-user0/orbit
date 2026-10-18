@@ -105,9 +105,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the spelling as written and as normalized), before any file system call, and a path that reaches a share through a
   link (`LinkShare.blocked`; pinned by the link test in `test/plugin/prompt-config.test.ts`). The same predicate answers
   for the trust fingerprint, `{file:}` reach and `ConfigTrust.inside`, and `test/link-share.test.ts` pins each NT
-  spelling against `of`, `ofSync`, `blocked` and `scan` with no file system call. `system_prompt` and `append_system_prompt`
-  are text and stay inert, like `agents.*.system`; the core rules follow a replacement. A drive letter mapped to a share
-  is not detected (follow-up). Proof: `test/plugin/prompt-config.test.ts`, `test/config/trust.test.ts`,
+  spelling against `of`, `ofSync`, `blocked` and `scan` with no file system call. `PromptConfigPlugin.promptKeys` reads
+  `system_prompt`, `append_system_prompt` and `system_prompt_file` only from documents of scope user (or no scope), flag
+  and managed, so a project, local or remote document never supplies them, trusted or not, and nothing ranks against
+  the person's value. `system_prompt` and `append_system_prompt` stay `inert` in `ConfigTrust` for that reason, as
+  `compatibility` does: withholding them would list `settings` in the trust prompt for keys a grant never applies. The
+  core rules follow a replacement. A drive letter mapped to a share is not detected (follow-up). Proof: the scope table
+  in `test/plugin/prompt-config.test.ts` ("system prompt keys by scope"), `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
 - `hg` in `Project.resolve` (`hg log`) and in the Mercurial VCS provider (`hg branch`, `status`, `diff`, which the
   terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
@@ -309,7 +313,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/plugin/output-style.test.ts` (six places a style can come from, three spellings of the key, before a grant, after
   one and after a revoke, the clone's claim of approval as the body), `test/project-trust.test.ts` (`trustedSource`),
   `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval).
-- A folder's `attribution` text (class 8, prompt form): it reaches `system[0]` in the git section as an indented literal
+- A folder's `attribution` text (class 8, prompt form): `ConfigTrust` withholds it whole (kind `settings`) from an
+  untrusted project or local document, because a project's field outranks the person's, `""` included; once the folder
+  is trusted `resolveAttribution` ranks the scopes as before. Proof: the attribution rows of
+  `test/config/config-trust.test.ts` and `test/config/trust.test.ts`. It reaches `system[0]` in the git section as an indented literal
   block, line for line, split on every line separator (`\n`, `\r\n`, `\r`, U+2028, U+2029), so no line can open a
   top-level section that an output style would cut at. Proof: `test/plugin/prompt-config.test.ts` (the separator table)
   and `test/session-system-prompt.test.ts`.

@@ -205,9 +205,17 @@ function field(entries: readonly Entry[], key: "commit" | "pr") {
   return document?.info.attribution?.[key] ?? DEFAULT_ATTRIBUTION[key]
 }
 
-/** The replacement and appended text the config asks for: the highest-priority document that sets each decides. */
+/**
+ * The replacement and appended text the config asks for. Only the person's own documents supply them: user (the
+ * global and home config; a document with no scope counts as user), flag (`ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT`)
+ * and managed. A project, local or remote document never does, trusted or not. The highest-priority one of those that
+ * sets each key decides. Attribution is the other way round: every scope counts, and trust has already removed an
+ * untrusted folder's value before it gets here.
+ */
 export function promptKeys(entries: readonly Entry[]) {
-  const documents = entries.filter((entry): entry is Document => entry.type === "document")
+  const documents = entries.filter(
+    (entry): entry is Document => entry.type === "document" && ["user", "flag", "managed"].includes(entry.scope ?? "user"),
+  )
   const replacing = documents.findLast((document) => document.info.system_prompt || document.info.system_prompt_file)
   const replacement = !replacing
     ? undefined

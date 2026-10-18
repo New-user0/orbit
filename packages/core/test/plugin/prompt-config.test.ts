@@ -778,3 +778,87 @@ describe("resolveAttribution", () => {
     }),
   )
 })
+
+describe("system prompt keys by scope", () => {
+  // The three prompt keys come only from the person's own documents. Every other scope is read for attribution but never
+  // for the prompt, trusted or not, so a repository cannot take over the system prompt.
+  const scopes = [
+    ["none", undefined, true],
+    ["user", "user", true],
+    ["flag", "flag", true],
+    ["managed", "managed", true],
+    ["remote", "remote", false],
+    ["project", "project", false],
+    ["local", "local", false],
+  ] as const
+
+  const run = (documents: Document[]) =>
+    Effect.gen(function* () {
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) => {
+        editor.update(Agent.ID.make("build"), () => {})
+      })
+      const host = yield* PluginHost.make(yield* Plugin.Service)
+      yield* PromptConfigPlugin.Plugin.effect(host)
+      const root = yield* host.session.create({ title: "root" })
+      const config = yield* Config.Test
+      yield* config.setEntries(documents)
+      const event = context({ text: base, tools: ["Bash", "Read"], sessionID: root.id })
+      yield* (yield* PluginHooks.Service).trigger("session", "context", event as never)
+      return { text: event.system[0]?.text ?? "", personal: SessionSystemPrompt.personal.get(event) ?? [] }
+    })
+
+  const scoped = (info: unknown, scope: string | undefined, file?: string) =>
+    new Document({
+      type: "document",
+      scope: scope as never,
+      ...(file ? { path: AbsolutePath.make(file) } : {}),
+      info: decode(info),
+    })
+
+  for (const [name, scope, applies] of scopes) {
+    it.effect(`${name}: system_prompt and append_system_prompt ${applies ? "apply" : "are ignored"}`, () =>
+      Effect.gen(function* () {
+        const result = yield* run([scoped({ system_prompt: `S-${name}`, append_system_prompt: `A-${name}` }, scope)])
+        if (applies) {
+          expect(result.text.startsWith(`S-${name}`)).toBe(true)
+          expect(result.text).toContain(`A-${name}`)
+          return
+        }
+        expect(result.text.startsWith("You are Orbit")).toBe(true)
+        expect(result.text).not.toMatch(/S-|A-/)
+        expect(result.personal).toEqual([])
+      }),
+    )
+
+    it.effect(`${name}: system_prompt_file ${applies ? "applies" : "is ignored"}`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* tmpdirScoped()).path
+        yield* Effect.promise(() => Bun.write(path.join(dir, "p.md"), `F-${name}`))
+        const result = yield* run([scoped({ system_prompt_file: "p.md" }, scope, path.join(dir, "orbit.json"))])
+        if (applies) return expect(result.text.startsWith(`F-${name}`)).toBe(true)
+        expect(result.text.startsWith("You are Orbit")).toBe(true)
+        expect(result.text).not.toContain("F-")
+      }),
+    )
+  }
+
+  it.effect("a user document listed before a project document still decides", () =>
+    Effect.gen(function* () {
+      const result = yield* run([scoped({ system_prompt: "USER-BASE" }, "user"), scoped({ system_prompt: "PROJECT-BASE" }, "project")])
+      expect(result.text.startsWith("USER-BASE")).toBe(true)
+      expect(result.text).not.toContain("PROJECT-BASE")
+    }),
+  )
+
+  it.effect("a local document listed after a user document does not outrank it", () =>
+    Effect.gen(function* () {
+      const result = yield* run([
+        scoped({ append_system_prompt: "USER-APPEND" }, "user"),
+        scoped({ append_system_prompt: "LOCAL-APPEND" }, "local"),
+      ])
+      expect(result.text).toContain("USER-APPEND")
+      expect(result.text).not.toContain("LOCAL-APPEND")
+    }),
+  )
+})
