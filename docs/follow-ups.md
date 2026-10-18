@@ -153,11 +153,10 @@ Open rows of severity major, any carrier. The major rows that wait for a decisio
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. "Sweep" is work no task owns.
 
-### M4 (10)
+### M4 (9)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
-| FU-M1-014 | External editor starts with shell:true and has no decoy test | 10, 14 | A regression could let a repository's vim.bat or code.cmd run in place of the editor. | low today (variable is set) | S: route like openFile via which | clients-ux-14 | Known gaps; plan Found while mapping; PR #27 review | packages/tui/src/editor.ts:27 shell: process.platform === 'win32' |
 | FU-M1-023 | Dormant instructions config key needs a real-path guard when wired | 4 | Wiring the key without the guard would read files through links out of the project. | low; dormant | S when wired | prompts-context-9b | Known gaps; plan M1 table (prompts-context-9b adds @path imports and does not wire the key, so the row stays open) | packages/schema/src/config.ts:131 instructions key; docs/untrusted-repositories.md:1948 |
 | FU-M3-112 | LSP follow-ups: Write diagnostics have no drawn TUI test; 'No language server is available' for a refused file; share stat after the write; lexical fallback when a hook strips Write output | 14,13 | Misleading reason; regressions unnoticed. | low | S | file-web-tools-9 | PR #84 C0-C8 | packages/core/src/tool/plugin/lsp.ts:92; TUI Write Diagnostics block |
 | FU-M3-154 | LSP: content-modified retry re-sends the document; server starts before the size cap and read; git check-ignore batch fails whole on one bad path; junction Location hides nothing | perf,7 | Extra didChange; one bad path shows every ignored file. | low | S | file-web-tools-9 | PR #92 C0-C4 | packages/core/src/lsp/index.ts ignored() |
@@ -633,6 +632,7 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 |---|---|---|---|
 | FU-M1-045 | Plan session's subagent description offers agents Plan refuses | ea36dfdf | test packages/core/test/session-context-listings.test.ts 'lists only the agents Plan mode allows to a Plan session, and every agent to a Build session' (the session's agent reaches the filter), and the filter itself in agent-instructions-fields.test.ts |
 | FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | commit 4b063090 and the Mini menu fix (fix(tui): draw Mini menu text through plain) | tests packages/tui/test/prompt/autocomplete-hostile.test.tsx (@ skills and / commands), packages/tui/test/component/dialog-listings.test.tsx, packages/tui/test/mini/footer.view.test.tsx (Mini agent picker and Mini slash menu) |
+| FU-M1-014 | External editor starts with shell:true and has no decoy test | c94d12b7 | test packages/tui/test/editor.test.ts 'starts the prompt editor from PATH and never a code.cmd, code.exe or vim.bat in the folder it runs in' (Windows; mutation: shell: true with the bare name fails it) |
 | FU-M3-043 | vim_mode and output_style are not in the status line watch list | 43822725 | test packages/tui/test/status-line-app.test.tsx 'the status line reruns when the vim mode or the output style changes' (and status-line-trust.test.tsx 'a vim mode change in an untrusted start folder starts no status line command') |
 | FU-M1-017 | Git.clean compared paths with startsWith | 97cb7e7 | test packages/flow/test/git.test.ts 'a run is cleaned up whatever case the repository path is spelled with'. Known gaps entry and class 5 text are stale |
 | FU-M1-025 | No in-repo list of known test failures | 933be24 | Known gaps entry 'No list of known failures' is stale |
@@ -853,9 +853,9 @@ placement, a requirement that was written against code that no longer exists). T
 
 - Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) plus 7 rows that the M4 task prompts-context-12 raised (FU-M4-44 to FU-M4-50) = 725.
 - Output: 643 rows plus 83 listed duplicates = 726. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 643 register rows have a table entry.
-- Open minors by carrier: M4: 8, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 153, Owner: 95.
+- Open minors by carrier: M4: 7, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 153, Owner: 95.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
-- Fixed: 128.
+- Fixed: 129.
 - Duplicates: 83.
-- Check: 421 open + 86 owner + 128 fixed + 83 duplicates = 718, the 718 inputs.
+- Check: 420 open + 86 owner + 129 fixed + 83 duplicates = 718, the 718 inputs.

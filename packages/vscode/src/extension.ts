@@ -1,4 +1,5 @@
 import { Orbit } from "@orbit/client"
+import { IdeLock } from "@orbit/util/ide-lock"
 import path from "node:path"
 import vscode from "vscode"
 import {
@@ -17,6 +18,7 @@ import {
 import { Controller, type TrustAnswer, type Update } from "./controller.js"
 import { askForm } from "./forms.js"
 import { headers, start, version } from "./endpoint.js"
+import { startBridge, type Bridge } from "./ide-bridge.js"
 import { createNoticeTracker, notice } from "./notify.js"
 import { proposed } from "./patch.js"
 import { configured, find, missing } from "./program.js"
@@ -30,6 +32,7 @@ export function activate(context: vscode.ExtensionContext) {
   const editor = new EditorState()
   const chat = new Chat(context, editor)
   new RunsView(executable, () => directory(editor), chat.log).register(context)
+  ideBridge(context, editor, chat.log)
   const proposals = new Map<string, string>()
   context.subscriptions.push(
     editor,
@@ -131,6 +134,77 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 /**
+ * Orbit's bridge to the terminal UI that runs in this window (ide-bridge.ts), kept on while the person's own setting says
+ * so. It starts no program, makes no outbound connection and does not wait for the service: it listens on the loopback
+ * interface, writes a private lock file and hands the terminals of this window the port, and nothing else.
+ */
+function ideBridge(context: vscode.ExtensionContext, editor: EditorState, log: vscode.OutputChannel) {
+  let bridge: Bridge | undefined
+  let starting = false
+  const folders = () =>
+    (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => upperDrive(folder.uri.fsPath))
+  const apply = async () => {
+    const wanted = ideBridgeEnabled()
+    if (!wanted && bridge) {
+      bridge.dispose()
+      bridge = undefined
+    }
+    if (!wanted || bridge || starting) return
+    starting = true
+    const started = await startBridge({
+      directory: IdeLock.directory(),
+      folders: folders(),
+      ideName: vscode.env.appName,
+      log: (line) => log.appendLine(line),
+      // Not persistent: a terminal of a reloaded window gets the new port and never a stale one.
+      environment: (port) => {
+        const variables = context.environmentVariableCollection
+        variables.persistent = false
+        variables.description = "Lets the Orbit terminal UI find this window's Orbit bridge."
+        if (port === undefined) variables.delete("ORBIT_EDITOR_SSE_PORT")
+        else variables.replace("ORBIT_EDITOR_SSE_PORT", String(port))
+      },
+    }).then(
+      (next) => next,
+      (error: unknown) => {
+        log.appendLine(`IDE bridge: could not start: ${error instanceof Error ? error.message : "error"}`)
+        return undefined
+      },
+    )
+    starting = false
+    // The setting may have been turned off while the server was starting.
+    if (started && !ideBridgeEnabled()) return started.dispose()
+    bridge = started
+    bridge?.select(editor.raw())
+  }
+  void apply()
+  context.subscriptions.push(
+    { dispose: () => bridge?.dispose() },
+    editor.onDidChange(() => bridge?.select(editor.raw())),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => bridge?.folders(folders())),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("orbit.ideBridge.enabled")) void apply()
+    }),
+    vscode.commands.registerCommand("orbit.mentionSelection", async () => {
+      const current = editor.editor()
+      if (!current) return void vscode.window.showInformationMessage("Orbit: open a file to mention first")
+      const range = lines(current.selection.start, current.selection.end)
+      const sent = bridge?.mention(
+        { filePath: upperDrive(current.document.uri.fsPath), ...(range && { lineStart: range.startLine, lineEnd: range.endLine }) },
+        await vscode.window.activeTerminal?.processId,
+      )
+      if (!sent) void vscode.window.showInformationMessage("Orbit: no Orbit terminal UI is connected to this window")
+    }),
+  )
+}
+
+function upperDrive(file: string) {
+  return file.replace(/^[a-z]:/, (drive) => drive.toUpperCase())
+}
+
+/**
  * The file editor the user last worked in. While the chat tab is focused VS Code reports no active text editor, and a
  * chat that opens over the editor hides it, so the file, selection, problems and folder the chat offers come from
  * here. It keeps that editor while its document is open, visible or not. Only documents of the `file` scheme count:
@@ -177,6 +251,18 @@ class EditorState implements vscode.Disposable {
   /** The file as the agent resolves it from the chat's folder. */
   private place(editor: vscode.TextEditor) {
     return place(this.root ?? directory(this), editor.document.uri.fsPath)
+  }
+
+  /** The file and selection as the bridge sends them: the editor's own 0-based positions and the path on disk. */
+  raw() {
+    const editor = this.editor()
+    if (!editor) return undefined
+    return {
+      filePath: upperDrive(editor.document.uri.fsPath),
+      text: editor.document.getText(editor.selection),
+      start: editor.selection.start,
+      end: editor.selection.end,
+    }
   }
 
   selection(): Selection | undefined {
@@ -687,6 +773,12 @@ function directory(editor: EditorState) {
 // The person's own setting. A workspace's value is never read: it would choose the program the extension runs.
 function executable() {
   return configured(vscode.workspace.getConfiguration("orbit").inspect<string>("executable"))
+}
+
+// The person's own setting, like `executable`: a repository must not be able to open a listener the person turned off.
+function ideBridgeEnabled() {
+  const setting = vscode.workspace.getConfiguration("orbit").inspect<boolean>("ideBridge.enabled")
+  return setting?.globalValue ?? setting?.defaultValue ?? true
 }
 
 // The person's own setting, like `executable`: a repository's .vscode/settings.json must not decide how much of the

@@ -22,6 +22,7 @@ test("every setting the extension contributes has a decision on who may set it",
     "orbit.notifications": "window: whether the extension shows its own in-editor notices, which runs and chooses nothing",
     "orbit.context.includeOpenFile":
       "application: user settings only, because it decides how much of the editor goes to the model",
+    "orbit.ideBridge.enabled": "machine: opens a loopback listener, so only the person's own settings decide",
   }
   const properties = manifest.contributes.configuration.properties
 
@@ -30,6 +31,16 @@ test("every setting the extension contributes has a decision on who may set it",
   for (const [key, setting] of Object.entries<{ scope?: string; default: string }>(properties))
     if (key !== "orbit.placement" && key !== "orbit.notifications" && key !== "orbit.context.includeOpenFile")
       expect({ key, scope: setting.scope }).toEqual({ key, scope: "machine" })
+})
+
+test("the IDE bridge starts when the window opens, is on by default, and only the person's own settings turn it off", () => {
+  const setting = manifest.contributes.configuration.properties["orbit.ideBridge.enabled"]
+
+  expect(manifest.activationEvents).toContain("onStartupFinished")
+  expect(setting.type).toBe("boolean")
+  expect(setting.default).toBe(true)
+  expect(setting.scope).toBe("machine")
+  expect(setting.markdownDescription).toContain("a workspace cannot set this")
 })
 
 test("the open file goes with a message by default, and only the person's own settings decide that", () => {
@@ -69,6 +80,8 @@ test("every command the extension contributes says what stands between it and wo
     "orbit.runs.reject": "starts orb flow approve --reject, which records a decision and runs nothing",
     "orbit.runs.resume": "starts orb flow resume in a terminal, which refuses an untrusted folder itself",
     "orbit.runs.watch": "starts orb flow watch in a terminal, which only reads",
+    "orbit.mentionSelection":
+      "starts nothing: sends a file reference to a connected terminal UI, which only inserts it into the prompt for the person to send",
   }
   const contributed: string[] = manifest.contributes.commands.map((item: { command: string }) => item.command)
 
