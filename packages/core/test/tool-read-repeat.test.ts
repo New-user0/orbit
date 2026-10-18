@@ -20,6 +20,8 @@ import { Session } from "@orbit/core/session"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionInstructions } from "@orbit/core/session/instructions"
+import { InstructionTriggers } from "@orbit/core/instruction-triggers"
+import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionStore } from "@orbit/core/session/store"
@@ -50,6 +52,8 @@ const readToolNode = makeLocationNode({
     Image.node,
     Permission.node,
     SessionInstructions.node,
+    InstructionTriggers.node,
+    InstructionDiscovery.node,
     FSUtil.node,
     Location.node,
   ],
@@ -75,6 +79,8 @@ const it = testEffect(
       PluginHooks.node,
       ProjectTrust.node,
       SessionInstructions.node,
+      InstructionTriggers.node,
+      InstructionDiscovery.node,
       Global.node,
       Image.node,
     ]),
