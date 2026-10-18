@@ -360,7 +360,7 @@ Open rows of severity minor, grouped by the plan milestone of the carrier task. 
 | FU-M2-059 | Overload count is not reset by overflow compaction or full retry | behaviour | The fallback switch fires early after a recovery. | low | S | loop-robustness-20 | #62 follow-up 12 | packages/core/src/session/runner/step.ts:339 overloaded flag; llm.ts:95 counter (not re-probed) |
 | FU-M4-39 | The todo nudge is not skipped while a send-to-user channel tool is offered (AE43) | parity | The reference treats that tool as the main channel and sends no list nudge; Orbit nudges anyway. | low | S: skip when the channel tool is in the offered set | agents-extensibility-43 | plan-todo-reminders review (follow-up) | packages/core/src/tool/todo-reminders.ts (insertions) |
 
-### Sweep (150)
+### Sweep (149)
 
 Work no plan task owns. The sweep takes a row when the milestone that touches its files starts.
 
@@ -393,7 +393,6 @@ Work no plan task owns. The sweep takes a row when the milestone that touches it
 | FU-M2-071 | agent.test.ts shell check is vacuous and explore has no Memory-deny row | 14 | A built-in agent opted into the shell would pass. | low | S: one-line test change | sweep | #62 follow-up 32; #65 round 5 follow-up 18 | packages/core/test/agent.test.ts:222 compares rule.action === 'bash' |
 | FU-M2-073 | The fallback notice description is stored unescaped | 9 | A provider-supplied model name with control characters is stored raw. | very low | S | sweep | #62 follow-up 40 | packages/core/src/session/runner/llm.ts:397 interpolates model names |
 | FU-M2-080 | The /diff viewer draws diff lines and file names raw | 9 | A repository's diff writes OSC and bidi controls to the terminal. | low to moderate | S | sweep | #62 follow-up 45 | packages/tui/src/feature-plugins/system/diff-viewer.tsx has no bodyText/plain |
-| FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | 9 | An untrusted folder's command or skill description writes control characters. | low to moderate | S | sweep | #62 follow-up 46 | packages/tui/src/component/prompt/autocomplete.tsx:431,480; the skills dialog part is fixed by ea36dfdf (test packages/tui/test/component/dialog-listings.test.tsx), autocomplete remains |
 | FU-M2-083 | VS Code chat draws resources, tool text and model text with bidi controls | 9 | Reordered text can hide what a tool did. | low | S | sweep | #62 follow-up 48 | packages/vscode/src/controller.ts error notes and tool errors (lines `~502-568`) not passed through plain (not re-probed) |
 | FU-M2-084 | workflowModels leaves out retry.retryOn | 2 | A workflow field that changes spend is not listed for the gate. | low | S | sweep | #62 follow-up 50 | packages/flow/src/load.ts:177 AGENT_CHOICES has no retryOn |
 | FU-M2-086 | util.flock load flake is not on known-failures | tests | The flake looks like a new failure. | intermittent under load | S | sweep | #62 follow-up 54 | docs/known-failures.md has no flock row |
@@ -624,7 +623,8 @@ These rows have no plan task and no decision to wait for. The owner gives each o
 
 | id | title | fixed by | test |
 |---|---|---|---|
-| FU-M1-045 | Plan session's subagent description offers agents Plan refuses | ea36dfdf | test packages/core/test/agent-instructions-fields.test.ts 'lists only what Plan mode allows for the Plan agent, and everything for another agent' |
+| FU-M1-045 | Plan session's subagent description offers agents Plan refuses | ea36dfdf | test packages/core/test/session-context-listings.test.ts 'lists only the agents Plan mode allows to a Plan session, and every agent to a Build session' (the session's agent reaches the filter), and the filter itself in agent-instructions-fields.test.ts |
+| FU-M2-081 | Autocomplete and skills dialog draw repository descriptions raw | PR #132 | tests packages/tui/test/prompt/autocomplete-hostile.test.tsx (@ skills and / commands), packages/tui/test/component/dialog-listings.test.tsx, packages/tui/test/mini/footer.view.test.tsx (Mini agent picker) |
 | FU-M3-043 | vim_mode and output_style are not in the status line watch list | 43822725 | test packages/tui/test/status-line-app.test.tsx 'the status line reruns when the vim mode or the output style changes' (and status-line-trust.test.tsx 'a vim mode change in an untrusted start folder starts no status line command') |
 | FU-M1-017 | Git.clean compared paths with startsWith | 97cb7e7 | test packages/flow/test/git.test.ts 'a run is cleaned up whatever case the repository path is spelled with'. Known gaps entry and class 5 text are stale |
 | FU-M1-025 | No in-repo list of known test failures | 933be24 | Known gaps entry 'No list of known failures' is stale |
@@ -845,9 +845,9 @@ placement, a requirement that was written against code that no longer exists). T
 
 - Input: 637 triaged rows (M1, M2, the M3 task pull requests, M3 verification rounds 1 to 6) plus 67 later follow-ups (rounds 7, 8, 9) plus 1 row for the owner's input-that-does-not-parse decision of 2026-10-14 plus 3 rows that the M4 task git-untrusted raised (FU-M4-001, FU-M4-002, FU-M4-003) plus 1 row that the M4 task prompts-context-1 raised (FU-M4-1) plus 1 row that the M4 task clients-ux-35 raised (FU-M4-35) plus 3 rows that the M4 task prompts-context-5 raised (FU-M4-36, FU-M4-37, FU-M4-38) plus 4 rows that the M4 task prompts-context-6 raised (FU-M4-39 to FU-M4-43, carried by later tasks) = 718.
 - Output: 635 rows plus 83 listed duplicates = 718. The 83 duplicates are 3 that the triage marked, 38 that this register merged into the row of the same defect, and 42 of the later follow-ups. So 635 register rows have a table entry.
-- Open minors by carrier: M4: 5, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 150, Owner: 94.
+- Open minors by carrier: M4: 5, M5: 5, M6: 36, M7: 68, M8: 27, M9: 3, M10: 18, M12: 3, Sweep: 149, Owner: 94.
 - Open majors: 13 open, plus 5 marked major in "For the owner" that wait for a decision = 18.
 - For the owner: 86.
-- Fixed: 127.
+- Fixed: 128.
 - Duplicates: 83.
-- Check: 422 open + 86 owner + 127 fixed + 83 duplicates = 718, the 718 inputs.
+- Check: 421 open + 86 owner + 128 fixed + 83 duplicates = 718, the 718 inputs.

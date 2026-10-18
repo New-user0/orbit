@@ -130,7 +130,7 @@ const it = testEffect(
   ),
 )
 
-const setup = (model?: { providerID: string; id: string }) =>
+const setup = (model?: { providerID: string; id: string }, agent = "build", sid = id) =>
   Effect.gen(function* () {
     const here = yield* Location.Service
     const { db } = yield* Database.Service
@@ -143,9 +143,17 @@ const setup = (model?: { providerID: string; id: string }) =>
       editor.update(Agent.ID.make("build"), (agent) => {
         agent.mode = "primary"
       })
+      editor.update(Agent.ID.make("plan"), (agent) => {
+        agent.mode = "primary"
+      })
+      for (const name of ["general", "explore"])
+        editor.update(Agent.ID.make(name), (agent) => {
+          agent.mode = "subagent"
+          agent.description = `The ${name} agent`
+        })
     })
-    yield* insertSession({ id, directory: here.directory, agent: "build" })
-    if (model) yield* db.update(SessionTable).set({ model }).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
+    yield* insertSession({ id: sid, directory: here.directory, agent })
+    if (model) yield* db.update(SessionTable).set({ model }).where(eq(SessionTable.id, sid)).run().pipe(Effect.orDie)
     return yield* SessionContext.Service
   })
 
@@ -216,6 +224,29 @@ describe("the agent and skill listings of a session", () => {
       const selected = yield* context.select(id)
       expect(selected.instructions.map((source) => source.key)).toContain(Instructions.Key.make("core/agent-guidance"))
       expect(AgentInstructions.NAME).toBe(SubagentTool.name)
+    }),
+  )
+
+  // The Plan-mode filter is wired from the session's agent: listing only what Plan mode may start.
+  it.live("lists only the agents Plan mode allows to a Plan session, and every agent to a Build session", () =>
+    Effect.gen(function* () {
+      reset([SubagentTool.name])
+      // A session keeps its first listing, so each agent gets a session of its own.
+      const listed = (agent: string) =>
+        Effect.gen(function* () {
+          const sid = SessionSchema.ID.make(`ses_listing_${agent}`)
+          const selected = yield* (yield* setup(undefined, agent, sid)).select(sid)
+          const observed = yield* Instructions.read(selected.instructions)
+          return JSON.stringify(observed.find((item) => item.key === "core/agent-guidance")?.value)
+        })
+      const plan = yield* listed("plan")
+      expect(plan).toContain(`"id":"explore"`)
+      expect(plan).not.toContain(`"id":"general"`)
+      expect(plan).not.toContain(`"id":"helper"`)
+      const build = yield* listed("build")
+      expect(build).toContain(`"id":"explore"`)
+      expect(build).toContain(`"id":"general"`)
+      expect(build).toContain(`"id":"helper"`)
     }),
   )
 })

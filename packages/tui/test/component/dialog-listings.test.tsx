@@ -11,7 +11,7 @@ test("the agent picker draws a hostile name and description without control char
   await using setup = await renderLocal({
     agents: [
       { ...agent("build"), description: hostile },
-      { ...agent("ev\u001b[2Jil"), mode: "subagent", description: "ok" },
+      { ...agent("ev\u001b[2Jil"), mode: "primary", description: "ok" },
     ],
   })
   setup.dialog.replace(() => <DialogAgent />)
