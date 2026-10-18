@@ -49,7 +49,13 @@ const fixed: Record<string, string> = {
   deepListAt: `${"- ".repeat(100_000)}@./a.md`,
   deepQuoteAt: `${">".repeat(100_000)} @./a.md`,
   bracketsAt: "[@./a.md".repeat(50_000),
-  frontMatterAndComments: `---\n${"a: b\n".repeat(1_000)}---\n${"<!-- x -->\n\n".repeat(20_000)}`,
+  headings: "# Compaction instructions\nx\n".repeat(100_000),
+  backtickRun: "`".repeat(1_000_000),
+  alternatingFences: "```\n~~~\n".repeat(50_000),
+  oneMegabyteLine: `# ${"a ".repeat(500_000)}`,
+  headingLadder: Array.from({ length: 100_000 }, (_, index) => `${"#".repeat((index % 6) + 1)} Compaction instructions`).join("\n"),
+  blankThenText: `# Compaction instructions\n${"\n ".repeat(200_000)}x`,
+  frontMatterAndComments:`---\n${"a: b\n".repeat(1_000)}---\n${"<!-- x -->\n\n".repeat(20_000)}`,
 }
 
 // A generator that a failure can be replayed from: the same seed gives the same documents.
@@ -87,6 +93,8 @@ for (const [name, text] of cases) {
   for (const frontmatter of [true, false]) {
     const found = ConfigInstructionFile.imports(text)
     if (!Array.isArray(found)) throw new Error(`${name}: imports is not a list`)
+    if (!Array.isArray(ConfigInstructionFile.sections(text))) throw new Error(`${name}: sections is not a list`)
+    if (!Array.isArray(ConfigInstructionFile.section(text, ["Compaction instructions", "x"]))) throw new Error(`${name}: section is not a list`)
     const result = ConfigInstructionFile.parse(text, { frontmatter })
     // Whatever it was given, the text that comes back is a string, and a file that no comment went from is untouched.
     if (typeof result.content !== "string") throw new Error(`${name}: content is not a string`)

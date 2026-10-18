@@ -1032,3 +1032,121 @@ describe("ConfigInstructionFile.load", () => {
     }),
   )
 })
+
+describe("ConfigInstructionFile.sections and section", () => {
+  const name = "Compaction instructions"
+  const find = (text: string, names: string | string[] = name) => ConfigInstructionFile.section(text, names)
+
+  for (const [label, text] of [
+    ["a backtick fence", "```\n# Compaction instructions\nhidden\n```\n"],
+    ["a tilde fence", "~~~\n# Compaction instructions\nhidden\n~~~\n"],
+    ["a longer fence that a shorter run does not close", "````\n```\n# Compaction instructions\nhidden\n```\n````\n"],
+    ["a fence that is never closed", "```\n# Compaction instructions\nhidden\n"],
+    ["four spaces of indentation", "    # Compaction instructions\n    hidden\n"],
+    ["a tab", "\t# Compaction instructions\n\thidden\n"],
+    ["a block quote", "> # Compaction instructions\n> hidden\n"],
+    ["a list item", "- # Compaction instructions\n  hidden\n"],
+    ["an HTML block", "<div>\n# Compaction instructions\nhidden\n</div>\n"],
+    ["a Setext underline", "Compaction instructions\n=======================\nhidden\n"],
+    ["no space after the hashes", "##Compaction instructions\nhidden\n"],
+    ["seven hashes", "####### Compaction instructions\nhidden\n"],
+    ["more words than the name", "# Compaction instructions for tests\nhidden\n"],
+  ] as const)
+    test(`does not find a heading in ${label}`, () => {
+      expect(find(text)).toEqual([])
+    })
+
+  test("finds the heading after a fence that is properly closed, and one indented by three spaces", () => {
+    expect(find("```\n# Compaction instructions\nno\n```\n\n# Compaction instructions\nyes\n")).toEqual(["yes"])
+    expect(find("   ## Compaction instructions\nyes\n")).toEqual(["yes"])
+  })
+
+  test("keeps subsections in the body, up to a heading of the same or a shallower depth", () => {
+    const text = "# Top\n## Compaction instructions\nkeep this\n### Deeper\nand this\n## Next\nnot this\n# Other\nnor this\n"
+    expect(find(text)).toEqual(["keep this\n### Deeper\nand this"])
+    expect(find("## Compaction instructions\na\n# Shallower\nb\n")).toEqual(["a"])
+    expect(ConfigInstructionFile.sections(text).map((item) => [item.depth, item.heading])).toEqual([
+      [1, "Top"],
+      [2, "Compaction instructions"],
+      [3, "Deeper"],
+      [2, "Next"],
+      [1, "Other"],
+    ])
+  })
+
+  test("does not end a body at a hash line inside a fence in it", () => {
+    expect(find("# Compaction instructions\nbefore\n```sh\n# comment\n```\nafter\n# End\n")).toEqual([
+      "before\n```sh\n# comment\n```\nafter",
+    ])
+  })
+
+  for (const heading of [
+    "# compaction INSTRUCTIONS",
+    "# Compaction \t  instructions",
+    "# Compaction instructions:",
+    "# Compaction instructions :",
+    "# Compaction instructions ##",
+    "# Compaction instructions #",
+    "## Compaction instructions:  ##",
+    "#\tCompaction instructions",
+  ])
+    test(`matches ${JSON.stringify(heading)}`, () => {
+      expect(find(`${heading}\nbody\n`)).toEqual(["body"])
+    })
+
+  test("returns two matching sections of a file in file order, and a nested match once", () => {
+    expect(find("# Compaction instructions\none\n# Middle\nm\n## compaction instructions\ntwo\n")).toEqual(["one", "two"])
+    expect(find("# Compaction instructions\nouter\n## Compaction instructions\ninner\n")).toEqual([
+      "outer\n## Compaction instructions\ninner",
+    ])
+  })
+
+  test("skips a section that has nothing under it", () => {
+    expect(find("# Compaction instructions\n# Next\n")).toEqual([])
+    expect(find("# Compaction instructions\n\n  \n\n")).toEqual([])
+    expect(find("# Compaction instructions")).toEqual([])
+    expect(ConfigInstructionFile.sections("# Compaction instructions\n# Next\n")[0]).toEqual({
+      heading: "Compaction instructions",
+      depth: 1,
+      body: "",
+    })
+  })
+
+  test("reads CRLF, lone CR and a byte order mark, and returns LF with no blank line at either end", () => {
+    expect(find("# Compaction instructions\r\n\r\nline one\r\nline two\r\n\r\n# End\r\n")).toEqual(["line one\nline two"])
+    expect(find("# Compaction instructions\r\rline one\rline two\r\r# End\r")).toEqual(["line one\nline two"])
+    expect(find("﻿# Compaction instructions\nbody\n")).toEqual(["body"])
+  })
+
+  test("takes several names in one call, in file order", () => {
+    const text = "# Summary instructions\nsecond name\n# Other\nx\n## Compact instructions\nfirst name\n"
+    expect(find(text, ["Compaction instructions", "Compact instructions", "Summary instructions"])).toEqual([
+      "second name",
+      "first name",
+    ])
+    expect(find(text, "Compact instructions")).toEqual(["first name"])
+  })
+
+  test("finds a heading in a file that has comments, and not one inside a comment", () => {
+    expect(find("<!--\n# Compaction instructions\nhidden\n-->\n# Compaction instructions\nshown\n")).toEqual(["shown"])
+  })
+})
+
+// A synchronous loop cannot be interrupted, so the work runs in a child process with a deadline. The script is the one
+// that the parse test runs; it covers the heading lookup as well.
+describe("ConfigInstructionFile.sections on hostile input", () => {
+  test("finishes every case in linear time, and never throws", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "instruction-file-stress.ts")],
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 60_000)
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    const report = JSON.parse(out) as { readonly name: string; readonly ms: number }[]
+    for (const wanted of ["headings", "backtickRun", "alternatingFences", "oneMegabyteLine", "headingLadder", "blankThenText"])
+      expect(report.find((item) => item.name === wanted)?.ms ?? Infinity).toBeLessThan(5_000)
+  }, 90_000)
+})
