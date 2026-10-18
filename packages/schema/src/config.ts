@@ -77,7 +77,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   language: Schema.String.pipe(optional).annotate({
     description:
-      'The language the agent replies to the person in, as any language name or spelling, for example "Japanese" or "español". Code, commands and technical terms keep their original form. Unset, or empty, means no preference',
+      'The language the agent replies to the person in, as any language name or spelling, for example "Japanese" or "español". Code, commands and technical terms are left untranslated. Unset, or empty, means no preference',
   }),
   system_prompt: Schema.String.pipe(optional).annotate({
     description:

@@ -440,6 +440,21 @@ describe("the reasoning boost note", () => {
     expect(
       boosted(toLLMMessages([shell("sh", "echo ultrathink")], model, "provider", [], { minimal: true }), "sh"),
     ).toHaveLength(0)
+    // A shell command typed while the agent works waits for the turn, so it gets no note (a steer gets none either).
+    expect(
+      boosted(toLLMMessages([user("a"), toolStep("s1"), shell("sh", "echo ultrathink")], model), "sh"),
+    ).toHaveLength(0)
+    expect(boosted(toLLMMessages([user("a"), textStep("s1"), shell("sh", "echo ultrathink")], model), "sh")).toHaveLength(
+      1,
+    )
+    // A skill the person activates (Session.skill) is scanned like a prompt that carries it.
+    const skill = (value: string, text: string) =>
+      ({ id: id(value), type: "skill", text, time: { created } }) as unknown as SessionMessage.Info
+    expect(boosted(toLLMMessages([skill("sk", "Take care. Ultrathink first.")], model), "sk")).toHaveLength(1)
+    expect(boosted(toLLMMessages([skill("sk", "Take care.")], model), "sk")).toHaveLength(0)
+    expect(
+      boosted(toLLMMessages([skill("sk", "Ultrathink first.")], model, "provider", [], { minimal: true }), "sk"),
+    ).toHaveLength(0)
     // A subagent command's child prompt is marked as built by the harness, so it carries none.
     expect(boosted(toLLMMessages([keyword("c", { metadata: { origin: "agent" } })], model), "c")).toHaveLength(0)
   })
