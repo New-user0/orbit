@@ -3356,11 +3356,42 @@ the session runs in. The highest-priority config that sets a replacement decides
 - The project's own decision covers the files in the project. A file above the project, or one that a trusted file
   imports from outside, needs the folder that owns it trusted before it imports anything from outside. When the
   repository is the home folder itself (or a filesystem root), a session started below it imports only from the folder
-  it started in, even with home trusted for the session. A file that the home folder or a root holds never imports
-  from outside.
+  it started in, even with home trusted for the session. A file above the project that the home folder or a root owns
+  (`~/AGENTS.md` for a project in `~/code/repo`) never imports from outside. A session started at home itself, with
+  home trusted for the session, does let home's own files import from outside.
 - Network paths are never read, trusted or not, and files that the model's reads load later never import from outside.
 
 **Affects:** people who trust a project whose instruction files import files outside it.
 
 **What to do:** Nothing for a project you trust; the outside files are sent with the first request. Run
 `orb trust --revoke` in a folder to stop its files importing from outside.
+
+## Turn cost, token and step limits count every spend and every response
+
+- `--max-cost` and `--max-tokens` now count what side queries (a fetched page's summary, a hook prompt, memory
+  recall, the permission helpers, the away summary) and session generations (`/btw`, warming, plugin and doctor calls)
+  spend, in the session and in its subagents. They used to count only responses, compaction and titles.
+- A response that the provider cut off before it reported usage (a stream that failed part way, a side query that
+  timed out after it was sent, a title or compaction call that failed) is counted by an estimate priced with the model's
+  own rates, so recovery after it (continuing the reply, retrying, the fallback model) runs under a cost limit
+  instead of ending the turn as `limit.cost-unknown`. A request the provider refused before it began costs nothing.
+  An attempt that reported usage and was then retried is counted too.
+- A subagent's limit check now includes the response of its parent that started it, from the moment the provider
+  reported that response, instead of after the parent's tools finished.
+- A token limit refuses with the new `limit.tokens-unknown` (a plain error, like `limit.cost-unknown`, not a limit that
+  was reached) when a finished response or a usage record in the turn reported no tokens. A usage record with no tokens
+  and no cost now counts as unknown spend under a cost limit.
+- A reply that was cut off at the output limit and then escalated or resumed is one step with what continues it, so
+  `--max-steps 1` no longer stops a text-only capped reply from being repeated at the larger cap. `orb run` reports the
+  same step count. A cut-off that holds a tool part (a completed call, an input the cap cut off, or a hosted call) is a
+  step of its own, so a reply cut off while it was writing a tool call still ends with `limit.steps`.
+- The session's shown cost and `orb stats` totals now include estimates for failed responses, retried attempts and
+  generations, which were not counted before.
+- A wake-up (a background job's or subagent's completion notice) continues the limits of the turn before it whether it
+  was queued or steered, and finds that turn in a fixed number of reads however many wake-ups came between.
+
+**Affects:** people who run with `--max-cost`, `--max-tokens` or `--max-steps`, and scripts that read the `limit.*`
+error types.
+
+**What to do:** Nothing; expect a cost or token limit to stop a little earlier than before when side queries ran, and
+treat `limit.tokens-unknown` as a refusal to count (for example, use a provider that reports usage, or drop the token limit).

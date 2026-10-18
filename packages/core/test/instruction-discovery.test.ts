@@ -2046,6 +2046,42 @@ describe("ConfigInstructionPlugin.Plugin lets a trusted holder import from outsi
     }),
   )
 
+  // A link in the instruction file names a file in a folder of its own, which imports a file beside it. The owner of the
+  // linked file is trusted for good, and home is trusted for the session. Only the project opening it counts, so a
+  // session below home opens nothing, and a session at home does.
+  for (const atHomeItself of [false, true])
+    (canLinkFile ? it.live : it.live.skip)(
+      `${atHomeItself ? "loads" : "never loads"} a file that an instruction file linked to a trusted outside folder imports, with the session ${atHomeItself ? "at" : "below"} the home folder`,
+      () =>
+        Effect.gen(function* () {
+          const base = yield* folders
+          const evil = path.join(path.dirname(base.home), "evil")
+          const payload = path.join(evil, "payload.md")
+          yield* write(path.join(evil, "AGENTS.md"), "EVIL FILE\n@./payload.md")
+          yield* write(payload, "PAYLOAD MARKER")
+          const directory = atHomeItself ? base.home : path.join(base.home, "Downloads", "x")
+          const session = {
+            ...base,
+            repo: base.home,
+            directory,
+            packageFile: path.join(directory, "AGENTS.md"),
+          }
+          yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+          yield* Effect.promise(() => fs.symlink(path.join(evil, "AGENTS.md"), session.packageFile))
+          yield* Effect.gen(function* () {
+            yield* grantProject
+            yield* grantFolder(evil)
+            const discovery = yield* start()
+            const text = (yield* readInitial(yield* discovery.load())).text
+            expect((placesOf(yield* discovery.list()) as string[]).includes(payload)).toBe(atHomeItself)
+            expect(text.includes("PAYLOAD MARKER")).toBe(atHomeItself)
+            expect(
+              (yield* warned(discovery)).filter((item) => item.target === payload).map((item) => item.directory),
+            ).toEqual(atHomeItself ? [] : [undefined])
+          }).pipe(untrusted(session))
+        }),
+    )
+
   it.live("never lets a file in the home folder reach out for its own imports, whatever the project's trust", () =>
     Effect.gen(function* () {
       const { where } = yield* layout
