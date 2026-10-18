@@ -166,6 +166,7 @@ export const Plugin = {
                         .prompt({
                           sessionID: child.id,
                           text: call.prompt,
+                          metadata: { origin: "agent" },
                         })
                         .pipe(
                           Effect.mapError(

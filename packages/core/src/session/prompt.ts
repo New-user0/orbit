@@ -11,8 +11,11 @@ import { Effect } from "effect"
 import path from "path"
 import { fileURLToPath } from "url"
 import { Image } from "../image.js"
+import { Agent } from "../agent.js"
+import { FileAccess, leadsOf } from "../file-access.js"
 import { Instance } from "../instance/service.js"
 import { Mime } from "../mime.js"
+import { Permission } from "../permission.js"
 import { Plugin } from "../plugin/service.js"
 import { PluginHooks } from "../plugin/hooks.js"
 import { Skill } from "../skill.js"
@@ -24,6 +27,8 @@ export type Input = {
   files?: PromptInput.Prompt["files"]
   agents?: PromptInput.Prompt["agents"]
   skills?: PromptInput.Prompt["skills"]
+  /** Not part of the plugin `session.prompt` hook payload: it is carried around the hook as admitted. */
+  editor?: PromptInput.Prompt["editor"]
   metadata?: Record<string, unknown>
   /** Limits and a fallback for the turn this prompt belongs to. */
   turn?: SessionTurn.Options
@@ -61,6 +66,8 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
       delivery: request.input.delivery ?? "steer",
     })
     const input = event.prompt
+    const agents = input.agents ? yield* startableAgents(input.agents) : undefined
+    const editor = request.input.editor ? yield* readableEditor(request.session, request.input.editor) : undefined
     const files = input.files
       ? yield* Effect.forEach(input.files, materializeAttachment, { concurrency: 8 })
       : undefined
@@ -90,9 +97,10 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
       payload: SessionInbox.UserPayload.make({
         ...Prompt.make({
           text: input.text,
-          agents: input.agents,
+          agents,
           files,
           skills: selected?.length ? selected : undefined,
+          editor,
         }),
         metadata: event.metadata,
         turn: request.input.turn,
@@ -100,6 +108,61 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
       delivery: SessionInbox.Delivery.make(event.delivery),
     } satisfies SessionInbox.Item
   }).pipe(instances.provide(request.session))
+})
+
+// A mention of an agent that the subagent tool cannot start costs only itself: the hint would name something the model
+// cannot use. In a folder that is not trusted a repository's own agents are not loaded, so their names drop here too.
+const startableAgents = Effect.fn("SessionPrompt.startableAgents")(function* (
+  requested: NonNullable<PromptInput.Prompt["agents"]>,
+) {
+  const service = yield* Agent.Service
+  const known = yield* Effect.forEach(requested, (attachment) =>
+    service.get(Agent.ID.make(attachment.name)).pipe(
+      Effect.flatMap((agent) =>
+        agent !== undefined && agent.mode !== "primary"
+          ? Effect.succeed(true)
+          : Effect.logWarning("A mentioned agent cannot be started, so it was dropped from the prompt").pipe(
+              Effect.annotateLogs({ agent: attachment.name }),
+              Effect.as(false),
+            ),
+      ),
+    ),
+  )
+  return requested.filter((_, index) => known[index])
+})
+
+// The editor's file reaches the model without a read, so the person's read rules decide here, on the server, with the
+// read tool's own resolver. It asks nobody and opens nothing. One bad field costs only itself: the prompt is admitted
+// without it.
+const readableEditor = Effect.fn("SessionPrompt.readableEditor")(function* (
+  session: Session.Info,
+  editor: NonNullable<PromptInput.Prompt["editor"]>,
+) {
+  const dropped = (reason: string) =>
+    Effect.logWarning("The editor context was dropped from the prompt").pipe(
+      Effect.annotateLogs({ reason, sessionID: session.id }),
+      Effect.as(undefined),
+    )
+  // `~` is a spelling the read tool's resolver accepts, so it passes here and is resolved below.
+  if (!editor.path.startsWith("~") && !path.posix.isAbsolute(editor.path) && !path.win32.isAbsolute(editor.path)) return yield* dropped("path is not absolute")
+  if (editor.selection && editor.selection.end < editor.selection.start) return yield* dropped("selection ends before it starts")
+  const access = yield* FileAccess.Service
+  const permission = yield* Permission.Service
+  const target = yield* access.resolve({ path: editor.path, kind: "file" }).pipe(Effect.option)
+  if (target._tag === "None") return yield* dropped("path could not be resolved")
+  const denied = yield* permission
+    .denied({
+      action: "Read",
+      resources: [target.value.resource],
+      save: ["*"],
+      metadata: { paths: [target.value.place] },
+      ...leadsOf([target.value]),
+      sessionID: session.id,
+      agent: session.agent,
+    })
+    .pipe(Effect.orElseSucceed(() => true))
+  if (denied) return yield* dropped("a read rule denies the path")
+  return editor
 })
 
 const materializeAttachment = Effect.fn("SessionPrompt.materializeAttachment")(function* (

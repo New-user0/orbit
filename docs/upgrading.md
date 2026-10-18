@@ -2736,6 +2736,22 @@ Sessions that already hold the old Plan mode rows keep working: an old enter row
 
 **What to do:** Nothing.
 
+### Input sent mid-turn, @agent mentions and editor context reach the model
+
+Three notes are now written while a user message is lowered, from fields the message already stores, and none is stored itself.
+
+- A message that the person sent while the agent was working, and that is steered in right after a round of tool calls, gets a short note ahead of it saying so and that it must not be ignored. The person's words stay outside the note, unchanged. Input that waited in the queue, a first prompt, a prompt after idle, an interruption or a checkpoint, and a steer that follows a final text-only step get no note. A message that a subagent or workflow tool sent to a child session gets a note naming the parent agent as the sender.
+- Each distinct `agents` entry of a prompt adds one hint that the person asked for that agent and that the `Agent` tool starts it. Admission now drops entries that name an agent the tool cannot start (unknown or primary-only); before, a mention had no effect on the model at all.
+- A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative, cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI keep sending the editor context as a hidden item until a later change moves them.
+
+`orb run --bare` and vanilla instances keep the mid-turn note and drop the hints and the editor note. A redacted session export now replaces `editor.path` and the selected text.
+
+Sessions that already hold steered messages gain the note once when first lowered by this build, so a running session sees one prompt-cache miss. A steer that follows a fork, an import or a crash that cut history right after a tool step also gets the note, and the first steer after a completed checkpoint does not.
+
+**Affects:** people who type while the agent works, users of `@agent` mentions, and SDK or protocol clients that can now send `editor` (the generated clients carry it).
+
+**What to do:** Nothing.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs

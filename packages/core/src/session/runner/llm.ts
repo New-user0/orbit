@@ -461,6 +461,7 @@ const layer = Layer.effect(
           initial: loaded.initial,
           messages: loaded.messages,
           insertions: yield* reminders.derive(loaded, step),
+          minimal: reminders.minimal,
         })
         const prepared = yield* context.request.primary({
           session: loaded.session,

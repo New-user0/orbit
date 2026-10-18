@@ -447,6 +447,10 @@ describe("SubagentTool", () => {
           expect((yield* sessions.inbox(child.id)).find((message) => message.type === "user")?.payload.text).toBe(
             "review this",
           )
+          // The parent agent's words are marked, so a steer into the child is framed as the agent's, not the person's.
+          expect((yield* sessions.inbox(child.id)).find((message) => message.type === "user")?.payload.metadata).toEqual(
+            { origin: "agent" },
+          )
 
           const fallback = yield* executeTool(registry, {
             sessionID: parent.id,

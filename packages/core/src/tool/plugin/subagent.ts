@@ -243,6 +243,7 @@ export const Plugin = {
                 .prompt({
                   sessionID: child.id,
                   text: input.prompt,
+                  metadata: { origin: "agent" },
                   ...(background && existing === undefined ? { resume: false } : {}),
                 })
                 .pipe(

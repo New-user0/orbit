@@ -473,7 +473,7 @@ describe("isolation", () => {
 
     expect(lists.durable.map((producer) => producer.name)).toEqual(["queued"])
     expect(lists.derived.map((producer) => producer.name)).toEqual(["d-keep"])
-    expect(SessionReminders.minimal(SessionReminders.production)).toEqual({ durable: [], derived: [] })
+    expect(SessionReminders.minimal(SessionReminders.production)).toEqual({ durable: [], derived: [], minimal: true })
   })
 })
 
