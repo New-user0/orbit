@@ -39,6 +39,8 @@ const manual = Skill.Info.make({
   content: "Manual guidance",
 })
 
+const window = { contextWindow: 200_000, enabled: true }
+
 const layer = (list: () => Skill.Info[]) =>
   AppNodeBuilder.build(SkillInstructions.node, [
     Skill.node.replace(Layer.mock(Skill.Service, { list: () => Effect.succeed(list()) })),
@@ -53,20 +55,16 @@ describe("SkillInstructions", () => {
     let skills = [hidden, denied, manual, effect]
     return Effect.gen(function* () {
       const instructions = yield* SkillInstructions.Service
-      const initialized = yield* instructions.load(agent.permissions).pipe(Effect.flatMap(readInitial))
+      const initialized = yield* instructions.load(agent.permissions, window).pipe(Effect.flatMap(readInitial))
 
       expect(initialized.text).toBe(
         [
           "Skills provide specialized instructions and workflows for specific tasks.",
           "Use the Skill tool to load a skill when a task matches its description.",
           "The user may also invoke a skill directly. When that happens, its instructions appear in the conversation as a <skill_content> block, the same shape the Skill tool returns. A skill that is already present this way does not need to be invoked again.",
-          "<available_skills>",
-          "  <skill>",
-          "    <id>effect</id>",
-          "    <name>Effect</name>",
-          "    <description>Build applications with Effect</description>",
-          "  </skill>",
-          "</available_skills>",
+          "",
+          "Available skills:",
+          "- effect: Build applications with Effect",
         ].join("\n"),
       )
       expect(initialized.text).not.toContain("manual")
@@ -74,7 +72,7 @@ describe("SkillInstructions", () => {
       skills = []
       expect(
         yield* instructions
-          .load(agent.permissions)
+          .load(agent.permissions, window)
           .pipe(Effect.flatMap((context) => readUpdate(context, initialized))),
       ).toMatchObject({ text: "Skill guidance is no longer available. Do not use any previously listed skill." })
     }).pipe(Effect.provide(layer(() => skills)))
@@ -92,26 +90,22 @@ describe("SkillInstructions", () => {
     let skills = [effect]
     return Effect.gen(function* () {
       const instructions = yield* SkillInstructions.Service
-      const initialized = yield* instructions.load(agent.permissions).pipe(Effect.flatMap(readInitial))
+      const initialized = yield* instructions.load(agent.permissions, window).pipe(Effect.flatMap(readInitial))
 
       skills = [effect, debugging]
       const added = yield* instructions
-        .load(agent.permissions)
+        .load(agent.permissions, window)
         .pipe(Effect.flatMap((context) => readUpdate(context, initialized)))
       expect(added.text).toBe(
         [
           "New skills are available in addition to those previously listed:",
-          "  <skill>",
-          "    <id>debugging</id>",
-          "    <name>Debugging</name>",
-          "    <description>Diagnose hard bugs</description>",
-          "  </skill>",
+          "- debugging: Diagnose hard bugs",
         ].join("\n"),
       )
 
       skills = [debugging]
       const removed = yield* instructions
-        .load(agent.permissions)
+        .load(agent.permissions, window)
         .pipe(Effect.flatMap((context) => readUpdate(context, added)))
       expect(removed.text).toBe("The following skill IDs are no longer available and must not be used: effect.")
     }).pipe(Effect.provide(layer(() => skills)))
@@ -122,12 +116,12 @@ describe("SkillInstructions", () => {
     let skills = [effect]
     return Effect.gen(function* () {
       const instructions = yield* SkillInstructions.Service
-      const initialized = yield* instructions.load(agent.permissions).pipe(Effect.flatMap(readInitial))
+      const initialized = yield* instructions.load(agent.permissions, window).pipe(Effect.flatMap(readInitial))
 
       skills = [Skill.Info.make({ ...effect, description: "Build applications with Effect v4" })]
       expect(
         yield* instructions
-          .load(agent.permissions)
+          .load(agent.permissions, window)
           .pipe(Effect.flatMap((context) => readUpdate(context, initialized))),
       ).toMatchObject({
         text: expect.stringContaining(
@@ -144,7 +138,7 @@ describe("SkillInstructions", () => {
     })
     return Effect.gen(function* () {
       const instructions = yield* SkillInstructions.Service
-      expect((yield* instructions.load(agent.permissions).pipe(Effect.flatMap(readInitial))).text).toBe("")
+      expect((yield* instructions.load(agent.permissions, window).pipe(Effect.flatMap(readInitial))).text).toBe("")
     }).pipe(Effect.provide(layer(() => [effect])))
   })
 
@@ -158,7 +152,7 @@ describe("SkillInstructions", () => {
     })
     return Effect.gen(function* () {
       const instructions = yield* SkillInstructions.Service
-      expect((yield* instructions.load(agent.permissions).pipe(Effect.flatMap(readInitial))).text).toBe("")
+      expect((yield* instructions.load(agent.permissions, window).pipe(Effect.flatMap(readInitial))).text).toBe("")
     }).pipe(Effect.provide(layer(() => [effect])))
   })
 
@@ -173,8 +167,8 @@ describe("SkillInstructions", () => {
     return Effect.gen(function* () {
       const instructions = yield* SkillInstructions.Service
       expect(
-        (yield* instructions.load(agent.permissions).pipe(Effect.flatMap(readInitial))).text,
-      ).toContain("<name>Effect</name>")
+        (yield* instructions.load(agent.permissions, window).pipe(Effect.flatMap(readInitial))).text,
+      ).toContain("- effect: Build applications with Effect")
     }).pipe(Effect.provide(layer(() => [effect])))
   })
 
@@ -189,7 +183,7 @@ describe("SkillInstructions", () => {
     })
     return Effect.gen(function* () {
       const instructions = yield* SkillInstructions.Service
-      expect((yield* instructions.load(agent.permissions).pipe(Effect.flatMap(readInitial))).text).toBe("")
+      expect((yield* instructions.load(agent.permissions, window).pipe(Effect.flatMap(readInitial))).text).toBe("")
     }).pipe(Effect.provide(layer(() => [effect])))
   })
 })

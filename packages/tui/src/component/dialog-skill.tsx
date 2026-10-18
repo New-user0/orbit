@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core"
+import { plain } from "@orbit/flow/plain"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { createResource, createMemo, createSignal, Match, Switch } from "solid-js"
 import { useDialog } from "../ui/dialog"
@@ -41,10 +42,10 @@ export function DialogSkill(props: DialogSkillProps) {
   const options = createMemo<DialogSelectOption<string>[]>(() => {
     if (showError()) return []
     const list = skills() ?? []
-    const maxWidth = Math.max(0, ...list.map((s) => s.name.length))
+    const maxWidth = Math.max(0, ...list.map((s) => plain(s.name).length))
     return list.map((skill) => ({
-      title: skill.name.padEnd(maxWidth),
-      description: skill.description?.replace(/\s+/g, " ").trim(),
+      title: plain(skill.name).padEnd(maxWidth),
+      description: skill.description === undefined ? undefined : plain(skill.description.replace(/\s+/g, " ")),
       value: skill.id,
       onSelect: () => {
         props.onSelect(skill.id)

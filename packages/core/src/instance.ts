@@ -45,6 +45,7 @@ import { SessionReminders } from "./session/reminders.js"
 import { SessionContext } from "./session/context.js"
 import { Skill } from "./skill.js"
 import { SkillInstructions } from "./skill/instructions.js"
+import { AgentInstructions } from "./agent/instructions.js"
 import { Snapshot } from "./snapshot.js"
 import { InstructionDiscovery } from "./instruction-discovery.js"
 import { InstructionBuiltIns } from "./instructions/builtins.js"
@@ -100,6 +101,7 @@ const nodes = [
   ToolOutput.node,
   Image.node,
   SkillInstructions.node,
+  AgentInstructions.node,
   ReferenceInstructions.node,
   InstructionEntry.node,
   Form.node,

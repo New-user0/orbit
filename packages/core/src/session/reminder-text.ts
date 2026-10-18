@@ -27,6 +27,12 @@ const TAG = /<(?=\s*\/?\s*system\s*-\s*(?:reminder|update))/gi
 export const neutralize = (text: string) => text.replace(TAG, "&lt;")
 
 /**
+ * Text from a repository file or a config that becomes one line of a listing: control characters and line or
+ * paragraph separators (CR, LF, U+2028/9, ESC, BEL) collapse to a space, and envelope look-alikes are escaped.
+ */
+export const oneLine = (value: string) => neutralize(value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim())
+
+/**
  * Neutralizes text parts that an adapter may join into one string. A provider joins tool-result parts with nothing or
  * with a line break, and the server chooses where the parts split, so a tag cut across parts is escaped when it would
  * read as a tag under either join. Each returned part is the input part with its `<` escaped.
