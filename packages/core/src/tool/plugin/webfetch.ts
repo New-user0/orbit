@@ -110,7 +110,10 @@ export const Plugin = {
     // addresses that were checked and not to the name, which would be resolved again. Redirects are never followed by
     // the client: the loop below decides about each one.
     const send = Effect.fnUntraced(function* (url: URL, userAgent: string) {
-      const places = WebPin.targets(url, yield* tools.resolveWeb(url.hostname))
+      // Through a configured proxy the request is for the name, which the proxy resolves (the owner's exception to the
+      // checked-address rule); every other request is checked and pinned.
+      const proxy = WebPin.proxyFor(url)
+      const places = WebPin.targets(url, proxy ? [] : yield* tools.resolveWeb(url.hostname))
       const attempt = (index: number): Effect.Effect<HttpClientResponse.HttpClientResponse, HttpClientError.HttpClientError> => {
         const place = places[index]
         const request = HttpClientRequest.get(place.url.href).pipe(
@@ -120,6 +123,7 @@ export const Plugin = {
         return http.execute(request).pipe(
           Effect.provideService(FetchHttpClient.RequestInit, {
             redirect: "manual",
+            ...(proxy ? { proxy } : {}),
             ...(place.tls ? { tls: place.tls } : {}),
           }),
           // The site must not receive Orbit's trace context (traceparent, b3): it would link every hop and call of a run.

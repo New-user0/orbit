@@ -119,6 +119,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system` from
   a document of a folder that is not trusted when the agent already exists; an agent the folder defines itself keeps
   its prompt. Proof: `test/config/agent-untrusted-system.test.ts`.
+- `language` and `output_style` in the config: text that steers every reply (a reply language, a named style whose file
+  is looked up by name). The last entry wins, so a project's value would outrank the person's own. `ConfigTrust`
+  withholds both (kind `settings`) from an untrusted project or local document, the person's value stays in force, and
+  the project's applies after the folder is trusted. Proof: the `language` and `output_style` rows of
+  `test/config/trust.test.ts`.
 - `hg` in `Project.resolve` (`hg log`) and in the Mercurial VCS provider (`hg branch`, `status`, `diff`, which the
   terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
   each command, so none is started while the folder is untrusted. The provider answers an empty branch, status and
@@ -157,12 +162,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
-    and `gpg.program` when `log.showSignature` is set, as the Gates paragraph says. `Worktree.create` and `Worktree.remove`
+    and `gpg.program` when `log.showSignature` is set, as the Gates paragraph says. While the folder is untrusted
+    `Worktree.list` answers the main checkout from files and `Worktree.create` and `Worktree.remove` are refused with
+    `DirectoryUnavailableError` (`test/worktree-untrusted-git.test.ts`, with a trusted control). In a trusted folder they
     run `git worktree add` and `remove` when a person or the model asks, which runs hooks and filters of the folder (task
     `agents-extensibility-28`).
   - Proof: `test/project-git-trust.test.ts` (one row for each of eleven keys, a linked worktree, and every layout of
     `test/fixture/git-forged.ts`), `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts` ("finds the git
-    directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts` and `test/git.test.ts`. Each row
+    directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts`, `test/worktree-untrusted-git.test.ts` and `test/git.test.ts`. Each row
     plants a program that the config names, which records its runs, and carries the plain git command that runs it as the
     control (all but `core.pager`, which git runs only for a terminal that no test has); git's own trace (`GIT_TRACE2`)
     says whether any git started.
@@ -1197,7 +1204,8 @@ the store.
 **Rule:** Only `http:` and `https:` URLs reach `fetch`. Every request that a repository or a script can influence asks
 permission per hop, as `webfetch` does, then passes `AddressGuard.check`, then connects to the address that was checked,
 with the name kept only in `Host` and SNI. A name that resolves to nothing, fails to resolve or answers with names is
-refused.
+refused. One exception, the owner's of 2026-10-19: `webfetch` through a configured proxy sends the name to the proxy
+(see the first Known gap on `webfetch` and a proxy).
 
 **Why:** Code Mode `fetch` lets a script choose the method and the headers of its request. One approval of an origin
 then reached other hosts by redirect, loopback, the LAN or a cloud metadata endpoint (credentials), in spellings that a
@@ -2184,8 +2192,17 @@ The program-wide register of every follow-up, these gaps included, with each one
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
   holds only without a leading wildcard. The review of #3 left it to the owner: change what such a pattern matches, or
   say so in the note.
-- **The `webfetch` tool and a proxy.** `webfetch` now asks per hop, passes `AddressGuard.check` and connects to the checked
-  address, as Code Mode `fetch` does. A user-configured proxy still sees that address and not the name; the owner has yet to decide.
+- **The `webfetch` tool and a proxy (the owner's exception, 2026-10-19, FU-M1-008).** `webfetch` asks per hop and, for a
+  request that goes direct, passes `AddressGuard.check` and connects to the checked address, as Code Mode `fetch` does.
+  When `HTTPS_PROXY` (for `https:`) or `HTTP_PROXY` (for `http:`) holds an `http:` or `https:` address and `NO_PROXY` does
+  not name the host, the request is sent to the proxy for the host name, as the reference does, and Orbit resolves and
+  checks nothing: the proxy decides where it connects, so a cloud metadata address named by a host is the proxy's to
+  refuse. A literal address and a loopback name never take the exception. When `NO_PROXY` names the host, Orbit pins as
+  before; the runtime applies its own proxy variables to the pinned address, so a `NO_PROXY` list of names only does not
+  stop it from sending that address to the proxy. Code Mode `fetch` keeps the rule without the exception. Proof:
+  `test/tool-webfetch.test.ts` (the name reaches a recorded proxy target and no lookup runs; six `NO_PROXY` and proxy
+  spellings connect to the checked address; a metadata name without a proxy, and a literal address and `localhost` with
+  one, are still refused).
 - **A terminal UI plugin that first appears above the folder** while the UI runs is imported with no `config.updated` or
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,

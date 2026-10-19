@@ -1249,6 +1249,88 @@ describe("WebFetchTool address guard and pinning", () => {
     }),
   )
 
+  // The owner's exception (2026-10-19, FU-M1-008): through a configured proxy the request is for the name.
+  const withProxyEnvironment = <A, E, R>(values: Record<string, string>, effect: Effect.Effect<A, E, R>) => {
+    const names = ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"]
+    const saved = names.map((name) => [name, process.env[name]] as const)
+    return Effect.sync(() => {
+      names.forEach((name) => delete process.env[name])
+      Object.assign(process.env, values)
+    }).pipe(
+      Effect.andThen(effect),
+      Effect.ensuring(
+        Effect.sync(() =>
+          saved.forEach(([name, value]) => (value === undefined ? delete process.env[name] : (process.env[name] = value))),
+        ),
+      ),
+    )
+  }
+
+  it.effect("sends the name to a configured proxy and resolves nothing itself", () =>
+    withProxyEnvironment(
+      { HTTPS_PROXY: "http://proxy.test:3128" },
+      Effect.gen(function* () {
+        reset()
+        const registry = yield* Tool.Service
+
+        yield* run(registry, { url: "https://example.com/x", prompt: "q" })
+        expect(requests[0]?.url).toBe("https://example.com/x")
+        expect(requests[0]?.headers.host).toBeUndefined()
+        expect(requests[0]?.init).toMatchObject({ redirect: "manual", proxy: "http://proxy.test:3128/" })
+        expect(requests[0]?.init).not.toHaveProperty("tls")
+        expect(lookups).toEqual([])
+      }),
+    ),
+  )
+
+  const P = "http://proxy.test:3128"
+  for (const [label, values] of [
+    ["a NO_PROXY entry for the host", { HTTPS_PROXY: P, NO_PROXY: "example.com" }],
+    ["a NO_PROXY entry for its domain", { HTTPS_PROXY: P, NO_PROXY: ".example.com,other.test" }],
+    ["a NO_PROXY of *", { HTTPS_PROXY: P, NO_PROXY: "*" }],
+    ["a NO_PROXY entry for its port", { HTTPS_PROXY: P, NO_PROXY: "example.com:8443" }],
+    ["only a proxy for the other scheme", { HTTP_PROXY: P }],
+    ["a proxy value that is not an http address", { HTTPS_PROXY: "socks5://proxy.test:1080" }],
+  ] as const) {
+    it.effect(`connects to the checked address with ${label}`, () =>
+      withProxyEnvironment(
+        values,
+        Effect.gen(function* () {
+          reset()
+          const registry = yield* Tool.Service
+
+          yield* run(registry, { url: "https://example.com:8443/x", prompt: "q" })
+          expect(requests[0]?.url).toBe(`https://${publicAddress}:8443/x`)
+          expect(requests[0]?.init).not.toHaveProperty("proxy")
+          expect(lookups).toEqual(["example.com"])
+        }),
+      ),
+    )
+  }
+
+  it.effect("still refuses a metadata address, with and without a proxy configured", () =>
+    Effect.gen(function* () {
+      reset()
+      addresses = { "meta.example": ["169.254.169.254"] }
+      const registry = yield* Tool.Service
+
+      // No proxy: the name resolves to a metadata address and nothing is sent.
+      expect(yield* run(registry, { url: "https://meta.example/x", prompt: "q" })).toMatchObject({
+        status: "error",
+        error: { type: "webfetch.refused" },
+      })
+      // A proxy: a literal address and a loopback name are not sent to it either.
+      yield* withProxyEnvironment(
+        { HTTPS_PROXY: "http://proxy.test:3128", HTTP_PROXY: "http://proxy.test:3128" },
+        Effect.gen(function* () {
+          for (const url of ["http://169.254.169.254/latest", "https://[fd00:ec2::254]/x", "http://localhost/x"])
+            expect(yield* run(registry, { url, prompt: "q" })).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
+        }),
+      )
+      expect(requests).toEqual([])
+    }),
+  )
+
   it.effect("sends nothing for a file: URL", () =>
     Effect.gen(function* () {
       reset()

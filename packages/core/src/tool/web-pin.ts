@@ -1,5 +1,6 @@
 export * as WebPin from "./web-pin.js"
 
+import { isIP } from "node:net"
 import { checkServerIdentity, type PeerCertificate } from "node:tls"
 
 // What fetch fails with when it could not connect to an address, so that nothing was sent to it.
@@ -35,3 +36,35 @@ export function targets(url: URL, addresses: ReadonlyArray<string>) {
 /** Whether `error` is fetch failing to connect, so that the next address of a name may be tried. */
 export const notConnected = (error: unknown) =>
   error instanceof TypeError && "code" in error && typeof error.code === "string" && NOT_CONNECTED.has(error.code)
+
+/**
+ * The proxy a request to `url` goes through, from `HTTPS_PROXY` or `HTTP_PROXY` unless `NO_PROXY` names the host, or
+ * undefined when it connects directly. The owner's exception to the rule above (2026-10-19, FU-M1-008): a request that
+ * goes through a proxy is sent with the host name, as the reference does, because the proxy resolves and connects, and
+ * a proxy that filters by name must see the name. Nothing connects to the checked address then. An address written as a
+ * literal and a loopback name never take the exception, and stay under `AddressGuard`.
+ */
+export function proxyFor(url: URL, environment: Readonly<Record<string, string | undefined>> = process.env) {
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/, "")
+  if (isIP(hostname.replace(/^\[|\]$/g, "")) !== 0 || hostname === "localhost" || hostname.endsWith(".localhost"))
+    return undefined
+  const read = (name: string) => environment[name] || environment[name.toLowerCase()] || undefined
+  const value = read(url.protocol === "https:" ? "HTTPS_PROXY" : "HTTP_PROXY")
+  if (!value || bypasses(url, hostname, read("NO_PROXY"))) return undefined
+  // Anything but an http(s) proxy address is ignored, so a malformed value cannot turn into another scheme.
+  const proxy = URL.parse(value)
+  return proxy && (proxy.protocol === "http:" || proxy.protocol === "https:") ? proxy.href : undefined
+}
+
+function bypasses(url: URL, hostname: string, list: string | undefined) {
+  if (!list) return false
+  const port = url.port || (url.protocol === "https:" ? "443" : "80")
+  return list.split(/[\s,]+/).some((entry) => {
+    if (!entry) return false
+    if (entry === "*") return true
+    const match = entry.match(/^(.+?):(\d+)$/)
+    if (match?.[2] && match[2] !== port) return false
+    const host = (match?.[1] ?? entry).toLowerCase().replace(/^\*?\.?/, "")
+    return hostname === host || hostname.endsWith(`.${host}`)
+  })
+}

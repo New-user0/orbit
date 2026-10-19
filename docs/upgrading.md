@@ -120,8 +120,10 @@ rest:
 
 - **Left out whole:** `language`, `output_style`, `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
   `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
-  `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, and `disabled` on an agent, whose
-  entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's own rules
+  `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, the budgets `media`, `tool_output`, `compaction` and `shell_tool`,
+  `attribution`, `system_prompt_file`, `instructions_exclude` and `model_aliases`, and `disabled` on an agent, whose
+  entry goes with it. So are an agent's `effort`, `max_turns`, `tools`, `permission_mode`, `mcp_servers`, `hooks`,
+  `skills`, `memory` and `isolation`. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's own rules
   come after yours and win: which agent a session starts as, which agent runs a command, and which agents the model
   may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as the
   session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key that
@@ -132,9 +134,10 @@ rest:
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
-  10 or less, so a repository cannot raise the limit above 10.
-- **Kept as written:** everything else, such as `username`, `snapshots`, `watcher`, `media`,
-  `tool_output`, `compaction`, and the fields of an agent that only describe it.
+  10 or less, so a repository cannot raise the limit above 10. An agent's `context` loses `instructions: false`, and its
+  `initial_prompt` is dropped when it starts with `/`.
+- **Kept as written:** everything else, such as `username`, `snapshots` and `watcher`, and the fields of an agent that
+  only describe it.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
 `{file:path}` reference is read only when it names a file inside the project's folder, not through a link that leaves
@@ -3504,6 +3507,19 @@ in the tool description, in the permission request's `metadata`, in the input th
 wording of those notes, and models that sent a one-character query or both domain lists.
 
 **What to do:** Nothing. Send one domain list per search.
+
+### `WebFetch` sends the host name to a configured proxy
+
+When `HTTPS_PROXY` (for an `https:` page) or `HTTP_PROXY` (for `http:`) is set to an `http:` or `https:` address and
+`NO_PROXY` does not name the host, `WebFetch` now sends the request to the proxy for the host name. Before, it resolved
+the name itself, checked the address and sent the address, so a proxy that filters by name saw an address. The proxy
+resolves the name and connects, so Orbit's own address check does not run for that request; the permission check for
+each hop still does. A literal address and `localhost` are never sent that way, and a host that `NO_PROXY` names is
+checked and connected to as before. This is the owner's exception of 2026-10-19 to connecting to the checked address.
+
+**Affects:** people who run Orbit behind a proxy and fetch pages with `WebFetch`.
+
+**What to do:** Nothing. To keep a host out of the proxy, list it in `NO_PROXY`.
 
 ## System prompt
 
