@@ -151,7 +151,6 @@ export interface Interface {
       scope: RelativePath
       ignores?: Repository
       maximumUntrackedFileBytes?: number
-      withholdNested?: boolean
     }) => Effect.Effect<{ readonly skipped: readonly RelativePath[] }, OperationError>
     /**
      * The paths git ignores. By default a tracked file that matches a pattern counts as ignored, which is what a
@@ -169,8 +168,6 @@ export interface Interface {
       scopes: readonly RelativePath[]
       ignores?: Repository
       maximumUntrackedFileBytes?: number
-      /** Leave out every folder that holds a `.git` entry of its own, so that git never opens what it names. */
-      withholdNested?: boolean
     }) => Effect.Effect<TreeID, OperationError>
     readonly write: (repository: Repository) => Effect.Effect<TreeID, OperationError>
     readonly files: (input: {
@@ -470,31 +467,31 @@ const layer = Layer.effect(
       return repository
     })
 
+    // The snapshot commands that take paths (the refresh, the comparison and the restore) read them as names, through
+    // `--literal-pathspecs`. Git reads a path as a pattern by default, so a file named `[s]ub`, `*` or `:!x` would also stand
+    // for every path the pattern matches: restoring that one file would overwrite them, leaving it out of a capture would
+    // drop them from the index, adding it would add them, and git would walk folders that nobody listed.
     const refresh = Effect.fn("Git.index.refresh")(function* (input: {
       repository: Repository
       scope: RelativePath
       ignores?: Repository
       maximumUntrackedFileBytes?: number
-      /** Keep git out of every folder that holds a `.git` entry of its own: it opens what that entry names. */
-      withholdNested?: boolean
     }) {
-      const withheld = input.withholdNested ? yield* withholdNestedRepositories(input.repository, input.scope) : undefined
       const list = (args: string[]) =>
         repositoryOperation("refresh", input.repository, args).pipe(Effect.map((result) => nuls(result.text)))
       const [tracked, untracked] = yield* Effect.all(
         [
           // A nested repository is a gitlink here; git would start a status inside it, with the config that clone ships.
-          list(["diff-files", "--ignore-submodules=all", "--name-only", "-z", "--", input.scope]),
-          // The patterns on the command line outrank every .gitignore, so a negation there cannot bring a folder back.
           list([
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-            ...(withheld ?? []).flatMap((line) => ["-x", line]),
+            "--literal-pathspecs",
+            "diff-files",
+            "--ignore-submodules=all",
+            "--name-only",
             "-z",
             "--",
             input.scope,
           ]),
+          list(["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "-z", "--", input.scope]),
         ],
         { concurrency: 2 },
       )
@@ -524,78 +521,25 @@ const layer = Layer.effect(
         yield* repositoryOperation(
           "refresh",
           input.repository,
-          ["rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"],
+          [
+            "--literal-pathspecs",
+            "rm",
+            "--cached",
+            "-f",
+            "--ignore-unmatch",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+          ],
           { stdin: remove.join("\0") + "\0" },
         )
       if (stage.length)
         yield* repositoryOperation(
           "refresh",
           input.repository,
-          ["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"],
+          ["--literal-pathspecs", "add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"],
           { stdin: stage.join("\0") + "\0" },
         )
       return { skipped }
-    })
-
-    // `ls-files --others` and `add` look inside every untracked folder for a `.git` entry, to tell a nested repository
-    // from a plain folder, and a `.git` file that says `gitdir: \\host\share` (or a directory whose `commondir` does)
-    // makes git open that share (class 6). A folder that the snapshot repository's own `info/exclude` names is never
-    // opened, so while the project is not trusted each such folder is found here, without git, and written there. A
-    // .gitignore ranks above that file, and a negation in it (`!sub/`) would bring the folder back, so the same lines
-    // are also given to `ls-files` as `-x`, which outranks every .gitignore (`--exclude-from` does not). It returns them.
-    // They travel on the command line, so a folder with more of them than a command line holds cannot be captured.
-    const withholdNestedRepositories = Effect.fn("Git.index.withholdNested")(function* (
-      repository: Repository,
-      scope: RelativePath,
-    ) {
-      const named = /^(\.git[. ]*|git~\d+)$/i
-      const walk = (directory: string): Effect.Effect<string[]> =>
-        fs.readDirectoryEntries(directory).pipe(
-          Effect.orElseSucceed(() => []),
-          Effect.flatMap((entries) =>
-            directory !== repository.worktree && entries.some((entry) => named.test(entry.name))
-              ? Effect.succeed([directory])
-              : Effect.forEach(
-                  entries.filter(
-                    (entry) => entry.type === "directory" && !(directory === repository.worktree && named.test(entry.name)),
-                  ),
-                  (entry) => walk(path.join(directory, entry.name)),
-                  { concurrency: 16 },
-                ).pipe(Effect.map((found) => found.flat())),
-          ),
-        )
-      const lines = (yield* walk(path.join(repository.worktree, scope))).map(
-        (directory) =>
-          "/" +
-          path
-            .relative(repository.worktree, directory)
-            .replaceAll("\\", "/")
-            .replace(/[\\*?[\]#!]/g, "\\$&")
-            .replace(/ $/, "\\ ") +
-          "/",
-      )
-      const exclude = path.join(repository.gitDirectory, "info", "exclude")
-      const content = "# Written by Orbit: folders that hold a .git entry of their own.\n" + lines.sort().join("\n") + "\n"
-      if (lines.join("").length > 16_000)
-        return yield* new OperationError({
-          operation: "refresh",
-          directory: repository.worktree,
-          message: "Too many nested repositories to leave out of the snapshot",
-        })
-      if ((yield* fs.readFileStringSafe(exclude).pipe(Effect.orElseSucceed(() => undefined))) === content) return lines
-      yield* fs.ensureDir(path.dirname(exclude)).pipe(
-        Effect.andThen(fs.writeFileString(exclude, content)),
-        Effect.mapError(
-          (cause) =>
-            new OperationError({
-              operation: "refresh",
-              directory: repository.gitDirectory,
-              message: "Failed to configure Git exclusions",
-              cause,
-            }),
-        ),
-      )
-      return lines
     })
 
     const ignored = Effect.fn("Git.index.ignored")(function* (input: {
@@ -655,7 +599,6 @@ const layer = Layer.effect(
         scopes: readonly RelativePath[]
         ignores?: Repository
         maximumUntrackedFileBytes?: number
-        withholdNested?: boolean
       }) =>
         locked(
           input.repository,
@@ -703,12 +646,19 @@ const layer = Layer.effect(
       // Patch headers have no -z form: unquoted paths keep chunksByFile matching non-ASCII names.
       const [names, numbers, patch] = yield* Effect.all(
         [
-          repositoryOperation("diff", input.repository, ["diff", "--name-status", "-z", ...args]),
-          repositoryOperation("diff", input.repository, ["diff", "--numstat", "-z", ...args]),
+          repositoryOperation("diff", input.repository, [
+            "--literal-pathspecs",
+            "diff",
+            "--name-status",
+            "-z",
+            ...args,
+          ]),
+          repositoryOperation("diff", input.repository, ["--literal-pathspecs", "diff", "--numstat", "-z", ...args]),
           repositoryOperation(
             "diff",
             input.repository,
             [
+              "--literal-pathspecs",
               "-c",
               "core.quotepath=false",
               "diff",
@@ -786,7 +736,14 @@ const layer = Layer.effect(
             ([file, tree]) =>
               Effect.gen(function* () {
                 if (yield* hasEntry(input.repository, tree, file)) {
-                  yield* repositoryOperation("restore", input.repository, ["checkout", "--no-recurse-submodules", tree, "--", file])
+                  yield* repositoryOperation("restore", input.repository, [
+                    "--literal-pathspecs",
+                    "checkout",
+                    "--no-recurse-submodules",
+                    tree,
+                    "--",
+                    file,
+                  ])
                   return
                 }
                 yield* fs.remove(path.join(input.repository.worktree, file), { recursive: true, force: true }).pipe(

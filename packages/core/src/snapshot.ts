@@ -91,6 +91,12 @@ const layer = Layer.effect(
         },
       }),
     })
+    // The work tree of a folder that is not trusted, read from its files.
+    const untrustedWorktree = Effect.gen(function* () {
+      const found = yield* GitLayout.locate(fs, location.project.directory)
+      if (!found) return yield* new Error({ operation: "capture", message: "Project is not a Git repository" })
+      return AbsolutePath.make(yield* fs.realPath(found.worktree).pipe(Effect.orDie))
+    })
     // Git applies the config of the repository it runs in, and a clone chooses that file: `include.path`, `core.worktree`
     // and `core.excludesFile` open files and shares that it names, and its objects can chain to more through
     // `objects/info/alternates` (class 1, class 6). So while the project is not trusted no git starts in the project's own
@@ -102,9 +108,11 @@ const layer = Layer.effect(
       Effect.cached(
         Effect.gen(function* () {
           const source = trusted ? yield* git.repo.discover(location.project.directory) : undefined
-          const found = source ?? (trusted ? undefined : yield* GitLayout.locate(fs, location.project.directory))
-          if (!found) return yield* new Error({ operation: "capture", message: "Project is not a Git repository" })
-          const worktree = AbsolutePath.make(yield* fs.realPath(found.worktree).pipe(Effect.orDie))
+          if (trusted && !source)
+            return yield* new Error({ operation: "capture", message: "Project is not a Git repository" })
+          const worktree = source
+            ? AbsolutePath.make(yield* fs.realPath(source.worktree).pipe(Effect.orDie))
+            : yield* untrustedWorktree
           // Untrusted snapshots are keyed by the work tree alone, not by the project ID.
           const untrustedDirectory = path.join(global.data, "snapshot", "untrusted", Hash.fast(worktree))
           const gitDirectory = AbsolutePath.make(
@@ -165,11 +173,9 @@ const layer = Layer.effect(
       )
     const trustedFiber = yield* open(true)
     const untrustedFiber = yield* open(false)
-    const repository = trust.trusted().pipe(
-      Effect.flatMap((yes) => (yes ? trustedFiber : untrustedFiber)),
-      Effect.uninterruptible,
-      Effect.flatMap(Fiber.join),
-    )
+    const opened = (trusted: boolean) =>
+      (trusted ? trustedFiber : untrustedFiber).pipe(Effect.uninterruptible, Effect.flatMap(Fiber.join))
+    const repository = trust.trusted().pipe(Effect.flatMap(opened))
 
     const scope = Effect.fnUntraced(function* (worktree: AbsolutePath) {
       const relative = path.relative(worktree, location.directory)
@@ -183,14 +189,29 @@ const layer = Layer.effect(
     const capture = Effect.fn("Snapshot.capture")(function* () {
       if (!enabled()) return undefined
       return yield* Effect.gen(function* () {
-        const repo = yield* repository
+        const trusted = yield* trust.trusted()
+        // Git looks inside each folder it has not recorded for a `.git` entry, to tell a nested repository from a plain
+        // folder, and opens what that entry names: a `.git` file that says `gitdir: \\host\share`, or a `.git` folder whose
+        // `commondir` names one, connects to that host (class 6). Excluding such a folder from the capture did not hold: a
+        // `.gitignore` of the clone named it back, and then a file named as a pattern for it (`[s]ub`) led git there again.
+        // So while the folder is not trusted, a scope that holds one gets no snapshot, and no git starts for it.
+        if (!trusted) {
+          const worktree = yield* untrustedWorktree
+          const found = yield* GitLayout.nested(fs, worktree, path.join(worktree, yield* scope(worktree)))
+          if (found.length) {
+            yield* Effect.logWarning("no snapshot: the folder is not trusted and holds a nested git repository", {
+              folder: found[0],
+            })
+            return undefined
+          }
+        }
+        const repo = yield* opened(trusted)
         return ID.make(
           yield* git.tree.capture({
             repository: repo.snapshotRepository,
             scopes: [yield* scope(repo.worktree)],
             ignores: repo.source,
             maximumUntrackedFileBytes: 2 * 1024 * 1024,
-            withholdNested: !(yield* trust.trusted()),
           }),
         )
       }).pipe(

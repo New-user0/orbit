@@ -104,9 +104,10 @@ folder's `.gitattributes` names, so no filter, diff or merge program of your git
 the folder's files and no `.lfsconfig` host is contacted (`snapshot-untrusted-git.test.ts`; the hooks of your own git
 config, `core.hooksPath` and `init.templateDir`, still run during a snapshot, with the folder as the working directory)
 (undo still works, and `.gitignore` files still apply, and snapshots
-taken before the folder was trusted stay usable once it is trusted, but not the other way round; a folder that holds a `.git`
-entry of its own, which git would open to see where it points, is left out of the snapshot, even when a `.gitignore` of the folder names it back, so its files are not part
-of an undo; a folder with so many of them that their names do not fit on a command line makes the snapshot fail), the list of worktrees
+taken before the folder was trusted stay usable once it is trusted, but not the other way round; while a folder below
+the session's folder holds a `.git` entry of its own, which git would open to see where it points, no snapshot is taken
+at all, so undo is not available for those steps until the folder is trusted or that entry is gone, and Orbit's log names
+the folder), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
 folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`,
 `resume`, `replay` and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a
@@ -2749,6 +2750,19 @@ the turn ended without an answer.
 
 **Affects:** anyone who sets turn limits. Each step sends a few more input tokens, and the stored history holds one more
 hidden row per step. Clients do not show it.
+
+**What to do:** Nothing.
+
+### Undo takes a file named like a pattern as that one file
+
+Session snapshots, and the undo that restores from them, now hand every path to git as a name. Git used to read a file
+name such as `[s]ub` (or `*` and `s*`, which Windows does not allow) as a pattern, so undoing a change to that file also
+put back every file the pattern matched, such as `sub`, and the diff of that file listed them too. A capture that left
+such a file out because it was too large dropped the files it matched from the snapshot, and one that recorded it also
+recorded a large file it matched (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for
+a pattern as a name").
+
+**Affects:** folders that hold files whose names git would read as a pattern.
 
 **What to do:** Nothing.
 

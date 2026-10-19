@@ -1,13 +1,15 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Logger } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Git } from "@orbit/core/git"
 import { Location } from "@orbit/core/location"
 import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Snapshot } from "@orbit/core/snapshot"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Global } from "@orbit/util/global"
+import { LayerNode } from "@orbit/util/effect/layer-node"
 import { git, repository } from "./fixture/git"
 import { keys, live, plain, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
@@ -65,52 +67,52 @@ const run = (implicit: boolean) =>
 // Git's trace names the work tree of the repository a process works in; Orbit's own is under its data folder.
 const own = (command: string) => command.replaceAll("\\", "/").includes("/snapshot/")
 
-// The nested repository is left out of an untrusted snapshot, so its folder is not a gitlink in the index. One still can be
-// there: a repository that an earlier version wrote holds it, and so does a folder whose exclusion lost a race with a
-// `git init` in it. The comparison of the index with the work tree then has to leave the nested repository alone, which
-// only `--ignore-submodules=all` ensures: this seeds the gitlink into Orbit's own index so that the rows reach that guard.
-// The entry names the commit that the nested repository is at, so that git takes the folder for an unchanged submodule and
-// goes inside it to look for what is modified, which is what starts the program of the nested repository.
-const seedGitlink = (data: string, root: string, folder: string) =>
-  Effect.promise(async () => {
-    const snapshots = path.join(data, "snapshot", "untrusted")
-    const [name] = await fs.readdir(snapshots)
-    const directory = path.join(snapshots, name!)
-    const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: path.join(root, folder) }).stdout.toString().trim()
-    await git(directory, "--git-dir=" + directory, "update-index", "--add", "--cacheinfo", `160000,${head},${folder}`)
-  })
+const layerFor = (root: string, data: string, implicit: boolean) =>
+  AppNodeBuilder.build(Snapshot.node, [
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit })),
+    Location.node.replace(Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(root) }))),
+    Global.node.replace(Global.layerWith({ data, config: path.join(data, "config") })),
+  ])
 
-describe("Snapshot starts no git in the folder's own repository while it is not trusted", () => {
-  it.live(
-    "works from Orbit's own git directory, and still leaves out what .gitignore names",
-    () =>
-      Effect.gen(function* () {
-        const { value, git } = yield* run(false)
-
-        expect(value.before).toBeDefined()
-        expect(value.after).toBeDefined()
-        expect(value.files).toEqual(["a.txt"])
-        expect(git.length).toBeGreaterThan(0)
-        expect(git.filter((command) => !own(command))).toEqual([])
-      }),
-    SLOW,
+/** Two captures of the folder at `root` while it is not trusted, with a change in between, and what git started. */
+const untrustedCaptures = (root: string, data: string, change: () => Promise<unknown>) =>
+  traced(
+    Effect.gen(function* () {
+      const snapshot = yield* Snapshot.Service
+      const first = yield* snapshot.capture()
+      yield* Effect.promise(change)
+      return [first, yield* snapshot.capture()]
+    }).pipe(Effect.provide(layerFor(root, data, false))),
   )
 
-  it.live(
-    "starts git in the folder's repository when it is trusted (control)",
-    () =>
-      Effect.gen(function* () {
-        const { git } = yield* run(true)
+// A folder that is a repository of its own is a gitlink in a snapshot index once it is recorded: a trusted folder records
+// it, and an untrusted one could if its `.git` appeared after the scan. Git then starts a status inside it, with the config
+// that repository ships, whenever it compares the index with the work tree, unless the comparison passes
+// `--ignore-submodules=all`. This runs the Git service by itself, with a repository of Orbit's over the folder: its first
+// capture records the gitlink, and the later calls compare and restore.
+const gitlinkGuard = (root: string) =>
+  Effect.gen(function* () {
+    const data = (yield* tmpdirScoped()).path
+    const git = yield* Git.Service
+    const repository = yield* git.repo.create({
+      worktree: AbsolutePath.make(yield* Effect.promise(() => fs.realpath(root))),
+      gitDirectory: AbsolutePath.make(path.join(data, "snapshot", "own")),
+    })
+    const scopes = [RelativePath.make(".")]
+    const first = yield* git.tree.capture({ repository, scopes })
+    yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "three\n"))
+    const second = yield* git.tree.capture({ repository, scopes })
+    yield* git.tree.capture({ repository, scopes })
+    yield* git.tree.files({ repository, from: first, to: second })
+    yield* git.tree.diff({ repository, from: first, to: second })
+    yield* git.tree.restore({ repository, files: new Map([[RelativePath.make("a.txt"), first]]) })
+  }).pipe(Effect.provide(LayerNode.compile(Git.node)))
 
-        expect(git.filter((command) => !own(command)).length).toBeGreaterThan(0)
-      }),
-    SLOW,
-  )
-})
-
-// Class 1 (round 2): a directory of the folder that is a repository itself is a gitlink in the snapshot index, and git
-// starts a status inside it, with the config that repository ships, whenever it compares the index with the work tree.
-// Each row plants a key into a nested repository `sub`, and the plain command of the row is the live control.
+// Class 1 (round 2): each row plants a key into a nested repository `sub`, and the plain command of the row is the live
+// control. While the folder is not trusted it gets no snapshot and starts no git (round 6; the share rows below say why).
+// Orbit's own repository, with the folder recorded as a gitlink, starts nothing inside it either.
+// Mutations: removing the skip from `Snapshot.capture` fails the untrusted half of every row; removing
+// `--ignore-submodules=all` from the `diff-files` of `Git.index.refresh` fails the gitlink half.
 describe("Snapshot starts no git program of a repository nested in an untrusted folder", () => {
   const rows = ["core.fsmonitor", "core.hooksPath", ".git/hooks"].map((name) => keys.find((key) => key.name === name)!)
 
@@ -127,27 +129,15 @@ describe("Snapshot starts no git program of a repository nested in an untrusted 
             await fs.cp(nested.root, path.join(outer.root, "sub"), { recursive: true })
           })
           const data = (yield* tmpdirScoped()).path
-          const layer = AppNodeBuilder.build(Snapshot.node, [
-            WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
-            Location.node.replace(Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(outer.root) }))),
-            Global.node.replace(Global.layerWith({ data, config: path.join(data, "config") })),
-          ])
-          const { git } = yield* traced(
-            Effect.gen(function* () {
-              const snapshot = yield* Snapshot.Service
-              const first = yield* snapshot.capture()
-              yield* seedGitlink(data, outer.root, "sub")
-              yield* Effect.promise(() => fs.writeFile(path.join(outer.root, "a.txt"), "three\n"))
-              const second = yield* snapshot.capture()
-              yield* snapshot.capture()
-              if (!first || !second) return expect.unreachable("capture is disabled")
-              yield* snapshot.files({ from: first, to: second })
-              yield* snapshot.diff({ from: first, to: second })
-              yield* snapshot.restore({ files: new Map([[RelativePath.make("a.txt"), first]]) })
-            }).pipe(Effect.provide(layer)),
+          const untrusted = yield* untrustedCaptures(outer.root, data, () =>
+            fs.writeFile(path.join(outer.root, "a.txt"), "three\n"),
           )
+          const guarded = yield* traced(gitlinkGuard(outer.root))
 
-          expect(git.filter((command) => !own(command))).toEqual([])
+          expect(untrusted.value).toEqual([undefined, undefined])
+          expect(untrusted.git).toEqual([])
+          expect(guarded.git.length).toBeGreaterThan(0)
+          expect(guarded.git.filter((command) => !own(command))).toEqual([])
           expect(yield* nested.ran()).toEqual([])
           // Control: the same program does run when the nested repository is used as a repository.
           yield* Effect.promise(() => plain(path.join(outer.root, "sub"), key.trigger!, key.input))
@@ -176,13 +166,6 @@ const withGlobalConfig = <A, E, R>(file: string, body: Effect.Effect<A, E, R>) =
       ),
     )
   })
-
-const layerFor = (root: string, data: string, implicit: boolean) =>
-  AppNodeBuilder.build(Snapshot.node, [
-    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit })),
-    Location.node.replace(Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(root) }))),
-    Global.node.replace(Global.layerWith({ data, config: path.join(data, "config") })),
-  ])
 
 describe("Snapshot runs no attribute driver of the person's config for an untrusted folder's files", () => {
   // `reuse` starts from a repository an earlier version made: its index is filled and it has no attributes file.
@@ -450,6 +433,7 @@ describe("Snapshot runs no attribute driver of the person's config for an untrus
 
 // Class 14 (round 2 re-check): a clone with submodules keeps each one's repository under `.git/modules/<name>`, and the
 // submodule's `.git` is a file that points there. The plain command in the submodule is the control that the key is live.
+// Mutations as for the nested rows above.
 describe("Snapshot starts nothing of a submodule's repository in an untrusted folder", () => {
   it.live(
     "a .git file pointing into .git/modules, with core.fsmonitor set there",
@@ -475,22 +459,13 @@ describe("Snapshot starts nothing of a submodule's repository in an untrusted fo
         const ran = () =>
           Effect.promise(async () => ((await Bun.file(marker).exists()) ? await Bun.file(marker).text() : ""))
         const data = (yield* tmpdirScoped()).path
-        const traces = yield* traced(
-          Effect.gen(function* () {
-            const snapshot = yield* Snapshot.Service
-            const first = yield* snapshot.capture()
-            yield* seedGitlink(data, root, "sub")
-            yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "two\n"))
-            const second = yield* snapshot.capture()
-            yield* snapshot.capture()
-            if (!first || !second) return expect.unreachable("capture is disabled")
-            yield* snapshot.files({ from: first, to: second })
-            yield* snapshot.diff({ from: first, to: second })
-            yield* snapshot.restore({ files: new Map([[RelativePath.make("a.txt"), first]]) })
-          }).pipe(Effect.provide(layerFor(root, data, false))),
-        )
+        const untrusted = yield* untrustedCaptures(root, data, () => fs.writeFile(path.join(root, "a.txt"), "two\n"))
+        const guarded = yield* traced(gitlinkGuard(root))
 
-        expect(traces.git.filter((command) => !own(command))).toEqual([])
+        expect(untrusted.value).toEqual([undefined, undefined])
+        expect(untrusted.git).toEqual([])
+        expect(guarded.git.length).toBeGreaterThan(0)
+        expect(guarded.git.filter((command) => !own(command))).toEqual([])
         expect(yield* ran()).toBe("")
         yield* Effect.promise(() => git(path.join(root, "sub"), "status").catch(() => undefined))
         expect((yield* ran()).length).toBeGreaterThan(0)
@@ -499,12 +474,14 @@ describe("Snapshot starts nothing of a submodule's repository in an untrusted fo
   )
 })
 
-// Class 6 (round 4): git looks inside every untracked folder for a `.git` entry, and a `.git` file naming a share, or a
-// `.git` folder whose `commondir` names one, makes it open that share. While the folder is not trusted nothing of the
-// kind may be reached. The oracle is the Windows DNS client cache: a name that something tried to open is cached, but
-// only for a few seconds, so a watcher polls the cache for the whole run. The control is a plain open of a second unique
-// name by this process, which the watcher must also see. Other systems have no such share syntax, so there the rows check
-// only what is recorded.
+// Class 6 (rounds 4 to 6): git looks inside every folder it has not recorded for a `.git` entry, and a `.git` file naming
+// a share, or a `.git` folder whose `commondir` names one, makes it open that share. Leaving such a folder out did not hold:
+// a `.gitignore` negation named it back (round 4), and then a file beside it whose name git read as a pattern for it
+// (`[s]ub`) led `add` there again (round 5). So while the folder is not trusted a capture whose scope holds such an entry is
+// skipped before any git starts. The oracle is the Windows DNS client cache: a name that something tried to open is cached,
+// but only for a few seconds, so a watcher polls the cache for the whole run. The control is a plain open of a second
+// unique name by this process, which the watcher must also see. Other systems have no such share syntax, so there the rows
+// check that no git started and nothing was recorded.
 const windows = process.platform === "win32"
 
 const unique = (prefix: string) => `${prefix}${Math.random().toString(36).slice(2, 12)}.example.com`
@@ -535,17 +512,21 @@ const watch = async () => {
   }
 }
 
-describe("Snapshot reaches no share named by a nested .git entry in an untrusted folder", () => {
+describe("Snapshot takes no snapshot, and reaches no share, in an untrusted folder that holds a nested .git entry", () => {
   const pointer = (name: string) => async (folder: string, host: string) => {
     await Bun.write(path.join(folder, name), `gitdir: \\\\${host}\\share\\repo\n`)
   }
-  const rows: ReadonlyArray<{
-    name: string
-    plant: (folder: string, host: string) => Promise<void>
-    nested: string
-    /** A .gitignore (path from the root, text) that tries to bring the nested folder back. */
-    negate?: readonly [string, string]
-  }> = [
+  interface Row {
+    readonly name: string
+    readonly nested: string
+    /** Writes the entry into the nested folder; none leaves the folder a plain one. */
+    readonly plant?: (folder: string, host: string) => Promise<void>
+    /** A .gitignore (path from the root, text) that names the nested folder back. */
+    readonly negate?: readonly [string, string]
+    /** A file beside the nested folder whose name git would read as a pattern that matches the folder. */
+    readonly glob?: string
+  }
+  const spellings: readonly Row[] = [
     { name: "a .git file in a subfolder", nested: "sub", plant: pointer(".git") },
     { name: "a .git file several folders down", nested: path.join("a", "b", "sub"), plant: pointer(".git") },
     { name: "a .git file with other letter case", nested: "sub", plant: pointer(".GIT") },
@@ -558,59 +539,232 @@ describe("Snapshot reaches no share named by a nested .git entry in an untrusted
         await Bun.write(path.join(folder, ".git", "commondir"), `\\\\${host}\\share\\repo\n`)
       },
     },
-    // A .gitignore of the clone ranks above the snapshot repository's info/exclude, so a negation there re-includes the
-    // folder unless the exclusion is also given on the command line.
-    { name: "root .gitignore !/sub/", nested: "sub", plant: pointer(".git"), negate: [".gitignore", "!/sub/\n"] },
-    { name: "root .gitignore !sub", nested: "sub", plant: pointer(".git"), negate: [".gitignore", "!sub\n"] },
-    { name: "root .gitignore !*", nested: "sub", plant: pointer(".git"), negate: [".gitignore", "!*\n"] },
+  ]
+  const negations: readonly Row[] = [
+    { name: "root .gitignore !/sub/", nested: "sub", negate: [".gitignore", "!/sub/\n"] },
+    { name: "root .gitignore !sub", nested: "sub", negate: [".gitignore", "!sub\n"] },
+    { name: "root .gitignore !*", nested: "sub", negate: [".gitignore", "!*\n"] },
     {
       name: "a nested .gitignore !sub/",
       nested: path.join("a", "b", "sub"),
-      plant: pointer(".git"),
       negate: [path.join("a", "b", ".gitignore"), "!sub/\n"],
     },
   ]
+  // Windows allows no `*` in a name.
+  const globs = windows ? ["[s]ub"] : ["[s]ub", "*", "s*"]
+  const rows: readonly Row[] = [
+    ...spellings,
+    ...negations.flatMap((row) =>
+      globs.map((glob) => ({ ...row, name: `${row.name}, beside a file named ${glob}`, plant: pointer(".git"), glob })),
+    ),
+  ]
 
+  /**
+   * The row's folder, the captures of it, what git started, the folders that the skip logged and which names were looked
+   * up (Windows only).
+   */
+  const scene = (row: Row, implicit: boolean) =>
+    Effect.gen(function* () {
+      const logged: string[] = []
+      const logger = Logger.make((entry) => {
+        const [message, fields] = Array.isArray(entry.message) ? entry.message : [entry.message]
+        if (message !== "no snapshot: the folder is not trusted and holds a nested git repository") return
+        logged.push(typeof fields === "object" && fields !== null && "folder" in fields ? String(fields.folder) : "")
+      })
+      const root = path.join((yield* tmpdirScoped()).path, "clone")
+      const host = unique("nested")
+      const control = unique("control")
+      yield* repository(root)
+      const folder = path.join(root, row.nested)
+      yield* Effect.promise(async () => {
+        await fs.mkdir(folder, { recursive: true })
+        await row.plant?.(folder, host)
+        await Bun.write(path.join(folder, "inner.txt"), "inner\n")
+        await Bun.write(path.join(root, "top.txt"), "top\n")
+        if (row.negate) await Bun.write(path.join(root, row.negate[0]), row.negate[1])
+        if (row.glob) await Bun.write(path.join(path.dirname(folder), row.glob), "glob\n")
+      })
+      const data = (yield* tmpdirScoped()).path
+      const stop = windows && row.plant ? yield* Effect.promise(watch) : undefined
+      const run = yield* traced(
+        Effect.gen(function* () {
+          const snapshot = yield* Snapshot.Service
+          const first = yield* snapshot.capture()
+          // The nested file changes as well, so that what is recorded shows whether the folder was walked.
+          yield* Effect.promise(async () => {
+            await fs.appendFile(path.join(root, "top.txt"), "more\n")
+            await fs.appendFile(path.join(folder, "inner.txt"), "more\n")
+          })
+          const second = yield* snapshot.capture()
+          const files = first && second ? (yield* snapshot.files({ from: first, to: second })).map(String) : []
+          return { first, second, files }
+        }).pipe(Effect.provide(layerFor(root, data, implicit)), Effect.provide(Logger.layer([logger]))),
+      )
+      if (stop) yield* Effect.promise(() => fs.stat(`\\\\${control}\\share\\x`).catch(() => undefined))
+      const names = stop ? yield* Effect.promise(stop) : undefined
+      const recorded = yield* Effect.promise(() => fs.readdir(path.join(data, "snapshot")).catch(() => []))
+      // A logged folder is the nested one when no path leads from one to the other (any letter case on Windows).
+      const real = yield* Effect.promise(() => fs.realpath(folder))
+      return {
+        ...run.value,
+        git: run.git,
+        recorded,
+        logged: logged.map((item) => (item && path.relative(real, item) === "" ? "nested" : item)),
+        names,
+        host,
+        control,
+        inner: fwd(path.join(row.nested, "inner.txt")),
+      }
+    })
+
+  // Mutations: removing the skip from `Snapshot.capture` fails every row (a capture is taken and git starts), and so does
+  // removing its log line.
   for (const row of rows)
     it.live(
       row.name,
       () =>
         Effect.gen(function* () {
-          const root = path.join((yield* tmpdirScoped()).path, "clone")
-          const host = unique("nested")
-          const control = unique("control")
-          yield* repository(root)
-          const folder = path.join(root, row.nested)
-          yield* Effect.promise(async () => {
-            await fs.mkdir(folder, { recursive: true })
-            await row.plant(folder, host)
-            await Bun.write(path.join(folder, "inner.txt"), "inner\n")
-            await Bun.write(path.join(root, "top.txt"), "top\n")
-            if (row.negate) await Bun.write(path.join(root, row.negate[0]), row.negate[1])
-          })
-          const data = (yield* tmpdirScoped()).path
-          const stop = windows ? yield* Effect.promise(watch) : undefined
+          const result = yield* scene(row, false)
+
+          expect(result.first).toBeUndefined()
+          expect(result.second).toBeUndefined()
+          expect(result.git).toEqual([])
+          expect(result.recorded).toEqual([])
+          // One line for each skipped step, naming the nested folder.
+          expect(result.logged).toEqual(["nested", "nested"])
+          if (!result.names) return
+          expect(result.names.has(result.control)).toBe(true)
+          expect(result.names.has(result.host)).toBe(false)
+        }),
+      SLOW,
+    )
+
+  // Control: the same folder is captured once it is trusted, and git then opens the share that the entry names, which shows
+  // that the planted entry is live (on Windows, where the oracle can see it).
+  it.live(
+    "captures the same folder when it is trusted, and git then looks the share up (control)",
+    () =>
+      Effect.gen(function* () {
+        const row = rows.find((item) => item.glob === "[s]ub" && item.negate?.[1] === "!*\n")!
+        const result = yield* scene(row, true)
+
+        expect(result.first).toBeDefined()
+        expect(result.files).toEqual([result.inner, "top.txt"])
+        expect(result.logged).toEqual([])
+        if (!result.names) return
+        expect(result.names.has(result.control)).toBe(true)
+        expect(result.names.has(result.host)).toBe(true)
+      }),
+    SLOW,
+  )
+
+  // Control: an untrusted folder with the same negation and the same file names, but no `.git` entry in the folder, is
+  // captured as before, from Orbit's own git directory, and its nested folder is recorded.
+  it.live(
+    "captures an untrusted folder that holds no nested .git entry (control)",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* scene(
+          { name: "plain", nested: "sub", negate: [".gitignore", "!*\n"], glob: "[s]ub" },
+          false,
+        )
+
+        expect(result.first).toBeDefined()
+        expect(result.files).toEqual([result.inner, "top.txt"])
+        expect(result.logged).toEqual([])
+        expect(result.git.length).toBeGreaterThan(0)
+        expect(result.git.filter((command) => !own(command))).toEqual([])
+      }),
+    SLOW,
+  )
+})
+
+// Every folder: git reads a path as a pattern unless it is told otherwise, and a file can be named like one. Each row puts
+// such a file beside a file `sub` that the pattern matches, in a trusted folder.
+// Mutations: `--literal-pathspecs` removed from the restore's `checkout` fails the restore rows, from the comparison's
+// `diff` the same rows, from the refresh's `add` the "records no large file" rows, and from its `rm` the "keeps a recorded
+// file" rows.
+describe("Snapshot reads a file name that git would take for a pattern as a name", () => {
+  // Over the 2 MiB that a capture records of a file it has not recorded before.
+  const large = "x".repeat(3 * 1024 * 1024)
+  const names = windows ? ["[s]ub"] : ["[s]ub", "*", "s*"]
+
+  const trustedFolder = (files: Readonly<Record<string, string>>) =>
+    Effect.gen(function* () {
+      const root = path.join((yield* tmpdirScoped()).path, "clone")
+      yield* repository(root)
+      yield* Effect.promise(() =>
+        Promise.all(Object.entries(files).map(([name, text]) => fs.writeFile(path.join(root, name), text))),
+      )
+      return { root, layer: layerFor(root, (yield* tmpdirScoped()).path, true) }
+    })
+
+  for (const name of names) {
+    it.live(
+      `restores and compares only the file named ${name}`,
+      () =>
+        Effect.gen(function* () {
+          const folder = yield* trustedFolder({ [name]: "one\n", sub: "one\n" })
+          const result = yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const first = yield* snapshot.capture()
+            yield* Effect.promise(async () => {
+              await fs.writeFile(path.join(folder.root, name), "two\n")
+              await fs.writeFile(path.join(folder.root, "sub"), "two\n")
+            })
+            const second = yield* snapshot.capture()
+            if (!first || !second) return expect.unreachable("capture is disabled")
+            const compared = yield* snapshot.diff({ from: first, to: second, paths: [RelativePath.make(name)] })
+            yield* snapshot.restore({ files: new Map([[RelativePath.make(name), first]]) })
+            return compared.map((item) => item.file)
+          }).pipe(Effect.provide(folder.layer))
+
+          expect(result).toEqual([name])
+          expect(yield* Effect.promise(() => fs.readFile(path.join(folder.root, name), "utf8"))).toBe("one\n")
+          expect(yield* Effect.promise(() => fs.readFile(path.join(folder.root, "sub"), "utf8"))).toBe("two\n")
+        }),
+      SLOW,
+    )
+
+    it.live(
+      `records no large file that ${name} would match`,
+      () =>
+        Effect.gen(function* () {
+          const folder = yield* trustedFolder({ "top.txt": "top\n" })
           const files = yield* Effect.gen(function* () {
             const snapshot = yield* Snapshot.Service
             const first = yield* snapshot.capture()
-            // The nested file changes as well, so that what is recorded shows whether the folder was walked.
             yield* Effect.promise(async () => {
-              await fs.appendFile(path.join(root, "top.txt"), "more\n")
-              await fs.appendFile(path.join(folder, "inner.txt"), "more\n")
+              await fs.writeFile(path.join(folder.root, name), "small\n")
+              await fs.writeFile(path.join(folder.root, "sub"), large)
             })
             const second = yield* snapshot.capture()
             if (!first || !second) return expect.unreachable("capture is disabled")
             return (yield* snapshot.files({ from: first, to: second })).map(String)
-          }).pipe(Effect.provide(layerFor(root, data, false)))
-          yield* Effect.promise(() => fs.stat(`\\\\${control}\\share\\x`).catch(() => undefined))
-          const names = stop ? yield* Effect.promise(stop) : undefined
+          }).pipe(Effect.provide(folder.layer))
 
-          // The nested folder is left out; the rest of the folder is still recorded.
-          expect(files).toEqual(["top.txt"])
-          if (!names) return
-          expect(names.has(control)).toBe(true)
-          expect(names.has(host)).toBe(false)
+          expect(files).toEqual([name])
         }),
       SLOW,
     )
+
+    it.live(
+      `keeps a recorded file that ${name} would match when ${name} is too large to record`,
+      () =>
+        Effect.gen(function* () {
+          const folder = yield* trustedFolder({ "top.txt": "top\n", sub: "one\n" })
+          const files = yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const first = yield* snapshot.capture()
+            yield* Effect.promise(() => fs.writeFile(path.join(folder.root, name), large))
+            const second = yield* snapshot.capture()
+            if (!first || !second) return expect.unreachable("capture is disabled")
+            return (yield* snapshot.files({ from: first, to: second })).map(String)
+          }).pipe(Effect.provide(folder.layer))
+
+          expect(files).toEqual([])
+        }),
+      SLOW,
+    )
+  }
 })
