@@ -35,7 +35,10 @@ export interface RunOptions {
    * Whether the folder is trusted. The VCS applies the config a repository ships (`core.fsmonitor`, clean filters, hooks)
    * to the commands it runs there, so in a folder that is not trusted the run starts no such process and works as it does
    * outside a repository: no worktrees, commits, merges, base commit (a base kept in the run store is ignored too, so no
-   * review diff) or dirty check. The run store is found from the files.
+   * review diff) or dirty check. The run store is found from the files. A resume there takes no folder and no session ID
+   * from the store either: the checks and the reviewer of a reused verify iteration work in the run's folder, and a team
+   * member whose turn is reused opens a new session for its next one. The commands refuse to resume or replay in such a
+   * folder anyway; this holds for a caller that does not.
    */
   readonly trusted: boolean
   readonly input?: Readonly<Record<string, unknown>>
@@ -352,7 +355,10 @@ export async function run(options: RunOptions): Promise<RunResult> {
     claim(used, node)
     if (source) return fromRecording(node).result as unknown as CheckResult
     store.append(id, node, "node.started", { command: checkOptions.command })
-    const result = await shell(checkOptions.command, checkOptions.in?.worktree ?? home, checkOptions.timeout)
+    // On a resume `in` can be a result reused from the run store, a file a clone ships, so its worktree is a folder the
+    // store names. Only a repository in a trusted folder has worktrees; anywhere else the check runs where the run does.
+    const directory = (repository ? checkOptions.in?.worktree : undefined) ?? home
+    const result = await shell(checkOptions.command, directory, checkOptions.timeout)
     store.append(
       id,
       node,
@@ -411,7 +417,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
                 onError: "continue",
                 prompt: await reviewPrompt(verifyOptions.prompt, judge.criteria, work, base),
               },
-              { directory: work.worktree ?? home },
+              // As for a check: a reused iteration's worktree comes from the run store.
+              { directory: (repository ? work.worktree : undefined) ?? home },
             )
           : undefined
       if (review) add(review)
@@ -468,7 +475,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
       readonly permissions: "reject" | "auto"
       readonly timeout?: number
     },
-  ): Promise<Attempt> => {
+  ): Promise<Attempt & { readonly reused?: boolean }> => {
     claim(used, node)
     const key = hash({ ...input, permissions: undefined })
     if (source) return fromRecording(node, key).result as unknown as Attempt
@@ -476,7 +483,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
     if (done?.status === "succeeded" && done.key === key) {
       store.append(id, node, "node.reused", { key, result: done.result })
       log(`= ${node} (recorded)`)
-      return done.result as unknown as Attempt
+      return { ...(done.result as unknown as Attempt), reused: true }
     }
     store.append(id, node, "node.started", { key })
     log(`> ${node}`)
@@ -573,7 +580,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
         state.failure = result.error
         return false
       }
-      sessions.set(name, result.session)
+      // A reused turn's session ID comes from the run store, so in a folder that is not trusted the member's next turn
+      // opens a session of its own instead of prompting the one the store names.
+      if (options.trusted || !result.reused) sessions.set(name, result.session)
       const reply = parse(result.text)
       for (const note of reply.notes) {
         board[note.key] = note.text

@@ -668,12 +668,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   share is refused without being opened. Proof: `packages/flow/test/store-share.test.ts`.
 - The flow runner's git (`run` and `evaluate` in `packages/flow`: root, exclude, head, dirty check, worktrees, commits,
   merges, review diff), which reads the index and applies `core.fsmonitor`, clean filters and hooks of the clone: class 1,
-  gated on `trusted`, which `orb flow run`, `resume` and `orb eval` take from the server after `requireTrust` and `replay`
-  sets to false (class 12). The base commit is taken from the store of a resumed run only where git may run, because
-  the store is a file that a clone ships and the review diff would start git in the folder it names. Proof:
-  `packages/cli/test/trust.test.ts`, rows per key and door, and the rows for `flow resume` and `eval --resume` of a store
-  the clone ships (a recorded attempt whose worktree is the clone), each with a trusted control; the refusals that say
-  "in a trusted folder": `packages/flow/test/runner-untrusted.test.ts`.
+  gated on `trusted`, which `orb flow run` and `orb eval` take from the server after `requireTrust` and `replay` sets to
+  false (class 12). The base commit is taken from the store of a resumed run only where git may run. Proof:
+  `packages/cli/test/trust.test.ts`, rows per key and door; the refusals that say "in a trusted folder" (a worktree
+  agent, a team in a worktree, a merge): `packages/flow/test/runner-untrusted.test.ts`.
+- What a resumed run takes from the store (classes 1, 5 and 12): the worktree that a reused verify iteration's checks
+  and reviewer work in, the session a reused team turn continues, the base commit and the default model. `orb flow resume`, `orb eval --resume` and `orb flow replay` refuse a folder that is not trusted, before
+  they open the store (`requireTrust` with `strict: "recorded"`; `eval` reports it through `reportRunError`, as JSON
+  under `--format json`). No other door resumes a stored run: the terminal UI's `/runs` dialog and the VS Code Runs view
+  only read the store and hand a resume to `orb flow resume`, and the server, ACP and the SDK do not load
+  `@orbit/flow`. The runner itself, for a caller that resumes with `trusted: false`, takes no worktree and no session ID
+  from the store. Proof: `packages/cli/test/trust.test.ts`, the rows for a run store that the clone ships (a recorded
+  verify iteration whose worktree is a folder outside the clone holding a secret: refused with no model request, git or
+  read, and a `--trust` control that reads it), the rows that refuse before the store is opened, and the rows for a server
+  older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts` (the reviewer's folder, the check's
+  folder and a team member's session, each with a trusted control).
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
@@ -1087,14 +1096,15 @@ and its data twins (commands, approvals, agents) at once.
   comment on `execute` in `packages/flow/src/yaml.ts` and the one in `evaluate` (`packages/flow/src/eval.ts`) name the
   lists.
 - Hand the lists to the gate with `trustOptions(file, kind)`, which `flow run`, `flow resume` and `eval` share. Replay
-  answers from the recording, so it is held only for a module and contacts no server for a YAML file.
+  answers from the recording, so the file is held only for a module. A resume and a replay go on from the run store, so
+  they need the folder they run in trusted before anything else (`strict: "recorded"`, class 5).
 - Print the file's text with its control characters written out (class 9).
 
 **How to test:**
 
 - A marker command in a `check` node, in the `checks` of a `verify` node and in the `checks` of a suite task, in an
   untrusted folder that holds nothing else back. Assert refused, marker absent and the model never asked. The `--trust`
-  control writes the marker, and a replay is not held up and contacts no server.
+  control writes the marker, and a replay in a trusted folder is not held up by the commands.
 - A gate-versus-runner test. Run the real runner and `evaluate` against a client that records every agent, approval and
   command it is asked to use, and require each one to be in the gate's list (`packages/flow/test/agents.test.ts`). Feed
   awkward shapes through both: anchors, merge keys, `__proto__`, duplicate keys, tags, flow style, quoted keys,
@@ -1321,6 +1331,10 @@ the store.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust
   step, or a shape check that makes the action safe whatever the store says.
+- A folder or a session ID that a store records is a place to act in, not only a name: a resumed run reviews, checks
+  and prompts there. So `orb flow resume`, `orb eval --resume` and `orb flow replay` refuse an untrusted folder before
+  they open the store, and the runner with `trusted: false` takes neither from it (M4 round 6; the narrower check that
+  would let a resume run untrusted is a Known gap).
 
 **How to test:**
 
@@ -2406,6 +2420,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
   check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
+- **Resuming a run in a folder that is not trusted** (M4 round 6, register row FU-M4-r6-resume-store). `orb flow
+  resume`, `orb eval --resume` and `orb flow replay` refuse such a folder before they open its run store, because a store
+  that a clone ships decides where a resumed run's reviewer and checks work and which sessions its team continues
+  (`packages/cli/test/trust.test.ts`, the rows for a run store that the clone ships). Letting them run there again needs a
+  narrower check: accept a stored worktree only when it is the folder `Git.worktree` makes for that repository, run and
+  node, accept a team member's session only when the run made it, and take no default model or eval models from the
+  store, since the owner withholds the choice of a model from an untrusted folder. In a trusted folder a resumed run
+  still takes all of these from the store as it records them. No task yet.
 - **Build checks.** `verifyArtifact` fails the build on an import or a `require` of a `#` name in the forms Bun writes in an unsplit build (`import("#x")`, `import"#x"`, `from"#x"`, `__require("#x")` and a call through the minified `import.meta.require` alias)
   (`packages/cli/test/verify-artifact.test.ts`), and `provider-compiled.test.ts` and `pdf-compiled.test.ts` import the
   autoload options instead of copying them. The alias set covers the whole file, so a minifier that reuses the alias name for another call could fail the build wrongly, and a `splitting: true` build, where a chunk imports the alias from an earlier or later chunk, is not covered and has no test. It still does not fail the build on a stray bare name: a text scan of the
@@ -2458,7 +2480,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   and `orb flow run`, `resume`, `replay` and `orb eval`, which started git in the folder for its root, head, changes,
   worktrees, commits and merges, so that `core.fsmonitor`, a clean filter or a hook of an untrusted clone ran
   (fixed: `run` and `evaluate` take `trusted`, the commands pass the answer of the server after `requireTrust` and `replay`
-  passes false, and with it false the runner starts no git and finds the run store from the files;
+  passes false, and with it false the runner starts no git and finds the run store from the files; since round 6
+  `resume` and `replay` refuse an untrusted folder before they open the store;
   `packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and `hooks/post-checkout`, each with a
   trusted control; the tasks of an eval still run agents, whose session snapshot uses the separate git directory above); a repository with no config of its own, which shows no
   branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as

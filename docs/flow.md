@@ -109,6 +109,12 @@ at all, when the workflow or suite brings code, commands, approvals or agents th
   counts as well, because it is filled in when the node starts. A file that names none runs as before, and `orb flow replay`
   is not stopped, because a replay answers every node from the recording and opens no session.
 
+`orb flow resume`, `orb eval --resume` and `orb flow replay` also stop in any folder that is not trusted, before they
+read its run store, whatever the folder holds and whatever the file defines. They go on from a run that the store
+records, and a clone can ship a store with any run in it, naming for instance the folder that a resumed verify node's
+reviewer works in. Where the list above says that `orb flow replay` is not stopped, it is about what the file defines;
+the folder that the replay runs in has to be trusted all the same.
+
 The folder that holds the file is asked as well, after the folder you run in, because the file is all that a run takes
 from it. A workflow or suite file that lies in another project than the one you run in, as in
 `orb flow run ../examples/review.ts`, or that the run store names for `orb flow resume`, needs that project trusted too
@@ -264,7 +270,8 @@ from running a YAML workflow or a YAML or JSON suite that names an agent, until 
 passed. The refusal lists each node with the agent it names as written, a `judge` as `node/judge` and a team member as
 `team/member`. An `agent` that is a template, such as `{{plan.text}}`, is listed as well, because it is filled in when
 the node starts and an agent's reply can name one. A TypeScript or JavaScript workflow is stopped whatever it names,
-because loading it runs its code. `orb flow replay` is not stopped, because it opens no session. A suite task's own
+because loading it runs its code. `orb flow replay` is not stopped for it, because it opens no session, though it needs
+its folder trusted as every command that goes on from the run store does. A suite task's own
 `agent` chooses nothing, because an eval runs each task as a verify node and passes on only the task's `judge`. See the
 note under the `orb flow` commands above.
 
@@ -276,7 +283,8 @@ In a folder that you trust, the file still chooses. If some of your agents have 
 Every run is an append-only event log in `.orbit/runs.db` at the repository root. `orb flow resume <run>` runs the
 same workflow file again. A node that already succeeded with the same prompt, model, agent, worktree setting and
 fallback models returns its recorded result without calling a model; everything else runs. A resumed worktree
-node starts from the same base commit as the original run.
+node starts from the same base commit as the original run. The log is a file that a clone can bring, so a resume
+runs only in a folder that is trusted, or with `--trust`.
 
 ## Gates
 
@@ -450,8 +458,9 @@ watches the newest.
 
 `orb flow replay <run>` re-runs a finished run as a new run from its recorded results: no model calls, worktrees or
 merges. Every node returns what the recording holds for its id. It connects to a server only to ask whether the folder
-is trusted, before it loads a workflow module, and takes `--standalone`, `--server` and `--trust` as `orb flow run` does;
-a YAML workflow needs no server. Uses:
+is trusted, before it reads the run store, and whether the folder that holds a workflow module is, before it loads the
+module. It takes `--standalone`, `--server` and `--trust` as `orb flow run` does, and stops in a folder that is not
+trusted. Uses:
 
 - **Debugging a workflow's logic:** pass an edited copy with `--file`. Nodes whose inputs changed are reported
   (`~ node: its inputs differ from the recording`) and still return the recorded result. A node the recording lacks

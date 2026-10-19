@@ -37,9 +37,11 @@ type Options = {
   /**
    * The command sends the folder to a model and runs the tool calls that come back (`orb -p`): any untrusted folder
    * stops it, whether or not its config holds something back, because the folder's own instructions and files steer
-   * the model and the default rules let its tool calls run without asking.
+   * the model and the default rules let its tool calls run without asking. `recorded` stops it for the same folders for
+   * another reason: the command goes on from a run that the folder's run store records (`orb flow resume`,
+   * `orb eval --resume`, `orb flow replay`), and the store is a file that a clone can ship with any run in it.
    */
-  readonly strict?: boolean
+  readonly strict?: boolean | "recorded"
 }
 
 /**
@@ -131,7 +133,7 @@ export const requireTrust = Effect.fn("cli.trust.require")(function* (
 
 /**
  * Whether the folder is trusted now, for a command that goes ahead either way but must not start the folder's version
- * control in one that is not (class 1): `orb flow run`, `flow resume`, `flow replay` and `eval`. Ask after
+ * control in one that is not (class 1): `orb flow run`, `flow resume` and `eval`. Ask after
  * `requireTrust`, so that a `--trust` grant is in force. A server that cannot say, or does not answer, counts as no.
  */
 export const folderTrusted = Effect.fn("cli.trust.folder")(function* (client: OrbitClient, directory: string) {
@@ -158,21 +160,25 @@ export function refusal(
   status: TrustStatus,
   imports?: string,
   defines?: Defined,
-  strict?: boolean,
+  strict?: boolean | "recorded",
   location: string = status.directory,
 ) {
   if (status.trusted) return changedRefusal(status, location)
   const own = status.withheld.filter((item) => item.directory === undefined)
   const above = status.withheld.filter((item) => item.directory !== undefined)
   const loads = imports ?? defines?.file
+  // A command that goes on from the run store is stopped by the folder itself, whatever it holds back.
+  const recorded = strict === "recorded" && loads === undefined
   // A strict command stopped by a folder that holds nothing back: there is no list to show, only the folder itself.
   const quiet = strict === true && status.withheld.length === 0 && loads === undefined
   // What there is to look over before trusting the folder.
   const review =
     loads === undefined
-      ? quiet
+      ? quiet || (recorded && own.length === 0)
         ? "the folder"
-        : "those files"
+        : recorded
+          ? "the folder and those files"
+          : "those files"
       : own.length === 0
         ? "the file"
         : "the file and those files"
@@ -182,20 +188,20 @@ export function refusal(
       status.directory,
       imports,
       defines,
-      quiet,
+      recorded ? "recorded" : quiet ? "prompt" : undefined,
     ),
     ...(status.withheld.length === 0
       ? []
       : [
           "",
-          ...(loads === undefined
+          ...(loads === undefined && !recorded
             ? []
             : ["The project config it finds also holds back what could run code or reach the network:", ""]),
           ...heldLines(status.directory, status.withheld),
         ]),
     "",
     // What trusting the project lifts, and the files above it, which only their own folders do.
-    ...(own.length === 0 && loads === undefined && !quiet
+    ...(own.length === 0 && loads === undefined && !quiet && !recorded
       ? []
       : [
           status.persistent
@@ -243,14 +249,20 @@ export function changedRefusal(status: TrustStatus, location: string = status.di
  * the folder is trusted, and the command is about to run what the folder brings in this process, so it stops. The text
  * names the file and what it brings as `refusal` does, and the ways to get an answer.
  */
-export function unanswered(directory: string, imports?: string, defines?: Defined, strict?: boolean) {
+export function unanswered(directory: string, imports?: string, defines?: Defined, strict?: boolean | "recorded") {
   return [
     ...lead(
       `Orbit stopped before doing any work: the server is older than workspace trust, so it cannot say whether ${directory} is trusted`,
       directory,
       imports,
       defines,
-      strict === true && imports === undefined && defines === undefined,
+      imports !== undefined || defines !== undefined
+        ? undefined
+        : strict === "recorded"
+          ? "recorded"
+          : strict === true
+            ? "prompt"
+            : undefined,
     ),
     "",
     "Restart the server to get an answer, which for the background service is `orb service restart`. Or run on a current private server instead: --standalone starts one that checks the folder, and --trust starts one that trusts the folder for this run only.",
@@ -399,19 +411,24 @@ function fromFolder(directory: string, file: string) {
 
 // What the folder's missing trust holds up, first of all: the code the command imports, what the file it reads defines
 // (shell commands, nodes that approve what their agents ask permission for, and nodes that run as an agent the file
-// names), or else the config it finds. `heading` is what comes before: why the folder is not enough as it stands.
+// names), the run store that a command goes on from (`recorded`), the model that a strict command sends the folder to
+// (`prompt`), or else the config it finds. `heading` is what comes before: why the folder is not enough as it stands.
 function lead(
   heading: string,
   directory: string,
   imports: string | undefined,
   defines: Defined | undefined,
-  quiet = false,
+  reason?: "prompt" | "recorded",
 ) {
   if (imports !== undefined)
     return [
       `${heading}, and this command runs code from the folder: it imports ${plain(fromFolder(directory, imports))}, and importing a TypeScript or JavaScript file runs the code in it.`,
     ]
-  if (quiet)
+  if (reason === "recorded")
+    return [
+      `${heading}, and this command goes on from a run that the folder's run store (.orbit/runs.db) records. A clone can ship that file with any run in it, and a resumed run picks up the folders, sessions and models it records, so the command does not open the store until the folder is trusted.`,
+    ]
+  if (reason === "prompt")
     return [
       `${heading}. This command sends the folder's instructions to a model and runs the tool calls that come back, which the default rules allow without asking, so the folder has to be trusted first.`,
     ]
@@ -482,14 +499,19 @@ const grant = Effect.fnUntraced(function* (client: OrbitClient, location: { read
  * Whether the folder is held to a trust it lacks: untrusted, and either something is held back that a grant would let
  * through, or the command loads a file from it that runs code (a module it imports) or carries out what the file defines
  * (shell commands, approvals of what agents ask permission for, and the choice of which agents run), which a folder that
- * holds nothing back does not excuse.
+ * holds nothing back does not excuse. A strict command is held to it whatever the folder holds back: one that sends the
+ * folder to a model, and one that goes on from a run the folder's run store records.
  */
 const blocked = (
   status: TrustStatus,
   imports: string | undefined,
   defines: Defined | undefined,
-  strict: boolean | undefined,
+  strict: boolean | "recorded" | undefined,
 ) =>
   status.trusted
     ? (status.changed ?? []).length > 0
-    : strict === true || imports !== undefined || defines !== undefined || status.withheld.length > 0
+    : strict === true ||
+      strict === "recorded" ||
+      imports !== undefined ||
+      defines !== undefined ||
+      status.withheld.length > 0
