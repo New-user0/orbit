@@ -403,18 +403,19 @@ describe("ShellTool scanner choice", () => {
     test(`the person's portable scanner ${name}`, () =>
       withScanner(
         true,
-        (registry) =>
+        (registry, fixture) =>
           Effect.gen(function* () {
-            const settled = yield* executeTool(
+            const result = yield* runPermissionCommand(
               registry,
-              call({ command: "if [ -f x ]; then cat x; else echo no; fi" }, "call-scanner-choice"),
+              "if [ -f x ]; then cat x; else echo no; fi",
+              path.join(fixture.active, "marker"),
+              ["once"],
             )
-            expect(settled.status).toBe("completed")
-            expect(assertions.map((item) => item.save)).toEqual([saves])
+            expect(result.requests.map((request) => request.save)).toEqual([saves])
           }),
         "sh",
         local,
-      ), { timeout: 30_000 })
+      ))
   }
 })
 
