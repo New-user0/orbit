@@ -8,6 +8,7 @@ import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Snapshot } from "@orbit/core/snapshot"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Global } from "@orbit/util/global"
+import { git, repository } from "./fixture/git"
 import { keys, live, plain, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -139,4 +140,235 @@ describe("Snapshot starts no git program of a repository nested in an untrusted 
       SLOW,
     )
   }
+})
+
+// Class 1 and class 6 (round 3): the folder's `.gitattributes` picks drivers by name and the person's own config says
+// which program each is. Orbit's untrusted snapshot repository unsets them, so a capture, a comparison and a restore start
+// no program of the person's config for the folder's files and open no host that `.lfsconfig` names.
+const fwd = (file: string) => file.replaceAll("\\", "/")
+
+const withGlobalConfig = <A, E, R>(file: string, body: Effect.Effect<A, E, R>) =>
+  Effect.suspend(() => {
+    const previous = process.env.GIT_CONFIG_GLOBAL
+    process.env.GIT_CONFIG_GLOBAL = file
+    return body.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL
+          else process.env.GIT_CONFIG_GLOBAL = previous
+        }),
+      ),
+    )
+  })
+
+const layerFor = (root: string, data: string, implicit: boolean) =>
+  AppNodeBuilder.build(Snapshot.node, [
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit })),
+    Location.node.replace(Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(root) }))),
+    Global.node.replace(Global.layerWith({ data, config: path.join(data, "config") })),
+  ])
+
+describe("Snapshot runs no attribute driver of the person's config for an untrusted folder's files", () => {
+  // `reuse` starts from a repository an earlier version made: its index is filled and it has no attributes file.
+  const driverRow = (implicit: boolean, reuse: boolean) =>
+    it.live(
+      `a clean filter picked by .gitattributes (trusted: ${implicit}${reuse ? ", repository of an earlier version" : ""})`,
+      () =>
+        Effect.gen(function* () {
+          const base = (yield* tmpdirScoped()).path
+          const root = path.join(base, "clone")
+          yield* repository(root)
+          const marker = path.join(base, "marker.txt")
+          const globalConfig = path.join(base, "global.gitconfig")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(
+              globalConfig,
+              `[diff "probe"]\n\ttextconv = "echo textconv >> ${fwd(marker)}; cat"\n[filter "probe"]\n\tclean = "echo clean >> ${fwd(marker)}; cat"\n`,
+            )
+            await fs.writeFile(path.join(root, ".gitattributes"), "*.txt diff=probe filter=probe\n")
+            await fs.writeFile(path.join(root, "a.txt"), "one\n")
+          })
+          const read = () => Effect.promise(() => fs.readFile(marker, "utf8").catch(() => ""))
+          const data = (yield* tmpdirScoped()).path
+          const compare = (trusted: boolean) =>
+            Effect.gen(function* () {
+              const snapshot = yield* Snapshot.Service
+              const before = yield* snapshot.capture()
+              yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "two\n"))
+              const after = yield* snapshot.capture()
+              if (!before || !after) return expect.unreachable("capture is disabled")
+              yield* snapshot.diff({ from: before, to: after })
+            }).pipe(Effect.provide(layerFor(root, data, trusted)))
+          yield* withGlobalConfig(
+            globalConfig,
+            Effect.gen(function* () {
+              if (reuse) {
+                // Make the earlier version's repository: capture once, then take the attributes file away.
+                yield* compare(false)
+                yield* Effect.promise(async () => {
+                  const parent = path.join(data, "snapshot", "untrusted")
+                  await Promise.all(
+                    (await fs.readdir(parent)).map((name) =>
+                      fs.rm(path.join(parent, name, "info", "attributes"), { force: true }),
+                    ),
+                  )
+                  await fs.rm(marker, { force: true })
+                  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+                })
+              }
+              yield* compare(implicit)
+            }),
+          )
+
+          // Trusted control: the filter is live, so an empty marker above is not a vacuous pass.
+          if (implicit) expect(yield* read()).toContain("clean")
+          else expect(yield* read()).toBe("")
+        }),
+      SLOW,
+    )
+
+  driverRow(false, false)
+  driverRow(false, true)
+  driverRow(true, false)
+
+  // The textconv program is run by the comparison itself, so it gets its own row; the trusted comparison passes
+  // `--no-textconv` too (a patch has no use for converted text), so its control is the plain command in the folder.
+  it.live(
+    "a textconv program picked by .gitattributes",
+    () =>
+      Effect.gen(function* () {
+        const base = (yield* tmpdirScoped()).path
+        const root = path.join(base, "clone")
+        yield* repository(root)
+        const marker = path.join(base, "marker.txt")
+        const globalConfig = path.join(base, "global.gitconfig")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(globalConfig, `[diff "probe"]\n\ttextconv = "echo textconv >> ${fwd(marker)}; cat"\n`)
+          await fs.writeFile(path.join(root, ".gitattributes"), "*.txt diff=probe\n")
+          await fs.writeFile(path.join(root, "a.txt"), "one\n")
+        })
+        const data = (yield* tmpdirScoped()).path
+        yield* withGlobalConfig(
+          globalConfig,
+          Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const before = yield* snapshot.capture()
+            yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "two\n"))
+            const after = yield* snapshot.capture()
+            if (!before || !after) return expect.unreachable("capture is disabled")
+            yield* snapshot.diff({ from: before, to: after })
+            yield* snapshot.files({ from: before, to: after })
+          }).pipe(Effect.provide(layerFor(root, data, false))),
+        )
+        const read = () => Effect.promise(() => fs.readFile(marker, "utf8").catch(() => ""))
+        expect(yield* read()).toBe("")
+        yield* withGlobalConfig(
+          globalConfig,
+          Effect.promise(async () => {
+            await git(root, "add", "a.txt")
+            await git(root, "commit", "-m", "two")
+            await fs.writeFile(path.join(root, "a.txt"), "three\n")
+            await git(root, "diff").catch(() => undefined)
+          }),
+        )
+        expect((yield* read()).length).toBeGreaterThan(0)
+      }),
+    SLOW,
+  )
+
+  const lfs = Bun.spawnSync(["git", "lfs", "version"]).exitCode === 0
+  for (const implicit of [false, true])
+    (lfs ? it.live : it.live.skip)(
+      `an LFS pointer with .lfsconfig naming a host (trusted: ${implicit})`,
+      () =>
+        Effect.gen(function* () {
+          const hits: string[] = []
+          const server = Bun.serve({
+            port: 0,
+            hostname: "127.0.0.1",
+            fetch(request) {
+              hits.push(`${request.method} ${new URL(request.url).pathname}`)
+              return new Response("{}", { status: 404, headers: { "content-type": "application/vnd.git-lfs+json" } })
+            },
+          })
+          const base = (yield* tmpdirScoped()).path
+          const root = path.join(base, "clone")
+          yield* repository(root)
+          yield* Effect.promise(async () => {
+            await fs.writeFile(path.join(root, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n")
+            await fs.writeFile(path.join(root, ".lfsconfig"), `[lfs]\n\turl = http://127.0.0.1:${server.port}/lfs\n`)
+            await fs.writeFile(
+              path.join(root, "data.bin"),
+              "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12\n",
+            )
+          })
+          const data = (yield* tmpdirScoped()).path
+          const restored = yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const first = yield* snapshot.capture()
+            yield* Effect.promise(() => fs.writeFile(path.join(root, "data.bin"), "changed\n"))
+            const second = yield* snapshot.capture()
+            if (!first || !second) return expect.unreachable("capture is disabled")
+            return yield* snapshot
+              .restore({ files: new Map([[RelativePath.make("data.bin"), first]]) })
+              .pipe(Effect.as("ok"), Effect.catchCause(() => Effect.succeed("failed")))
+          }).pipe(Effect.provide(layerFor(root, data, implicit)), Effect.ensuring(Effect.sync(() => server.stop(true))))
+
+          if (implicit) return expect(hits.length).toBeGreaterThan(0)
+          expect(hits).toEqual([])
+          expect(restored).toBe("ok")
+          expect(yield* Effect.promise(() => fs.readFile(path.join(root, "data.bin"), "utf8"))).toContain("git-lfs")
+        }),
+      SLOW,
+    )
+})
+
+// Class 14 (round 2 re-check): a clone with submodules keeps each one's repository under `.git/modules/<name>`, and the
+// submodule's `.git` is a file that points there. The plain command in the submodule is the control that the key is live.
+describe("Snapshot starts nothing of a submodule's repository in an untrusted folder", () => {
+  it.live(
+    "a .git file pointing into .git/modules, with core.fsmonitor set there",
+    () =>
+      Effect.gen(function* () {
+        const base = (yield* tmpdirScoped()).path
+        const root = path.join(base, "clone")
+        const marker = path.join(base, "ran.txt")
+        const program = path.join(base, "evil.sh")
+        const source = path.join(base, "source")
+        yield* Effect.promise(async () => {
+          await Bun.write(program, `#!/bin/sh\necho "ran $*" >> "${fwd(marker)}"\nexit 1\n`)
+          await fs.chmod(program, 0o755)
+        })
+        yield* repository(root)
+        yield* repository(source)
+        yield* Effect.promise(async () => {
+          await git(root, "-c", "protocol.file.allow=always", "submodule", "add", fwd(source), "sub")
+          await git(root, "commit", "-m", "sub")
+          await git(path.join(root, ".git", "modules", "sub"), "config", "core.fsmonitor", fwd(program))
+        })
+        expect((yield* Effect.promise(() => fs.stat(path.join(root, "sub", ".git")))).isFile()).toBe(true)
+        const ran = () =>
+          Effect.promise(async () => ((await Bun.file(marker).exists()) ? await Bun.file(marker).text() : ""))
+        const data = (yield* tmpdirScoped()).path
+        const traces = yield* traced(
+          Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const first = yield* snapshot.capture()
+            yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "two\n"))
+            const second = yield* snapshot.capture()
+            yield* snapshot.capture()
+            if (!first || !second) return expect.unreachable("capture is disabled")
+            yield* snapshot.files({ from: first, to: second })
+            yield* snapshot.diff({ from: first, to: second })
+            yield* snapshot.restore({ files: new Map([[RelativePath.make("a.txt"), first]]) })
+          }).pipe(Effect.provide(layerFor(root, data, false))),
+        )
+
+        expect(traces.git.filter((command) => !own(command))).toEqual([])
+        expect(yield* ran()).toBe("")
+        yield* Effect.promise(() => git(path.join(root, "sub"), "status").catch(() => undefined))
+        expect((yield* ran()).length).toBeGreaterThan(0)
+      }),
+    SLOW,
+  )
 })

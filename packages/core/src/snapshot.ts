@@ -71,6 +71,8 @@ export interface Interface extends State.Transformable<Editor> {
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Snapshot") {}
 
+const untrustedAttributes = "* !filter !diff !merge\n"
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -113,6 +115,20 @@ const layer = Layer.effect(
             : yield* git.repo
                 .create({ worktree, gitDirectory, seed: source })
                 .pipe(Effect.mapError((cause) => failure("capture", cause)))
+          // The folder's `.gitattributes` names drivers (`filter=`, `diff=`, `merge=`), and the person's own git config says
+          // which program each one is: a clean filter runs on capture, a textconv program on a comparison, and git-lfs
+          // smudge on a restore, which asks the host in the folder's `.lfsconfig` (class 1, class 6). `info/attributes`
+          // outranks the work tree's file, so unsetting them there leaves the folder no driver to pick. A repository an
+          // earlier version made lacks the file, and its index may hold cleaned entries, so that index is dropped.
+          if (!trusted) {
+            const attributes = path.join(gitDirectory, "info", "attributes")
+            if ((yield* fs.readFileStringSafe(attributes).pipe(Effect.orElseSucceed(() => undefined))) !== untrustedAttributes)
+              yield* fs.ensureDir(path.dirname(attributes)).pipe(
+                Effect.andThen(fs.remove(path.join(gitDirectory, "index"), { force: true })),
+                Effect.andThen(fs.writeFileString(attributes, untrustedAttributes)),
+                Effect.orDie,
+              )
+          }
           // Trees captured earlier live in Orbit's own repositories for this work tree: the untrusted one, and the one filed
           // under the project ID that the Location held when it captured them. A Location keeps the ID it was bound with,
           // and the ID of a folder with no remote changes when trust is granted, so a grant without a reload files its

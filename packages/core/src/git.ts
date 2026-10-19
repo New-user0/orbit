@@ -628,7 +628,7 @@ const layer = Layer.effect(
           repositoryOperation(
             "diff",
             input.repository,
-            ["-c", "core.quotepath=false", "diff", "--no-ext-diff", `--unified=${input.context ?? 3}`, ...args],
+            ["-c", "core.quotepath=false", "diff", "--no-ext-diff", "--no-textconv", `--unified=${input.context ?? 3}`, ...args],
             { maxOutputBytes: VcsPatch.MAX_TOTAL_PATCH_BYTES },
           ),
         ],

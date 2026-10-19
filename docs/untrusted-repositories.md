@@ -157,8 +157,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     folder that is a repository itself is a gitlink there, so the comparisons (`diff-files`, `diff`) pass
     `--ignore-submodules=all` and the restore passes `--no-recurse-submodules`; without them git starts a status inside the
     nested repository with the config that repository ships. The same file has a row for `core.fsmonitor`,
-    `core.hooksPath` and `.git/hooks` in a nested repository, each with a plain-git control. A nested `.git` file that
-    points into the clone's `.git/modules` has no row of its own; the same flags apply to it.
+    `core.hooksPath` and `.git/hooks` in a nested repository, each with a plain-git control, and a row for a real
+    submodule whose `.git` file points into the clone's `.git/modules`.
+    The folder's `.gitattributes` can pick `filter=`, `diff=` and `merge=` drivers whose programs the person's own system
+    or global config defines (git-lfs among them), and an `.lfsconfig` names the host that git-lfs contacts. Orbit's
+    untrusted snapshot repository therefore holds `info/attributes` with `* !filter !diff !merge`, which outranks the
+    folder's file. It is written before the first capture, and again, with the index dropped, when a repository made by
+    an earlier version lacks it. The patch comparison also passes `--no-textconv`. The same test file has rows for a clean
+    filter (a new repository and one from an earlier version), a textconv program, and an LFS pointer restore against a
+    local server (skipped where `git lfs` is missing), each with a trusted control that does run the driver or contact the
+    host. Mutation: emptying the attributes text fails the clean-filter rows and the LFS row.
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
@@ -2295,10 +2303,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   and the hooks), which can name programs for git to run. `Project.resolve`, the Git VCS provider and the location
   watcher start no git in a folder that `WorkspaceTrust` does not trust, and read its files instead (`GitLayout`;
   `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
-  control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read-only calls
-  of the `Git` service still run git in an untrusted folder, with its config in effect, and reach none of those keys except two: `status.short` runs `core.fsmonitor` and clean filters, and `history.recent` runs `gpg.program` when `log.showSignature` is set. Those two are called only by `VcsInstructions`, behind `ProjectTrust.trusted()`
-  (`test/snapshot-trust.test.ts`, `test/git.test.ts`); that is a fact about the commands and the git versions the tests ran
-  with (2.52 on Windows, the container's on Linux), not a gate. What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
+  control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read calls
+  of the `Git` service run only behind those gates: `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes`,
+  `VcsInstructions` and the snapshot check trust first, and the repository cache works only in Orbit's own clones
+  (`test/worktree-untrusted-git.test.ts`, `test/lsp-ignored.test.ts`, the "starts no git process in an untrusted folder"
+  row of `test/instruction-notes.test.ts`, `test/session-context-vcs.test.ts`). In a trusted folder `status.short` reaches
+  `core.fsmonitor` and clean filters, and `history.recent` reaches `gpg.program` when `log.showSignature` is set
+  (`test/snapshot-trust.test.ts`, `test/git.test.ts`; a fact about the commands and git versions the tests ran with, 2.52
+  on Windows and the container's on Linux). What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
   and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the
   folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
   git in the shell tool (`shell-safety-12`); the `orb flow` commands that open the run store (`ls`, `show`, `cost`, `trace`,

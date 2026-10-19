@@ -99,7 +99,9 @@ above, which also stops it loading that product's skills, output styles and inst
 
 A repository's own config can name programs for git to run and files or network shares for it to open, so Orbit starts
 git in a repository only once its folder is trusted. Until then session snapshots work from a separate git directory of
-Orbit's own that is not seeded from the repository (undo still works, and `.gitignore` files still apply, and snapshots
+Orbit's own that is not seeded from the repository and switches off every `filter`, `diff` and `merge` driver that the
+folder's `.gitattributes` names, so no program of your git config (git-lfs included) runs on the folder's files and no
+`.lfsconfig` host is contacted (`snapshot-untrusted-git.test.ts`) (undo still works, and `.gitignore` files still apply, and snapshots
 taken before the folder was trusted stay usable once it is trusted, but not the other way round; a repository nested in
 the folder is recorded as one entry and never inspected, so its own changes are not part of an undo), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
