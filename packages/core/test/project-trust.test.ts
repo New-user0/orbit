@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Logger, Schedule, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Logger, Schedule, Stream } from "effect"
 import { CompatNames } from "@orbit/compat/names"
 import { Event } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
@@ -45,11 +45,11 @@ interface Folders {
 // The real configuration loader and ProjectTrust over a project in a home of its own, in a folder that nothing trusts
 // on its own. The watcher is the test one, so that a test can say that a file changed.
 // With `canonical`, the project is a linked worktree of a main checkout kept there.
-function loader(folders: Folders, canonical?: string, directory?: string) {
+function loader(folders: Folders, canonical?: string, directory?: string, filesystem?: Layer.Layer<FSUtil.Service>) {
   return Layer.mergeAll(
     AppNodeBuilder.build(
       LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]),
-      replacements(folders, canonical, directory),
+      replacements(folders, canonical, directory, filesystem),
     ),
     Watcher.testLayer,
   )
@@ -77,7 +77,7 @@ function pluginLoader(folders: Folders) {
   )
 }
 
-function replacements(folders: Folders, canonical?: string, directory?: string) {
+function replacements(folders: Folders, canonical?: string, directory?: string, filesystem?: Layer.Layer<FSUtil.Service>) {
   const here = location(
     { directory: AbsolutePath.make(directory ?? folders.repo) },
     directory === undefined ? {} : { projectDirectory: AbsolutePath.make(folders.repo) },
@@ -92,6 +92,7 @@ function replacements(folders: Folders, canonical?: string, directory?: string) 
     Credential.node.replace(emptyCredentialNode),
     WellKnown.node.replace(emptyWellknownNode),
     Watcher.node.replace(Watcher.testLayer),
+    ...(filesystem ? [FSUtil.node.replace(filesystem)] : []),
   ] satisfies LayerNode.Replacements
 }
 
@@ -427,6 +428,67 @@ describe("ProjectTrust.status", () => {
         )
         expect<unknown>(held(folders.repo, yield* announced)).toEqual([[".orbit", ["plugins"]]])
       }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+describe("ProjectTrust.status during a reload", () => {
+  // A listing that began before a change finishes after the change was announced and after a newer listing was kept. Its
+  // answer describes the folder as it was, so it must not replace the newer one.
+  it.live("keeps the newer listing when an older one finishes after a change was announced", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const orbit = path.join(folders.repo, ".orbit")
+      yield* Effect.promise(() => write(path.join(orbit, "commands", "plain.md"), "Plain"))
+      const plugins = path.join(orbit, "plugins")
+      const reading = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let reads = 0
+      // The second read of the plugin folder (the first is the digest of the config directory, the second is the listing of
+      // what it holds back) returns what was there, then waits to be let go.
+      const slow = Layer.effect(
+        FSUtil.Service,
+        FSUtil.Service.pipe(
+          Effect.map((real) =>
+            FSUtil.Service.of({
+              ...real,
+              readDirectoryEntries: (directory) =>
+                real.readDirectoryEntries(directory).pipe(
+                  Effect.tap(() => {
+                    if (directory !== plugins || ++reads !== 2) return Effect.void
+                    return Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(release)))
+                  }),
+                ),
+            }),
+          ),
+        ),
+      ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const watcher = yield* Watcher.Test
+        yield* Effect.promise(() => fs.mkdir(plugins, { recursive: true }))
+        const older = yield* project.status().pipe(Effect.forkScoped)
+        yield* Deferred.await(reading)
+
+        // A checkout adds a plugin while the older listing is still open, and the change is announced.
+        const added = path.join(plugins, "greeter.ts")
+        yield* Effect.promise(() => write(added, plugin))
+        const announced = watcher.emit({ path: added, type: "create" }).pipe(
+          Effect.andThen(Effect.sleep("20 millis")),
+          Effect.andThen(project.status()),
+          Effect.filterOrFail(
+            (status) => status.withheld.length > 0,
+            () => "the answer has not been read again",
+          ),
+          Effect.retry({ times: 100, schedule: Schedule.spaced("20 millis") }),
+        )
+        expect<unknown>(held(folders.repo, yield* announced)).toEqual([[".orbit", ["plugins"]]])
+
+        // The older listing ends now, with the folder as it was before the plugin: it is not kept.
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(older)
+        expect<unknown>(held(folders.repo, yield* project.status())).toEqual([[".orbit", ["plugins"]]])
+      }).pipe(Effect.provide(loader(folders, undefined, undefined, slow)))
     }),
   )
 })

@@ -236,13 +236,22 @@ const layer = Layer.effect(
     // the answer is kept by directory until a file under a config root changes: an edit, or a checkout that adds a
     // plugin. It counts what the plugins would read: a file that a link leads out of the folder is not read here either.
     const byDirectory = new Map<string, readonly Trust.Kind[]>()
+    // Counts the clears. A listing that began before one finished after it read files that may have changed, so it is
+    // returned to its caller but not kept (a stale one would hide a plugin that a checkout just added).
+    let generation = 0
     yield* config.changes().pipe(
-      Stream.runForEach(() => Effect.sync(() => byDirectory.clear())),
+      Stream.runForEach(() =>
+        Effect.sync(() => {
+          generation++
+          byDirectory.clear()
+        }),
+      ),
       Effect.forkScoped({ startImmediately: true }),
     )
     const inDirectory = Effect.fnUntraced(function* (directory: string) {
       const known = byDirectory.get(directory)
       if (known !== undefined) return known
+      const started = generation
       // Listing a plugin folder that a link leads to a share would connect to it. Such a folder is not listed: it counts as
       // holding plugins, since nothing is known of what it holds.
       const shared = yield* Effect.filter(PluginSourceDirectory.names, (name) =>
@@ -268,7 +277,7 @@ const layer = Layer.effect(
         ]),
       ]
       const kinds = Trust.Kinds.filter((kind) => held.includes(kind))
-      byDirectory.set(directory, kinds)
+      if (started === generation) byDirectory.set(directory, kinds)
       return kinds
     })
 
