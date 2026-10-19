@@ -2763,7 +2763,7 @@ and nothing is fetched to find it. A model that the catalog has no cutoff for ge
 optional `knowledge` field (`YYYY-MM`), so the generated client changed too.
 
 Each session has a scratchpad: the folder `sessions/<ID of the session its lineage goes back to>` in Orbit's temporary
-folder. The name goes back one level only: a subagent and a fork use the folder of the session they came from, but a subagent that a fork or another subagent starts uses the folder named by that session's own ID, so only a session with no parent and no fork source tells the model that its subagents share the folder (`FU-M4-r3-scratch` tracks resolving the whole lineage). The baseline names it and tells the model to
+folder. The name goes back one level only: a subagent uses its parent's folder, a fork uses its source's folder, and a fork of a subagent or of a fork uses the folder of the session it came from. The baseline names the folder and says the same for every session, so an exact fork repeats its parent's system parts. Resolving the whole lineage is deferred by the plan's appendix (`FU-M4-r3-scratch`). The baseline names it and tells the model to
 keep its temporary files there instead of in the system temp folder. Orbit makes it when a run starts. Every agent that
 may edit files (not Plan, whose mode denies `Edit *`, so its writes there still ask until permissions-7) may edit in the folder of the session that asks without a question, and only where the real place of the
 file is in that folder (a link inside it that leads elsewhere is decided by where it leads), and your own rules for the
