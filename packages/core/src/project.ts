@@ -462,16 +462,25 @@ const layer = Layer.effect(
         const cachedID = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
         const id = (yield* remote(repo)) ?? cachedID ?? (yield* rootCommit(repo))
         // The ID this folder had while it was untrusted (above), so its sessions follow it into the trusted project.
+        const pretrust = layout ? (yield* stored(layout.canonical)).pretrust : undefined
         const earlier = layout
           ? (remoteID(yield* GitLayout.remote(fs, layout)) ??
-            (yield* stored(layout.canonical)).pretrust ??
+            pretrust ??
             ID.make(Hash.fast(`directory:${layout.worktree}`)))
           : undefined
         // A repository that git cannot name, with no remote and no commit yet, keeps the name it had before the grant and is
         // never put in `global`, the project that every such folder would share with its sessions and memory.
         const named = id ?? earlier ?? ID.global
-        // A shipped `.git/orbit` names the ID but does not drop the sessions made before trust.
-        const previous = earlier && earlier !== named && (yield* known(earlier)) ? earlier : cachedID
+        // The sessions follow the repository from the ID it had before (above), or from the one its folder named it by
+        // while it had no name, which a remote added since then no longer leads to. A shipped `.git/orbit` names the ID
+        // but does not drop the sessions made before trust.
+        const [moved] = yield* Effect.filter(
+          [...new Set([earlier, pretrust])].filter(
+            (candidate): candidate is ID => candidate !== undefined && candidate !== named,
+          ),
+          known,
+        )
+        const previous = moved ?? cachedID
         const canonical = repo.gitDirectory === repo.commonDirectory ? repo.worktree : yield* mainCheckout(repo)
         return yield* persist({
           previous,
