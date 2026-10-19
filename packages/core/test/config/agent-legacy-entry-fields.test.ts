@@ -61,4 +61,29 @@ describe("legacy agent and mode entries", () => {
       expect(result.paths).toContain(`${door}.build.variant`)
     })
   }
+
+  // Every key Orbit's own schema has, beside the v1 keys, is read natively in these maps: a `permissions` deny holds, a
+  // bad rule is named at its own path and no native key reaches the request body.
+  for (const door of ["agent", "mode"] as const)
+    for (const tools of [undefined, { webfetch: false }]) {
+      const label = `${door}${tools ? " with a tools map" : ""}`
+      const entry = (extra: Record<string, unknown>) => ({
+        [door]: { build: { ...(tools ? { tools } : {}), ...extra } },
+      })
+      test(`${label}: a native permissions deny survives and a bad rule is named`, () => {
+        const deny = { action: "Read", resource: "*.env", effect: "deny" }
+        const result = agents(entry({ permissions: [deny, { action: "Bash", resource: "x", effect: "Deny" }] }))
+        expect(result.agents.build?.permissions).toContainEqual(deny)
+        expect(result.paths).toEqual([`${door}.build.permissions.1`])
+      })
+      test(`${label}: disallowed_tools lands on the agent and no native key reaches the request body`, () => {
+        const result = agents(
+          entry({ disallowed_tools: ["Bash"], permission_mode: "plan", max_turns: 3, initial_prompt: "hi" }),
+        )
+        expect(result.agents.build?.disallowed_tools).toEqual(["Bash"])
+        expect(result.agents.build?.permission_mode).toBe("plan")
+        expect(result.agents.build?.request?.body ?? {}).toEqual({})
+        expect(result.paths).toEqual([])
+      })
+    }
 })
