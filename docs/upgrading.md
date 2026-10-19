@@ -3843,10 +3843,10 @@ A project or local config in a folder that is not trusted can no longer set `age
 
 When a tool or a program works on a file outside the project, Orbit asks whether the folder that owns the file is trusted. The owner is the nearest folder above the file that holds `.git` or `.hg`, or else the folder itself. Two shapes are refused, and both fail closed (they refuse, never open):
 
-- A home folder that is itself a git repository (a dotfiles repository) is never trusted as an owner. A trusted folder that you reach through a link that lives in that home folder is refused too.
-- A folder you granted trust to that carries no `.git` or `.hg`, and whose parent is neither trusted nor above the project you opened, is refused for the files it holds.
+- A home folder that is itself a git repository (a dotfiles repository) owns everything below it, including a folder you granted trust to inside it, so that folder is refused until you trust the home folder for the session. Inside a home folder without `.git`, a granted folder owns itself and is served. Either way, a trusted repository that you reach through a link that lives in a home folder you have not trusted is refused.
+- A folder you granted trust to that carries no `.git` or `.hg` serves the files it holds, but a link inside it that leads to a trusted repository is refused: a program that walks up the spelling of that path meets the link, and the folder that holds it owns itself, so it cannot lend that repository its trust.
 
-A trusted repository that sits inside an untrusted folder is served, because you granted that nested folder yourself; a formatter that walks up from a file there can read the outer folder's config. The project itself behaves the same way. No change is planned for these three edges (FU-M3-115: accepted, documented).
+A trusted repository that sits inside an untrusted folder is served, because you granted that nested folder yourself; a formatter that walks up from a file there can read the outer folder's config. The project itself behaves the same way. No change is planned for these three edges (FU-M3-115: accepted, documented; `project-trust-owner-edges.test.ts` pins the first two).
 
 **Affects:** people whose home folder is a git repository, and people who grant trust to a folder without a marker.
 
