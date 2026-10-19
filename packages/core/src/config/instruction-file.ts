@@ -1201,3 +1201,32 @@ function compile(pattern: string): CompiledRulePattern | undefined {
   }
 }
 
+
+/**
+ * Whether the project is the home folder or a filesystem root. Such a project contains everything below it, so being inside it
+ * says nothing about a link: a file or rule of the walk there may lead out of the folder the session started in only to a
+ * folder the person has trusted (`leadsOut`).
+ */
+export const wideProject = (home: string, folders: readonly string[]) =>
+  folders.some((folder) => relative(home, folder) === "" || dirname(folder) === folder)
+
+/**
+ * Whether a file of the walk, or a rule, that is a link in a wide project leads somewhere it may not be read from: not a
+ * place `importable` accepts, and not a folder the person has trusted (`outward`). The loader and the note targets both ask
+ * this, so that the file a note is written to is the file that loads. A project that is not wide bounds nothing here.
+ */
+export const leadsOut = (
+  input: {
+    readonly wide: boolean
+    readonly importable: (spelling: string, real: string) => Effect.Effect<boolean>
+    readonly outward: (real: string) => Effect.Effect<{ readonly open: boolean }>
+  },
+  spelling: string,
+  real: string,
+) =>
+  input.wide && relative(spelling, real) !== ""
+    ? Effect.gen(function* () {
+        if (yield* input.importable(spelling, real)) return false
+        return !(yield* input.outward(real)).open
+      })
+    : Effect.succeed(false)

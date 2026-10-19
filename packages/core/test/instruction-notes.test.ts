@@ -592,6 +592,36 @@ describe("InstructionNotes.add", () => {
     )
   })
 
+  // Class 3: the project is the home folder and the session started in a folder below it. The loader does not read a project
+  // file there that is a link leading out of the folder the session started in, so no note may be written to it either: the
+  // list says it is not enabled, and add refuses it without touching what the link leads to. A plain file is the control.
+  describe("a project at the home folder", () => {
+    const linked = canLinkFile ? it.live : it.live.skip
+    for (const trusted of [true, false])
+      for (const mode of ["link", "plain"] as const)
+        (mode === "link" ? linked : it.live)(`${mode === "link" ? "refuses" : "writes to"} a ${mode} AGENTS.md, ${trusted ? "trusted" : "not trusted"}`, () =>
+          Effect.gen(function* () {
+            const where = yield* scratch
+            const home = path.join(where.base, "home")
+            const directory = path.join(home, "Downloads", "x")
+            const target = path.join(home, "dotfiles", "AGENTS.md")
+            yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+            yield* Effect.promise(() => fs.mkdir(path.dirname(target), { recursive: true }))
+            yield* write(target, "DOTFILES MARKER\n")
+            if (mode === "link") yield* Effect.promise(() => fs.symlink(target, path.join(home, "AGENTS.md"), "file"))
+            else yield* write(path.join(home, "AGENTS.md"), "PLAIN MARKER\n")
+            yield* Effect.gen(function* () {
+              const { notes } = yield* start
+              const item = (yield* notes.targets()).find((entry) => entry.scope === "project")
+              expect(item).toMatchObject({ enabled: mode === "plain", loaded: mode === "plain" })
+              expect(yield* outcome(notes.add({ scope: "project", text: "n" }))).toBe(mode === "link" ? "outside" : "ok")
+              expect(yield* read(target)).toBe("DOTFILES MARKER\n")
+              if (mode === "plain") expect(yield* read(path.join(home, "AGENTS.md"))).toContain("- n")
+            }).pipe(Effect.provide(layerFor({ ...where, root: home, directory, trusted })))
+          }),
+        )
+  })
+
   describe("a link to a network share", () => {
     // The real file system, except that a call which would open the link (resolve, stat, read) is recorded and answered
     // without touching it, so that a regression fails at once and never connects to a host.
