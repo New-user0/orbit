@@ -49,24 +49,31 @@ describe("ConfigTrust.sanitize: the keys of an agent definition", () => {
     ["effort", "high", "providers"],
     ["max_turns", 5, "providers"],
     ["tools", ["read"], "permissions"],
-    ["disallowed_tools", ["shell"], undefined],
+    // Kept and reported: trusting the folder turns the merge into a replacement.
+    ["disallowed_tools", ["shell"], "permissions"],
     ["permission_mode", "bypass", "permissions"],
     ["mcp_servers", ["docs"], "mcp"],
     ["hooks", { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] }, "hooks"],
     ["skills", ["deploy"], "skills"],
     ["initial_prompt", "/deploy", "commands"],
+    // Kept and reported.
+    ["system", "Be brief.", "permissions"],
+    ["description", "Reviews.", "permissions"],
     ["memory", "user", "permissions"],
     ["background", true, undefined],
     ["isolation", "worktree", "settings"],
     ["context", { instructions: false }, "settings"],
   ]
 
+  // Keys the classification flags: the value stays, and the kind is still reported.
+  const flagged = new Set(["disallowed_tools", "system", "description"])
+
   test.each(keys)("treats agents.*.%s as the classification says", (key, value, kind) => {
-    const result = sanitize({ agents: { mine: { description: "Kept", [key]: value } } })
+    const result = sanitize({ agents: { mine: { color: "#112233", [key]: value } } })
     const agent = result.info.agents?.mine
-    expect(agent?.description).toBe("Kept")
+    expect(agent?.color).toBe("#112233")
     expect(result.withheld).toEqual(kind === undefined ? [] : [kind])
-    expect(key in (agent ?? {})).toBe(kind === undefined)
+    expect(key in (agent ?? {})).toBe(kind === undefined || flagged.has(key))
     // Control: the same document, unsanitized, carries the key.
     expect(key in (decode({ agents: { mine: { [key]: value } } }).agents?.mine ?? {})).toBe(true)
   })
@@ -101,7 +108,9 @@ describe("ConfigTrust.sanitize: the keys of an agent definition", () => {
   test("keeps an initial prompt that is plain text", () => {
     const result = sanitize({ agents: { mine: { initial_prompt: "check the tests" } } })
     expect(result.info.agents?.mine?.initial_prompt).toBe("check the tests")
-    expect(result.withheld).toEqual([])
+    // Kept for an agent the folder defines and held back from one that exists, which status cannot tell apart.
+    expect(result.withheld).toEqual(["permissions"])
+    expect(sanitize({ agents: { mine: { initial_prompt: "   " } } }).withheld).toEqual([])
   })
 
   test("withholds an initial prompt that starts with a slash command after blanks", () => {
@@ -206,7 +215,7 @@ describe("ConfigTrust.sanitize", () => {
       permissions: [{ action: "shell", resource: "rm *", effect: "deny" }],
       instructions: ["./docs/ARCHITECTURE.md"],
       commands: { review: { template: "Review $ARGUMENTS", description: "Review a change" } },
-      agents: { reviewer: { system: "Review carefully.", color: "#112233" } },
+      agents: { reviewer: { color: "#112233" } },
     })
     const result = ConfigTrust.sanitize(inert, place)
     // Nothing was taken out, so nothing was copied.
@@ -264,8 +273,8 @@ describe("ConfigTrust.sanitize", () => {
   // Titles, side queries and subagents run without anyone choosing the agent, and the owner decided that a field that
   // picks a model is a permission an untrusted folder cannot set.
   test.each(["side", "title", "reviewer"])("withholds the model of the agent %s and keeps the rest of its entry", (name) => {
-    const result = sanitize({ agents: { [name]: { model: "acme/expensive#high", description: "Kept" } } })
-    expect(result.info.agents?.[name]).toEqual(new ConfigAgent.Info({ description: "Kept" }))
+    const result = sanitize({ agents: { [name]: { model: "acme/expensive#high", color: "#112233" } } })
+    expect(result.info.agents?.[name]).toEqual(new ConfigAgent.Info({ color: "#112233" }))
     expect(result.info.agents?.[name]).not.toHaveProperty("model")
     expect(result.withheld).toEqual(["providers"])
 
@@ -273,7 +282,7 @@ describe("ConfigTrust.sanitize", () => {
     expect(alone.info.agents?.[name]).toEqual(new ConfigAgent.Info({}))
     expect(alone.withheld).toEqual(["providers"])
 
-    const unpinned = decode({ agents: { [name]: { description: "No model" } } })
+    const unpinned = decode({ agents: { [name]: { color: "#112233" } } })
     expect(ConfigTrust.sanitize(unpinned, place)).toEqual({ info: unpinned, withheld: [] })
   })
 
@@ -310,7 +319,7 @@ describe("ConfigTrust.sanitize", () => {
 
   test("keeps an agent whose request and rules are already harmless as it was", () => {
     const original = decode({
-      agents: { reviewer: { system: "Review.", permissions: [] }, plain: { color: "#112233" } },
+      agents: { reviewer: { permissions: [] }, plain: { color: "#112233" } },
     })
     const result = ConfigTrust.sanitize(original, place)
     expect(result.info).toBe(original)
