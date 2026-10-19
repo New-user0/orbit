@@ -2924,6 +2924,18 @@ A `.orbit/rules` folder (and, with compatibility on, the other product's `rules`
 
 **What to do:** Nothing, except to copy a rule with `paths` that is a link to a file outside the project into the project. Move text you want only for some files into a rule with `paths`.
 
+### Links in a project at home or at a filesystem root, unreadable rules, and a cap on rule files
+
+When the project is your home folder or a filesystem root, an instruction file of the walk (`AGENTS.md`, `ORBIT.local.md`, the other product's names) and a rule of a `rules` folder may no longer be a link that leads out of the folder you started the session in, whatever the trust decision is. Before, in a folder with no repository of its own below a home folder that was a repository, a downloaded `AGENTS.md` or rule that linked to `~/.ssh/id_rsa` was sent to the model at the start of the session, with no trust granted. A plain file in the started folder is still read.
+
+A project or personal rule that cannot be read (no read permission, or a file another program holds open) is now left out with one warning line that names it. Before, it stopped every new session in the folder with "Instruction initialization blocked by unavailable sources". The administrator's rules and file still stop the session, so that policy text is never dropped for a failed read.
+
+One rules folder now lists at most 256 rule files, in name order, with one warning when more are there. Every read looked at all of them again.
+
+**Affects:** people who start a session in a folder below their home folder when home is a git repository, repositories that link an instruction file or a rule to a file outside the folder, and folders with more than 256 rule files.
+
+**What to do:** Copy a linked file into the folder you start in. Merge rule files if you have more than 256.
+
 ### A reply language setting and the `ultrathink` keyword
 
 The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. The key is allowed in a project's config, because it is only text in the prompt.

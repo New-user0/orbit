@@ -82,9 +82,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 - `InstructionNotes.add` (`packages/core/src/instruction-notes.ts`, served at `POST /api/location/instructions/note`)
   appends a bullet to the project or local instruction file, so it writes into the folder a repository supplied. It reads
-  only the one file it is about to append to, and only after the checks. A candidate that is a link to a network share (or
-  whose place cannot be read) is found by reading links only (`LinkShare.of`); it counts as there, is never resolved,
-  statted or read, is listed as not enabled and is refused as `outside`, trusted or not. The target is the file the loader reads in that
+  only the one file it is about to append to, and only after the checks. A candidate that is a link to a network share is found by reading links only (`LinkShare.of`); it counts as there, is
+  never resolved, statted or read, is listed as not enabled and is refused as `outside`, trusted or not. A candidate whose place cannot be
+  followed (a loop of links, or a `resolve` that fails) is found when `resolve` fails, is listed the same way and is refused
+  (proof: the "cannot be resolved" rows of `test/instruction-notes.test.ts`; removing the `catchCause` fails them). The target is the file the loader reads in that
   scope (the loader's own exclusion and `ProjectTrust.reachable` filters, in the loader's order), asked of the spelling the
   walk builds, never of a real path alone. While the project is untrusted, `ProjectTrust.escapes` and `reachable` on that
   spelling refuse a file that leads outside (a link to a file, a dangling link) as
@@ -333,6 +334,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   opener is not front matter and its text is kept as written, and a bare block is removed whatever it holds. Its comment
   blocks are found by a scanner that reads the file once, line by line, because the block lexer of a Markdown library
   takes seconds on a list item of a few thousand lines, and a clone chooses the file before anyone has trusted it.
+  `ConfigInstructionPlugin` also asks `ProjectTrust.importable` of a walk file and a rule file whose real path is not the
+  file itself while the project is home or a filesystem root (which contain everything below them), trusted or not: a link may
+  not lead out of the folder the session started in (class 4). Proof: the "keeps a link in a wide project from leading out"
+  rows of `test/instruction-discovery.test.ts` (home and root projects, untrusted and trusted for the session, a shared, a
+  local and two rule spellings, an ssh key and a credentials file, with plain controls; mutation: skipping the check fails 34
+  rows).
   `instructions_exclude` names files to leave out. Exclusion only removes files, and comes before `reachable` in both
   readers. `SessionInstructions` (the files a read brings, found by `InstructionTriggers`) asks `ProjectTrust.importable`
   on the file's real path just before it reads it instead, so a nested file that a link leads out of the project's
@@ -368,6 +375,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   through, of `ProjectTrust.importable`, or for a rule of a folder above the project (never one inside it), `reachable` and `supplies` again
   on where it leads now. So a rules folder, a subfolder or a file that is a link out of the project is skipped alone,
   trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
+  A project or personal rule that cannot be read costs only itself, with one warning that names it; the administrator's rules
+  fail closed (proof: the "unreadable rule" rows of `test/instruction-discovery.test.ts`). One scan lists at most 256 rule
+  files and compiled globs are kept, so a read costs a bounded amount (proof: `test/config/instruction-rules.test.ts`).
   The person's and the administrator's rules are theirs: only the network refusal applies. The `paths` key is read only
   from the block `ConfigMarkdown.split` finds, only by `ConfigMarkdown.parseOption` (YAML, never evaluated; a block that
   does not parse makes the rule unconditional, with one debug line), and a pattern only chooses when text the folder
