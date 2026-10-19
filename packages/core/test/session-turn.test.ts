@@ -1058,6 +1058,60 @@ for (const { persist, it } of modes) {
       }),
     )
 
+    // A response the provider reported with no usage is unknown spend while its step is open, never free: a subagent's
+    // limit check refuses instead of reading the parent's step as costing nothing.
+    it.effect("counts a reported but unended step with no usage as unknown cost and unknown tokens", () =>
+      Effect.gen(function* () {
+        const s = yield* harness
+        yield* s.admit("Now", { turn: { maxCost: Money.USD.make(5), maxTokens: 1_000 } })
+        yield* s.promote("input")
+        const turn = yield* s.current
+        const bus = yield* Bus.Service
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* bus.publish(SessionEvent.Step.Started, {
+          sessionID,
+          assistantMessageID,
+          agent: Agent.ID.make("build"),
+          model: primary,
+          started: 1_000,
+        })
+        SessionTurn.reportStep(sessionID, assistantMessageID, { cost: Money.USD.make(0), tokens: noTokens })
+        const spent = yield* SessionTurn.usage(s.db, sessionID, since(turn)).pipe(
+          Effect.ensuring(Effect.sync(() => SessionTurn.settleStep(sessionID, assistantMessageID))),
+        )
+
+        expect(spent).toMatchObject({ unknown: 1, unknownTokens: 1 })
+      }),
+    )
+
+    for (const [name, turnOptions, type] of [
+      ["cost", { maxCost: Money.USD.make(5) }, "limit.cost-unknown"],
+      ["token", { maxTokens: 1_000 }, "limit.tokens-unknown"],
+    ] as const)
+      it.effect(`refuses a subagent under the parent's ${name} limit while a step with no usage is open`, () =>
+        Effect.gen(function* () {
+          const s = yield* harness
+          yield* s.admit("Now", { turn: turnOptions })
+          yield* s.promote("input")
+          yield* children
+          const bus = yield* Bus.Service
+          const assistantMessageID = SessionMessage.ID.create()
+          yield* bus.publish(SessionEvent.Step.Started, {
+            sessionID,
+            assistantMessageID,
+            agent: Agent.ID.make("build"),
+            model: primary,
+            started: 1_000,
+          })
+          SessionTurn.reportStep(sessionID, assistantMessageID, { cost: Money.USD.make(0), tokens: noTokens })
+          const limit = yield* SessionTurn.ancestorLimit(s.db, childID, true).pipe(
+            Effect.ensuring(Effect.sync(() => SessionTurn.settleStep(sessionID, assistantMessageID))),
+          )
+
+          expect(limit?.type).toBe(type)
+        }),
+      )
+
     const unknownSpend: ReadonlyArray<
       [string, (id: Session.ID) => Effect.Effect<void, unknown, Bus.Service>]
     > = [

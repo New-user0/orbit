@@ -109,13 +109,16 @@ the session's folder holds a `.git` entry of its own, which git would open to se
 at all, so undo is not available for those steps until the folder is trusted or that entry is gone, and Orbit's log names
 the folder), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
-folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`,
-`resume`, `replay` and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a
-repository, with no worktrees, no commits, no merges, no base commit, no check for uncommitted changes and no diff for a
-reviewer, so a node that asks for a worktree, or a `merge`, fails and says that the folder is not trusted. Add `--trust`
-(for that run only) to `flow run`, `flow resume` or `eval`, or trust the folder, to get them back. The other `orb flow`
-commands find the repository root from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`,
-`filter.<driver>.clean` and `hooks/post-checkout`; the resume rows for a run store that a clone ships; `packages/flow/test/runner-untrusted.test.ts` for the failures). A repository with no remote is named by its path until it is
+folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`
+and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a repository, with no
+worktrees, no commits, no merges, no base commit, no check for uncommitted changes and no diff for a reviewer, so a
+node that asks for a worktree, a team in a worktree, or a `merge`, fails and says that the folder is not trusted. Add
+`--trust` (for that run only) to `flow run` or `eval`, or trust the folder, to get them back. `orb flow resume`,
+`orb eval --resume` and `orb flow replay` do not run in such a folder at all (see "`orb flow resume`, `orb eval --resume`
+and `orb flow replay` need a trusted folder" under Clients). The other `orb flow` commands find the repository root
+from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and
+`hooks/post-checkout`, and the rows for a run store that a clone ships; `packages/flow/test/runner-untrusted.test.ts`
+for the failures). A repository with no remote is named by its path until it is
 trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
 `project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
 path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
@@ -799,7 +802,9 @@ plugins and nothing to say so. A folder that holds nothing back runs as before, 
 server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`), except that a workflow or suite
 that is a TypeScript or JavaScript module, that defines shell commands, that names an agent, or, for a workflow, that
 sets `permissions: auto`, needs a trusted folder either way (see "`orb flow` and `orb eval` need a trusted folder to run
-a workflow or suite's code, commands, approvals or agents" under Clients).
+a workflow or suite's code, commands, approvals or agents" under Clients), and so do `orb flow resume`,
+`orb eval --resume` and `orb flow replay` (see "`orb flow resume`, `orb eval --resume` and `orb flow replay` need a
+trusted folder" under Clients).
 `orb flow` and `orb eval` import a workflow or suite module only after the check, because importing it runs its code.
 `orb acp` cannot stop, because the editor chooses the folders, so it writes a warning to stderr about the folder it
 started in.
@@ -939,8 +944,9 @@ something back, and not otherwise.
 calls no model and connects to no server. It now makes the check for a module. To ask, it connects to a server, which
 for the background service starts it when it is not running, and it takes `--standalone`, `--server` and `--trust` as
 the other `orb flow` commands do. A replay answers every node from the recording, runs no command, asks no model and
-opens no session, so a YAML workflow is not stopped for the commands, approvals or agents it defines, and replaying one
-still connects to no server.
+opens no session, so a YAML workflow is not stopped for the commands, approvals or agents it defines. A replay of one
+still connects to a server, because it reads the run store, which needs the folder trusted (see "`orb flow resume`,
+`orb eval --resume` and `orb flow replay` need a trusted folder" below).
 
 These commands ask the background service as it is, without replacing one that is older than the client, so a service
 that was started before an upgrade and not restarted can lack the trust routes. They used to go ahead with a warning on
@@ -958,14 +964,41 @@ is not trusted, through the background service, which is the default: they now e
 holds no project config.
 That is nearly every eval, because nearly every suite has checks. The same commands against a server that is older than
 workspace trust, such as a background service that was not restarted after the upgrade, now exit with status 1 whether
-or not the folder is trusted. A replay of a module workflow now connects to a server, and starts the background service
-if that is the server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or
-against a server that trusts the folder, are not affected.
+or not the folder is trusted. A replay now connects to a server, and starts the background service if that is the
+server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or against a server
+that trusts the folder, are not affected.
 
 **What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
 `ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service
 restart`). Look over a workflow or suite that you did not write, and the commands, nodes and agents that the refusal
 lists, before you trust the folder that holds it, because trusting the folder lets it run.
+
+### `orb flow resume`, `orb eval --resume` and `orb flow replay` need a trusted folder
+
+The run store, `.orbit/runs.db`, is a file in the repository, so a clone can ship one with any run in it, and a
+resumed run goes on from what the store records for it: the worktree that a verify node's reviewer and checks work in,
+the session that a team member continues, and the base commit of the review diff. A store in an untrusted clone could
+point a reviewer at any folder on the computer, `C:\` or `/` included, and the reviewer could read a file there and send
+it to your model provider.
+
+`orb flow resume`, `orb eval --resume` and `orb flow replay` now stop in a folder that is not trusted, whatever the
+folder holds back and whatever the workflow or suite defines, before they open the run store. They say that the folder
+is not trusted and that the command goes on from a run that the folder's run store records, give `orb trust` and
+`--trust` as the ways to go on, and exit with status 1. `orb eval --resume --format json` prints the refusal on stdout
+as the JSON error that `orb run --format json` prints. A server that cannot say whether the folder is trusted, because
+it is older than workspace trust, stops them as well. To ask, `orb flow replay` now always connects to a server, for a
+YAML workflow too, and one it cannot reach stops it. `orb flow run` and `orb eval` without `--resume` are not affected.
+The flow runner, for a caller that resumes in such a folder anyway, takes no worktree and no session ID from the store:
+the checks and the reviewer of a reused verify iteration work in the folder of the run, and a team member whose turn is
+reused opens a new session for its next one. (`packages/cli/test/trust.test.ts`: the rows for a run store that the
+clone ships, each with a `--trust` control, the rows that refuse before the store is opened, and the rows for a server
+older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts`.)
+
+**Affects:** scripts and CI that resume or replay a run in a folder that is not trusted, including a run they started
+there themselves: they now exit with status 1.
+
+**What to do:** trust the folder with `orb trust`, or pass `--trust` to the one command, or set
+`ORBIT_TRUST_PROJECT=1` and `--standalone` in CI.
 
 ### `orb flow` treats the run store of a repository as untrusted text
 
@@ -2950,7 +2983,7 @@ A nested instruction file that is a link leading out of the project is no longer
 
 A folder named `rules` now holds instruction files too. Orbit reads `<folder>/.orbit/rules` in every folder of the instruction walk, `rules` in your own config folder, and `rules` in the managed folder beside the managed `ORBIT.md`. With compatibility on, the `rules` folder inside another product's dot-directory is read as well, before Orbit's own, so Orbit's rules take precedence. Every file whose name ends in `.md` (lower case) is a rule, in subfolders too, loaded by name order.
 
-A rule with no `paths` in its front matter is an ordinary instruction file: it joins the first request right after the instruction file of its folder (the managed rules after the managed file, your own after your global file) and before that folder's local file. A rule with `paths` (a YAML list, or a comma-separated string, with `{a,b}` groups expanded) is not in the first request. It is added to the conversation, once, the first time the model reads a file that matches. The patterns follow the rules of a `.gitignore`, from the folder that holds the `.orbit` folder (your own and the managed rules: from the folder the session started in), on the real path of the file: `*.ts` matches at any depth, `src/api/**` and `/src/*.ts` are anchored, case is ignored, `*.md` matches `.notes.md`, and `!` takes a match back. Only a read triggers a rule, not an edit, a folder listing or a PDF. A rule is added again after compaction drops it. A `paths` that cannot be read as YAML makes the rule apply from the start, and a front matter whose first line names a language (`---js`) is text, not front matter.
+A rule with no `paths` in its front matter is an ordinary instruction file: it joins the first request right after the instruction file of its folder (the managed rules after the managed file, your own after your global file) and before that folder's local file. A rule with `paths` (a YAML list, or a comma-separated string, with `{a,b}` groups expanded) is not in the first request. It is added to the conversation, once, the first time the model reads a file that matches. The patterns follow the rules of a `.gitignore`, from the folder that holds the `.orbit` folder (your own and the managed rules: from the folder the session started in), on the real path of the file: `*.ts` matches at any depth, `src/api/**` and `/src/*.ts` are anchored, case is ignored, `*.md` matches `.notes.md`, and `!` takes a match back. Only a read triggers a rule, not an edit, a folder listing or a PDF. A read outside the folder the session started in, such as a file of a sibling package in the same repository, adds no rule, even one whose patterns match that file. A rule is added again after compaction drops it. A `paths` that cannot be read as YAML makes the rule apply from the start, and a front matter whose first line names a language (`---js`) is text, not front matter.
 
 An unconditional rule counts toward the 40,000-character size warning; a rule that waits does not. `instructions_exclude` applies to your own and the project's rules, never to the managed ones. In a project that is not trusted, a rule or a rules folder that is a link out of the project is skipped and logged once, and loads once the project is trusted. A rule with `paths` that is a link out of the project is never added on a read, in a trusted project too. Rule paths are matched by Bun's glob matcher, whose time grows with the path and the pattern and cannot blow up, and a read of a path more than 32 folders deep or 1,024 characters long matches no pattern. A rule in a folder above the project waits for the project to be trusted, as the instruction file in that folder does, and loads, or waits for a matching read, once it is.
 
@@ -2966,9 +2999,9 @@ When the project is your home folder or a filesystem root, an instruction file o
 
 A project or personal rule that cannot be read (no read permission, or a file another program holds open) is now left out with one warning line that names it. Before, it stopped every new session in the folder with "Instruction initialization blocked by unavailable sources". An instruction file of the walk (`AGENTS.md`, `ORBIT.local.md`, the other product's names) that cannot be read is left out the same way, and the next name in its slot in that folder is read instead; before, it stopped every new session in the folder with the same message, and a file that was readable when the session was prepared but gone when it was read kept its old text. The administrator's rules and file still stop the session, so that policy text is never dropped for a failed read.
 
-One rules folder now lists at most 256 rule files, in name order, with one warning when more are there. One read of a file looks at no more than 256 rule files over all the folders it passes through, and the next read of the same folders does not list them again until a rescan or a short while has passed, so a new rule shows on a later read. Before, every read walked every rule folder on the way again, which took minutes in a repository that held thousands of rule files. One scan of a rules folder also enters at most 256 folders, with one warning when more are there, so a repository that holds thousands of empty subfolders no longer delays the first request of a session by tens of seconds. The time a read takes still grows with the folders and imports it is allowed, which are bounded now (register row FU-M4-r5-pass-budget). A rule or instruction file that fails to read costs only itself now; before, one file another program held open dropped every nested file of that read.
+One rules folder now lists at most 256 rule files, in name order, with one warning when more are there. One read of a file looks at no more than 256 rule files over all the folders it passes through, and the next read of the same folders does not list them again until a rescan or a short while has passed, so a new rule shows on a later read. Before, every read walked every rule folder on the way again, which took minutes in a repository that held thousands of rule files. One scan of a rules folder also enters at most 256 folders, with one warning when more are there. That limit counts the folders of one rules folder, not of the whole pass: a session scans two rules folders (Orbit's and, with compatibility on, which is the default, the other product's) in each folder from the one it started in up to the project root, and each scan has its own 256. A repository that fills every one of them with empty subfolders can therefore still delay the first request of a session started a few levels down: about 28 seconds on Windows with 400 empty subfolders in each rules folder of four levels, against 3 seconds without them. It costs time only; nothing runs and nothing is sent. This stays open as register row FU-M4-r2-rule-scan. The `@` import allowance in the next paragraph is shared by every file of a pass instead (register row FU-M4-r5-pass-budget). A rule or instruction file that fails to read costs only itself now; before, one file another program held open dropped every nested file of that read.
 
-A rules folder that is a link, or a link to a folder inside one, is held to the same bound as a linked file: in a home or root project a linked folder of rules may no longer lead out of the folder you started in, and before it carried every `.md` file of the folder it led to, a diary under `~/Documents` included. One pass of loading instructions now follows at most 256 `@` imports in all, counted over every file of the pass, the file itself and the files it imports together; the rest are left out with one warning for the pass, and an import whose target is missing or refused is not looked up again in the same pass. This is a limit of Orbit's own: the reference has no such cap. Before, a file with thousands of them delayed the first request of the session by about a minute for every 175 KiB, and a first cap of 256 for each file left the same delay when the tokens were spread over imported files (40 files of 256 missing imports took 35 seconds). In a project that is your home folder or a filesystem root, an agent, command, skill or output style file of the project's own config folders (`.orbit` and the other product's project folder) that is a link may no longer lead out of that config folder, the folder you started in or a folder you can trust for good, and a config folder that is itself a link out is not read from; trusting the project alone does not open it. Your own config (the global config folder, `~/.orbit`, the other product's user folder) is not held to this: a link there may lead anywhere, in any folder you start in, as it did before.
+A rules folder that is a link, or a link to a folder inside one, is held to the same bound as a linked file: in a home or root project a linked folder of rules may no longer lead out of the folder you started in, and before it carried every `.md` file of the folder it led to, a diary under `~/Documents` included. One pass of loading instructions now follows at most 256 `@` imports in all, counted over every file of the pass (the instruction files of the walk, the rule files of every folder, and the files they import); the rest are left out with one warning for the pass, and an import whose target is missing or refused is not looked up again in the same pass. This is a limit of Orbit's own: the reference has no such cap. Before, a file with thousands of them delayed the first request of the session by about a minute for every 175 KiB, and a first cap of 256 for each file left the same delay when the tokens were spread over imported files (40 files of 256 missing imports took 35 seconds). In a project that is your home folder or a filesystem root, an agent, command, skill or output style file of the project's own config folders (`.orbit` and the other product's project folder) that is a link may no longer lead out of that config folder or the folder you started in, and a config folder that is itself a link out is not read from; trusting the project alone does not open it. Your own config (the global config folder, `~/.orbit`, the other product's user folder) is not held to this: a link there may lead anywhere, in any folder you start in, as it did before.
 
 **Affects:** people who start a session in a folder below their home folder when home is a git repository, repositories that link an instruction file or a rule to a file outside the folder, and folders with more than 256 rule files.
 
@@ -2994,7 +3027,9 @@ path, its scope (`managed`, `user`, `project` or `local`), its length in charact
 blocks are off, and the file that imported it when it was imported. `status.warnings` names each file longer than
 40,000 characters, which is still sent whole, and each import that was left out because it leads outside what the
 project may supply (`import-external`, or `import-untrusted` when trusting the folder would load it).
-`status.available` is false when a source could not be read, so the list is incomplete. `initial` is the baseline the
+`status.available` is false when a source could not be read, as when the administrator's instruction file is there and
+cannot be read, so the list is incomplete. A project instruction file that cannot be read keeps `available` true: it is
+missing from the list, and the next name in its folder is listed in its place. `initial` is the baseline the
 next request sends and `update` the instruction update the next step boundary would record, empty when nothing
 changed. Neither starts a model request or needs a provider. When a source is unavailable and the session has no
 baseline yet, `initial` and `update` are left out and `blocked` names the sources. Warnings never reach the model.

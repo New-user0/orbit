@@ -6,6 +6,7 @@ import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { Agent } from "@orbit/core/agent"
 import { AgentAttachment, Base64, FileAttachment, SkillAttachment } from "@orbit/schema/prompt"
 import { Skill } from "@orbit/schema/skill"
+import { ShellResult } from "@orbit/core/shell/result"
 import { DateTime } from "effect"
 
 const created = DateTime.makeUnsafe(0)
@@ -504,5 +505,70 @@ describe("the reasoning boost note", () => {
     ).toHaveLength(0)
     // A subagent command's child prompt is marked as built by the harness, so it carries none.
     expect(boosted(toLLMMessages([keyword("c", { metadata: { origin: "agent" } })], model), "c")).toHaveLength(0)
+  })
+})
+
+// The notice Session.shell stores for a command the person typed (ShellResult.userNotification) is what the typed-shell
+// note is decided on; a background job of an agent stores ShellResult.notification, which names no origin.
+describe("the reasoning boost note on a typed shell command's notice", () => {
+  const EFFORT = "asked for a high level of reasoning effort"
+  const synthetic = (value: string, made: { text: string; metadata: Record<string, unknown> }) =>
+    SessionMessage.Synthetic.make({
+      id: id(value),
+      type: "synthetic",
+      text: made.text,
+      metadata: made.metadata,
+      time: { created },
+    })
+  const notice = (value: string, command: string) =>
+    synthetic(
+      value,
+      ShellResult.userNotification({
+        info: { id: "shl_1", command, status: "exited", exit: 0 },
+        capture: { output: "x", truncated: false },
+      } as unknown as ShellResult.Result),
+    )
+  const boosted = (out: ReturnType<typeof toLLMMessages>, value: string) =>
+    parts(out, value).filter((part) => part.includes(EFFORT))
+
+  test("is added to a notice that follows a text-only step, and ends with a blank line", () => {
+    const out = toLLMMessages([user("a"), textStep("s1"), notice("n", "echo ultrathink")], model)
+    expect(boosted(out, "n")).toHaveLength(1)
+    expect(boosted(out, "n")[0]).toEndWith("\n</system-reminder>\n\n")
+  })
+
+  test("is not added to a notice that arrives after a tool step, as one that arrives mid-turn", () => {
+    const out = toLLMMessages([user("a"), toolStep("s1"), notice("n", "echo ultrathink")], model)
+    expect(boosted(out, "n")).toHaveLength(0)
+  })
+
+  test("is not added under minimal lowering", () => {
+    const out = toLLMMessages([notice("n", "echo ultrathink")], model, "provider", [], { minimal: true })
+    expect(boosted(out, "n")).toHaveLength(0)
+  })
+
+  test("is added only when the typed command holds the keyword", () => {
+    expect(boosted(toLLMMessages([notice("n", "echo plain")], model), "n")).toHaveLength(0)
+    expect(boosted(toLLMMessages([notice("n", "echo ultrathink")], model), "n")).toHaveLength(1)
+  })
+
+  test("is not added to an agent's background job whose command holds the keyword", () => {
+    const job = synthetic(
+      "job",
+      ShellResult.notification({ shellID: "shl_2", command: "echo ultrathink", state: "completed", text: "x" }),
+    )
+    expect(boosted(toLLMMessages([job], model), "job")).toHaveLength(0)
+  })
+
+  test("a skill message's note ends with a blank line, so a chat adapter keeps the closing tag apart", () => {
+    const skill = {
+      id: id("sk"),
+      type: "skill",
+      text: "Ultrathink first.",
+      time: { created },
+    } as unknown as SessionMessage.Info
+    const note = boosted(toLLMMessages([skill], model), "sk")
+    expect(note).toHaveLength(1)
+    expect(note[0]).toEndWith("\n</system-reminder>\n\n")
   })
 })

@@ -87,7 +87,7 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
       App.node.replace(App.node),
       ModelsDev.node.replace(ModelsDev.configured({ fetch: false })),
       Watcher.node.replace(Watcher.configured({ enabled: true })),
-      // An instruction file that cannot be read while `unreadable.current` is set, as one that is locked or just gone.
+      // An ORBIT.md that cannot be read while the flag of its place in `unreadable` is set, as one that is locked or just gone.
       FSUtil.node.replace(
         Layer.effect(
           FSUtil.Service,
@@ -526,6 +526,7 @@ it.live("reads no file a link leads out of an untrusted project to, and a second
   }).pipe(Effect.scoped),
 )
 
+// The administrator's file fails closed: one that is there and cannot be read makes the source unavailable.
 it.live("reports an unavailable source, and no baseline while the session has none", () =>
   Effect.gen(function* () {
     const managed = path.join((yield* tmpdirScoped("orbit-managed-")).path, "managed")
@@ -534,6 +535,7 @@ it.live("reports an unavailable source, and no baseline while the session has no
     yield* s.write(file, "stored rules")
     const initialized = yield* s.session()
     const baseline = (yield* s.preview(initialized.id)).initial
+    expect(baseline).toContain("stored rules")
     yield* s.step(initialized.id, "go")
     const fresh = yield* s.session()
 
@@ -548,6 +550,32 @@ it.live("reports an unavailable source, and no baseline while the session has no
     const kept = yield* s.preview(initialized.id)
     expect(kept.status.available).toBe(false)
     expect(kept.initial).toBe(baseline)
+  }).pipe(Effect.scoped),
+)
+
+// The control for the rescan the two rows above wait for: a project file that a rescan cannot read costs only itself, so
+// the source stays available and the list is complete without it.
+it.live("keeps the source available when a rescan cannot read a project file", () =>
+  Effect.gen(function* () {
+    const s = yield* server()
+    const file = path.join(s.project, "ORBIT.md")
+    yield* s.write(file, "stored rules")
+    yield* s.write(path.join(s.project, "AGENTS.md"), "next rules")
+    const session = yield* s.session()
+    expect((yield* s.preview(session.id)).status.files.map((item) => item.path)).toEqual([file])
+
+    s.unreadable.project = true
+    yield* s.write(file, "changed rules")
+    const rescanned = yield* s.until(
+      (yield* s.session()).id,
+      (preview) => !preview.status.available || !preview.status.files.some((item) => item.path === file),
+    )
+
+    expect(rescanned.status.available).toBe(true)
+    // The next name of its slot takes its place, as it does when the first name is missing.
+    expect(rescanned.status.files.map((item) => item.path)).toEqual([path.join(s.project, "AGENTS.md")])
+    expect(rescanned.initial).toContain("next rules")
+    expect(rescanned.blocked).toBeUndefined()
   }).pipe(Effect.scoped),
 )
 

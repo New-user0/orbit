@@ -98,7 +98,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   through the repository's own `info/exclude` only, and only for a Location whose project is a git one, asked at the project
   root the Location resolved and never by walking up (a Mercurial project nested in a repository gets no step, and no git
   process starts for it): `GitLayout.locate` must report `verified` (the nine forged layouts of `git-forged.ts` get no line
-  and at most one log line), `info` and `exclude` must not be links, the exclude file's folder must
+  and at most one log line), `info` and `exclude` must not be links (an `exclude` that links to a file outside the git
+  directory, or dangles, gets no line and one warning, trusted or not, with a plain file as the control: the "when
+  info/exclude is" rows; mutation: dropping the `exclude` term of the link check fails the four link rows), the exclude file's folder must
   stay inside the verified common directory, and no git process starts while the folder is untrusted (the "already
   ignored" question is asked of git, with fsmonitor off, only once it is trusted). A failure of that step is logged and
   keeps the note. The text is the person's own and is not filtered; an import token in it meets the import gate when the
@@ -373,8 +375,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Agent, command, skill, compat skill and output style files: `ProjectTrust.supplies` for the path, `ConfigMarkdown` for
   the text, `ConfigTrust.sanitize` and `sanitizeCommands` for what they may say. Proof: `project-trust.test.ts`,
   `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`. When the project is the home folder or a filesystem root,
-  `supplies` holds a project's or a local source to its own config folder, the folder the session started in and a folder
-  that can be trusted for good, trusted for the session or not, because everything below home is inside the project
+  `supplies` holds a project's or a local source to its own config folder and the folder the session started in, trusted
+  for the session or not, because everything below home is inside the project
   (class 4): the "holds a config directory below a project at home to its own folder" rows of `project-trust.test.ts`
   (mutation: the pre-fix bound fails both). The config folder's own real path counts only when the folder is not a link out
   of the folder that holds it: the "holds a config folder that is a link out" rows (mutation: admitting the real path of
@@ -437,7 +439,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   and a clone chooses how many a file holds and how many files it imports (class 15 on a bound of time; proof: 'follows no
   more import tokens in one file than the cap' and 'in one pass than the cap, however many files hold them' in
   `test/config/instruction-file.test.ts`, which count the paths asked about, not seconds; mutation: following every token
-  fails the first, 10,002 asked against 256, and the cap per file alone fails the second).
+  fails the first, 10,002 asked against 256, and the cap per file alone fails the second; across the separate loads of a
+  refresh, the "looks up no more import tokens in one pass than the cap, spread over the walk's files and rule files" row
+  of `test/instruction-discovery.test.ts`, which an allowance per load fails).
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
@@ -458,7 +462,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   another product while compatibility is on, `rules` in the config folder, and `rules` beside the managed file; read by
   `ConfigInstructionRules.scan` and loaded by `ConfigInstructionPlugin` and, for the folders a read passes through, by
   `InstructionTriggers` and `SessionInstructions`; classes 1, 4, 6, 7, 11 and 14). The scan opens nothing before the gate:
-  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), a folder is
+  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), and the loader's
+  own check of whether a rules folder is there to watch skips such a folder before it stats it (proof: the "never stats,
+  lists or watches a share that a rules folder of the project links to" rows of `test/instruction-discovery.test.ts`,
+  Orbit's and the other product's rules folder, trusted and untrusted, Windows with link rights; mutation: dropping the
+  share term of that check fails both), a folder is
   entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
   `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
   a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
@@ -473,7 +481,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   warning that names it, and the next name of its slot in that folder takes its place (proof: the "a shared instruction
   file that answers nothing" rows and their siblings, which are shared, local and shared with a second name, untrusted and
   trusted, with a readable control, in `test/instruction-discovery.test.ts`; mutation: returning the source as unavailable
-  from `readSlot` again fails 12 of them). The administrator's file still fails closed. One scan lists at most 256 rule files and compiled globs are kept. One read of a
+  from `readSlot` again fails 12 of them). The administrator's file still fails closed (proof: the "reports an unavailable
+  source" and "lists no files for an agent" rows of `server/test/session-instructions.test.ts`, with "leaves an unreadable
+  project ORBIT.md out" and "keeps the source available when a rescan cannot read a project file" as the controls;
+  mutation: `managedSource` answering `nothing` for an unreadable file fails the two). No list of `instructions_exclude` drops an administrator's rule, at the start (the "excludes the rules of the person
+  and the project ... and never the administrator's" row of `test/instruction-discovery.test.ts`) or when a read brings in
+  one that waits (the "injects an administrator's waiting rule that a user list excludes" rows and their project siblings
+  in `test/session-instructions.test.ts`, with the person's rule under the same list as the control; mutation: dropping
+  the managed term of the exclusion check in `SessionInstructions.load` fails all four). One scan lists at most 256 rule files and compiled globs are kept. One read of a
   file looks at no more than 256 rule files over all the folders it passes through, with one warning (proof: 'looks at no
   more rule files in one read than the budget, over all the folders it passes through' in `test/session-instructions.test.ts`;
   mutation: raising `MAX_RULES_PER_READ` fails it), and the rules of one read share one set of handled files, so a file that
@@ -483,18 +498,28 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   nested rules folder again on the next read, until a rescan'; mutation: `CACHE_MILLIS = 0` fails it; the ageing out itself has
   no test; the rule files themselves are opened again on every read), and `ConfigInstructionRules.scan` asks the gate of a
   folder and of a file reached through a link, not of a plain file in a folder the gate accepted (proof: the "does not ask
-  it of a plain file" row of `test/config/instruction-rules.test.ts`). What a pass costs is bounded by two more
-  budgets (class 15, FU-M4-r5-pass-budget): one scan of a rules folder enters at most `MAX_FOLDERS` (256) folders, empty ones
-  included, with one warning (proof: the "enters at most MAX_FOLDERS folders" row of `test/config/instruction-rules.test.ts`,
-  counting the `leads`, `isDir` and gate calls over 2,048 empty folders; mutation: the scan without the budget fails it), and
-  one pass follows at most `MAX_IMPORTS` (256) import tokens over every file of it, the root file and what it imports,
-  with one warning, and remembers a missing target and an importer's refused one so that a token written again costs
-  nothing (proof: the "in one pass than the cap, however many files hold them" and "does not walk a missing target again"
-  rows of `test/config/instruction-file.test.ts`, counting the paths asked; mutation: the cap per file alone fails both).
-  A pass is a refresh, a read of the folders on the way, or a request for note targets. What is left unbounded is the
-  number of passes: a watcher, config or trust event, or a read after the 30 seconds a listing is kept, runs one more, each
-  within the two budgets. The reference walks nested rules folders on every read in the same way and has no such cap
-  (they are Orbit's own limits). It costs time only: no code runs and nothing is sent. A rule or
+  it of a plain file" row of `test/config/instruction-rules.test.ts`). Two more budgets bound part of what a pass costs
+  (class 15). The import allowance is the pass's (FU-M4-r5-pass-budget): one pass follows at most `MAX_IMPORTS` (256)
+  import tokens over every file of it, the instruction files of the walk, the rule files of every folder and what they
+  import, with one warning, and remembers a missing target and an importer's refused one so that a token written again
+  costs nothing (proof: the "in one pass than the cap, however many files hold them" and "does not walk a missing target
+  again" rows of `test/config/instruction-file.test.ts`, counting the paths asked in one load; mutation: the cap per file
+  alone fails both; and the "looks up no more import tokens in one pass than the cap, spread over the walk's files and
+  rule files" row of `test/instruction-discovery.test.ts`, which counts the lookups of one untrusted refresh over five
+  files of 256 missing imports each; mutation: a fresh allowance for each `ConfigInstructionFile.load` call fails it, 1,280
+  lookups against 256). The folder budget is a scan's, not the pass's: one scan of a rules folder enters at most
+  `MAX_FOLDERS` (256) folders, empty ones included, with one warning (proof: the "enters at most MAX_FOLDERS folders" row
+  of `test/config/instruction-rules.test.ts`, counting the `leads`, `isDir` and gate calls over 2,048 empty folders;
+  mutation: the scan without the budget fails it), but a refresh scans two rules folders (Orbit's, and the other
+  product's while compatibility is on) in every folder from the one the session started in up to the project root, each
+  with a budget of its own. So a clone that fills each of them with empty subfolders still delays the first request of a
+  session started a few levels down (about 28 s on Windows with 400 empty subfolders in every rules folder of four
+  levels, against 3 s for a plain clone). That is open as FU-M4-r2-rule-scan: it needs a crafted clone, costs time only
+  (no code runs and nothing is sent), and its fix is one folder budget for the pass, shared as `visited` is. A pass is a
+  refresh, a read of the folders on the way, or a request for note targets. What is left unbounded is the number of
+  passes: a watcher, config or trust event, or a read after the 30 seconds a listing is kept, runs one more, each within
+  the import allowance and the folder budget of each scan. The reference walks nested rules folders on every read in the
+  same way and has no such cap (they are Orbit's own limits). A rule or
   instruction file of a read that fails to read for another reason (a file another program holds open) costs only itself,
   with one warning (proof: the "still hands over the other nested files of a read when ... fails to read" rows of
   `test/session-instructions.test.ts`).
@@ -647,12 +672,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   share is refused without being opened. Proof: `packages/flow/test/store-share.test.ts`.
 - The flow runner's git (`run` and `evaluate` in `packages/flow`: root, exclude, head, dirty check, worktrees, commits,
   merges, review diff), which reads the index and applies `core.fsmonitor`, clean filters and hooks of the clone: class 1,
-  gated on `trusted`, which `orb flow run`, `resume` and `orb eval` take from the server after `requireTrust` and `replay`
-  sets to false (class 12). The base commit is taken from the store of a resumed run only where git may run, because
-  the store is a file that a clone ships and the review diff would start git in the folder it names. Proof:
-  `packages/cli/test/trust.test.ts`, rows per key and door, and the rows for `flow resume` and `eval --resume` of a store
-  the clone ships (a recorded attempt whose worktree is the clone), each with a trusted control; the refusals that say
-  "in a trusted folder": `packages/flow/test/runner-untrusted.test.ts`.
+  gated on `trusted`, which `orb flow run` and `orb eval` take from the server after `requireTrust` and `replay` sets to
+  false (class 12). The base commit is taken from the store of a resumed run only where git may run. Proof:
+  `packages/cli/test/trust.test.ts`, rows per key and door; the refusals that say "in a trusted folder" (a worktree
+  agent, a team in a worktree, a merge): `packages/flow/test/runner-untrusted.test.ts`.
+- What a resumed run takes from the store (classes 1, 5 and 12): the worktree that a reused verify iteration's checks
+  and reviewer work in, the session a reused team turn continues, the base commit and the default model. `orb flow resume`, `orb eval --resume` and `orb flow replay` refuse a folder that is not trusted, before
+  they open the store (`requireTrust` with `strict: "recorded"`; `eval` reports it through `reportRunError`, as JSON
+  under `--format json`). No other door resumes a stored run: the terminal UI's `/runs` dialog and the VS Code Runs view
+  only read the store and hand a resume to `orb flow resume`, and the server, ACP and the SDK do not load
+  `@orbit/flow`. The runner itself, for a caller that resumes with `trusted: false`, takes no worktree and no session ID
+  from the store. Proof: `packages/cli/test/trust.test.ts`, the rows for a run store that the clone ships (a recorded
+  verify iteration whose worktree is a folder outside the clone holding a secret: refused with no model request, git or
+  read, and a `--trust` control that reads it), the rows that refuse before the store is opened, and the rows for a server
+  older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts` (the reviewer's folder, the check's
+  folder and a team member's session, each with a trusted control).
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
@@ -1066,14 +1100,15 @@ and its data twins (commands, approvals, agents) at once.
   comment on `execute` in `packages/flow/src/yaml.ts` and the one in `evaluate` (`packages/flow/src/eval.ts`) name the
   lists.
 - Hand the lists to the gate with `trustOptions(file, kind)`, which `flow run`, `flow resume` and `eval` share. Replay
-  answers from the recording, so it is held only for a module and contacts no server for a YAML file.
+  answers from the recording, so the file is held only for a module. A resume and a replay go on from the run store, so
+  they need the folder they run in trusted before anything else (`strict: "recorded"`, class 5).
 - Print the file's text with its control characters written out (class 9).
 
 **How to test:**
 
 - A marker command in a `check` node, in the `checks` of a `verify` node and in the `checks` of a suite task, in an
   untrusted folder that holds nothing else back. Assert refused, marker absent and the model never asked. The `--trust`
-  control writes the marker, and a replay is not held up and contacts no server.
+  control writes the marker, and a replay in a trusted folder is not held up by the commands.
 - A gate-versus-runner test. Run the real runner and `evaluate` against a client that records every agent, approval and
   command it is asked to use, and require each one to be in the gate's list (`packages/flow/test/agents.test.ts`). Feed
   awkward shapes through both: anchors, merge keys, `__proto__`, duplicate keys, tags, flow style, quoted keys,
@@ -1300,6 +1335,10 @@ the store.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust
   step, or a shape check that makes the action safe whatever the store says.
+- A folder or a session ID that a store records is a place to act in, not only a name: a resumed run reviews, checks
+  and prompts there. So `orb flow resume`, `orb eval --resume` and `orb flow replay` refuse an untrusted folder before
+  they open the store, and the runner with `trusted: false` takes neither from it (M4 round 6; the narrower check that
+  would let a resume run untrusted is a Known gap).
 
 **How to test:**
 
@@ -2385,6 +2424,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
   check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
+- **Resuming a run in a folder that is not trusted** (M4 round 6, register row FU-M4-r6-resume-store). `orb flow
+  resume`, `orb eval --resume` and `orb flow replay` refuse such a folder before they open its run store, because a store
+  that a clone ships decides where a resumed run's reviewer and checks work and which sessions its team continues
+  (`packages/cli/test/trust.test.ts`, the rows for a run store that the clone ships). Letting them run there again needs a
+  narrower check: accept a stored worktree only when it is the folder `Git.worktree` makes for that repository, run and
+  node, accept a team member's session only when the run made it, and take no default model or eval models from the
+  store, since the owner withholds the choice of a model from an untrusted folder. In a trusted folder a resumed run
+  still takes all of these from the store as it records them. No task yet.
 - **Build checks.** `verifyArtifact` fails the build on an import or a `require` of a `#` name in the forms Bun writes in an unsplit build (`import("#x")`, `import"#x"`, `from"#x"`, `__require("#x")` and a call through the minified `import.meta.require` alias)
   (`packages/cli/test/verify-artifact.test.ts`), and `provider-compiled.test.ts` and `pdf-compiled.test.ts` import the
   autoload options instead of copying them. The alias set covers the whole file, so a minifier that reuses the alias name for another call could fail the build wrongly, and a `splitting: true` build, where a chunk imports the alias from an earlier or later chunk, is not covered and has no test. It still does not fail the build on a stray bare name: a text scan of the
@@ -2437,7 +2484,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   and `orb flow run`, `resume`, `replay` and `orb eval`, which started git in the folder for its root, head, changes,
   worktrees, commits and merges, so that `core.fsmonitor`, a clean filter or a hook of an untrusted clone ran
   (fixed: `run` and `evaluate` take `trusted`, the commands pass the answer of the server after `requireTrust` and `replay`
-  passes false, and with it false the runner starts no git and finds the run store from the files;
+  passes false, and with it false the runner starts no git and finds the run store from the files; since round 6
+  `resume` and `replay` refuse an untrusted folder before they open the store;
   `packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and `hooks/post-checkout`, each with a
   trusted control; the tasks of an eval still run agents, whose session snapshot uses the separate git directory above); a repository with no config of its own, which shows no
   branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as

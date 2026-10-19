@@ -451,8 +451,8 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
   const calls = requests.length
   const worktrees = await fs.readdir(path.join(repository, ".orbit", "worktrees"))
 
-  // A module workflow is code, so a replay asks a server whether the folder is trusted before it loads one: a private
-  // server here, though the replay itself calls no model.
+  // A replay goes on from the run store, so it asks a server whether the folder is trusted before it reads the store:
+  // a private server here, though the replay itself calls no model.
   const same = await orb(repository, ["flow", "replay", "--standalone", id])
 
   expect({ code: same.code, stderr: same.code === 0 ? "" : same.stderr }).toEqual({ code: 0, stderr: "" })
@@ -674,7 +674,7 @@ test("orb flow clean in a clone whose run store names runs like paths leaves eve
   expect(cleaned.stdout).toContain("from 1 run(s)")
   // Naming such a run does not make it one, for any command that takes a run, and resuming one makes no worktree.
   for (const command of ["clean", "show", "resume"]) {
-    const named = await orb(repository, ["flow", command, ...(command === "clean" ? ["--standalone", "--trust"] : []), "../../../victim"])
+    const named = await orb(repository, ["flow", command, ...(command === "show" ? [] : ["--standalone", "--trust"]), "../../../victim"])
     expect({ command, code: named.code }).toEqual({ command, code: 1 })
     expect(named.stderr).toContain("No run ../../../victim in this repository")
   }
@@ -892,7 +892,7 @@ test("orb flow replay prints the nodes of a YAML workflow without the characters
   // A node whose inputs changed since the recording is named, as the replay of an edited workflow goes on.
   const edited = path.join(repository, "edited.yaml")
   await Bun.write(edited, workflow("write a.txt carefully"))
-  const changed = await orb(repository, ["flow", "replay", id, "--file", edited])
+  const changed = await orb(repository, ["flow", "replay", "--standalone", id, "--file", edited])
 
   expectNoControl(changed.stdout, changed.stderr)
   expect(changed.stderr).toContain(`~ a${shown}: its inputs differ from the recording`)
@@ -903,7 +903,7 @@ test("orb flow replay prints the nodes of a YAML workflow without the characters
   // A node that the recording lacks stops the replay, and the failure names it.
   const longer = path.join(repository, "longer.yaml")
   await Bun.write(longer, workflow("write a.txt", `  - id: ${JSON.stringify(`b${evil}`)}`, "    prompt: write b.txt"))
-  const diverged = await orb(repository, ["flow", "replay", id, "--file", longer])
+  const diverged = await orb(repository, ["flow", "replay", "--standalone", id, "--file", longer])
 
   expect(diverged.code).toBe(1)
   expectNoControl(diverged.stderr)
@@ -950,9 +950,9 @@ test("orb flow resume and replay print the failure for a workflow file that the 
   store.status(id, "failed")
   store.close()
 
-  // A replay of a YAML workflow connects to no server, so nothing at all stands in front of its failure. They run one
-  // after the other, as processes that open the same store at once can find it locked.
-  const replayed = await orb(repository, ["flow", "replay", id])
+  // Both ask a private server whether the folder is trusted, which the tests' servers answer yes, before they read the
+  // store. They run one after the other, as processes that open the same store at once can find it locked.
+  const replayed = await orb(repository, ["flow", "replay", "--standalone", id])
   const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
 
   for (const output of [replayed, resumed]) {
