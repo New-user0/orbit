@@ -77,7 +77,7 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
         // entry needs the check, and asking it of every file made a scan cost more the deeper the folder was.
         if (entry.type === "symlink" && !(yield* input.allow(target, child))) continue
         files.add(key(target))
-        // A repository chooses how many rule files it holds, and every read walks them again: the rest are not listed.
+        // A repository chooses how many rule files it holds, and a read walks them: the rest are not listed.
         if (found.length >= limit) {
           if (!capped) yield* Effect.logWarning("instruction rules skipped", { path: input.directory, reason: `more than ${limit} rule files` })
           capped = true

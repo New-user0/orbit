@@ -87,7 +87,7 @@ const layer = Layer.effect(
     const applies = (rule: InstructionDiscovery.ConditionalRule, real: string) =>
       fs.resolve(rule.base).pipe(Effect.map((base) => ConfigInstructionFile.ruleMatches(rule.patterns, base, real)))
 
-    // The rules of the folders that a read passed through, from what the folders hold now. They are told apart by their own
+    // The rules of the folders that a read passed through, from what the folders held at a recent read (`remembered`). They are told apart by their own
     // front matter, as at the start of the session: a rule with no patterns, and a plain file that a waiting rule imports,
     // apply to every read below the folder, and a rule with patterns only to a read that matches them.
     const nestedRules = Effect.fnUntraced(function* (input: {

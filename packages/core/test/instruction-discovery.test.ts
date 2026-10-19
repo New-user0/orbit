@@ -2020,7 +2020,9 @@ describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from
 
 describe("ConfigInstructionPlugin.Plugin keeps a link in a wide project from leading out of the started folder", () => {
   // A project at the home folder or at a filesystem root holds everything below it, so being inside it proves nothing
-  // about a link: a file or a rule there may not lead out of the folder the session started in, whatever is granted.
+  // about a link: a file or a rule there may lead out of the folder the session started in only to a folder the person has
+  // trusted (the "loads a file that an instruction file linked to a trusted outside folder imports" row below); a grant of
+  // the project itself does not open it.
   const wide = [
     { name: "home", repo: (home: string) => home },
     { name: "filesystem root", repo: (home: string) => path.parse(home).root },

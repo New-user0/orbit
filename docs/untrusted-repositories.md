@@ -86,7 +86,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   never resolved, statted or read, is listed as not enabled and is refused as `outside`, trusted or not. A candidate whose place cannot be
   followed (a loop of links, or a `resolve` that fails) is found when `resolve` fails, is listed the same way and is refused
   (proof: the "cannot be resolved" rows of `test/instruction-notes.test.ts`; removing the `catchCause` fails them). The target is the file the loader reads in that
-  scope (the loader's own exclusion and `ProjectTrust.reachable` filters, in the loader's order), asked of the spelling the
+  scope (the loader's own exclusion, `ProjectTrust.reachable` and wide-project link filters, in the loader's order; the link
+  filter is `ConfigInstructionFile.leadsOut`, shared with the loader, and a file it drops is listed as not enabled and
+  refused as `outside`; proof: the "a project at the home folder" rows of `test/instruction-notes.test.ts`, which need
+  links and so run on Linux or with Developer Mode), asked of the spelling the
   walk builds, never of a real path alone. While the project is untrusted, `ProjectTrust.escapes` and `reachable` on that
   spelling refuse a file that leads outside (a link to a file, a dangling link) as
   `outside`, before any write and again under the file's lock (a link swapped in between); the GET listing reports such a
@@ -353,7 +356,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   takes seconds on a list item of a few thousand lines, and a clone chooses the file before anyone has trusted it.
   `ConfigInstructionPlugin` also asks `ProjectTrust.importable` of a walk file and a rule file whose real path is not the
   file itself while the project is home or a filesystem root (which contain everything below them), trusted or not: a link may
-  not lead out of the folder the session started in (class 4). Proof: the "keeps a link in a wide project from leading out"
+  lead out of the folder the session started in only to a folder the person has trusted, and only when the session started at
+  that home or root folder and that folder is trusted for the session (`ProjectTrust.outward`; class 4). Proof, for the
+  exception: the "loads a file that an instruction file linked to a trusted outside folder imports, with the session at the
+  home folder" row of `test/instruction-discovery.test.ts` (mutation: ignoring the `outward` answer in `ConfigInstructionFile.leadsOut` fails it). Proof for
+  the bound: the "keeps a link in a wide project from leading out"
   rows of `test/instruction-discovery.test.ts` (home and root projects, untrusted and trusted for the session, a shared, a
   local and two rule spellings, an ssh key and a credentials file, with plain controls; mutation: skipping the check fails 34
   rows).
@@ -393,8 +400,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   on where it leads now. So a rules folder, a subfolder or a file that is a link out of the project is skipped alone,
   trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
   A project or personal rule that cannot be read costs only itself, with one warning that names it; the administrator's rules
-  fail closed (proof: the "unreadable rule" rows of `test/instruction-discovery.test.ts`). One scan lists at most 256 rule
-  files and compiled globs are kept, so a read costs a bounded amount (proof: `test/config/instruction-rules.test.ts`).
+  fail closed (proof: the "a managed rule that answers nothing keeps the admitted instructions" and "a managed rule that fails keeps
+  the admitted instructions" rows of `test/instruction-discovery.test.ts`, with a readable control; mutation: dropping the
+  managed check in `rules()` fails both). One scan lists at most 256 rule files and compiled globs are kept. One read of a
+  file looks at no more than 256 rule files over all the folders it passes through, with one warning (proof: 'looks at no
+  more rule files in one read than the budget, over all the folders it passes through' in `test/session-instructions.test.ts`;
+  mutation: raising `MAX_RULES_PER_READ` fails it). `InstructionTriggers` keeps what a folder held for a short while and
+  until a rescan, so a second read of the same folder lists and opens nothing (proof: 'does not list or open a nested rules
+  folder again on the next read, until a rescan'; mutation: `CACHE_MILLIS = 0` fails it; the ageing out itself has no
+  test), and `ConfigInstructionRules.scan` asks the gate of a folder and of a file reached through a link, not of a plain
+  file in a folder the gate accepted (proof: the "does not ask it of a plain file" row of
+  `test/config/instruction-rules.test.ts`). The first read below a repository with many nested rules folders still does up
+  to 256 files of work; what the budget and the cache remove is the growth with depth and with every later read. A rule or
+  instruction file of a read that fails to read for another reason (a file another program holds open) costs only itself,
+  with one warning (proof: the "still hands over the other nested files of a read when ... fails to read" rows of
+  `test/session-instructions.test.ts`).
   The person's and the administrator's rules are theirs: only the network refusal applies. The `paths` key is read only
   from the block `ConfigMarkdown.split` finds, only by `ConfigMarkdown.parseOption` (YAML, never evaluated; a block that
   does not parse makes the rule unconditional, with one debug line), and a pattern only chooses when text the folder
