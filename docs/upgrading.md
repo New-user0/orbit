@@ -2073,7 +2073,7 @@ An IPv4 address in the managed `denied_domains` list now also denies its mapped 
 
 ### One bad field no longer drops its agent entry or its settings object
 
-In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry (`color`, `model`, `steps`, `mode`, or one rule in its `permissions`) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
+In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry, or in an entry of the older `agent` and `mode` maps (`color`, `model`, `steps`, `mode`, `description`, `options`, or one rule in its `permissions`) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
 
 **Affects:** anyone with a typo in one of these entries, administrators most of all; `orb doctor` lists each skipped field.
 
