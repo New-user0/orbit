@@ -2902,6 +2902,8 @@ Three notes are now written while a user message is lowered, from fields the mes
 
 `orb run --bare` and vanilla instances keep the mid-turn note and drop the hints and the editor note. On a normal instance, compaction summaries and session generations (/btw and the keep-alive warm-up) lower a prompt like the main request, so they share its cache and see the selection; retained recent messages never carry the hints or the editor note. A redacted session export now replaces `editor.path` and the selected text.
 
+Each of these notes (the mid-turn note, every `@agent` hint, the editor note and the reasoning-effort note) now ends with a blank line when it is lowered, so a provider route that joins a message's text parts with nothing, such as OpenAI Chat compatible providers and Mistral, keeps every closing fence on its own line and starts your words on a new line outside the quoted block. Stored messages are unchanged; a running session sees one more prompt-cache miss.
+
 Sessions that already hold steered messages gain the note once when first lowered by this build, so a running session sees one prompt-cache miss. A steer that follows a fork, an import or a crash that cut history right after a tool step also gets the note, and the first steer after a completed checkpoint does not.
 
 **Affects:** people who type while the agent works, users of `@agent` mentions, and SDK or protocol clients that can now send `editor` (the generated clients carry it).

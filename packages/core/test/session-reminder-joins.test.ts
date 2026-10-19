@@ -84,3 +84,54 @@ describe("tool results joined by an adapter", () => {
     }),
   )
 })
+
+// Prompt notes (agent hints, editor note, effort note) sit in text parts ahead of the prompt text. Chat adapters join
+// those parts with nothing, so every closing fence must stand alone and the prompt must start its own line.
+describe("prompt notes joined by an adapter", () => {
+  const prompt = "please fix the failing test"
+  for (const keyword of [false, true]) {
+    it.effect(`keeps fences and the prompt apart ${keyword ? "with" : "without"} the effort keyword`, () =>
+      Effect.gen(function* () {
+        const text = keyword ? `ultrathink ${prompt}` : prompt
+        const messages = toLLMMessages(
+          [
+            {
+              id: "msg_00000001",
+              type: "user",
+              text,
+              agents: [{ name: "explore" }, { name: "general" }],
+              editor: { path: "/w/src/a.ts", selection: { start: 3, end: 4, text: "const x = 1" } },
+              time: { created: 0 },
+            },
+          ] as unknown as SessionMessage.Info[],
+          ref,
+          "fake",
+        )
+        for (const model of [openai, mistral]) {
+          const prepared = yield* compileRequest(LLM.request({ model, messages }))
+          const user = (prepared.body.messages as ReadonlyArray<{ role: string; content: unknown }>).find(
+            (message) => message.role === "user",
+          )
+          const joined =
+            typeof user?.content === "string"
+              ? user.content
+              : (user?.content as ReadonlyArray<{ text?: string }>).map((part) => part.text ?? "").join("")
+          const lines = joined.split("\n")
+          // No text follows a closing fence on its line.
+          expect(lines.filter((line) => /^`{3,}[^`\s]/.test(line))).toEqual([])
+          // The prompt starts its own line.
+          expect(lines.some((line) => line.startsWith(text))).toBe(true)
+          // No envelope tag shows up while a fence is open.
+          const inside = lines.reduce(
+            (state, line) =>
+              /^`{3,}\s*$/.test(line)
+                ? { open: !state.open, bad: state.bad }
+                : { open: state.open, bad: state.bad || (state.open && live(line)) },
+            { open: false, bad: false },
+          )
+          expect(inside.bad).toBe(false)
+        }
+      }),
+    )
+  }
+})

@@ -66,7 +66,7 @@ describe("the note on input sent while work was in progress", () => {
     const body = parts(out, "b")
     expect(body).toHaveLength(2)
     expect(body[0]).toStartWith("<system-reminder>\n")
-    expect(body[0]).toEndWith("\n</system-reminder>")
+    expect(body[0]).toEndWith("\n</system-reminder>\n\n")
     expect(body[0]).toContain("do not drop it")
     expect(body[0]).not.toContain("words of b")
     expect(body[1]).toBe("words of b")
@@ -396,7 +396,7 @@ describe("the reasoning boost note", () => {
     expect(body[0]).toContain("is open in the person's editor")
     expect(body[1]).toStartWith("<system-reminder>\n")
     expect(body[1]).toContain(EFFORT)
-    expect(body[1]).toEndWith("\n</system-reminder>")
+    expect(body[1]).toEndWith("\n</system-reminder>\n\n")
     expect(body[2]).toBe("please ultrathink about a")
   })
 
