@@ -133,8 +133,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
   each command, so none is started while the folder is untrusted. The provider answers an empty branch, status and
   diff and reloads on `Trust.Event.Updated`; `Project.resolve` names an untrusted folder by its path, not `global`,
-  whose saved approvals every such folder would share. Proof: `test/project-hg-trust.test.ts`,
-  `test/vcs-hg-trust.test.ts`.
+  whose saved approvals every such folder would share, and so a trusted one that Mercurial gives no first changeset for.
+  Proof: `test/project-hg-trust.test.ts`, `test/vcs-hg-trust.test.ts`, and the Mercurial row of "Project.resolve keeps a
+  folder's project across the grant when git or Mercurial cannot name it" in `test/project-git-trust.test.ts`.
 - `git` in `Project.resolve` (`rev-parse`, `remote get-url`, `rev-list`, `worktree list`), in the Git VCS provider (`status`,
   `diff`, `reflog show`, which the terminal UI asks for on connect) and in the location watcher (`rev-parse`): git applies
   the folder's own `.git/config` (its includes, `.gitattributes` and hooks), and a clone chooses all of them. They name
@@ -165,7 +166,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     is blocked (a share), is over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there",
     never an error, and each folder is judged alone (class 7). The project is named by the remote URL in that config as
     written, which `git remote get-url` gives a trusted folder too unless an include or `url.<base>.insteadOf` rewrites it,
-    and by the folder's path when there is none (a trusted folder uses its first commit). The provider answers an empty
+    and by the folder's path when there is none (a trusted folder uses its first commit, and keeps the path's name when it
+    has none). A trusted folder that git gives no answer for (git on no PATH, a config or an owner that git refuses) is
+    read from these files as it was before the grant, so the next resolve names the same project, folders and decision
+    (`test/project-git-trust.test.ts`, "Project.resolve keeps a folder's project across the grant when git or Mercurial
+    cannot name it"). The provider answers an empty
     branch, status, diff and review base, and reloads on `Trust.Event.Updated`. The watcher finds `HEAD` from the same
     files.
   - Snapshot: an untrusted folder's snapshot runs git only in Orbit's own git directory, with the folder as the work tree

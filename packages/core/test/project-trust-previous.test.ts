@@ -21,7 +21,8 @@ import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 // The sessions made while a folder was untrusted follow it into the trusted project, whichever way the trusted ID is
-// chosen: a first commit (see project-trust-id.test.ts), a Mercurial folder, or an ID that the folder ships in `.git/orbit`.
+// chosen: a first commit (see project-trust-id.test.ts), or an ID that the folder ships in `.hg/orbit` or `.git/orbit`.
+// A folder that Mercurial or git cannot name keeps its ID across the grant (project-git-trust.test.ts).
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node, WorkspaceTrust.node, SessionProjector.node]), [
@@ -35,8 +36,11 @@ const SLOW = 90_000
 describe("sessions made before trust, by the way the trusted ID is chosen", () => {
   ;(
     [
-      ["a Mercurial folder", async (root: string) => {
+      [
+        "a Mercurial folder that ships .hg/orbit",
+        async (root: string) => {
           await fs.mkdir(path.join(root, ".hg"), { recursive: true })
+          await Bun.write(path.join(root, ".hg", "orbit"), "d".repeat(40) + "\n")
         },
       ],
       [

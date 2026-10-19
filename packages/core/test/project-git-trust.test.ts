@@ -1,6 +1,8 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
+import { eq } from "drizzle-orm"
 import { realpathSync } from "fs"
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { Effect } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -8,10 +10,14 @@ import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
 import { Project } from "@orbit/core/project"
 import { AbsolutePath } from "@orbit/core/schema"
+import { SessionProjector } from "@orbit/core/session/projector"
+import { SessionTable } from "@orbit/core/session/sql"
+import { SessionID } from "@orbit/schema/session-id"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Hash } from "@orbit/util/hash"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
+import { which } from "@orbit/util/which"
 import { git, repository } from "./fixture/git"
 import { type Found, folders, forgeries } from "./fixture/git-forged"
 import { keys, live, planted } from "./fixture/git-keys"
@@ -356,4 +362,160 @@ describe("Project.resolve names a folder that is not trusted as it names a trust
         }),
       SLOW,
     )
+})
+
+// Class 3: the folder that the person is asked about and grants is the one that the next resolve names, and the project
+// keeps its ID, so the sessions made before the grant stay in it. A trusted repository is named from git, which can give
+// no answer (git on no PATH, a config or an owner that git refuses) or no name (no remote and no commit yet), and
+// Mercurial can give no name either. Each row starts in a subfolder, resolves while the folder is untrusted, records a
+// session in the project it names, grants the folder it names and resolves again. Mutations: reading the files only for
+// an untrusted folder (`layout && !trusted`) fails the rows where git gives no answer; `id ?? ID.global` for the trusted
+// repository fails the row with no commit; and `global` for a trusted Mercurial folder with no name fails its row.
+describe("Project.resolve keeps a folder's project across the grant when git or Mercurial cannot name it", () => {
+  const stable = testEffect(
+    AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node, WorkspaceTrust.node, SessionProjector.node]), [
+      WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+      Global.node.replace(tempGlobalLayer),
+    ]),
+  )
+
+  // A repository as git writes one, made without git: `HEAD`, `objects`, `refs` and the config given.
+  const written = (config: string) => async (root: string) => {
+    await fs.mkdir(path.join(root, ".git", "refs", "heads"), { recursive: true })
+    await fs.mkdir(path.join(root, ".git", "objects"), { recursive: true })
+    await fs.writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
+    await fs.writeFile(path.join(root, ".git", "config"), config)
+  }
+  const origin = '[remote "origin"]\n\turl = https://example.test/owner/repo.git\n'
+  const named = (value: Project.Resolved) => ({ id: value.id, directory: value.directory, canonical: value.canonical, vcs: value.vcs })
+
+  // Runs `effect` with `env` added to the environment that git is started with.
+  const withEnv = <A, E, R>(env: Record<string, string>, effect: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const before = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]))
+        Object.assign(process.env, env)
+        return before
+      }),
+      () => effect,
+      (before) =>
+        Effect.sync(() => {
+          for (const [key, value] of Object.entries(before)) {
+            if (value === undefined) delete process.env[key]
+            else process.env[key] = value
+          }
+        }),
+    )
+
+  const rows: ReadonlyArray<{
+    readonly name: string
+    readonly make: (root: string) => Promise<void>
+    // Added to git's environment while Orbit resolves the folder.
+    readonly env?: Record<string, string>
+    // Whether git refuses the repository, which the row checks first with a plain git.
+    readonly refused?: boolean
+  }> = [
+    { name: "a config that git refuses", make: written(`${origin}[broken\n`), refused: true },
+    {
+      name: "a repository whose owner git refuses",
+      make: (root) => Effect.runPromise(repository(root, "https://example.test/owner/repo.git")),
+      env: { GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" },
+      refused: true,
+    },
+    { name: "a repository with no commit and no remote", make: (root) => git(root, "init", "-q") },
+    {
+      name: "a Mercurial folder that hg cannot name",
+      make: async (root) => {
+        await fs.mkdir(path.join(root, ".hg"), { recursive: true })
+      },
+    },
+  ]
+
+  for (const row of rows)
+    stable.live(
+      `${row.name}: the same project, folders and decision before and after the grant`,
+      () =>
+        Effect.gen(function* () {
+          const root = path.join((yield* tmpdirScoped()).path, "clone")
+          const sub = path.join(root, "sub")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(root, { recursive: true })
+            await row.make(root)
+            await fs.mkdir(sub, { recursive: true })
+          })
+          if (row.refused) {
+            const plain = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
+              cwd: root,
+              env: { ...process.env, ...row.env },
+              stderr: "ignore",
+            })
+            expect(plain.exitCode).not.toBe(0)
+          }
+          const project = yield* Project.Service
+          const trust = yield* WorkspaceTrust.Service
+          const database = yield* Database.Service
+
+          const before = yield* withEnv(row.env ?? {}, project.resolve(abs(sub)))
+          const id = SessionID.make("ses_across_the_grant")
+          yield* database.db
+            .insert(SessionTable)
+            .values({ id, project_id: before.id, directory: yield* real(sub), slug: "before", version: "test" })
+            .run()
+          yield* trust.grant(before.canonical, { persist: false, via: "test" })
+          const after = yield* withEnv(row.env ?? {}, project.resolve(abs(sub)))
+          const session = yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, id)).get()
+
+          expect(named(after)).toEqual(named(before))
+          expect(after.id).not.toBe(Project.ID.global)
+          expect(session?.project_id).toBe(after.id)
+          expect((yield* trust.status(after.canonical)).trusted).toBe(true)
+        }),
+      SLOW,
+    )
+
+  // `gitExecutable` is decided once when its module loads, so this row runs `Project.resolve` in a process of its own whose
+  // PATH has no git: the folder of the program that runs it, and System32 on Windows. A PATH that holds git there skips it.
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path")),
+    PATH: [
+      path.dirname(process.execPath),
+      ...(process.platform === "win32" ? [path.join(process.env.SystemRoot ?? "C:\\Windows", "System32")] : []),
+    ].join(path.delimiter),
+  }
+  test.skipIf(which("git", env) !== null)(
+    "git on no PATH: the same project, folders and decision before and after the grant",
+    async () => {
+      const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-no-git-")))
+      const root = path.join(base, "clone")
+      try {
+        await written(origin)(root)
+        await fs.mkdir(path.join(root, "sub"))
+        const host = path.join(import.meta.dir, "fixture", "project-host.ts")
+        const child = Bun.spawn([process.execPath, "run", host, path.join(root, "sub")], {
+          cwd: root,
+          env,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [out, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+        const line = out.split(/\r?\n/).find((item) => item.startsWith("{"))
+        expect({ line: line !== undefined, error: line === undefined ? error : "" }).toEqual({ line: true, error: "" })
+        const result = JSON.parse(line!) as {
+          readonly before: Project.Resolved
+          readonly after: Project.Resolved
+          readonly session: string
+          readonly trusted: boolean
+        }
+
+        expect(named(result.after)).toEqual(named(result.before))
+        expect(result.before.id).toBe(remoteID("example.test/owner/repo"))
+        expect(result.session).toBe(result.after.id)
+        expect(result.trusted).toBe(true)
+      } finally {
+        await fs.rm(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+      }
+    },
+    SLOW,
+  )
 })

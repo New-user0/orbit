@@ -137,6 +137,18 @@ project's folder. A `.git` directory whose `HEAD` is a link is passed over too. 
 project has `;` (Windows) or `:` (elsewhere) in its path, git cannot be told to stop there, so Orbit starts no git for that
 project (`git-passed-over.test.ts`, `git-layout.test.ts`).
 
+### A repository that git or Mercurial cannot name keeps its project once trusted
+
+Orbit names a project by what git or Mercurial says about it once you trust the folder, and some repositories get no
+answer. A git repository with no commit and no remote, and a Mercurial folder with no changeset or with no `hg`
+installed, used to move into the shared `global` project at the grant, taking along the sessions and memory notes made
+before it; they now keep the project named by their folder. A trusted git repository that git cannot read at all (git not
+on PATH, a config line git rejects, or a folder that git refuses because another account owns it) used to become a plain
+folder named by the subfolder you started in, so the sessions made before the grant were left behind and the next start
+asked about that subfolder again; it is now named from its `.git` files as it was before the grant, with the same folders
+and the same trust decision (`project-git-trust.test.ts`, "Project.resolve keeps a folder's project across the grant when
+git or Mercurial cannot name it"; `project.test.ts`).
+
 ### A project's config waits for its folder to be trusted
 
 The settings in a project's `orbit.json` and `orbit.local.json`, and in the hook settings and `.mcp.json` that other
@@ -3479,7 +3491,8 @@ When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name
 folder's own `.hg/hgrc` into each command. None of them is run now until you trust the folder: the branch is unknown
 and there are no changes or diffs, and they appear once you trust it. An untrusted Mercurial folder is its own project
 (identified by its path), not the shared `global` project, so its saved "always allow" answers are not shared with other
-folders; a trusted folder with no `hg` or no changeset is `global`, as before.
+folders. A trusted folder with no `hg` or no changeset keeps that name too (see "A repository that git or Mercurial
+cannot name keeps its project once trusted").
 
 **Affects:** Mercurial users who open a clone before trusting it.
 
@@ -3495,7 +3508,9 @@ programs for it to run: `core.fsmonitor`, hooks, the filter and text-conversion 
 named from the files of `.git` (the remote URL in its config, or the path of the folder when it names none), the branch is
 unknown and there are no changes, diffs or review base, and they appear once you trust the folder, with no restart. A
 repository with a remote keeps the project ID that it had. One with no remote is named by its path until you trust it (never
-`global`, whose saved "always allow" answers every such folder would share), and by its first commit afterwards, as before.
+`global`, whose saved "always allow" answers every such folder would share), and by its first commit afterwards; one with
+no commit yet keeps the name of its path (see "A repository that git or Mercurial cannot name keeps its project once
+trusted").
 The URL is read as written, so a remote that an include or a `url.<base>.insteadOf` rule supplies or rewrites gives the
 folder another project ID until you trust it. A linked worktree follows the decision for its main checkout. A `.git` that is a link, a submodule or a separate git
 directory, or that names another repository's directories, is read for its remote only after you trust the folder, and
