@@ -764,6 +764,8 @@ function preparedEntries(value: unknown, path: string[], diagnostics: Diagnostic
 // native key turns into a provider request option. The `mode` map marks its agents as primary.
 function legacyDoor(value: unknown, door: "agent" | "mode", diagnostics: Diagnostic[]) {
   const prepared = preparedEntries(plainNames(value, [door], diagnostics), [door], diagnostics, true)
+  // A value that is not a map is reported as a whole; only an absent door is silent.
+  if (value !== undefined && !isRecord(prepared)) invalid([door], diagnostics)
   const parts = isRecord(prepared)
     ? Object.fromEntries(
         Object.entries(prepared).map(([id, entry]) => [

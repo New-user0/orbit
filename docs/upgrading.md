@@ -149,7 +149,7 @@ rest:
   both directions and keeps only `git_status: false`, so a repository can turn the snapshot off but never back on over
   your own choice. An agent's `initial_prompt` is dropped when it starts with `/`.
 - **Kept as written:** everything else, such as `username`, `snapshots` and `watcher`, and the fields of an agent that
-  only describe it.
+  only describe it, except that a folder that is not trusted cannot rewrite the description or initial prompt of an agent that already exists.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
 `{file:path}` reference is read only when it names a file inside the project's folder, not through a link that leaves
@@ -2724,7 +2724,7 @@ from the reply (a fenced or bare JSON answer in prose is not an answer). Other c
   JSON, so pass a file there.
 - `ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES` (1 to 20) sets `attempts` for the prompts of a run; any other value is a usage error.
 - A failed run reports the new subtype `error_max_structured_output_retries` for the attempt limit, and `reason:
-  "invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
+"invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
   attempts and its own result line.
 - An older server refuses a request that carries `turn.output`, and a server that drops it fails the run; neither falls
   back to parsing text.
@@ -3857,7 +3857,7 @@ the provider's prompt cache is cold for it).
 
 ## An untrusted folder cannot change the prompt of an agent that exists
 
-A project or local config in a folder that is not trusted can no longer set `agents.<id>.system` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged.
+A project or local config in a folder that is not trusted can no longer set `agents.<id>.system`, `description` or `initial_prompt` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged.
 
 **Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
 

@@ -86,4 +86,16 @@ describe("legacy agent and mode entries", () => {
         expect(result.paths).toEqual([])
       })
     }
+
+  // A door whose value is not a map is named as a whole instead of vanishing.
+  for (const door of ["agent", "mode"] as const)
+    for (const value of ["x", [], null, 5])
+      test(`${door}: a value of ${JSON.stringify(value)} is named at the door`, () => {
+        const result = agents({ [door]: value })
+        expect(result.paths).toEqual([door])
+        expect(result.agents).toEqual({})
+      })
+  test("an absent door reports nothing", () => {
+    expect(agents({}).paths).toEqual([])
+  })
 })
