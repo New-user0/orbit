@@ -177,7 +177,11 @@ function mergeAdjacentUsers(messages: ReadonlyArray<Message>) {
   return messages.reduce<Message[]>((merged, message) => {
     const previous = merged.at(-1)
     if (previous?.role !== "user" || message.role !== "user") return [...merged, message]
-    return [...merged.slice(0, -1), new Message({ ...previous, content: [...previous.content, ...message.content] })]
+    // Chat adapters join text parts with nothing; a blank line keeps one message's closing fence off the next one's words.
+    return [
+      ...merged.slice(0, -1),
+      new Message({ ...previous, content: [...previous.content, Message.text("\n\n"), ...message.content] }),
+    ]
   }, [])
 }
 

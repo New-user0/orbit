@@ -93,5 +93,9 @@ export function userNotification(result: Result) {
     text: [captured.output, status].filter((item) => item !== undefined && item !== "").join("\n\n"),
     output: captured,
   })
-  return { ...message, text: `The following shell command was executed by the user:\n${message.text}` }
+  // The command is kept in metadata so the lowering can look for the reasoning keyword in what the person typed.
+  return {
+    text: `The following shell command was executed by the user:\n${message.text}`,
+    metadata: { ...message.metadata, origin: "user", command: result.info.command },
+  }
 }

@@ -139,16 +139,7 @@ export function normalize(input: unknown): Result {
     diagnostics,
   )
 
-  const legacyAgents = mapValues(
-    decodeMap(
-      preparedEntries(plainNames(input.agent, ["agent"], diagnostics), ["agent"], diagnostics, true),
-      ConfigAgentV1.Info,
-      ["agent"],
-      diagnostics,
-      (schema, value, at, found) => decodeFields(schema, value, at, found),
-    ),
-    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value as ConfigAgentV1.Info)),
-  )
+  const legacyAgents = legacyDoor(input.agent, "agent", diagnostics)
   const legacySmallModel = own(input, "small_model")
     ? decodeValue(Schema.String, input.small_model, ["small_model"], diagnostics)
     : undefined
@@ -166,16 +157,7 @@ export function normalize(input: unknown): Result {
       model: migratedSmallModel,
       ...legacyAgents.title,
     }
-  const modeAgents = mapValues(
-    decodeMap(
-      preparedEntries(plainNames(input.mode, ["mode"], diagnostics), ["mode"], diagnostics, true),
-      ConfigAgentV1.Info,
-      ["mode"],
-      diagnostics,
-      (schema, value, at, found) => decodeFields(schema, value, at, found),
-    ),
-    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...(value as ConfigAgentV1.Info), mode: "primary" })),
-  )
+  const modeAgents = legacyDoor(input.mode, "mode", diagnostics)
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
   // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style: its legacy fields migrate
   // and its native fields decode on their own, then the two halves join; a string or a list of tools is native.
@@ -773,6 +755,55 @@ function preparedEntries(value: unknown, path: string[], diagnostics: Diagnostic
         message: "a model tier takes no variant; ignored it",
       })
       return [id, prepared.entry]
+    }),
+  )
+}
+
+// An entry of the `agent` or `mode` map is split like a legacy entry of `agents`: the keys the v1 format owns go to its
+// decoder and migrate, every other key Orbit's schema has is decoded natively, so a `permissions` deny list holds and no
+// native key turns into a provider request option. The `mode` map marks its agents as primary.
+function legacyDoor(value: unknown, door: "agent" | "mode", diagnostics: Diagnostic[]) {
+  const prepared = preparedEntries(plainNames(value, [door], diagnostics), [door], diagnostics, true)
+  const parts = isRecord(prepared)
+    ? Object.fromEntries(
+        Object.entries(prepared).map(([id, entry]) => [
+          id,
+          isRecord(entry) ? LegacyAgent.split(entry, ConfigAgentV1.KNOWN_KEYS) : { legacy: entry, native: {} },
+        ]),
+      )
+    : {}
+  const legacy = decodeMap(
+    Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.legacy])),
+    ConfigAgentV1.Info,
+    [door],
+    diagnostics,
+    (schema, item, at, found) => decodeFields(schema, item, at, found),
+  )
+  const native = decodeMap(
+    Object.fromEntries(
+      Object.entries(parts)
+        .filter(([, part]) => Object.keys(part.native).length > 0)
+        .map(([id, part]) => [id, part.native]),
+    ),
+    ConfigAgent.Info,
+    [door],
+    diagnostics,
+    (schema, item, at, found) => decodeFields(schema, item, at, found, "permissions"),
+  )
+  return Object.fromEntries(
+    [...new Set([...Object.keys(legacy), ...Object.keys(native)])].map((id) => {
+      const half = legacy[id] as ConfigAgentV1.Info | undefined
+      const migrated =
+        half === undefined
+          ? {}
+          : (ConfigMigrateV1.migrateAgent(door === "mode" ? { ...half, mode: "primary" } : half) as Record<
+              string,
+              unknown
+            >)
+      return [
+        id,
+        canonical(ConfigAgent.Info, LegacyAgent.merge(migrated, (native[id] ?? {}) as Record<string, unknown>)) as Record<string, unknown>,
+      ]
     }),
   )
 }

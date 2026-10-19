@@ -117,9 +117,12 @@ function onlyActions(permission: Record<string, unknown>, notes: { key: string; 
  * share, never goes to the legacy decoder: it would fail the entry as one object and take the native half, its deny
  * rules included, with it, and the decoder would forward every key it does not know to the provider as a request option.
  */
-export function split(entry: Record<string, unknown>) {
+export function split(entry: Record<string, unknown>, legacyKeys: ReadonlySet<string> = new Set()) {
+  // `legacyKeys` are keys the legacy decoder reads itself (a model, a step count) even where the native schema has them
+  // too; the older `agent` and `mode` maps keep those on the legacy side.
   const native = (key: string, value: unknown) =>
-    key in ConfigAgent.Info.fields && (key !== "tools" || !isToolMap(value))
+    Object.hasOwn(ConfigAgent.Info.fields, key) &&
+    (key === "tools" ? !isToolMap(value) : !legacyKeys.has(key))
   return {
     legacy: Object.fromEntries(Object.entries(entry).filter(([key, value]) => !native(key, value))),
     native: Object.fromEntries(Object.entries(entry).filter(([key, value]) => native(key, value))),

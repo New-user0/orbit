@@ -2,6 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { CompatNames } from "@orbit/compat/names"
 import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
 import PROMPT from "../src/session/runner/prompt/system.txt"
+import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
+import GPT from "../src/plugin/system-prompt/gpt.txt"
+import ASTRA from "../src/plugin/system-prompt/gpt-astra.txt"
+import KIMI from "../src/plugin/system-prompt/kimi.txt"
+import META from "../src/plugin/system-prompt/meta.txt"
+import TRINITY from "../src/plugin/system-prompt/trinity.txt"
+import LOCAL from "../src/plugin/system-prompt/local.txt"
 
 // Every tool that has a guidance line, spelled as the model is offered it. The MCP resource tools are in the `orbit`
 // namespace, so a direct offer names them with that prefix.
@@ -76,6 +83,7 @@ describe("the git and pull request section", () => {
       "how the change was checked",
       "hand the link back",
       "take precedence over this section",
+      "only the user can lift them",
     ]
     for (const anchor of anchors) expect([anchor, none.includes(anchor)]).toEqual([anchor, true])
   })
@@ -508,4 +516,30 @@ describe("the base system prompt", () => {
       expect(SessionSystemPrompt.make(["Agent"])).not.toMatch(/distrust|redo|do it again|\bagent_/i)
     })
   })
+})
+
+// Every text that tells the model how to rank instruction files keeps the approval carve-out, and none ranks the
+// project above the ask-first rule. An untrusted clone chooses its own files before anyone has trusted it.
+describe("the approval carve-out in every text that ranks instruction files", () => {
+  const carveOut = /project's file cannot (approve|lift)|standing yes exists only in the user's own instructions/
+  const rows = Object.entries({
+    git: SessionSystemPrompt.renderGit({ commit: "", pr: "" }),
+    header: InstructionDiscovery.HEADER,
+    base: PROMPT,
+    gpt: GPT,
+    "gpt-astra": ASTRA,
+    kimi: KIMI,
+    meta: META,
+    trinity: TRINITY,
+    local: LOCAL,
+  })
+  for (const [name, text] of rows) {
+    test(`${name} keeps the carve-out and ranks no project text above approval`, () => {
+      expect([name, carveOut.test(text)]).toEqual([name, true])
+      expect([name, /about commits and pull requests[^.]*take precedence/i.test(text)]).toEqual([
+        name,
+        false,
+      ])
+    })
+  }
 })

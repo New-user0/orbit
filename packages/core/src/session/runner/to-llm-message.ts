@@ -439,7 +439,24 @@ function toLLMMessage(
         }),
       ]
     case "synthetic":
-      return [Message.make({ id: message.id, role: "user", content: syntheticText(message) })]
+      return [
+        Message.make({
+          id: message.id,
+          role: "user",
+          content: [
+            // The notice of a shell command the person typed is scanned like a prompt, unless it arrives mid-turn.
+            ...(message.metadata?.source === "shell" &&
+            message.metadata.origin === "user" &&
+            typeof message.metadata.command === "string" &&
+            !lowering.minimal &&
+            !lowering.queued.has(message.id) &&
+            SessionEffort.requested(message.metadata.command)
+              ? [Message.text(`${ReminderText.render({ text: SessionEffort.note })}\n\n`)]
+              : []),
+            Message.text(syntheticText(message)),
+          ],
+        }),
+      ]
     case "skill":
       return [
         Message.make({
@@ -448,7 +465,7 @@ function toLLMMessage(
           content: [
             // A skill the person activates is scanned like a prompt that carries it, unless it arrives mid-turn.
             ...(!lowering.minimal && !lowering.queued.has(message.id) && SessionEffort.requested(message.text)
-              ? [Message.text(ReminderText.render({ text: SessionEffort.note }))]
+              ? [Message.text(`${ReminderText.render({ text: SessionEffort.note })}\n\n`)]
               : []),
             Message.text(message.text),
           ],
@@ -468,8 +485,8 @@ function toLLMMessage(
             Message.text(
               `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${ReminderText.neutralize(message.output?.output ?? "")}`,
             ),
-            // Shell input the person typed is scanned like a prompt.
-            // A command typed while the agent works runs at once and belongs to that turn, so it gets no note.
+            // Only rows stored before shell results moved to their completion notice reach this. The notice carries
+            // the note now. A command typed while the agent works belongs to that turn, so it gets none.
             ...(!lowering.minimal && !lowering.queued.has(message.id) && SessionEffort.requested(message.command)
               ? [Message.text(ReminderText.render({ text: SessionEffort.note }))]
               : []),
@@ -538,7 +555,8 @@ const queuedInput = (history: readonly SessionMessage.Info[]) => {
         return
       case "shell":
       case "skill":
-        // Orbit runs both at once, so neither ends the busy period for the input that follows.
+      case "synthetic":
+        // Orbit runs a shell and a skill at once, and a notice only reports, so none ends the busy period.
         if (open) queued.add(message.id)
         return
       case "idle":
