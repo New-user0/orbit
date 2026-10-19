@@ -83,6 +83,20 @@ export const layer = Layer.effect(
     const plugins = yield* Plugin.Service
     const trust = yield* ProjectTrust.Service
 
+    // A project at the home folder or a filesystem root also bounds a link, as the loader does: the file the loader skips for
+    // it is no target, and a note is not written to it (`ConfigInstructionFile.leadsOut`, the loader's own question).
+    const leadsOut = Effect.fnUntraced(function* (spelling: string, real: string) {
+      const wide = ConfigInstructionFile.wideProject(yield* fs.resolve(global.home), [
+        yield* fs.resolve(location.project.directory),
+        yield* fs.resolve(location.project.canonical),
+      ])
+      return yield* ConfigInstructionFile.leadsOut(
+        { wide, importable: trust.importable, outward: trust.outward },
+        spelling,
+        real,
+      )
+    })
+
     // The loader's own rules, asked of this one folder pair, in the loader's order (config/plugin/instruction.ts).
     const target = Effect.fn("InstructionNotes.target")(function* (scope: Instruction.NoteScope) {
       const compat = yield* config.compatEnabled()
@@ -118,7 +132,13 @@ export const layer = Layer.effect(
       )
       // The project's files meet the same gate as the loader's, which asks it of the spelling the walk built.
       const survivors =
-        scope === "user" ? kept : yield* Effect.filter(kept, (item) => trust.reachable(item.file))
+        scope === "user"
+          ? kept
+          : yield* Effect.filter(kept, (item) =>
+              Effect.all([trust.reachable(item.file), leadsOut(item.file, item.real)]).pipe(
+                Effect.map(([reachable, out]) => reachable && !out),
+              ),
+            )
       const base = scope === "user" ? discovery.global : discovery.project && FSUtil.contains(root, start)
       // The loader drops a project file that is also a global file while global files are off.
       const isGlobal = (real: string) => globalFiles.some((file) => relative(file, real) === "")
@@ -185,6 +205,7 @@ export const layer = Layer.effect(
       if (item.scope === "user") return false
       if (item.blocked) return true
       if ((yield* trust.escapes(item.file)) !== undefined) return true
+      if (item.exists && (yield* leadsOut(item.file, item.path))) return true
       return !(yield* trust.reachable(item.file))
     })
 

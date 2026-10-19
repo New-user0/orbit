@@ -304,11 +304,28 @@ describe("ConfigInstructionRules.scan", () => {
     }),
   )
 
-  it.live("asks the gate of every folder and file, and skips what it refuses alone", () =>
+  it.live("asks the gate of every folder, skips a folder it refuses, and does not ask it of a plain file", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
       for (const name of ["ok.md", "no.md", "closed/in.md", "open/in.md"]) yield* write(path.join(tmp.path, name))
-      expect(yield* scan(tmp.path, (real) => !/no\.md$|closed$/.test(real))).toEqual(["ok.md", "open/in.md"])
+      const asked: string[] = []
+      const found = yield* scan(tmp.path, (real) => (asked.push(real), !/closed$/.test(real)))
+      expect(found).toEqual(["no.md", "ok.md", "open/in.md"])
+      // Only folders: a plain file lies in a folder the gate accepted, and no link is in its path.
+      expect(asked.every((real) => !real.endsWith(".md"))).toBe(true)
+      expect(asked.length).toBeGreaterThan(0)
+    }),
+  )
+
+  const gated = canLinkFile ? it.live : it.live.skip
+  gated("asks the gate of a file reached through a link, and skips it when refused", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const outside = yield* tmpdirScoped()
+      yield* write(path.join(outside.path, "no.md"))
+      yield* write(path.join(tmp.path, "ok.md"))
+      yield* Effect.promise(() => fs.symlink(path.join(outside.path, "no.md"), path.join(tmp.path, "link.md"), "file"))
+      expect(yield* scan(tmp.path, (real) => !/no\.md$/.test(real))).toEqual(["ok.md"])
     }),
   )
 

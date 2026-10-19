@@ -2017,6 +2017,105 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
       }),
     )
 
+  // The cost of a read: a repository chooses how many nested rules folders and rule files lie on the way to a file. The
+  // recording file system counts the folders listed and the files opened, and can make one file fail the way a file another
+  // program holds open does.
+  const listedFolders: string[] = []
+  const openedFiles: string[] = []
+  const failing = { suffix: "" }
+  const counting = Layer.effect(
+    FSUtil.Service,
+    FSUtil.Service.pipe(
+      Effect.map((fsUtil) =>
+        FSUtil.Service.of({
+          ...fsUtil,
+          readDirectoryEntries: (target) => (listedFolders.push(target), fsUtil.readDirectoryEntries(target)),
+          readFileStringSafe: (target) =>
+            failing.suffix !== "" && target.endsWith(failing.suffix)
+              ? Effect.die(new Error("EBUSY: resource busy or locked"))
+              : (openedFiles.push(target), fsUtil.readFileStringSafe(target)),
+        }),
+      ),
+    ),
+  ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+  const costed = testEffect(sessionLayer(Config.testLayer(), true, counting))
+  const isRule = (target: string) => target.split(path.sep).includes("rules")
+
+  costed.live("looks at no more rule files in one read than the budget, over all the folders it passes through", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const names = ["a", "b", "c"]
+      // 3 x 100 rules that never match the file: 300 files lie on the way.
+      for (const [index] of names.entries()) {
+        const rules = path.resolve(dir, ...names.slice(0, index + 1), ".orbit", "rules")
+        yield* mkdir(rules)
+        yield* Effect.promise(() =>
+          Promise.all(
+            Array.from({ length: 100 }, (_, number) =>
+              fs.writeFile(path.join(rules, `r${String(number).padStart(3, "0")}.md`), "---\npaths: '*.zz'\n---\nNEVER"),
+            ),
+          ),
+        )
+      }
+      yield* writeAgents(path.resolve(dir, "a", "b", "c", "f.txt"), "f")
+      const sessionID = yield* sessionIn(dir)
+      openedFiles.length = 0
+      yield* read(sessionID, "a/b/c/f.txt")
+      expect(openedFiles.filter(isRule).length).toBeGreaterThan(0)
+      expect(openedFiles.filter(isRule).length).toBeLessThanOrEqual(256)
+    }),
+  )
+
+  costed.live("does not list or open a nested rules folder again on the next read, until a rescan", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const discovery = yield* InstructionDiscovery.Service
+      const rules = path.resolve(dir, "sub", ".orbit", "rules")
+      yield* mkdir(rules)
+      yield* writeAgents(path.resolve(rules, "always.md"), "ALWAYS MARKER")
+      for (const name of ["a.txt", "b.txt", "c.txt"]) yield* writeAgents(path.resolve(dir, "sub", name), name)
+      const sessionID = yield* sessionIn(dir)
+      yield* read(sessionID, "sub/a.txt")
+      expect((yield* texts(sessionID)).join("")).toContain("ALWAYS MARKER")
+      listedFolders.length = 0
+      openedFiles.length = 0
+      yield* read(sessionID, "sub/b.txt")
+      expect(listedFolders.filter(isRule)).toEqual([])
+      expect(openedFiles.filter(isRule)).toEqual([])
+      yield* discovery.rescan()
+      listedFolders.length = 0
+      yield* read(sessionID, "sub/c.txt")
+      expect(listedFolders.filter(isRule).length).toBeGreaterThan(0)
+    }),
+  )
+
+  // Class 7: a file that fails to read costs only itself, in a rule and in an instruction file of the walk alike.
+  for (const [failed, kept] of [
+    ["zz-bad.md", ["SUB MARKER", "OK MARKER"]],
+    ["AGENTS.md", ["OK MARKER"]],
+  ] as const)
+    costed.live(`still hands over the other nested files of a read when ${failed} fails to read`, () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const rules = path.resolve(dir, "sub", ".orbit", "rules")
+        yield* mkdir(rules)
+        yield* writeAgents(path.resolve(dir, "sub", "AGENTS.md"), "SUB MARKER")
+        yield* writeAgents(path.resolve(rules, "ok.md"), "OK MARKER")
+        yield* writeAgents(path.resolve(rules, "zz-bad.md"), "BAD MARKER")
+        yield* writeAgents(path.resolve(dir, "sub", "a.ts"), "a")
+        const sessionID = yield* sessionIn(dir)
+        failing.suffix = failed
+        yield* read(sessionID, "sub/a.ts").pipe(Effect.ensuring(Effect.sync(() => void (failing.suffix = ""))))
+        const injected = (yield* texts(sessionID)).join("\n")
+        for (const marker of kept) expect(injected).toContain(marker)
+        if (failed === "zz-bad.md") expect(injected).not.toContain("BAD MARKER")
+        // The next read, once the file reads again, hands over what was missed.
+        yield* writeAgents(path.resolve(dir, "sub", "b.ts"), "b")
+        yield* read(sessionID, "sub/b.ts")
+        expect((yield* texts(sessionID)).join("\n")).toContain(failed === "zz-bad.md" ? "BAD MARKER" : "SUB MARKER")
+      }),
+    )
+
   // Class 4: a rule of the project that was already a link out of it when it was found (`real` is the outside file, the base
   // is the project) is refused at injection in a trusted project, as an import is. Only a folder above the project may
   // vouch for a rule that lies outside it. A plain rule of the project is the control.

@@ -1,7 +1,7 @@
 export * as SessionInstructions from "./instructions.js"
 
 import { join, relative } from "path"
-import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -198,7 +198,15 @@ const layer = Layer.effect(
                 Effect.orElseSucceed(() => false),
               )
             }),
-          })
+          }).pipe(
+            // One file that cannot be read, such as one another program holds open, costs only itself: the others of this
+            // read are still handed over, and the next read looks at it again.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.logWarning("instruction file not loaded", { path, cause }).pipe(Effect.as(undefined)),
+            ),
+          )
           if (loaded === undefined) continue
           for (const item of loaded.skipped)
             yield* Effect.logDebug("instruction import skipped", {

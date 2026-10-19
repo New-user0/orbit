@@ -2020,7 +2020,9 @@ describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from
 
 describe("ConfigInstructionPlugin.Plugin keeps a link in a wide project from leading out of the started folder", () => {
   // A project at the home folder or at a filesystem root holds everything below it, so being inside it proves nothing
-  // about a link: a file or a rule there may not lead out of the folder the session started in, whatever is granted.
+  // about a link: a file or a rule there may lead out of the folder the session started in only to a folder the person has
+  // trusted (the "loads a file that an instruction file linked to a trusted outside folder imports" row below); a grant of
+  // the project itself does not open it.
   const wide = [
     { name: "home", repo: (home: string) => home },
     { name: "filesystem root", repo: (home: string) => path.parse(home).root },
@@ -2118,6 +2120,41 @@ describe("ConfigInstructionPlugin.Plugin lets an unreadable rule cost only itsel
           }).pipe(Effect.provide(layerFor(where, { filesystemLayer: unreadable })))
         }),
       )
+
+  // The administrator's rules fail closed: one that cannot be read makes the source unavailable, so policy text that was
+  // admitted is kept and not dropped for a failed read. The control is the same rule, readable, which does change it.
+  for (const mode of ["answers nothing", "fails", "reads"] as const)
+    it.live(`a managed rule that ${mode} ${mode === "reads" ? "changes" : "keeps"} the admitted instructions`, () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const managed = path.join(path.dirname(where.home), "managed")
+        yield* write(path.join(managed, "rules", "zz-locked.md"), "LOCKED POLICY MARKER")
+        yield* write(path.join(managed, "rules", "control.md"), "CONTROL POLICY MARKER")
+        const unreadable = Layer.effect(
+          FSUtil.Service,
+          FSUtil.Service.pipe(
+            Effect.map((real) =>
+              FSUtil.Service.of({
+                ...real,
+                readFileStringSafe: (target) =>
+                  path.basename(target) !== "zz-locked.md" || mode === "reads"
+                    ? real.readFileStringSafe(target)
+                    : mode === "fails"
+                      ? Effect.die("EBUSY")
+                      : Effect.succeed(undefined),
+              }),
+            ),
+          ),
+        ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+        yield* Effect.gen(function* () {
+          const discovery = yield* start()
+          const admitted = state({
+            "core/instructions": [{ path: path.join(managed, "rules", "control.md"), content: "old policy", kind: "managed" }],
+          })
+          expect((yield* readUpdate(yield* discovery.load(), admitted)).changed).toBe(mode === "reads")
+        }).pipe(Effect.provide(layerFor(where, { managed, filesystemLayer: unreadable })))
+      }),
+    )
 })
 
 // An instruction file may import from outside the project's folders once the folder that holds the importing file is

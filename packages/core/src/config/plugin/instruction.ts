@@ -75,17 +75,11 @@ export const Plugin = define({
       // shared files the worktree has its own copy of. Its local files are not checked in, so only the main checkout has them.
       const canonical = yield* fs.resolve(location.project.canonical)
       // A project that is the home directory or a filesystem root contains everything below it, so being inside it says
-      // nothing about a link: such a file or rule may not lead out of the folder the session started in, whatever the
-      // trust decision is (the same bound that an import has, `ProjectTrust.importable`).
-      const wide = [root, canonical].some((folder) => relative(home, folder) === "" || dirname(folder) === folder)
+      // nothing about a link: such a file or rule may lead out of the folder the session started in only to a folder the
+      // person has trusted (the bound an import has; the note targets ask the same question).
+      const wide = ConfigInstructionFile.wideProject(home, [root, canonical])
       const leadsOut = (spelling: string, real: string) =>
-        wide && relative(spelling, real) !== ""
-          ? Effect.gen(function* () {
-              if (yield* trust.importable(spelling, real)) return false
-              // A folder the person has trusted, beyond the project, may still be linked to.
-              return !(yield* trust.outward(real)).open
-            })
-          : Effect.succeed(false)
+        ConfigInstructionFile.leadsOut({ wide, importable: trust.importable, outward: trust.outward }, spelling, real)
       const nested = relative(canonical, root) !== "" && FSUtil.contains(canonical, root)
       const inherited = (directory: string) => nested && FSUtil.contains(canonical, directory) && !FSUtil.contains(root, directory)
       // The one folder the managed settings were read from, so that the instruction file and the settings never disagree.
@@ -309,9 +303,10 @@ export const Plugin = define({
       // The rule files of the folders `directories` names, in order. Each is told apart by its own front matter: a rule with
       // no patterns joins the baseline where it is, and one with patterns waits for a matching read (`conditionalRules`).
       // The folders are scanned in the order given and the files of each by name, so what is loaded does not depend on the
-      // file system. `allow` is asked of every real path before it is listed or read. A rule that cannot be read makes the
-      // source unavailable for the administrator's and the project's, as an instruction file there does, and costs only itself
-      // for the person's. Exclusion comes first, and never applies to the administrator's.
+      // file system. `allow` is asked of every real folder, and of every file reached through a link, before it is listed or
+      // read. A rule that cannot be read makes the source unavailable only for the administrator's, so that policy text
+      // already admitted is kept; for the project's and the person's it costs only itself. Exclusion comes first, and never
+      // applies to the administrator's.
       const rules = Effect.fn("ConfigInstructionPlugin.rules")(function* (input: {
         readonly origin: "managed" | "user" | "project"
         readonly base: string
