@@ -146,8 +146,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     folder keeps its git as before.
   - `Project.resolve` reads `.git` and the shared `config` itself (`GitLayout`, `packages/core/src/git/layout.ts`). It
     opens only what git wrote for the folder: its own `.git` directory, or the entry that its repository keeps for a linked
-    worktree, which names the folder back. A `.git` that is a link, a submodule or separate git directory, and a layout
-    that names another repository's directories, are named and left alone. It passes over a `.git` directory that has no
+    worktree, which names the folder back. To tell the two apart it reads the pointer and, in the directory the pointer
+    names, the `commondir` and `gitdir` files (each a regular file of at most 4 KiB, never through a share), and
+    opens nothing else there until the entry names the folder back
+    (`packages/core/test/git-layout.test.ts`, "reads only the pointer and the commondir and gitdir of the entry it names").
+    A `.git` that is a link, a submodule or separate git directory, and a layout that names another repository's
+    directories, are named and left alone: their directories are not read further. It passes over a `.git` directory that has no
     `HEAD` and uses the repository above it, and stops at a `.git` file that is no good, as git does. A read that fails,
     is blocked (a share), is over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there",
     never an error, and each folder is judged alone (class 7). The project is named by the remote URL in that config as

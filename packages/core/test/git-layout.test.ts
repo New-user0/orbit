@@ -17,8 +17,8 @@ import { testEffect } from "./lib/effect"
 
 // The layout of a folder's git directory, read from files (class 1, 3, 4, 5, 6, 7). Git is the oracle where git makes the
 // layout (a repository, a linked worktree, a bare repository's worktree): the answer has to be the one `git rev-parse` and
-// `git worktree list` give. Where a clone makes the layout, the answer has to say that nothing was verified, and nothing that
-// the clone points at may be opened.
+// `git worktree list` give. Where a clone makes the layout, the answer has to say that nothing was verified, and what the clone
+// points at is read no further than the pointer and the `commondir` and `gitdir` files of the entry it names.
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([FSUtil.node, Git.node])))
 
 const abs = AbsolutePath.make
@@ -140,7 +140,7 @@ describe("GitLayout.locate, where git makes the layout", () => {
 
 // What a clone ships is a layout that no git of the user made. The folder is its own canonical folder in every row, so that
 // it never borrows the decision of a repository that it names, and the layout says it was not verified, so that nothing
-// inside is read. Git itself still follows some of these (the oracle is not asked, because the answer is the refusal).
+// is read from the directory it names beyond its `commondir` and `gitdir` files. Git itself still follows some of these (the oracle is not asked, because the answer is the refusal).
 describe("GitLayout.locate, where a clone makes the layout", () => {
   for (const [name, make] of forgeries)
     it.live(
@@ -157,6 +157,31 @@ describe("GitLayout.locate, where a clone makes the layout", () => {
           expect(layout?.gitDirectory).toBe(abs(path.join(found.crafted, ".git")))
           expect(layout?.commonDirectory).toBe(abs(path.join(found.crafted, ".git")))
           expect(yield* GitLayout.remote(yield* FSUtil.Service, layout!)).toBeUndefined()
+        }),
+      SLOW,
+    )
+
+  // What is read, pinned for every forgery: the recorder lists each file the layout reads. Only the pointer and the
+  // `commondir` and `gitdir` of the entry it names may be read, wherever that entry is, and nothing in the victim's
+  // repository but those two files of its own worktree entry. Mutation: `linked` also reading `<target>/HEAD` fails every
+  // row whose pointer names an entry.
+  for (const [name, make] of forgeries)
+    it.live(
+      `reads only the pointer and the commondir and gitdir of the entry it names, for ${name}`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* folders
+          yield* Effect.promise(() => make(found))
+          const recorder = recordedFileSystem()
+
+          yield* Effect.gen(function* () {
+            return yield* GitLayout.locate(yield* FSUtil.Service, found.crafted)
+          }).pipe(Effect.provide(recorder.layer))
+
+          const read = recorder.calls.flatMap((call) => (call.startsWith("readFileString ") ? [call.slice(15)] : []))
+          expect(read.map((file) => path.basename(file)).filter((file) => ![".git", "commondir", "gitdir"].includes(file))).toEqual([])
+          const victims = read.filter((file) => !path.relative(found.victim, file).startsWith(".."))
+          expect(victims.filter((file) => path.dirname(file) !== found.entry)).toEqual([])
         }),
       SLOW,
     )

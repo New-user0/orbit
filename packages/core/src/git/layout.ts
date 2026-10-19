@@ -35,7 +35,7 @@ export interface Layout {
   /**
    * Whether `gitDirectory` is a place git itself made for this folder, which may be read. A `.git` that is a link, a
    * `.git` file that Orbit cannot match to a registered worktree (a submodule, a separate git directory, a forged one)
-   * and a `.git` directory that names a `commondir` are named in the layout and never opened.
+   * and a `.git` directory that names a `commondir` are named in the layout and not read further.
    */
   readonly verified: boolean
 }
@@ -145,7 +145,8 @@ const pointed = Effect.fnUntraced(function* (files: Files, here: AbsolutePath, e
   const text = yield* files.text(entry, POINTER_LIMIT)
   const named = text === undefined ? undefined : POINTER.exec(text)?.[1]
   if (named === undefined) return undefined
-  // Nothing is opened for a target that Orbit cannot match to this folder; it is named by the pointer only.
+  // A target that Orbit cannot match to this folder is named by the pointer only. Matching it reads the `commondir` and
+  // `gitdir` files of the target, and nothing else there is opened.
   return (yield* linked(files, here, entry, path.resolve(here, FSUtil.windowsPath(named)))) ?? unverified(here, entry)
 })
 
