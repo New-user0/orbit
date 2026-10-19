@@ -65,6 +65,21 @@ const run = (implicit: boolean) =>
 // Git's trace names the work tree of the repository a process works in; Orbit's own is under its data folder.
 const own = (command: string) => command.replaceAll("\\", "/").includes("/snapshot/")
 
+// The nested repository is left out of an untrusted snapshot, so its folder is not a gitlink in the index. One still can be
+// there: a repository that an earlier version wrote holds it, and so does a folder whose exclusion lost a race with a
+// `git init` in it. The comparison of the index with the work tree then has to leave the nested repository alone, which
+// only `--ignore-submodules=all` ensures: this seeds the gitlink into Orbit's own index so that the rows reach that guard.
+// The entry names the commit that the nested repository is at, so that git takes the folder for an unchanged submodule and
+// goes inside it to look for what is modified, which is what starts the program of the nested repository.
+const seedGitlink = (data: string, root: string, folder: string) =>
+  Effect.promise(async () => {
+    const snapshots = path.join(data, "snapshot", "untrusted")
+    const [name] = await fs.readdir(snapshots)
+    const directory = path.join(snapshots, name!)
+    const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: path.join(root, folder) }).stdout.toString().trim()
+    await git(directory, "--git-dir=" + directory, "update-index", "--add", "--cacheinfo", `160000,${head},${folder}`)
+  })
+
 describe("Snapshot starts no git in the folder's own repository while it is not trusted", () => {
   it.live(
     "works from Orbit's own git directory, and still leaves out what .gitignore names",
@@ -121,6 +136,7 @@ describe("Snapshot starts no git program of a repository nested in an untrusted 
             Effect.gen(function* () {
               const snapshot = yield* Snapshot.Service
               const first = yield* snapshot.capture()
+              yield* seedGitlink(data, outer.root, "sub")
               yield* Effect.promise(() => fs.writeFile(path.join(outer.root, "a.txt"), "three\n"))
               const second = yield* snapshot.capture()
               yield* snapshot.capture()
@@ -463,6 +479,7 @@ describe("Snapshot starts nothing of a submodule's repository in an untrusted fo
           Effect.gen(function* () {
             const snapshot = yield* Snapshot.Service
             const first = yield* snapshot.capture()
+            yield* seedGitlink(data, root, "sub")
             yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "two\n"))
             const second = yield* snapshot.capture()
             yield* snapshot.capture()
@@ -526,6 +543,8 @@ describe("Snapshot reaches no share named by a nested .git entry in an untrusted
     name: string
     plant: (folder: string, host: string) => Promise<void>
     nested: string
+    /** A .gitignore (path from the root, text) that tries to bring the nested folder back. */
+    negate?: readonly [string, string]
   }> = [
     { name: "a .git file in a subfolder", nested: "sub", plant: pointer(".git") },
     { name: "a .git file several folders down", nested: path.join("a", "b", "sub"), plant: pointer(".git") },
@@ -538,6 +557,17 @@ describe("Snapshot reaches no share named by a nested .git entry in an untrusted
         await Bun.write(path.join(folder, ".git", "HEAD"), "ref: refs/heads/main\n")
         await Bun.write(path.join(folder, ".git", "commondir"), `\\\\${host}\\share\\repo\n`)
       },
+    },
+    // A .gitignore of the clone ranks above the snapshot repository's info/exclude, so a negation there re-includes the
+    // folder unless the exclusion is also given on the command line.
+    { name: "root .gitignore !/sub/", nested: "sub", plant: pointer(".git"), negate: [".gitignore", "!/sub/\n"] },
+    { name: "root .gitignore !sub", nested: "sub", plant: pointer(".git"), negate: [".gitignore", "!sub\n"] },
+    { name: "root .gitignore !*", nested: "sub", plant: pointer(".git"), negate: [".gitignore", "!*\n"] },
+    {
+      name: "a nested .gitignore !sub/",
+      nested: path.join("a", "b", "sub"),
+      plant: pointer(".git"),
+      negate: [path.join("a", "b", ".gitignore"), "!sub/\n"],
     },
   ]
 
@@ -556,13 +586,18 @@ describe("Snapshot reaches no share named by a nested .git entry in an untrusted
             await row.plant(folder, host)
             await Bun.write(path.join(folder, "inner.txt"), "inner\n")
             await Bun.write(path.join(root, "top.txt"), "top\n")
+            if (row.negate) await Bun.write(path.join(root, row.negate[0]), row.negate[1])
           })
           const data = (yield* tmpdirScoped()).path
           const stop = windows ? yield* Effect.promise(watch) : undefined
           const files = yield* Effect.gen(function* () {
             const snapshot = yield* Snapshot.Service
             const first = yield* snapshot.capture()
-            yield* Effect.promise(() => fs.appendFile(path.join(root, "top.txt"), "more\n"))
+            // The nested file changes as well, so that what is recorded shows whether the folder was walked.
+            yield* Effect.promise(async () => {
+              await fs.appendFile(path.join(root, "top.txt"), "more\n")
+              await fs.appendFile(path.join(folder, "inner.txt"), "more\n")
+            })
             const second = yield* snapshot.capture()
             if (!first || !second) return expect.unreachable("capture is disabled")
             return (yield* snapshot.files({ from: first, to: second })).map(String)

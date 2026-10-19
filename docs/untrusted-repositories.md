@@ -161,21 +161,31 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     files.
   - Snapshot: an untrusted folder's snapshot runs git only in Orbit's own git directory, with the folder as the work tree
     (`test/snapshot-untrusted-git.test.ts`, which traces every git process and finds none outside it). A directory of the
-    folder that is a repository itself and that an earlier capture recorded is a gitlink there, so the comparisons (`diff-files`, `diff`) pass
-    `--ignore-submodules=all` and the restore passes `--no-recurse-submodules`; without them git starts a status inside the
-    nested repository with the config that repository ships. The same file has a row for `core.fsmonitor`,
-    `core.hooksPath` and `.git/hooks` in a nested repository, each with a plain-git control, and a row for a real
-    submodule whose `.git` file points into the clone's `.git/modules`.
+    folder that is a repository itself is a gitlink there only when an earlier version's capture recorded it (or a
+    race let one in), and then the comparisons (`diff-files`, `diff`) pass `--ignore-submodules=all` and the restore
+    passes `--no-recurse-submodules`; without them git starts a status inside the nested repository with the config that
+    repository ships. The same file has a row for `core.fsmonitor`, `core.hooksPath` and `.git/hooks` in a nested
+    repository, each with a plain-git control, and a row for a real submodule whose `.git` file points into the clone's
+    `.git/modules`; each seeds a gitlink for the folder into Orbit's own index after the first capture, so that the
+    comparison reaches that guard. Mutation: removing `--ignore-submodules=all` from the `diff-files` of
+    `Git.index.refresh` fails all four rows.
     Git still opens what a nested `.git` entry names, only to decide whether the folder is a repository: a `.git` file
     that says `gitdir: \\host\share\repo`, or a `.git` folder whose `commondir` names a share, makes `ls-files --others`
     and `add` contact that host (class 6). So before each untrusted capture `Git.index.refresh` finds, without git, every
     folder below the scope that holds an entry named `.git` (any letter case, trailing dots or spaces, or the short name
-    `git~1`; links are not followed) and writes them to the snapshot repository's `info/exclude`, so git never enters
-    them and their files are not recorded. Proof: "Snapshot reaches no share named by a nested .git entry in an
-    untrusted folder" in `snapshot-untrusted-git.test.ts` (four spellings; a watcher polls the Windows DNS cache for the
+    `git~1`; links are not followed) and writes them to the snapshot repository's `info/exclude`. A `.gitignore` of the clone ranks above that file,
+    and a negation in it (`!sub/`, `!sub`, `!*`, or one in a nested `.gitignore`) would bring a folder back, so
+    `ls-files --others` is also given each folder as `-x` on its command line, which outranks every `.gitignore`
+    (`--exclude-from` does not). The only other command that walks the work tree, `add`, is given the files that
+    `ls-files` listed, so it never reaches a withheld folder. The folders travel on the command line, so a capture
+    that finds more than about 16,000 characters of them fails and is reported as a failed snapshot. Their files are not
+    recorded. Proof: "Snapshot reaches no share named by a nested .git entry in an
+    untrusted folder" in `snapshot-untrusted-git.test.ts` (four spellings of the entry, and four negations of the exclusion: root `!/sub/`, root `!sub`, root `!*` and a nested
+    `!sub/`; a watcher polls the Windows DNS cache for the
     whole run, and a plain open of a second unique name is the control that the watcher sees such lookups; the rows run
-    on Windows only for the cache, and everywhere for what is recorded). Mutation: `withholdNested: false` in
-    `snapshot.ts` makes all four rows fail. A folder that gains its `.git` entry between the scan and the git command is
+    on Windows only for the cache; what is recorded is checked everywhere by changing a file of the nested folder between
+    the two captures). Mutations: `withholdNested: false` in `snapshot.ts` makes the rows fail, and dropping the
+    `-x` arguments of `ls-files` in `Git.index.refresh` makes the four negation rows fail. A folder that gains its `.git` entry between the scan and the git command is
     not covered.
     The folder's `.gitattributes` can pick `filter=`, `diff=` and `merge=` drivers whose programs the person's own system
     or global config defines (git-lfs among them), and an `.lfsconfig` names the host that git-lfs contacts. Orbit's

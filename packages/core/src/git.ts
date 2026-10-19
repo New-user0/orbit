@@ -478,14 +478,23 @@ const layer = Layer.effect(
       /** Keep git out of every folder that holds a `.git` entry of its own: it opens what that entry names. */
       withholdNested?: boolean
     }) {
-      if (input.withholdNested) yield* withholdNestedRepositories(input.repository, input.scope)
+      const withheld = input.withholdNested ? yield* withholdNestedRepositories(input.repository, input.scope) : undefined
       const list = (args: string[]) =>
         repositoryOperation("refresh", input.repository, args).pipe(Effect.map((result) => nuls(result.text)))
       const [tracked, untracked] = yield* Effect.all(
         [
           // A nested repository is a gitlink here; git would start a status inside it, with the config that clone ships.
           list(["diff-files", "--ignore-submodules=all", "--name-only", "-z", "--", input.scope]),
-          list(["ls-files", "--others", "--exclude-standard", "-z", "--", input.scope]),
+          // The patterns on the command line outrank every .gitignore, so a negation there cannot bring a folder back.
+          list([
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            ...(withheld ?? []).flatMap((line) => ["-x", line]),
+            "-z",
+            "--",
+            input.scope,
+          ]),
         ],
         { concurrency: 2 },
       )
@@ -531,7 +540,10 @@ const layer = Layer.effect(
     // `ls-files --others` and `add` look inside every untracked folder for a `.git` entry, to tell a nested repository
     // from a plain folder, and a `.git` file that says `gitdir: \\host\share` (or a directory whose `commondir` does)
     // makes git open that share (class 6). A folder that the snapshot repository's own `info/exclude` names is never
-    // opened, so while the project is not trusted each such folder is found here, without git, and written there.
+    // opened, so while the project is not trusted each such folder is found here, without git, and written there. A
+    // .gitignore ranks above that file, and a negation in it (`!sub/`) would bring the folder back, so the same lines
+    // are also given to `ls-files` as `-x`, which outranks every .gitignore (`--exclude-from` does not). It returns them.
+    // They travel on the command line, so a folder with more of them than a command line holds cannot be captured.
     const withholdNestedRepositories = Effect.fn("Git.index.withholdNested")(function* (
       repository: Repository,
       scope: RelativePath,
@@ -564,7 +576,13 @@ const layer = Layer.effect(
       )
       const exclude = path.join(repository.gitDirectory, "info", "exclude")
       const content = "# Written by Orbit: folders that hold a .git entry of their own.\n" + lines.sort().join("\n") + "\n"
-      if ((yield* fs.readFileStringSafe(exclude).pipe(Effect.orElseSucceed(() => undefined))) === content) return
+      if (lines.join("").length > 16_000)
+        return yield* new OperationError({
+          operation: "refresh",
+          directory: repository.worktree,
+          message: "Too many nested repositories to leave out of the snapshot",
+        })
+      if ((yield* fs.readFileStringSafe(exclude).pipe(Effect.orElseSucceed(() => undefined))) === content) return lines
       yield* fs.ensureDir(path.dirname(exclude)).pipe(
         Effect.andThen(fs.writeFileString(exclude, content)),
         Effect.mapError(
@@ -577,6 +595,7 @@ const layer = Layer.effect(
             }),
         ),
       )
+      return lines
     })
 
     const ignored = Effect.fn("Git.index.ignored")(function* (input: {
