@@ -98,16 +98,13 @@ above, which also stops it loading that product's skills, output styles and inst
 ### Snapshots, worktree lists and `orb flow` start no git in a folder that is not trusted
 
 A repository's own config can name programs for git to run and files or network shares for it to open, so Orbit starts
-git in a repository only once its folder is trusted. Until then session snapshots work from a separate git directory of
-Orbit's own that is not seeded from the repository and switches off every `filter`, `diff` and `merge` driver that the
-folder's `.gitattributes` names, so no filter, diff or merge program of your git config (git-lfs included) runs on
-the folder's files and no `.lfsconfig` host is contacted (`snapshot-untrusted-git.test.ts`; the hooks of your own git
-config, `core.hooksPath` and `init.templateDir`, still run during a snapshot, with the folder as the working directory)
-(undo still works, and `.gitignore` files still apply, and snapshots
-taken before the folder was trusted stay usable once it is trusted, but not the other way round; while a folder below
-the session's folder holds a `.git` entry of its own, which git would open to see where it points, no snapshot is taken
-at all, so undo is not available for those steps until the folder is trusted or that entry is gone, and Orbit's log names
-the folder), the list of worktrees
+git in a repository only once its folder is trusted. Until then a session takes no undo snapshot: the steps it runs
+before you trust the folder cannot be undone, as in a folder without git, comparing or restoring a snapshot from a time
+when the folder was trusted fails with "The folder is not trusted", and Orbit's log says once why there is no snapshot.
+The first step after you trust the folder takes a snapshot again, without a restart (`snapshot-untrusted-git.test.ts`,
+`snapshot-trust.test.ts`, `snapshot-trust-transition.test.ts`). Earlier builds of this release captured an untrusted
+folder from a git directory of Orbit's own; each guard around that left a way for the folder's config, or a `.git`
+entry below it naming a network share, to reach git, so that capture is gone. Meanwhile the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
 folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`
 and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a repository, with no
@@ -2792,10 +2789,12 @@ Session snapshots, and the undo that restores from them, now hand every path to 
 name such as `[s]ub` (or `*` and `s*`, which Windows does not allow) as a pattern, so undoing a change to that file also
 put back every file the pattern matched, such as `sub`, and the diff of that file listed them too. A capture that left
 such a file out because it was too large dropped the files it matched from the snapshot, and one that recorded it also
-recorded a large file it matched (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for
-a pattern as a name").
+recorded a large file it matched. A session started in a folder with such a name now records only that folder: outside
+Windows a folder named `s*` also took in the files of a folder `sub` beside it, and on Windows git looked inside `sub`
+for a repository of its own (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for a
+pattern as a name").
 
-**Affects:** folders that hold files whose names git would read as a pattern.
+**Affects:** folders that hold files or folders whose names git would read as a pattern.
 
 **What to do:** Nothing.
 
