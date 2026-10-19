@@ -203,6 +203,13 @@ describe("SessionRunnerLLM recorded", () => {
       })
       yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(pluginHost), { discard: true })
       yield* IdentityPlugin.Plugin.effect(pluginHost)
+      // A cassette that no longer matches the request (for example after a prompt edit) is a transport
+      // error the runner would retry for minutes; decline every retry so a stale fixture fails at once.
+      yield* hooks.register("session", "retry", (event) =>
+        Effect.sync(() => {
+          event.decision = { retry: false }
+        }),
+      )
       const { db } = yield* Database.Service
       yield* db
         .insert(ProjectTable)
