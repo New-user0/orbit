@@ -46,6 +46,23 @@ describe("Provider", () => {
     expect(String(missing.cause)).toBe("Error: Provider package orbit-provider-that-is-not-installed is not installed")
   })
 
+  test("loads a package given as a plain absolute file path, and refuses a relative one", async () => {
+    await using directory = await tmpdir()
+    const file = path.join(directory.path, "provider-absolute.mjs")
+    await Bun.write(file, "export const model = () => ({})\n")
+
+    expect((await Effect.runPromise(Provider.loadPackage(file))).model).toBeFunction()
+    // The file: URL of the same file is the same package.
+    expect(await Effect.runPromise(Provider.loadPackage(file))).toBe(
+      await Effect.runPromise(Provider.loadPackage(pathToFileURL(file).href)),
+    )
+
+    for (const relative of ["./provider-absolute.mjs", `.${path.sep}provider-absolute.mjs`, "../provider-absolute.mjs"]) {
+      const refused = await Effect.runPromise(Provider.loadPackage(relative).pipe(Effect.flip))
+      expect(refused._tag).toBe("Provider.LoadError")
+    }
+  })
+
   test("passes flat settings to native packages without Core settings", () => {
     expect(
       Provider.nativeSettings({
