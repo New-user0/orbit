@@ -189,8 +189,6 @@ export interface Interface {
       to: TreeID
       context?: number
       paths?: readonly RelativePath[]
-      /** Run no textconv program for the comparison, whatever the attributes and the config name. */
-      noTextconv?: boolean
     }) => Effect.Effect<readonly FileDiff.Info[], OperationError>
     readonly restore: (input: {
       repository: Repository
@@ -652,7 +650,6 @@ const layer = Layer.effect(
       to: TreeID
       context?: number
       paths?: readonly RelativePath[]
-      noTextconv?: boolean
     }) {
       if (input.paths?.length === 0) return []
       const args = ["--ignore-submodules=all", "--no-renames", input.from, input.to, "--", ...(input.paths ?? [])]
@@ -676,7 +673,6 @@ const layer = Layer.effect(
               "core.quotepath=false",
               "diff",
               "--no-ext-diff",
-              ...(input.noTextconv ? ["--no-textconv"] : []),
               `--unified=${input.context ?? 3}`,
               ...args,
             ],

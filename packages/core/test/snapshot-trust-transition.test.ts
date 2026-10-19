@@ -10,17 +10,20 @@ import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { repository } from "./fixture/git"
+import { traced } from "./fixture/git-trace"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
-// Review of #118: trust is usually granted in the middle of a session. A snapshot taken while the folder was not trusted
-// lives in Orbit's own untrusted git directory, and undo must still find it once the folder is trusted.
+// Review of #118, M4 verification round 7: trust is usually granted in the middle of a session. The steps before the grant
+// get no snapshot and start no git; the first step after it captures, and undo works from there on, without a reload.
+// Mutation: letting `Snapshot.capture` go on while the folder is not trusted fails the first half of the row; asking the
+// trust store once when the service starts, instead of at every capture, fails the second.
 const it = testEffect(Layer.empty)
 const SLOW = 90_000
 
-describe("a snapshot taken before trust", () => {
+describe("a folder trusted partway through a session", () => {
   it.live(
-    "can be compared and restored after trust is granted",
+    "gets no snapshot before the grant and starts no git, then captures, compares and restores after it",
     () =>
       Effect.gen(function* () {
         const root = path.join((yield* tmpdirScoped()).path, "clone")
@@ -36,15 +39,17 @@ describe("a snapshot taken before trust", () => {
         yield* Effect.gen(function* () {
           const snapshot = yield* Snapshot.Service
           const trust = yield* WorkspaceTrust.Service
+          const untrusted = yield* traced(snapshot.capture())
+          yield* trust.grant(root, { persist: false, via: "test" })
           const before = yield* snapshot.capture()
           yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "two\n"))
-          yield* trust.grant(root, { persist: false, via: "test" })
           const after = yield* snapshot.capture()
 
-          expect(before).toBeDefined()
-          expect(after).toBeDefined()
-          expect((yield* snapshot.files({ from: before!, to: after! })).map(String)).toEqual(["a.txt"])
-          yield* snapshot.restore({ files: new Map([[RelativePath.make("a.txt"), before!]]) })
+          expect(untrusted.value).toBeUndefined()
+          expect(untrusted.git).toEqual([])
+          if (!before || !after) return expect.unreachable("capture is disabled after the grant")
+          expect((yield* snapshot.files({ from: before, to: after })).map(String)).toEqual(["a.txt"])
+          yield* snapshot.restore({ files: new Map([[RelativePath.make("a.txt"), before]]) })
           expect(yield* Effect.promise(() => fs.readFile(path.join(root, "a.txt"), "utf8"))).toBe("one\n")
         }).pipe(Effect.provide(layer))
       }),

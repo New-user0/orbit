@@ -61,31 +61,6 @@ export const locate = Effect.fn("GitLayout.locate")(function* (fs: FSUtil.Interf
 })
 
 /**
- * The folders from `folder` down, other than `top`, that hold an entry git could take for a `.git` of their own (any
- * letter case, trailing dots or spaces, or the short name `git~1`). The `.git` of `top` itself is not entered. It reads
- * directory listings only and starts no process. A link is not followed, as git does not follow one in a work tree, and a
- * folder that cannot be listed counts as holding nothing, as it does for git.
- */
-export const nested = Effect.fn("GitLayout.nested")(function* (fs: FSUtil.Interface, top: string, folder: string) {
-  const walk = (directory: string): Effect.Effect<string[]> =>
-    fs.readDirectoryEntries(directory).pipe(
-      Effect.orElseSucceed(() => []),
-      Effect.flatMap((entries) =>
-        directory !== top && entries.some((entry) => DOT_GIT.test(entry.name))
-          ? Effect.succeed([directory])
-          : Effect.forEach(
-              entries.filter((entry) => entry.type === "directory" && !(directory === top && DOT_GIT.test(entry.name))),
-              (entry) => walk(path.join(directory, entry.name)),
-              { concurrency: 16 },
-            ).pipe(Effect.map((found) => found.flat())),
-      ),
-    )
-  return yield* walk(folder)
-})
-
-const DOT_GIT = /^(\.git[. ]*|git~\d+)$/i
-
-/**
  * The URL that the shared config of a verified layout gives remote `name`, as written. It reads the text of one key and
  * does not apply `url.<base>.insteadOf`, follow an include or look at any other scope, which `git remote get-url` does.
  */

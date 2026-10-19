@@ -176,53 +176,52 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     cannot name it"). The provider answers an empty
     branch, status, diff and review base, and reloads on `Trust.Event.Updated`. The watcher finds `HEAD` from the same
     files.
-  - Snapshot: an untrusted folder's snapshot runs git only in Orbit's own git directory, with the folder as the work tree
-    (`test/snapshot-untrusted-git.test.ts`, which traces every git process and finds none outside it).
-    Git looks inside every folder it has not recorded for a `.git` entry, to tell a nested repository from a plain folder,
-    and opens what that entry names: a `.git` file that says `gitdir: \\host\share\repo`, or a `.git` folder whose
-    `commondir` names a share, makes it contact that host (class 6). Leaving such a folder out of the capture did not hold:
-    a `.gitignore` negation in the clone named it back, and so did a file beside it whose name git read as a pattern that
-    matches it (`[s]ub`). So before each capture of an untrusted folder, `Snapshot.capture` looks without git
-    (`GitLayout.nested`) for a folder below the top of the scope that holds an entry named `.git` (any letter case,
-    trailing dots or spaces, or the short name `git~1`; links are not followed). When it finds one, that step gets no
-    snapshot: no git starts, one log line names the folder, and undo is not available for the step, as in a folder
-    without git. A trusted folder is captured as before. Proof: "Snapshot takes no snapshot, and reaches no share, in an
-    untrusted folder that holds a nested .git entry" in `snapshot-untrusted-git.test.ts`: four spellings of the entry, and
-    four negations (root `!/sub/`, root `!sub`, root `!*` and a nested `!sub/`), each beside a file named `[s]ub`, and
-    also `*` and `s*` outside Windows. Each row checks that both captures are skipped, that no git starts, that nothing
-    is recorded and that each skip logs one line naming the nested folder; on Windows a watcher polls the DNS cache for
-    the whole run, and a plain open of a second unique name is the control that it sees such lookups. Its controls: the
-    same folder, trusted, is captured, and on Windows git then looks the share up; an untrusted folder with the same
-    negation and file name but no `.git` entry is captured. Mutations: removing the skip, or its log line, fails every
-    row. A folder that gains its `.git` entry between the scan and the git command is not covered.
-    The rows for `core.fsmonitor`, `core.hooksPath` and `.git/hooks` in a nested repository, and for a real submodule
-    whose `.git` file points into the clone's `.git/modules`, check the same skip, each with a plain-git control. A
-    nested repository is still a gitlink in Orbit's own index once a trusted folder records it (or the race above lets
-    one in), and then the comparison of the index with the work tree passes `--ignore-submodules=all`; without it git
-    starts a status inside the nested repository with the config that repository ships. The same four rows run the Git
-    service by itself over the folder, whose first capture records the gitlink, and find nothing started inside it.
-    Mutation: removing `--ignore-submodules=all` from the `diff-files` of `Git.index.refresh` fails all four rows.
-    The refresh, the comparison and the restore pass `--literal-pathspecs`, so in every folder a file named like a
-    pattern stands for that one file: the rows of "Snapshot reads a file name that git would take for a pattern as a
-    name" put such a file (`[s]ub`, and `*` and `s*` outside Windows) beside a file `sub` that it matches. Restoring and
-    comparing it leave `sub` alone, a capture records no large `sub` beside it, and a capture that leaves it out because
-    it is large keeps a recorded `sub`. Mutations: the flag removed from the restore's `checkout`, from the comparison's
-    `diff`, from the `add` or from the `rm` fails the matching rows.
-    The folder's `.gitattributes` can pick `filter=`, `diff=` and `merge=` drivers whose programs the person's own system
-    or global config defines (git-lfs among them), and an `.lfsconfig` names the host that git-lfs contacts. Orbit's
-    untrusted snapshot repository therefore holds `info/attributes` with `* !filter !diff !merge`, which outranks the
-    folder's file. It is written before the first capture, and again, with the index dropped, when a repository made by
-    an earlier version lacks it: that index may hold entries that a clean filter rewrote, and a restore would write the
-    cleaned text over the person's file (the row "gives back the person's bytes on a restore from a repository of an
-    earlier version whose index holds cleaned entries", which fails with the index drop removed). The patch comparison of an
-    untrusted folder also passes `--no-textconv`, and a trusted folder's does not, so it compares as it always did (the
-    rows "runs no textconv program for a comparison even when the snapshot repository's attributes name one", which writes
-    the driver back into the attributes file so that the flag is what it tests, and its trusted control). The same test file
-    has rows for a clean filter (a new repository and one from an earlier version), a textconv program, and an LFS pointer
-    restore against a local server (skipped where `git lfs` is missing), each with a trusted control that does run the
-    driver or contact the host. Mutation: emptying the attributes text fails the clean-filter rows and the LFS row. Not
-    covered: the hooks of the person's own git config, which still run (Known gaps, "The hooks of the person's own git
-    config during a snapshot").
+  - Snapshot (the undo snapshot of each session step, `packages/core/src/snapshot.ts`): while the folder is not trusted it
+    starts no git at all, neither in the folder nor in Orbit's own snapshot directory. `Snapshot.capture` returns no
+    snapshot, so undo is unavailable for those steps as it is in a folder without git, and one log line for each Location
+    says why; comparing or restoring a snapshot that the session took while the folder was trusted fails with "The
+    folder is not trusted". The first capture after a grant works as in any trusted folder, with no reload. The reason:
+    every git command a snapshot runs applies config that the clone chooses, the folder's own and that of each nested
+    repository git looks into while it walks the work tree, even when the command runs from a git directory of Orbit's.
+    That config names programs (`core.fsmonitor`, hooks, the drivers that `.gitattributes` picks) and files or shares to
+    open (`include.path`, alternates, a `.git` file that says `gitdir: \\host\share\repo`, a `.git` folder whose
+    `commondir` names a share). M4 verification rounds 2 to 6 captured untrusted folders from a git directory of Orbit's
+    behind narrower guards, and each round found another way past them: a `.gitignore` negation that named a withheld
+    nested folder back, a file named like a pattern for it (`[s]ub`), and top-level folders that the scan for nested
+    `.git` entries did not enter although git walks them (`git~2`, and outside Windows `.GIT`, `git~1` and `.git.`).
+    Register row FU-M4-r6-nested-undo carries that design. Proof: `test/snapshot-untrusted-git.test.ts`, where git's
+    trace (`GIT_TRACE2`) shows no process in any untrusted row: "Snapshot starts no git while the folder is not trusted"
+    (a folder whose config names a file system monitor, an include and alternates gets no snapshot, starts no git and
+    no program, and logs one line; comparing and restoring the snapshots of a trusted session fail and start no git; the
+    trusted control captures, compares and restores, and leaves out what `.gitignore` names), "Snapshot starts no git
+    program of a repository nested in an untrusted folder" (three keys) and the submodule row, each with a plain-git
+    control, "Snapshot runs no attribute driver of the person's config for an untrusted folder's files" (a clean filter,
+    a textconv program, and an LFS pointer against a local server, skipped where `git lfs` is missing, each with a
+    trusted control that runs the driver or reaches the host), and "Snapshot reaches no share, and starts no git, in an
+    untrusted folder that holds a .git entry naming one" (four spellings of the entry; four negations, each beside a
+    file named `[s]ub`, and also `*` and `s*` outside Windows; a `.git` file below a top-level folder `git~2`, and on
+    Linux below `.GIT`, `git~1` and `.git.`; on Windows a watcher polls the DNS cache for the whole run, and a plain open
+    of a second unique name is the control that it sees such lookups; the trusted controls capture and restore, and on
+    Windows git then looks the share up). Also `test/snapshot-trust.test.ts` (each key of `test/fixture/git-keys.ts`:
+    no snapshot, no git, no program) and `test/snapshot-trust-transition.test.ts` (a grant partway through a session).
+    Mutations: letting the capture go on while the folder is not trusted fails every untrusted capture row; taking the
+    trust check out of the comparison and the restore fails their row; dropping the log line fails the rows that count
+    it; asking the trust store once when the service starts, instead of at each capture, fails the transition row.
+    A nested repository is a gitlink in Orbit's own index once a trusted folder records it, and the comparison of the
+    index with the work tree passes `--ignore-submodules=all`; without it git starts a status inside the nested
+    repository with the config that repository ships. The nested-repository and submodule rows also run the Git service
+    by itself over the folder, whose first capture records the gitlink, and find nothing started inside it. Mutation:
+    removing `--ignore-submodules=all` from the `diff-files` of `Git.index.refresh` fails those four rows.
+    The refresh (`diff-files`, `ls-files`, `rm`, `add`), the comparison and the restore pass `--literal-pathspecs`, so in
+    every folder a name that git would read as a pattern stands for that one file or folder: the rows of "Snapshot
+    reads a file name that git would take for a pattern as a name" put such a name (`[s]ub`, and `*` and `s*` outside
+    Windows) beside a file or folder `sub` that it matches. Restoring and comparing the file leave `sub` alone, a capture
+    records no large `sub` beside it, a capture that leaves it out because it is large keeps a recorded `sub`, and a
+    session started in a folder of that name records and restores only that folder's files. On Windows, where `[s]ub`
+    stands for no file inside `sub`, a session started in `[s]ub` does not walk a folder `sub` whose `.git` names a
+    share (DNS cache). Mutations: the flag removed from the restore's `checkout`, from the comparison's `diff`, from the
+    `add` or from the `rm` fails the matching rows, and removed from the `ls-files` it fails the walk row on Windows and
+    the session rows for `*` and `s*` on Linux.
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
@@ -2500,14 +2499,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   and the hooks), which can name programs for git to run. `Project.resolve`, the Git VCS provider and the location
   watcher start no git in a folder that `WorkspaceTrust` does not trust, and read its files instead (`GitLayout`;
   `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
-  control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read calls
+  control and with the plain git command of each key as the proof that the key is live). The undo snapshot starts no git at all while the folder is not trusted, so those steps have no undo (`test/snapshot-untrusted-git.test.ts`, `test/snapshot-trust.test.ts`), and the worktree list (`test/worktree-untrusted-git.test.ts`) starts none in the folder's own repository. The read calls
   of the `Git` service run only behind those gates: `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes`,
   `VcsInstructions` and the snapshot check trust first, none of them lets git look for a repository above the folder
   that was trusted (`test/git-passed-over.test.ts`), and the repository cache works only in Orbit's own clones
   (`test/worktree-untrusted-git.test.ts`, `test/lsp-ignored.test.ts`, the "starts no git process in an untrusted folder"
   row of `test/instruction-notes.test.ts`, `test/session-context-vcs.test.ts`). In a trusted folder `status.short` reaches
   `core.fsmonitor` and clean filters, and `history.recent` reaches `gpg.program` when `log.showSignature` is set
-  (`test/snapshot-trust.test.ts`, `test/git.test.ts`; a fact about the commands and git versions the tests ran with, 2.52
+  (`test/git.test.ts`; a fact about the commands and git versions the tests ran with, 2.52
   on Windows and the container's on Linux). What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
   and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the
   folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
@@ -2520,22 +2519,18 @@ The program-wide register of every follow-up, these gaps included, with each one
   passes false, and with it false the runner starts no git and finds the run store from the files; since round 6
   `resume` and `replay` refuse an untrusted folder before they open the store;
   `packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and `hooks/post-checkout`, each with a
-  trusted control; the tasks of an eval still run agents, whose session snapshot uses the separate git directory above); a repository with no config of its own, which shows no
+  trusted control; the tasks of an eval still run agents, whose sessions take no undo snapshot while the folder is not trusted); a repository with no config of its own, which shows no
   branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
   for hooks and stdio MCP servers below); and fingerprints, which do not cover `.git`. A project is still named by the remote URL in the folder's config, which a
   clone can write (Shared approvals, above). Mercurial was never part of this gap: neither `Project.resolve` nor the
   Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
   (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does
   start it), because `hg` loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
-- **The hooks of the person's own git config during a snapshot** (M4 round 3 re-check). The untrusted snapshot repository
-  switches off the drivers that the folder's `.gitattributes` picks, but not the hooks of the person's own git config:
-  with `core.hooksPath` in a global or system config, `reference-transaction`, `post-index-change` and `post-checkout`
-  run during a capture and a restore, with the folder as the working directory, and `init.templateDir` is the same channel
-  at `git init`. The probe of the re-check saw no code of the folder run and no request reach the network: the hooks are the
-  person's own, and what git-lfs's `post-checkout` does there (it makes a file read-only when the folder's attributes
-  say `lockable`) sent nothing to the host that `.lfsconfig` names. Not pinned by a test here. Closing it means pointing
-  `core.hooksPath` of the snapshot repository at an empty folder that Orbit owns and running `init --template=` with an
-  empty value (hardening, left for the register of M4 verification round 4).
+- **The hooks of the person's own git config during a snapshot** (M4 round 3 re-check; closed in round 7). The hooks of
+  a global or system `core.hooksPath`, and `init.templateDir`, ran while an untrusted folder was captured from Orbit's
+  own git directory, with the folder as the working directory. An untrusted folder now gets no snapshot and no git at
+  all (the Snapshot entry of the inventory), so they no longer run there; in a trusted folder they run as for any git
+  command the person starts.
 - **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4). The `@path` imports
   of prompts-context-9b do not wire it; it stays unread and its guard waits for whichever task wires it.
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
