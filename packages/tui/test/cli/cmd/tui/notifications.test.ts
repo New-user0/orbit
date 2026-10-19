@@ -446,6 +446,15 @@ describe("idle reminder", () => {
     expect(waiting(harness)).toEqual([reminder])
   })
 
+  test("an unsynced root's own open request holds the reminder back", async () => {
+    const harness = await setup(undefined, 0.05)
+    // This session is not in the store yet, so its family is empty: only the root itself can be asked.
+    harness.emit({ id: "p", created: 0, type: "permission.asked", data: permission("permission-u", "unsynced") })
+    harness.emit(executionSucceeded("d", "unsynced"))
+    await Bun.sleep(150)
+    expect(waiting(harness)).toEqual([])
+  })
+
   test("does not start while a permission is already pending", async () => {
     const harness = await setup(undefined, 0.05)
     harness.emit({ id: "p", created: 0, type: "permission.asked", data: permission("permission-1") })
