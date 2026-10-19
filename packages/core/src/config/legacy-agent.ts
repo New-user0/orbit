@@ -1,10 +1,13 @@
 export * as LegacyAgent from "./legacy-agent.js"
 
 import { ConfigAgent } from "@orbit/schema/config/agent"
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { ConfigPermissionV1 } from "../v1/config/permission.js"
 
 const isAction = Schema.is(ConfigPermissionV1.Action)
+const decodePermission = Schema.decodeUnknownOption(ConfigPermissionV1.Info)
+// Whether the legacy decoder accepts `rule` under `name`: question, websearch and doom_loop take an action only.
+const accepts = (name: string, rule: unknown) => Option.isSome(decodePermission({ [name]: rule }))
 
 const tiers = new Set<string>(["inherit", "small", "large"])
 // Another product spells these keys in camelCase. The legacy decoder forwards a key it does not know to the provider as
@@ -87,8 +90,8 @@ function onlyBooleans(tools: Record<string, unknown>, notes: { key: string; mess
 function onlyActions(permission: Record<string, unknown>, notes: { key: string; message: string }[]) {
   return Object.fromEntries(
     Object.entries(permission).flatMap(([name, rule]): [string, unknown][] => {
-      if (isAction(rule)) return [[name, rule]]
-      if (isRecord(rule)) {
+      if (accepts(name, rule)) return [[name, rule]]
+      if (isRecord(rule) && accepts(name, {})) {
         const patterns = Object.entries(rule).filter(([pattern, action]) => {
           if (isAction(action)) return true
           notes.push({
@@ -99,7 +102,10 @@ function onlyActions(permission: Record<string, unknown>, notes: { key: string; 
         })
         return patterns.length === 0 ? [] : [[name, Object.fromEntries(patterns)]]
       }
-      notes.push({ key: `permission.${name}`, message: `dropped the invalid "permission.${name}"; use ask, allow or deny` })
+      notes.push({
+        key: `permission.${name}`,
+        message: `dropped the invalid "permission.${name}"; use ask, allow or deny`,
+      })
       return []
     }),
   )
