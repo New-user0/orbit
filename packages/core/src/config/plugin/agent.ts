@@ -108,6 +108,16 @@ export const Plugin = define({
           const replaces = defines && document.trusted !== false && agentID !== PlanMode.agent
           if (replaces) editor.remove(agentID)
           const exists = editor.get(agentID) !== undefined
+          const held = document.trusted === false && exists
+          const skipped = held
+            ? (["system", "description", "initial_prompt"] as const).filter(
+                (field) => item[field] !== undefined && item[field].trim() !== "",
+              )
+            : []
+          if (skipped.length > 0)
+            Effect.runSync(
+              Effect.logInfo("untrusted agent entry text held back", { agent: id, path: document.path, fields: skipped }),
+            )
           editor.update(agentID, (agent) => {
             if (!exists) agent.permissions.push(...permissions)
             if (!exists) {
@@ -152,7 +162,7 @@ export const Plugin = define({
             if (
               item.initial_prompt !== undefined &&
               item.initial_prompt.trim() !== "" &&
-              !(document.trusted === false && exists)
+              !held
             )
               agent.initialPrompt = item.initial_prompt
             if (item.memory !== undefined) agent.memory = item.memory
@@ -167,8 +177,8 @@ export const Plugin = define({
             // An agent's own prompt makes a session skip the person's `system_prompt`, and its description and first
             // message are text the model reads, so a folder that is not trusted may write them only for an agent it
             // defines itself.
-            if (item.system !== undefined && !(document.trusted === false && exists)) agent.system = item.system
-            if (item.description !== undefined && !(document.trusted === false && exists))
+            if (item.system !== undefined && !held) agent.system = item.system
+            if (item.description !== undefined && !held)
               agent.description = item.description
             if (item.mode !== undefined) agent.mode = item.mode
             if (item.hidden !== undefined) agent.hidden = item.hidden

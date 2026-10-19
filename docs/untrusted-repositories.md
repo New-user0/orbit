@@ -123,7 +123,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/config-trust.test.ts`. The same text can arrive as `agents.<id>.system`, because an agent with a prompt
   of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system`, `description` (the text of the agent listing) and `initial_prompt` from
   a document of a folder that is not trusted when the agent already exists; an agent the folder defines itself keeps
-  its prompt. Proof: `test/config/agent-untrusted-system.test.ts`.
+  its prompt. Trust status cannot tell the two apart, so `ConfigTrust` reports `system`, `description`, plain
+  `initial_prompt` and `disallowed_tools` of an `orbit.json` agent entry as `permissions` (the stricter answer, as for
+  the files under `agents/`), the trust question opens for such a folder, and the plugin logs one line for each entry it
+  holds back. Proof: the "lists orbit.json for agent" rows of `test/project-trust.test.ts`.
 - `language` and `output_style` in the config: text that steers every reply (a reply language, a named style whose file
   is looked up by name). The last entry wins, so a project's value would outrank the person's own. `ConfigTrust`
   withholds both (kind `settings`) from an untrusted project or local document, the person's value stays in force, and

@@ -3932,7 +3932,7 @@ the provider's prompt cache is cold for it).
 
 ## An untrusted folder cannot change the prompt of an agent that exists
 
-A project or local config in a folder that is not trusted can no longer set `agents.<id>.system`, `description` or `initial_prompt` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged.
+A project or local config in a folder that is not trusted can no longer set `agents.<id>.system`, `description` or `initial_prompt` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged. Trust status now lists such an `orbit.json` entry (`system`, `description`, `initial_prompt` or `disallowed_tools`) as holding back `permissions`, so the trust question opens for the folder, and Orbit logs a line for each entry it holds back.
 
 **Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
 
