@@ -102,9 +102,8 @@ git in a repository only once its folder is trusted. Until then a session takes 
 before you trust the folder cannot be undone, as in a folder without git, comparing or restoring a snapshot from a time
 when the folder was trusted fails with "The folder is not trusted", and Orbit's log says once why there is no snapshot.
 The first step after you trust the folder takes a snapshot again, without a restart (`snapshot-untrusted-git.test.ts`,
-`snapshot-trust.test.ts`, `snapshot-trust-transition.test.ts`). Earlier builds of this release captured an untrusted
-folder from a git directory of Orbit's own; each guard around that left a way for the folder's config, or a `.git`
-entry below it naming a network share, to reach git, so that capture is gone. Meanwhile the list of worktrees
+`snapshot-trust.test.ts`, `snapshot-trust-transition.test.ts`). A snapshot needs git, and git applies the config of
+the folder and of any repository nested in it, so there is no partial snapshot either. Meanwhile the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
 folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`
 and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a repository, with no
