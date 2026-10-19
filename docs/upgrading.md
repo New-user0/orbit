@@ -3566,10 +3566,8 @@ as a recorded request in a test or a plugin that looks for the heading `# Safety
 ### A web page question is answered with its own instructions, not the session's prompt
 
 WebFetch asks a second model about a fetched page with instructions of its own (answer from the page alone, short
-quotes, no lyrics). Before, a model overlay (a model-family prompt), the prompt keys `system_prompt` and
-`append_system_prompt`, or the subagent template could replace those instructions, so a subagent such as Explore, or a
-session on an overlay model, sent the page question under the wrong prompt. The request now keeps its own text in every
-one of those cases. Pinned by `packages/core/test/plugin/side-query-prompt.test.ts`.
+quotes, no lyrics). The request keeps its own text whichever model overlay, prompt key or subagent template applies to
+the session. Pinned by `packages/core/test/plugin/side-query-prompt.test.ts`.
 
 **Affects:** sessions on models with a prompt overlay, sessions with the prompt keys set, and subagents that fetch pages.
 
@@ -3798,10 +3796,11 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
   overlays, the new git section, the subagent prompt and its report notes, the plan, todo, task and verification
   reminders, the scratchpad, environment and git snapshot texts, the notes for messages that arrive mid-task, the agent
   listing and several tool descriptions and results. The sections of the base prompt are listed in the note above.
-- Main's prompt had the sections Harness, Communication, Doing tasks, Code style, Safety and Verification. Those names
-  are gone. The git section is new in this release, so there is no earlier git text to compare with.
+- The section list of the base prompt, and what became of main's git advice, are in the first note under "System
+  prompt" above.
 - A style without coding instructions drops Scope, Working in code and Evidence. Consent stays, and in it the rule that
-  only the user can approve a risky action ahead of time, in the default prompt and in every model overlay.
+  only the user can approve a risky action ahead of time, in the default prompt and in every full model overlay. The
+  prompt for local models keeps that rule under How to work.
 - The environment block labels the repository line `Git repository`, and the git snapshot labels its fields Branch,
   Pull request target, Configured author, Changes and Latest commits.
 - The built-in Explanatory style marks its notes with `Design note:` instead of `Insight:`, and the Learning style
@@ -3815,7 +3814,7 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 `Insight:` or `TODO(human)` markers; every session's first request after the upgrade (the system part changed once, so
 the provider's prompt cache is cold for it).
 
-**What to do:** Rename the section names you match on, and update recorded requests. Nothing else.
+**What to do:** Update recorded requests and any match on prompt text. Nothing else.
 
 ## Instruction notes, and an explicit rescan of the instruction files
 

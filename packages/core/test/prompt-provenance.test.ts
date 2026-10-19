@@ -179,9 +179,31 @@ describe("the prompt notes of the upgrade file", () => {
     expect(rewrite).toBeGreaterThan(-1)
     expect(first).toBeGreaterThan(-1)
     for (const text of [rewritten, system]) for (const pattern of notNames) expect(text).not.toMatch(pattern)
-    expect(rewritten.replace(/\s+/g, " ")).toContain(
+    expect(system.replace(/\s+/g, " ")).toContain(
       "Harness, Communication, Doing tasks, Code style, Safety and Verification",
     )
+  })
+})
+
+describe("the output-style and side-query notes", () => {
+  const read = async () => Bun.file(path.join(import.meta.dir, "../../../docs/upgrading.md")).text()
+  const flat = (text: string) => text.replace(/\s+/g, " ")
+
+  test("the output-style note names the coding sections the code drops", async () => {
+    const notes = await read()
+    const start = notes.indexOf("### An output style keeps the coding sections only when it asks for them")
+    const note = flat(notes.slice(start, notes.indexOf("\n### ", start + 5)))
+    const names = SessionSystemPrompt.CODING_SECTIONS
+    expect(start).toBeGreaterThan(-1)
+    expect(note).toContain(`(${names.slice(0, -1).join(", ")} and ${names.at(-1)})`)
+  })
+
+  test("the side-query note claims no earlier prompt that never shipped", async () => {
+    const notes = await read()
+    const start = notes.indexOf("### A web page question is answered with its own instructions")
+    const note = flat(notes.slice(start, notes.indexOf("\n### ", start + 5)))
+    expect(start).toBeGreaterThan(-1)
+    expect(note).not.toMatch(/Before, a model overlay|the wrong prompt/)
   })
 })
 
