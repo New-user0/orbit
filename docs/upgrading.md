@@ -2078,7 +2078,7 @@ An IPv4 address in the managed `denied_domains` list now also denies its mapped 
 
 ### One bad field no longer drops its agent entry or its settings object
 
-In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry, or in an entry of the older `agent` and `mode` maps (`color`, `model`, `steps`, `mode`, `description`, `options`, or one rule in its `permissions`) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
+In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry, or in an entry of the older `agent` and `mode` maps (`color`, `model`, `steps`, `mode`, `description`, `options`, or one entry of its `permission` object or `tools` map) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
 
 **Affects:** anyone with a typo in one of these entries, administrators most of all; `orb doctor` lists each skipped field.
 
@@ -3595,7 +3595,10 @@ of the default prompt is replaced by one that says the agent helps the way the o
 describes. A prompt that does not open with the default line, such as a model's own prompt or an agent's system prompt,
 keeps its first line. So does a prompt whose style comes from a folder that is not trusted yet: Orbit still reads that
 style and puts its text last in the prompt, but the clone's style does not get to say what the agent is for until you
-trust the folder. No style removes the rules about approval, which stay in the sections that every style keeps.
+trust the folder. No style removes the rules about approval, which stay in the sections that every style keeps. The
+style also applies to the requests that compact a conversation and to the background generate requests (such as cache
+warming), so they carry the same system prompt as your messages and reuse its cached prefix; a one-shot side query such
+as a web page extraction keeps its own text.
 
 **Affects:** people with a custom output style that has no `keep-coding-instructions` key, including styles kept in
 another product's folder that Orbit reads while compatibility is on, and people who open a repository with a style of
