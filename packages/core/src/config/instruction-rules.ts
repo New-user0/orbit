@@ -23,7 +23,7 @@ export interface Found {
  *
  * Nothing the folder holds costs more than itself: a missing or unreadable folder, a dangling link, a pipe, a folder where
  * a file was expected, and anything `allow` refuses are skipped. A network path, or a link that leads to one, is never
- * opened (class 6). `allow` is asked of every real folder and of every file reached through a link, just before it is listed, and
+ * opened (class 6). `allow` is asked of every real folder, with the path the walk built for it, and of every file reached through a link, just before it is listed, and
  * is where a caller keeps a repository's link out of the project from supplying a file (class 4).
  */
 export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
@@ -31,7 +31,7 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
   readonly fs: Pick<FSUtil.Interface, "isDir" | "isFile" | "readDirectoryEntries">
   /** Where a path really leads, a link to a network share named as the share without being opened (`ProjectTrust.leads`). */
   readonly leads: (spelling: string) => Effect.Effect<string>
-  /** `spelling` is the path as the walk built it, given for a file so that a caller can tell a link from the file itself. */
+  /** `spelling` is the path as the walk built it, given for every folder and for a file reached through a link, so that a caller can tell a link from the path itself. */
   readonly allow: (real: string, spelling?: string) => Effect.Effect<boolean>
   readonly platform?: NodeJS.Platform
   /** Fewer files than `MAX_FILES`, for a caller that spends one budget over several scans. */
@@ -54,7 +54,7 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
       const real = yield* input.leads(spelled)
       if (unreachable(real) || folders.has(key(real))) return
       folders.add(key(real))
-      if (!(yield* input.fs.isDir(real)) || !(yield* input.allow(real))) return
+      if (!(yield* input.fs.isDir(real)) || !(yield* input.allow(real, spelled))) return
       const entries = yield* input.fs.readDirectoryEntries(real).pipe(Effect.orElseSucceed(() => []))
       for (const entry of entries.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
         const child = join(spelled, entry.name)

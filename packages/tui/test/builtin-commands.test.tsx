@@ -143,7 +143,8 @@ test("/ide with an argument other than open says how it is used", async () => {
 })
 
 // Class 9: the folder of the session and the name an editor gave its lock reach the toasts of /ide, and each can hold an
-// escape sequence. `plain` at the toast keeps a folder name from acting on the terminal.
+// escape sequence. The toast draws every message through `bodyText`, so its own `plain` is a second guard that no row
+// pins alone; this row pins what is drawn, which is the two together.
 test("the toasts of /ide open write out the control characters of a folder and an editor name", async () => {
   await using state = await tmpdir()
   const root = path.parse(process.cwd()).root

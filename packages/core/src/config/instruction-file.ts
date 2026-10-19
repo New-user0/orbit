@@ -545,6 +545,9 @@ function startsBlock(rest: string, indent: number) {
 /** The most files in one chain of imports: the file itself and four levels below it. A deeper file is left out, silently. */
 export const DEPTH = 5
 
+/** The most import tokens one file has followed; the rest are left out with one warning. */
+export const MAX_IMPORTS = 256
+
 /**
  * The import tokens that a processed instruction file holds, cleaned up and in the order they are written, each once.
  *
@@ -985,7 +988,11 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
         ...(rule?.patterns === undefined ? {} : { patterns: rule.patterns }),
       })
       if (input.imports === false) return true
-      for (const token of imports(processed.content)) {
+      const tokens = imports(processed.content)
+      // A repository chooses how many tokens a file holds, and each one costs a walk of its path: the rest are not followed.
+      if (tokens.length > MAX_IMPORTS)
+        yield* Effect.logWarning("instruction imports skipped", { path: real, reason: `more than ${MAX_IMPORTS} imports in one file` })
+      for (const token of tokens.slice(0, MAX_IMPORTS)) {
         const target = resolveToken(token, dirname(real), input.home, platform)
         if (target !== undefined) yield* handle(target, real, depth + 1)
       }

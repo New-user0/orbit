@@ -1260,6 +1260,32 @@ describe("SessionInstructions keeps a project at the home folder from opening th
         expect(text).not.toContain("PRIVATE KEY MARKER")
       }),
     )
+
+    // A rules folder of a nested folder that is a link to a folder of notes: the files inside it are plain, so the folder is
+    // where the link has to be refused.
+    home.live(`sends no file of a linked nested rules folder, and sends a plain rule beside it, in a project that is ${name}`, () =>
+      Effect.gen(function* () {
+        yield* settle(granted)
+        const dir = (yield* Location.Service).directory
+        const folder = (yield* Global.Service).home
+        const notes = path.join(folder, "Documents", "notes")
+        yield* mkdir(notes)
+        yield* writeAgents(path.join(notes, "diary.md"), "PRIVATE NOTES MARKER")
+        const rules = path.resolve(dir, "sub", ".orbit", "rules")
+        yield* mkdir(rules)
+        yield* writeAgents(path.join(rules, "plain.md"), "PLAIN RULE MARKER")
+        yield* Effect.promise(() => fs.symlink(notes, path.join(rules, "team"), process.platform === "win32" ? "junction" : "dir"))
+        yield* writeAgents(path.resolve(dir, "sub", "file.txt"), "f")
+        const registry = yield* Tool.Service
+        const sessionID = yield* sessionIn(dir)
+
+        yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+        const text = (yield* synthetics(sessionID)).map((message) => message.text).join("\n")
+        expect(text).toContain("PLAIN RULE MARKER")
+        expect(text).not.toContain("PRIVATE NOTES MARKER")
+      }),
+    )
   }
 
   // The session itself starts at the home folder, so no folder below it is bounded until a person trusts it.
@@ -2066,7 +2092,38 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
     }),
   )
 
-  costed.live("does not list or open a nested rules folder again on the next read, until a rescan", () =>
+  // The shared-import shape: many rules import the same files. The read keeps one set of handled files, so each shared file
+  // is opened a fixed few times per read whatever the number of rules; a set of its own per rule opened each of them once for every rule (200 x 5).
+  // Counting the opens fails on that, where a clock would depend on the host.
+  costed.live("opens a file that many rules import once in a read, not once per rule", () =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const rules = path.resolve(dir, "sub", ".orbit", "rules")
+      const shared = path.resolve(dir, "sub", "shared")
+      yield* mkdir(rules)
+      yield* mkdir(shared)
+      const imports = Array.from({ length: 5 }, (_, number) => `s${number}.md`)
+      yield* Effect.promise(() =>
+        Promise.all([
+          ...imports.map((name) => fs.writeFile(path.join(shared, name), `SHARED ${name}`)),
+          ...Array.from({ length: 200 }, (_, number) =>
+            fs.writeFile(
+              path.join(rules, `r${String(number).padStart(3, "0")}.md`),
+              `---\npaths: '*.zz'\n---\n${imports.map((name) => `@../../shared/${name}`).join("\n")}`,
+            ),
+          ),
+        ]),
+      )
+      yield* writeAgents(path.resolve(dir, "sub", "a.txt"), "a")
+      const sessionID = yield* sessionIn(dir)
+      openedFiles.length = 0
+      yield* read(sessionID, "sub/a.txt")
+      expect(openedFiles.filter(isRule).length).toBe(200)
+      for (const name of imports) expect(openedFiles.filter((file) => file.endsWith(path.join("shared", name))).length).toBeLessThanOrEqual(2)
+    }),
+  )
+
+  costed.live("does not list a nested rules folder again on the next read, until a rescan", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory
       const discovery = yield* InstructionDiscovery.Service
@@ -2081,7 +2138,6 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
       openedFiles.length = 0
       yield* read(sessionID, "sub/b.txt")
       expect(listedFolders.filter(isRule)).toEqual([])
-      expect(openedFiles.filter(isRule)).toEqual([])
       yield* discovery.rescan()
       listedFolders.length = 0
       yield* read(sessionID, "sub/c.txt")

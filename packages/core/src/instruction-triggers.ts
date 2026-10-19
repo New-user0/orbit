@@ -57,28 +57,19 @@ const layer = Layer.effect(
     // is keyed by the trust decision, and it ages out, so an edit to a rule shows up within `CACHE_MILLIS`. A load that failed
     // is never kept.
     const scans = new Map<string, { readonly at: number; readonly value: readonly ConfigInstructionRules.Found[] }>()
-    const loads = new Map<
-      string,
-      { readonly at: number; readonly value: Effect.Success<ReturnType<typeof ConfigInstructionFile.load>> }
-    >()
-    yield* discovery.addRescan(
-      Effect.sync(() => {
-        scans.clear()
-        loads.clear()
-      }),
-    )
+    yield* discovery.addRescan(Effect.sync(() => scans.clear()))
     const remembered = <V, E>(
       store: Map<string, { readonly at: number; readonly value: V }>,
       key: string,
       make: Effect.Effect<V, E>,
     ) =>
       Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis
         const hit = store.get(key)
-        if (hit !== undefined && now - hit.at < CACHE_MILLIS) return hit.value
+        if (hit !== undefined && (yield* Clock.currentTimeMillis) - hit.at < CACHE_MILLIS) return hit.value
         const value = yield* make
         if (store.size >= 4096) store.clear()
-        store.set(key, { at: now, value })
+        // Stamped after the work, so a scan that takes longer than the cache lives is still reused by the next read.
+        store.set(key, { at: yield* Clock.currentTimeMillis, value })
         return value
       })
 
@@ -96,6 +87,8 @@ const layer = Layer.effect(
       readonly patterns: readonly string[]
       readonly real: string
       readonly listing: boolean
+      /** The files this read has handed over, shared by all its rules so that a file many rules import is walked once. */
+      readonly visited: Set<string>
       /** The rule files this read may still look at, shared by all its folders. */
       readonly budget: { spent: number; warned: boolean }
       readonly open: boolean
@@ -128,24 +121,19 @@ const layer = Layer.effect(
           reason: `more than ${MAX_RULES_PER_READ} rule files for one read`,
         })
       }
-      // One bad rule costs only itself, as it does at the start of the session. Each rule is loaded with a set of its own, so
-      // that what it brings does not depend on the rules before it; a file two rules import is handed over once below.
+      // One bad rule costs only itself, as it does at the start of the session.
       const loaded = yield* Effect.forEach(found, (item) =>
-        remembered(
-          loads,
-          `${input.open}|${input.compat}|${input.patterns.join("\n")}|${item.real}`,
-          ConfigInstructionFile.load({
-            path: item.real,
-            scope: "project",
-            visited: new Set<string>(),
-            patterns: input.patterns,
-            home: global.home,
-            fs,
-            rules: true,
-            leads: trust.leads,
-            allow: (real, spelling) => trust.importable(spelling, real),
-          }),
-        ).pipe(
+        ConfigInstructionFile.load({
+          path: item.real,
+          scope: "project",
+          visited: input.visited,
+          patterns: input.patterns,
+          home: global.home,
+          fs,
+          rules: true,
+          leads: trust.leads,
+          allow: (real, spelling) => trust.importable(spelling, real),
+        }).pipe(
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.failCause(cause)
@@ -240,6 +228,8 @@ const layer = Layer.effect(
       )
       // The rule files are counted over all the folders of the read, not folder by folder.
       const budget = { spent: 0, warned: false }
+      // One set of handled files for the read, so that a file two rules import is handed over once.
+      const visited = new Set<string>()
       const open = yield* trust.trusted()
       const nested = yield* Effect.forEach(
         [...folders].toReversed(),
@@ -250,7 +240,7 @@ const layer = Layer.effect(
               .map((item) => ({ path: item.real, scope: "project" as const }))
             return [
               ...own,
-              ...(yield* nestedRules({ folder, compat, patterns, real, listing: target.listing === true, budget, open })),
+              ...(yield* nestedRules({ folder, compat, patterns, real, listing: target.listing === true, visited, budget, open })),
             ]
           }),
       )

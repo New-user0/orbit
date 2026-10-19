@@ -161,11 +161,22 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     files.
   - Snapshot: an untrusted folder's snapshot runs git only in Orbit's own git directory, with the folder as the work tree
     (`test/snapshot-untrusted-git.test.ts`, which traces every git process and finds none outside it). A directory of the
-    folder that is a repository itself is a gitlink there, so the comparisons (`diff-files`, `diff`) pass
+    folder that is a repository itself and that an earlier capture recorded is a gitlink there, so the comparisons (`diff-files`, `diff`) pass
     `--ignore-submodules=all` and the restore passes `--no-recurse-submodules`; without them git starts a status inside the
     nested repository with the config that repository ships. The same file has a row for `core.fsmonitor`,
     `core.hooksPath` and `.git/hooks` in a nested repository, each with a plain-git control, and a row for a real
     submodule whose `.git` file points into the clone's `.git/modules`.
+    Git still opens what a nested `.git` entry names, only to decide whether the folder is a repository: a `.git` file
+    that says `gitdir: \\host\share\repo`, or a `.git` folder whose `commondir` names a share, makes `ls-files --others`
+    and `add` contact that host (class 6). So before each untrusted capture `Git.index.refresh` finds, without git, every
+    folder below the scope that holds an entry named `.git` (any letter case, trailing dots or spaces, or the short name
+    `git~1`; links are not followed) and writes them to the snapshot repository's `info/exclude`, so git never enters
+    them and their files are not recorded. Proof: "Snapshot reaches no share named by a nested .git entry in an
+    untrusted folder" in `snapshot-untrusted-git.test.ts` (four spellings; a watcher polls the Windows DNS cache for the
+    whole run, and a plain open of a second unique name is the control that the watcher sees such lookups; the rows run
+    on Windows only for the cache, and everywhere for what is recorded). Mutation: `withholdNested: false` in
+    `snapshot.ts` makes all four rows fail. A folder that gains its `.git` entry between the scan and the git command is
+    not covered.
     The folder's `.gitattributes` can pick `filter=`, `diff=` and `merge=` drivers whose programs the person's own system
     or global config defines (git-lfs among them), and an `.lfsconfig` names the host that git-lfs contacts. Orbit's
     untrusted snapshot repository therefore holds `info/attributes` with `* !filter !diff !merge`, which outranks the
@@ -347,7 +358,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/command-shell.test.ts`.
 - Agent, command, skill, compat skill and output style files: `ProjectTrust.supplies` for the path, `ConfigMarkdown` for
   the text, `ConfigTrust.sanitize` and `sanitizeCommands` for what they may say. Proof: `project-trust.test.ts`,
-  `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`.
+  `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`. When the project is the home folder or a filesystem root,
+  `supplies` holds a source to its own config folder, the folder the session started in and a folder that can be trusted for
+  good, trusted for the session or not, because everything below home is inside the project (class 4): the "holds a config
+  directory below a project at home to its own folder" rows of `project-trust.test.ts` (mutation: the pre-fix bound fails both).
 - What a style and a skill may say to the model (class 8, prompt form): reading is the entry above, and it lets the text
   of a folder that is not trusted reach the prompt, so two things limit what that text is taken for. An output style from
   such a folder goes last under its own heading but does not replace the prompt's opening line, which says what the agent
@@ -384,7 +398,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the bound: the "keeps a link in a wide project from leading out"
   rows of `test/instruction-discovery.test.ts` (home and root projects, untrusted and trusted for the session, a shared, a
   local and two rule spellings, an ssh key and a credentials file, with plain controls; mutation: skipping the check fails 34
-  rows).
+  rows). A rules folder that is a link is the same hole with plain files inside it, so the scan asks the gate of every folder
+  with the path the walk built for it, not only of a link to a file (class 4): the "linked to a folder sends nothing from it"
+  rows of the same file (a linked subfolder of `.orbit/rules`, `.orbit/rules` itself, `.orbit` itself, a subfolder linked to
+  home itself, and the vendor's rules folder; home and root projects, untrusted and trusted for the session; mutation: asking
+  the folder without its spelling fails all 20 rows). The note target asks the same filter (the "two names for one slot" rows of
+  `test/instruction-notes.test.ts`, which run where a link to a file can be made; mutation: dropping the `leadsOut` term of the
+  survivors filter fails them on Linux).
   `instructions_exclude` names files to leave out. Exclusion only removes files, and comes before `reachable` in both
   readers. `SessionInstructions` (the files a read brings, found by `InstructionTriggers`) asks `ProjectTrust.importable`
   on the file's real path just before it reads it instead, so a nested file that a link leads out of the project's
@@ -392,7 +412,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   trusted. A filesystem root is treated the same way by `ProjectTrust`, but no test here pins a session started at one
   (FU-M4-44). Proof: `test/session-instructions.test.ts` ("a symlink to, trusted or not", "InstructionTriggers"). A
   project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind `settings`): the lists
-  of every scope are added up, so a repository's would hide the user's own files from the model.
+  of every scope are added up, so a repository's would hide the user's own files from the model. One file follows at most
+  256 import tokens (`MAX_IMPORTS`), with one warning, because each token costs a walk of its path and a clone chooses how
+  many a file holds (class 15 on a bound of time; proof: 'follows no more import tokens in one file than the cap' in
+  `test/config/instruction-file.test.ts`, which counts the paths asked about, not seconds; mutation: following every token
+  fails it, 10,002 asked against 256).
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
@@ -426,13 +450,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   managed check in `rules()` fails both). One scan lists at most 256 rule files and compiled globs are kept. One read of a
   file looks at no more than 256 rule files over all the folders it passes through, with one warning (proof: 'looks at no
   more rule files in one read than the budget, over all the folders it passes through' in `test/session-instructions.test.ts`;
-  mutation: raising `MAX_RULES_PER_READ` fails it). `InstructionTriggers` keeps what a folder held for a short while and
-  until a rescan, so a second read of the same folder lists and opens nothing (proof: 'does not list or open a nested rules
-  folder again on the next read, until a rescan'; mutation: `CACHE_MILLIS = 0` fails it; the ageing out itself has no
-  test), and `ConfigInstructionRules.scan` asks the gate of a folder and of a file reached through a link, not of a plain
-  file in a folder the gate accepted (proof: the "does not ask it of a plain file" row of
-  `test/config/instruction-rules.test.ts`). The first read below a repository with many nested rules folders still does up
-  to 256 files of work; what the budget and the cache remove is the growth with depth and with every later read. A rule or
+  mutation: raising `MAX_RULES_PER_READ` fails it), and the rules of one read share one set of handled files, so a file that
+  many rules import is walked once per read (proof: 'opens a file that many rules import once in a read, not once per rule';
+  mutation: a set of its own per rule fails it, 201 opens against 2). `InstructionTriggers` keeps what a folder listed
+  for a short while and until a rescan, so a second read of the same folder lists nothing again (proof: 'does not list a
+  nested rules folder again on the next read, until a rescan'; mutation: `CACHE_MILLIS = 0` fails it; the ageing out itself has
+  no test; the rule files themselves are opened again on every read), and `ConfigInstructionRules.scan` asks the gate of a
+  folder and of a file reached through a link, not of a plain file in a folder the gate accepted (proof: the "does not ask
+  it of a plain file" row of `test/config/instruction-rules.test.ts`). What a read costs is not bounded by those: it grows
+  with the subfolders of the rules folders and with the imports of the rules on the way, which a repository chooses, and
+  empty subfolders and many imports count against none of the budgets. The reference walks nested rules folders on every
+  read in the same way. It costs time only: no code runs and nothing is sent. The row is FU-M4-r2-rule-scan. A rule or
   instruction file of a read that fails to read for another reason (a file another program holds open) costs only itself,
   with one warning (proof: the "still hands over the other nested files of a read when ... fails to read" rows of
   `test/session-instructions.test.ts`).
@@ -794,8 +822,9 @@ every other extension):
 - `/ide` lists the locks in the state folder that `readLocks` accepts, so nothing is read from a project folder; the name
   and folders an editor chose reach the dialog and its toasts written out: the lock's name is escaped where the lock is
   read, the name in the editor's hello where it arrives, and the toasts escape names and the session folder once more with
-  `plain`. The tests pin what is drawn, not each of those calls: the folder reaches the toast already escaped, so
-  removing the `plain` of the toast alone fails no test. `connect` reads the chosen window's lock
+  `plain`. The tests pin what is drawn, not each of those calls: the toast draws every message through `bodyText`
+  (`packages/tui/src/ui/toast.tsx`), so the toast's own `plain` is a second guard that no row pins alone, and the drawn
+  row pins the two together. `connect` reads the chosen window's lock
   again and dials `127.0.0.1` with the token in the one header; a window that never says hello is not retried and ends
   with a timeout. `/ide open` finds the editor's program with `which` (PATH only) and starts it through cross-spawn with
   the folder as its only argument, never through a shell. Proof: `test/context/editor-ide.test.tsx`,

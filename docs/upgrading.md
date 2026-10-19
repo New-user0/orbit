@@ -104,8 +104,9 @@ folder's `.gitattributes` names, so no filter, diff or merge program of your git
 the folder's files and no `.lfsconfig` host is contacted (`snapshot-untrusted-git.test.ts`; the hooks of your own git
 config, `core.hooksPath` and `init.templateDir`, still run during a snapshot, with the folder as the working directory)
 (undo still works, and `.gitignore` files still apply, and snapshots
-taken before the folder was trusted stay usable once it is trusted, but not the other way round; a repository nested in
-the folder is recorded as one entry and never inspected, so its own changes are not part of an undo), the list of worktrees
+taken before the folder was trusted stay usable once it is trusted, but not the other way round; a folder that holds a `.git`
+entry of its own, which git would open to see where it points, is left out of the snapshot, so its files are not part
+of an undo), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
 folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`,
 `resume`, `replay` and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a
@@ -2951,7 +2952,9 @@ When the project is your home folder or a filesystem root, an instruction file o
 
 A project or personal rule that cannot be read (no read permission, or a file another program holds open) is now left out with one warning line that names it. Before, it stopped every new session in the folder with "Instruction initialization blocked by unavailable sources". The administrator's rules and file still stop the session, so that policy text is never dropped for a failed read.
 
-One rules folder now lists at most 256 rule files, in name order, with one warning when more are there. One read of a file looks at no more than 256 rule files over all the folders it passes through, and the next read of the same folders does not list or open them again until a rescan or a short while has passed, so an edit to a rule shows on a later read. Before, every read walked every rule file of every rules folder on the way again, which took minutes in a repository that held thousands. A rule or instruction file that fails to read costs only itself now; before, one file another program held open dropped every nested file of that read.
+One rules folder now lists at most 256 rule files, in name order, with one warning when more are there. One read of a file looks at no more than 256 rule files over all the folders it passes through, and the next read of the same folders does not list them again until a rescan or a short while has passed, so a new rule shows on a later read. Before, every read walked every rule folder on the way again, which took minutes in a repository that held thousands of rule files. The time a read takes still grows with the subfolders of the rules folders and with the imports of the rules on the way, which neither limit counts (register row FU-M4-r2-rule-scan). A rule or instruction file that fails to read costs only itself now; before, one file another program held open dropped every nested file of that read.
+
+A rules folder that is a link, or a link to a folder inside one, is held to the same bound as a linked file: in a home or root project a linked folder of rules may no longer lead out of the folder you started in, and before it carried every `.md` file of the folder it led to, a diary under `~/Documents` included. An instruction file now follows at most 256 `@` imports; the rest are left out with one warning. Before, a file with thousands of them delayed the first request of the session by about a minute for every 175 KiB. In a project that is your home folder or a filesystem root, an agent, command, skill or output style file that is a link may no longer lead out of its own config folder, the folder you started in or a folder you can trust for good; trusting the project alone does not open it.
 
 **Affects:** people who start a session in a folder below their home folder when home is a git repository, repositories that link an instruction file or a rule to a file outside the folder, and folders with more than 256 rule files.
 
@@ -3857,20 +3860,6 @@ A project or local config in a folder that is not trusted can no longer set `age
 **Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
 
 **What to do:** Trust the folder if you want its prompt to apply.
-
-
-## A file outside the project is trusted by the folder that owns it, and two shapes of owner stay refused
-
-When a tool or a program works on a file outside the project, Orbit asks whether the folder that owns the file is trusted. The owner is the nearest folder above the file that holds `.git` or `.hg`, or else the folder itself. Two shapes are refused, and both fail closed (they refuse, never open):
-
-- A home folder that is itself a git repository (a dotfiles repository) owns everything below it, including a folder you granted trust to inside it, so that folder is refused until you trust the home folder for the session. Inside a home folder without `.git`, a granted folder owns itself and is served. Either way, a trusted repository that you reach through a link that lives in a home folder you have not trusted is refused.
-- A folder you granted trust to that carries no `.git` or `.hg` serves the files it holds, but a link inside it that leads to a trusted repository is refused: a program that walks up the spelling of that path meets the link, and the folder that holds it owns itself, so it cannot lend that repository its trust.
-
-A trusted repository that sits inside an untrusted folder is served, because you granted that nested folder yourself; a formatter that walks up from a file there can read the outer folder's config. The project itself behaves the same way. No change is planned for these three edges (FU-M3-115: accepted, documented; `project-trust-owner-edges.test.ts` pins the first two).
-
-**Affects:** people whose home folder is a git repository, and people who grant trust to a folder without a marker.
-
-**What to do:** Open the project from a folder that has a marker, or grant trust to the folder that holds the project, to have its files trusted.
 
 ## A provider package written as an absolute file path loads again
 

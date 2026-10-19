@@ -939,6 +939,32 @@ describe("ConfigInstructionFile.load", () => {
     }),
   )
 
+  // A repository chooses how many tokens a file holds, and every followed one is a walk of its path: the cost is counted in
+  // the paths asked about, which does not depend on how fast the host is, and the files that are there past the cap are not read.
+  it.live("follows no more import tokens in one file than the cap, however many it holds", () =>
+    Effect.gen(function* () {
+      const fs_ = yield* FSUtil.Service
+      const asked: string[] = []
+      const early = yield* tree({
+        "a.md": ["@./early.md", ...Array.from({ length: 10_000 }, (_, number) => `@./missing/n${number}.md`), "@./late.md"].join("\n"),
+        "early.md": "EARLY",
+        "late.md": "LATE",
+      })
+      const loaded = yield* ConfigInstructionFile.load({
+        path: path.join(early, "a.md"),
+        scope: "user",
+        visited: new Set(),
+        patterns: [],
+        home: path.join(early, "home"),
+        fs: fs_,
+        leads: (spelling) => (asked.push(spelling), fs_.resolve(spelling)),
+        allow: pass,
+      })
+      expect(asked.length).toBeLessThanOrEqual(ConfigInstructionFile.MAX_IMPORTS)
+      expect(names(early, loaded)).toEqual(["a.md", "early.md"])
+    }),
+  )
+
   it.live("treats an address as a name that is not there, asked about only as a local spelling", () =>
     Effect.gen(function* () {
       const root = yield* tree({ "a.md": "@https://example.invalid/x.md" })

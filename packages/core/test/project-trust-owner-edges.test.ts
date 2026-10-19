@@ -55,7 +55,8 @@ describe("trustedAt: owners that the note on a file outside the project names", 
       yield* trust.grant(plain, { persist: false, via: "test" })
       const ask = (file: string) =>
         Effect.gen(function* () {
-          return yield* (yield* ProjectTrust.Service).trustedAt(file)
+          const projectTrust = yield* ProjectTrust.Service
+          return yield* projectTrust.trustedAt(file)
         }).pipe(Effect.provide(Layer.succeedContext(context)))
       return { home, trusted, plain, trust, ask }
     })

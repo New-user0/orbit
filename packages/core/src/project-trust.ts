@@ -120,7 +120,9 @@ export interface Interface {
    * skills and output styles. Any file may while the folder that holds the source is trusted. Until then only a file
    * whose real path is inside the folders that decision covers may, which are the project's for a source in them and
    * the folder around the source for one above them, so that a link in a repository does not carry a file of the user's
-   * into the prompt. A file that is left out is logged once, as a warning that says `config file skipped`.
+   * into the prompt. For a project that is the home directory or a filesystem root those folders are the source's own, the
+   * session's started folder and any folder that can be trusted for good, and a decision for the project does not widen
+   * them. A file that is left out is logged once, as a warning that says `config file skipped`.
    */
   readonly supplies: (source: Source, file: string) => Effect.Effect<boolean>
   /**
@@ -219,8 +221,16 @@ const layer = Layer.effect(
     })
 
     const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
-      if (yield* trustedSource(source)) return true
-      const roots = yield* boundOf(source.path)
+      // A project that is the home directory or a filesystem root contains everything below it, so being inside it proves
+      // nothing about a link: its config may supply a file from its own config folder, the folder the session started in
+      // and a folder that can be trusted for good, as an import may, and a decision for the project does not widen that.
+      const wide =
+        inside(source.path) &&
+        (yield* Effect.forEach([location.project.directory, location.project.canonical], (folder) => trust.status(folder))).some(
+          (state) => !state.persistent,
+        )
+      if (!wide && (yield* trustedSource(source))) return true
+      const roots = wide ? [...(yield* importRoots()), source.path] : yield* boundOf(source.path)
       if (yield* stays([...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
       if (skipped.has(file)) return false
       skipped.add(file)
