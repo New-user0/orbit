@@ -164,7 +164,7 @@ test("a team's lead assigns work, members message each other, and the lead finis
   expect(shown.stdout).toContain("feature: lead → coder: Write 42 into answer.txt.")
   expect(shown.stdout).toContain("feature: lead noted plan:")
   const calls = turns.length
-  // A replay calls no model, but it asks a server whether the folder is trusted before it loads the workflow module.
+  // A replay calls no model, but it asks a server whether the folder is trusted before it reads the run store.
   const replayed = await orb(repository, ["flow", "replay", "--standalone", await runID(repository)])
   expect({ code: replayed.code, stderr: replayed.code === 0 ? "" : replayed.stderr }).toEqual({ code: 0, stderr: "" })
   expect(replayed.stderr).toContain("replay matches the recorded output")

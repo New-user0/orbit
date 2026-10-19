@@ -2,11 +2,16 @@ import { plain } from "@orbit/flow/plain"
 import { Effect } from "effect"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
-import { directory, execute } from "./execute"
+import { requireTrust } from "../../../util/trust"
+import { connect, directory, execute } from "./execute"
 
 export default Runtime.handler(
   Commands.commands.flow.commands.resume,
   Effect.fn("cli.flow.resume")(function* (input) {
+    const client = yield* connect(input)
+    // The run store is a file that a clone ships, and a resumed run goes on from the worktrees, sessions, model and
+    // workflow file it records, so the folder has to be trusted before the store is opened (classes 1, 5 and 12).
+    yield* requireTrust(client, directory(), { grant: input.trust, strict: "recorded" })
     const { openStore } = yield* Effect.promise(() => import("@orbit/flow"))
     const store = yield* Effect.promise(() => openStore(directory()))
     const recorded = store.run(input.run)
@@ -17,6 +22,6 @@ export default Runtime.handler(
       return yield* Effect.fail(
         new Error(`${input.run} is an eval; resume it with \`orb eval ${plain(recorded.file)} --resume ${input.run}\``),
       )
-    yield* execute({ ...input, file: recorded.file, resume: recorded.id })
+    yield* execute(client, { ...input, file: recorded.file, resume: recorded.id })
   }),
 )

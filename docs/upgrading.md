@@ -108,13 +108,16 @@ taken before the folder was trusted stay usable once it is trusted, but not the 
 entry of its own, which git would open to see where it points, is left out of the snapshot, even when a `.gitignore` of the folder names it back, so its files are not part
 of an undo; a folder with so many of them that their names do not fit on a command line makes the snapshot fail), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
-folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`,
-`resume`, `replay` and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a
-repository, with no worktrees, no commits, no merges, no base commit, no check for uncommitted changes and no diff for a
-reviewer, so a node that asks for a worktree, or a `merge`, fails and says that the folder is not trusted. Add `--trust`
-(for that run only) to `flow run`, `flow resume` or `eval`, or trust the folder, to get them back. The other `orb flow`
-commands find the repository root from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`,
-`filter.<driver>.clean` and `hooks/post-checkout`; the resume rows for a run store that a clone ships; `packages/flow/test/runner-untrusted.test.ts` for the failures). A repository with no remote is named by its path until it is
+folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`
+and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a repository, with no
+worktrees, no commits, no merges, no base commit, no check for uncommitted changes and no diff for a reviewer, so a
+node that asks for a worktree, a team in a worktree, or a `merge`, fails and says that the folder is not trusted. Add
+`--trust` (for that run only) to `flow run` or `eval`, or trust the folder, to get them back. `orb flow resume`,
+`orb eval --resume` and `orb flow replay` do not run in such a folder at all (see "`orb flow resume`, `orb eval --resume`
+and `orb flow replay` need a trusted folder" under Clients). The other `orb flow` commands find the repository root
+from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and
+`hooks/post-checkout`, and the rows for a run store that a clone ships; `packages/flow/test/runner-untrusted.test.ts`
+for the failures). A repository with no remote is named by its path until it is
 trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
 `project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
 path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
@@ -798,7 +801,9 @@ plugins and nothing to say so. A folder that holds nothing back runs as before, 
 server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`), except that a workflow or suite
 that is a TypeScript or JavaScript module, that defines shell commands, that names an agent, or, for a workflow, that
 sets `permissions: auto`, needs a trusted folder either way (see "`orb flow` and `orb eval` need a trusted folder to run
-a workflow or suite's code, commands, approvals or agents" under Clients).
+a workflow or suite's code, commands, approvals or agents" under Clients), and so do `orb flow resume`,
+`orb eval --resume` and `orb flow replay` (see "`orb flow resume`, `orb eval --resume` and `orb flow replay` need a
+trusted folder" under Clients).
 `orb flow` and `orb eval` import a workflow or suite module only after the check, because importing it runs its code.
 `orb acp` cannot stop, because the editor chooses the folders, so it writes a warning to stderr about the folder it
 started in.
@@ -938,8 +943,9 @@ something back, and not otherwise.
 calls no model and connects to no server. It now makes the check for a module. To ask, it connects to a server, which
 for the background service starts it when it is not running, and it takes `--standalone`, `--server` and `--trust` as
 the other `orb flow` commands do. A replay answers every node from the recording, runs no command, asks no model and
-opens no session, so a YAML workflow is not stopped for the commands, approvals or agents it defines, and replaying one
-still connects to no server.
+opens no session, so a YAML workflow is not stopped for the commands, approvals or agents it defines. A replay of one
+still connects to a server, because it reads the run store, which needs the folder trusted (see "`orb flow resume`,
+`orb eval --resume` and `orb flow replay` need a trusted folder" below).
 
 These commands ask the background service as it is, without replacing one that is older than the client, so a service
 that was started before an upgrade and not restarted can lack the trust routes. They used to go ahead with a warning on
@@ -957,14 +963,41 @@ is not trusted, through the background service, which is the default: they now e
 holds no project config.
 That is nearly every eval, because nearly every suite has checks. The same commands against a server that is older than
 workspace trust, such as a background service that was not restarted after the upgrade, now exit with status 1 whether
-or not the folder is trusted. A replay of a module workflow now connects to a server, and starts the background service
-if that is the server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or
-against a server that trusts the folder, are not affected.
+or not the folder is trusted. A replay now connects to a server, and starts the background service if that is the
+server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or against a server
+that trusts the folder, are not affected.
 
 **What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
 `ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service
 restart`). Look over a workflow or suite that you did not write, and the commands, nodes and agents that the refusal
 lists, before you trust the folder that holds it, because trusting the folder lets it run.
+
+### `orb flow resume`, `orb eval --resume` and `orb flow replay` need a trusted folder
+
+The run store, `.orbit/runs.db`, is a file in the repository, so a clone can ship one with any run in it, and a
+resumed run goes on from what the store records for it: the worktree that a verify node's reviewer and checks work in,
+the session that a team member continues, and the base commit of the review diff. A store in an untrusted clone could
+point a reviewer at any folder on the computer, `C:\` or `/` included, and the reviewer could read a file there and send
+it to your model provider.
+
+`orb flow resume`, `orb eval --resume` and `orb flow replay` now stop in a folder that is not trusted, whatever the
+folder holds back and whatever the workflow or suite defines, before they open the run store. They say that the folder
+is not trusted and that the command goes on from a run that the folder's run store records, give `orb trust` and
+`--trust` as the ways to go on, and exit with status 1. `orb eval --resume --format json` prints the refusal on stdout
+as the JSON error that `orb run --format json` prints. A server that cannot say whether the folder is trusted, because
+it is older than workspace trust, stops them as well. To ask, `orb flow replay` now always connects to a server, for a
+YAML workflow too, and one it cannot reach stops it. `orb flow run` and `orb eval` without `--resume` are not affected.
+The flow runner, for a caller that resumes in such a folder anyway, takes no worktree and no session ID from the store:
+the checks and the reviewer of a reused verify iteration work in the folder of the run, and a team member whose turn is
+reused opens a new session for its next one. (`packages/cli/test/trust.test.ts`: the rows for a run store that the
+clone ships, each with a `--trust` control, the rows that refuse before the store is opened, and the rows for a server
+older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts`.)
+
+**Affects:** scripts and CI that resume or replay a run in a folder that is not trusted, including a run they started
+there themselves: they now exit with status 1.
+
+**What to do:** trust the folder with `orb trust`, or pass `--trust` to the one command, or set
+`ORBIT_TRUST_PROJECT=1` and `--standalone` in CI.
 
 ### `orb flow` treats the run store of a repository as untrusted text
 
