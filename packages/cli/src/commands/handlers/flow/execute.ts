@@ -5,7 +5,7 @@ import { Effect, Option, Schema } from "effect"
 import path from "node:path"
 import { ServerConnection } from "../../../services/server-connection"
 import { bypassDecision, printBypassNotice } from "../../../util/managed-bypass"
-import { requireTrust } from "../../../util/trust"
+import { folderTrusted, requireTrust } from "../../../util/trust"
 
 // Shared by `orb flow run` and `orb flow resume`: connect, load the workflow file, and drive the run.
 export const execute = Effect.fn("cli.flow.execute")(function* (input: {
@@ -33,6 +33,7 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
   // folder of the run. For a resumed run the file is the one the repository's run store names.
   const trust = yield* trustOptions(file, "workflow")
   yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
+  const trusted = yield* folderTrusted(client, directory())
   const bypass = yield* bypassDecision(client, directory(), input.auto)
   printBypassNotice(bypass.notice)
   const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
@@ -42,6 +43,7 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
       workflow,
       file,
       directory: directory(),
+      trusted,
       input: input.input,
       resume: input.resume,
       permissions: bypass.auto ? "auto" : "reject",

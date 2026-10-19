@@ -572,6 +572,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `replay`, `resume`, `show`, `trace`, `watch` and `run`): SQLite at `.orbit/runs.db` of the repository. It is not
   code, and `flow ls` runs before a trust answer, so the gate is class 6: a store whose path leads through a link to a
   share is refused without being opened. Proof: `packages/flow/test/store-share.test.ts`.
+- The flow runner's git (`run` and `evaluate` in `packages/flow`: root, exclude, head, dirty check, worktrees, commits,
+  merges, review diff), which reads the index and applies `core.fsmonitor`, clean filters and hooks of the clone: class 1,
+  gated on `trusted`, which `orb flow run`, `resume` and `orb eval` take from the server after `requireTrust` and `replay`
+  sets to false (class 12). Proof: `packages/cli/test/trust.test.ts`, rows per key and door, with a trusted control.
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
@@ -1342,7 +1346,8 @@ one table covers every spelling.
   taking the check out of `discoverThemes` or `Store.at` fails the rows of their files; reverting `LinkShare` and
   `FSUtil.up` to the walk that starts again from the root at every hop fails three rows of `link-share-bounds.test.ts`.
   Not covered, and still a gap: the terminal UI's plugin folders, the VS Code diff view (another process), the native
-  watcher, and the git calls that `orb flow` makes in the folder before it opens the store.
+  watcher. (The git calls of the flow runner are a different class: they wait for trust, see the Known gaps on
+  `orb flow run`.)
 
 **Review questions:**
 
@@ -2349,8 +2354,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the
   folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
   git in the shell tool (`shell-safety-12`); the `orb flow` commands that open the run store (`ls`, `show`, `cost`, `trace`,
-  `approve`, `watch` and `clean`), which ask git for the repository root with no trust check, and `clean` removes
-  worktrees with it (register row FU-M4-002, fixed: `clean` asks `requireTrust` first and the readers find the root from the files); a repository with no config of its own, which shows no
+  `approve`, `watch` and `clean`), which asked git for the repository root with no trust check, and `clean` removed
+  worktrees with it (register row FU-M4-002, fixed: `clean` asks `requireTrust` first and the readers find the root from the files),
+  and `orb flow run`, `resume`, `replay` and `orb eval`, which started git in the folder for its root, head, changes,
+  worktrees, commits and merges, so that `core.fsmonitor`, a clean filter or a hook of an untrusted clone ran
+  (fixed: `run` and `evaluate` take `trusted`, the commands pass the answer of the server after `requireTrust` and `replay`
+  passes false, and with it false the runner starts no git and finds the run store from the files;
+  `packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and `hooks/post-checkout`, each with a
+  trusted control; the tasks of an eval still run agents, whose session snapshot uses the separate git directory above); a repository with no config of its own, which shows no
   branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
   for hooks and stdio MCP servers below); and fingerprints, which do not cover `.git`. A project is still named by the remote URL in the folder's config, which a
   clone can write (Shared approvals, above). Mercurial was never part of this gap: neither `Project.resolve` nor the

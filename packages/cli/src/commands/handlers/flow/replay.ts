@@ -45,6 +45,8 @@ export default Runtime.handler(
         workflow,
         file,
         directory: directory(),
+        // A replay creates no worktrees and answers from the recording, so it needs no version control.
+        trusted: false,
         replay: recorded.id,
         log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
       }),

@@ -41,6 +41,8 @@ export interface EvalOptions {
   readonly suite: EvalSuite
   readonly file: string
   readonly directory: string
+  /** As for `run`: a folder that is not trusted gets no worktree for the tasks. */
+  readonly trusted: boolean
   readonly models?: ReadonlyArray<string>
   /** Tasks running at once across all models. Default 1, which suits local models. */
   readonly concurrency?: number
@@ -93,6 +95,7 @@ export async function evaluate(options: EvalOptions): Promise<RunResult & { read
     workflow,
     file: options.file,
     directory: options.directory,
+    trusted: options.trusted,
     input: { models },
     resume: options.resume,
     permissions: options.permissions,

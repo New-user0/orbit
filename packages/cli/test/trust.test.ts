@@ -712,7 +712,9 @@ const printDoors = doors.map(([name, flags]) => [`-p ${name}`, ["-p", ...flags, 
 const runDoors = doors.map(([name, flags]) => [`run ${name}`, ["run", ...flags, "--model", model, "say ok"]] as const)
 const loopDoors = doors
   .filter(([, flags]) => flags[0] === "--settings") // loop takes no other overlay flag
-  .map(([name, flags]) => [`loop ${name}`, ["loop", "10s", "check", "--times", "1", ...flags, "--model", model]] as const)
+  .map(
+    ([name, flags]) => [`loop ${name}`, ["loop", "10s", "check", "--times", "1", ...flags, "--model", model]] as const,
+  )
 
 test.each(printDoors)(
   "%s stops in an untrusted folder that holds nothing back, asks no model, and --trust gets past the check",
@@ -729,7 +731,9 @@ test.each(printDoors)(
     expect(refused.stderr).toContain("--trust")
     expect(runs).toBe(before)
 
-    const trusted = await orb(folder, [args[0], "--trust", ...args.slice(1)], { ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES: "1" })
+    const trusted = await orb(folder, [args[0], "--trust", ...args.slice(1)], {
+      ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES: "1",
+    })
 
     expect(trusted.stderr).not.toContain("is not trusted")
     expect(runs).toBeGreaterThan(before)
@@ -757,7 +761,9 @@ test.each([...runDoors, ...loopDoors])(
     expect(await Bun.file(marker).exists()).toBe(false)
     expect(runs).toBe(before)
 
-    const trusted = await orb(folder, [args[0], "--trust", ...args.slice(1)], { ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES: "1" })
+    const trusted = await orb(folder, [args[0], "--trust", ...args.slice(1)], {
+      ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES: "1",
+    })
 
     expect(trusted.stdout + trusted.stderr).not.toContain("is not trusted")
     expect(runs).toBeGreaterThan(before)
@@ -1833,20 +1839,24 @@ test("orb trust prints a folder name that acts on a terminal without its control
 }, 120_000)
 
 // Windows does not allow a control character in a file name, so the lines that name a stored folder are tried where it does.
-test.skipIf(process.platform === "win32")("orb trust --list and --revoke print a stored folder name without its control characters", async () => {
-  const repository = path.join(root, "work", `escaping-${escaping}`)
-  await Bun.write(path.join(repository, "orbit.json"), JSON.stringify(guard))
-  succeeded(await orb(repository, ["trust", "--standalone"]))
-  const listed = await orb(root, ["trust", "--standalone", "--list"])
-  succeeded(listed)
-  expect(listed.stdout).toContain("escaping-")
-  expect(listed.stdout).not.toContain("")
-  await fs.rm(repository, { recursive: true, force: true })
-  const revoked = await orb(root, ["trust", "--standalone", "--revoke", repository])
-  succeeded(revoked)
-  expect(revoked.stdout).toContain("Stopped trusting")
-  expect(revoked.stdout).not.toContain("")
-}, 240_000)
+test.skipIf(process.platform === "win32")(
+  "orb trust --list and --revoke print a stored folder name without its control characters",
+  async () => {
+    const repository = path.join(root, "work", `escaping-${escaping}`)
+    await Bun.write(path.join(repository, "orbit.json"), JSON.stringify(guard))
+    succeeded(await orb(repository, ["trust", "--standalone"]))
+    const listed = await orb(root, ["trust", "--standalone", "--list"])
+    succeeded(listed)
+    expect(listed.stdout).toContain("escaping-")
+    expect(listed.stdout).not.toContain("")
+    await fs.rm(repository, { recursive: true, force: true })
+    const revoked = await orb(root, ["trust", "--standalone", "--revoke", repository])
+    succeeded(revoked)
+    expect(revoked.stdout).toContain("Stopped trusting")
+    expect(revoked.stdout).not.toContain("")
+  },
+  240_000,
+)
 
 test("orb run stops when the config of a trusted folder changed, names what changed, and orb trust renews the grant", async () => {
   const repository = await hooked("changed")
@@ -1964,7 +1974,12 @@ test("trusting a folder above the project lists nothing of it as still held back
 }, 300_000)
 
 // Names that a repository can give a folder. On Windows a name cannot hold a quote or a control character.
-const hostile = ["$(touch PWNED)", "`touch PWNED`", "it's", ...(process.platform === "win32" ? [] : ['a"b', "a\u001bb", "a\nb"])]
+const hostile = [
+  "$(touch PWNED)",
+  "`touch PWNED`",
+  "it's",
+  ...(process.platform === "win32" ? [] : ['a"b', "a\u001bb", "a\nb"]),
+]
 
 test("the commands the advice prints for a folder name are quoted so that no shell runs the name, or are not printed", async () => {
   const location = path.join(root, "work", "advice-location")
@@ -2635,7 +2650,12 @@ test("orb flow clean runs no hook of an untrusted repository, and the commands t
   expect(vcs("config", "core.hooksPath", "hooks")).toBe(0)
 
   const trace = path.join(root, "flow-clean-trace.txt")
-  for (const args of [["ls", "--format", "json"], ["show", id], ["cost", id], ["trace", id]]) {
+  for (const args of [
+    ["ls", "--format", "json"],
+    ["show", id],
+    ["cost", id],
+    ["trace", id],
+  ]) {
     await fs.rm(trace, { force: true })
     await orb(repository, ["flow", ...args], { GIT_TRACE2: trace })
     expect(await Bun.file(trace).exists()).toBe(false)
@@ -2650,3 +2670,117 @@ test("orb flow clean runs no hook of an untrusted repository, and the commands t
   succeeded(await orb(repository, ["flow", "clean", "--trust", "--standalone"]))
   expect(await Bun.file(marker).exists()).toBe(true)
 }, 300_000)
+
+// Class 1 and class 12 (M4 round 4): `orb flow run`, `flow resume`, `eval` and `flow replay` started the folder's version
+// control to find its root, its head and its changes, which applies the config a clone ships. Each key below names a
+// program of the clone; a marker is the oracle, and the trace of the version control shows that no process of it started
+// at all. The workflow and the suite are the person's files outside the clone and define nothing, so the check on what a
+// file defines lets them through. The trusted control shows that each key is live: with `--trust` the same door runs it.
+// Mutation: the `options.trusted ? await Git.root(...) : undefined` gate in the flow runner removed fails the rows of
+// `flow run`, `flow resume` and `eval`; `trusted: false` removed from the replay door fails the row of `flow replay`.
+const gateFile = path.join(root, "vcs-gate.yaml")
+const taskSuite = path.join(root, "vcs-suite.json")
+
+const unix = (file: string) => file.replaceAll("\\", "/")
+
+const programKeys = [
+  {
+    name: "core.fsmonitor",
+    arm: async (repository: string, marker: string) => {
+      const script = `${repository}-fsmonitor.sh`
+      await Bun.write(script, `#!/bin/sh\necho ran >> "${unix(marker)}"\n`)
+      await fs.chmod(script, 0o755)
+      return ["config", "core.fsmonitor", unix(script)]
+    },
+  },
+  {
+    name: "filter.<driver>.clean",
+    arm: async (repository: string, marker: string) => {
+      const script = `${repository}-clean.sh`
+      await Bun.write(script, `#!/bin/sh\necho ran >> "${unix(marker)}"\ncat\n`)
+      await fs.chmod(script, 0o755)
+      return ["config", "filter.marker.clean", unix(script)]
+    },
+  },
+  {
+    name: "hooks/post-checkout",
+    arm: async (repository: string, marker: string) => {
+      const hook = path.join(repository, ".git", "hooks", "post-checkout")
+      await Bun.write(hook, `#!/bin/sh\necho ran >> "${unix(marker)}"\n`)
+      await fs.chmod(hook, 0o755)
+      return undefined
+    },
+  },
+] as const
+
+// A repository with one commit and a run that waits at a gate (so `resume` has one), made while the folder is trusted and
+// before the key exists. Then the key, and a tracked file that differs from the index, which is what makes the version
+// control run a clean filter or a file system monitor.
+async function armed(name: string, key: (typeof programKeys)[number]) {
+  const repository = await bare(name)
+  const marker = path.join(root, `${name}.marker`)
+  const vcs = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: repository }).exitCode
+  expect(vcs("init", "--quiet", "-b", "main")).toBe(0)
+  expect(vcs("config", "user.email", "t@orbit.test")).toBe(0)
+  expect(vcs("config", "user.name", "T")).toBe(0)
+  expect(vcs("config", "commit.gpgsign", "false")).toBe(0)
+  await Bun.write(path.join(repository, ".gitattributes"), "*.txt filter=marker\n")
+  await Bun.write(path.join(repository, "a.txt"), "one\n")
+  expect(vcs("add", "-A")).toBe(0)
+  expect(vcs("commit", "-q", "-m", "root")).toBe(0)
+  await Bun.write(gateFile, "name: pause\nnodes:\n  - id: approve\n    type: gate\n    message: Go on?\n")
+  await Bun.write(taskSuite, JSON.stringify({ name: "vcs", tasks: [{ id: "task", prompt: "say ok", checks: [] }] }))
+  expect((await orb(repository, ["flow", "run", "--trust", "--standalone", gateFile])).code).toBe(2)
+  const id: string = JSON.parse((await orb(repository, ["flow", "ls", "--format", "json"])).stdout)[0].id
+  succeeded(await orb(repository, ["flow", "approve", id, "approve"]))
+  const config = await key.arm(repository, marker)
+  if (config) expect(vcs(...config)).toBe(0)
+  await Bun.write(path.join(repository, "a.txt"), "two\n")
+  return { repository, marker, id }
+}
+
+for (const key of programKeys) {
+  const slug = key.name.replace(/\W+/g, "-")
+
+  test(`orb flow run, resume, replay and eval start no git, and so run no ${key.name} program, in an untrusted clone`, async () => {
+    const { repository, marker, id } = await armed(`vcs-${slug}`, key)
+    const trace = `${repository}-trace.txt`
+    const doors = [
+      ["flow run", ["flow", "run", "--standalone", gateFile]],
+      ["flow resume", ["flow", "resume", "--standalone", id]],
+      ["flow replay", ["flow", "replay", id, "--server", "http://127.0.0.1:9"]],
+      ["eval", ["eval", taskSuite, "--standalone"]],
+    ] as const
+
+    for (const [door, args] of doors) {
+      await fs.rm(trace, { force: true })
+      await fs.rm(marker, { force: true })
+      const result = await orb(repository, [...args], { GIT_TRACE2: trace })
+      // Not refused for trust: the folder holds nothing back and the file defines nothing, so the door goes ahead.
+      expect({ door, refused: result.stderr.includes("is not trusted") }).toEqual({ door, refused: false })
+      expect({ door, ran: await Bun.file(marker).exists() }).toEqual({ door, ran: false })
+      // The tasks of an eval run agents, whose session snapshots the folder in a repository that Orbit owns and that applies
+      // no program of the clone; what must not appear is a process of the runner's own, which reads the clone itself.
+      const started =
+        ((await Bun.file(trace).exists()) ? await Bun.file(trace).text() : "").match(/cmd_name \S+/g) ?? []
+      const runner = new Set(["rev-parse", "worktree", "branch", "reset", "merge", "commit"])
+      expect({
+        door,
+        started: door === "eval" ? started.filter((item) => runner.has(item.slice(9))) : started,
+      }).toEqual({
+        door,
+        started: [],
+      })
+    }
+  }, 600_000)
+
+  test(`the ${key.name} program of a trusted clone runs from the same doors: the control for the rows above`, async () => {
+    const { repository, marker } = await armed(`vcs-control-${slug}`, key)
+    // The hook needs a worktree, which only the tasks of an eval add; the other keys run on the first call of a run.
+    const args = key.name.startsWith("hooks/")
+      ? ["eval", taskSuite, "--trust", "--standalone"]
+      : ["flow", "run", "--trust", "--standalone", gateFile]
+    await orb(repository, args)
+    expect(await Bun.file(marker).exists()).toBe(true)
+  }, 600_000)
+}

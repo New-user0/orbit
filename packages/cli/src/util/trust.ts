@@ -129,6 +129,18 @@ export const requireTrust = Effect.fn("cli.trust.require")(function* (
   })
 })
 
+/**
+ * Whether the folder is trusted now, for a command that goes ahead either way but must not start the folder's version
+ * control in one that is not (class 1): `orb flow run`, `flow resume`, `flow replay` and `eval`. Ask after
+ * `requireTrust`, so that a `--trust` grant is in force. A server that cannot say, or does not answer, counts as no.
+ */
+export const folderTrusted = Effect.fn("cli.trust.folder")(function* (client: OrbitClient, directory: string) {
+  const status = yield* call((signal) => client.location.trust.get({ location: { directory } }, { signal })).pipe(
+    Effect.orElseSucceed(() => undefined),
+  )
+  return status?.trusted === true
+})
+
 /** For a command that cannot stop, such as `orb acp` whose stdout belongs to the protocol: says on stderr what is held back. */
 export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: OrbitClient, directory: string) {
   const status = yield* call((signal) => client.location.trust.get({ location: { directory } }, { signal }))

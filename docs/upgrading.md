@@ -105,8 +105,13 @@ folder's `.gitattributes` names, so no program of your git config (git-lfs inclu
 taken before the folder was trusted stay usable once it is trusted, but not the other way round; a repository nested in
 the folder is recorded as one entry and never inspected, so its own changes are not part of an undo), the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
-folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`; the other `orb
-flow` commands find the repository root from its files. A repository with no remote is named by its path until it is
+folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`,
+`resume`, `replay` and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a
+repository, with no worktrees, no commits, no merges, no base commit, no check for uncommitted changes and no diff for a
+reviewer, so a node that asks for a worktree, or a `merge`, fails and says that the folder is not trusted. Add `--trust`
+(for that run only) to `flow run`, `flow resume` or `eval`, or trust the folder, to get them back. The other `orb flow`
+commands find the repository root from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`,
+`filter.<driver>.clean` and `hooks/post-checkout`). A repository with no remote is named by its path until it is
 trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
 `project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
 path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a

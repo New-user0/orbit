@@ -31,6 +31,12 @@ export interface RunOptions {
   /** The workflow file, recorded so `orb flow resume` can load it again. */
   readonly file: string
   readonly directory: string
+  /**
+   * Whether the folder is trusted. The VCS applies the config a repository ships (`core.fsmonitor`, clean filters, hooks)
+   * to the commands it runs there, so in a folder that is not trusted the run starts no such process and works as it does
+   * outside a repository: no worktrees, commits, merges, base commit or dirty check. The run store is found from the files.
+   */
+  readonly trusted: boolean
   readonly input?: Readonly<Record<string, unknown>>
   /** Resume this run: completed nodes whose inputs are unchanged return their recorded result. */
   readonly resume?: string
@@ -82,8 +88,8 @@ const REJECTED =
   "This workflow runs unattended and does not approve actions that need permission. Continue without this action, or explain what you would need."
 
 export async function run(options: RunOptions): Promise<RunResult> {
-  const repository = await Git.root(options.directory)
-  const home = repository ?? path.resolve(options.directory)
+  const repository = options.trusted ? await Git.root(options.directory) : undefined
+  const home = repository ?? Git.holder(options.directory) ?? path.resolve(options.directory)
   if (repository) await Git.exclude(repository)
   const store = Store.at(home)
   const log = options.log ?? (() => {})
@@ -218,7 +224,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
     const agentOptions = { ...requested, model: requested.model ?? defaultModel }
     const worktree = within.directory === undefined && (agentOptions.worktree ?? repository !== undefined)
     if (worktree && !source && (!repository || !base))
-      throw new Error(`${node}: worktree agents need a git repository with a commit`)
+      throw new Error(
+        `${node}: worktree agents need a git repository with a commit${options.trusted ? "" : " in a trusted folder"}`,
+      )
     const key = hash({
       prompt: agentOptions.prompt,
       model: agentOptions.model,
@@ -515,7 +523,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
       throw new Error(`${node}: the team needs members, and its lead must be one`)
     const worktree = teamOptions.worktree ?? repository !== undefined
     if (worktree && !source && (!repository || !base))
-      throw new Error(`${node}: a team in a worktree needs a git repository with a commit`)
+      throw new Error(
+        `${node}: a team in a worktree needs a git repository with a commit${options.trusted ? "" : " in a trusted folder"}`,
+      )
     const place = worktree && repository && base && !source ? await Git.worktree(repository, id, node, base) : undefined
     const directory = place?.directory ?? home
     store.append(id, node, "node.started", { members: names, lead })
@@ -655,7 +665,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
       if (replayed.status === "failed") throw new Error(`${node}: ${String(replayed.error?.message ?? "failed")}`)
       return replayed.result as unknown as MergeResult
     }
-    if (!repository) throw new Error(`${node}: merging needs a git repository`)
+    if (!repository)
+      throw new Error(`${node}: merging needs a git repository${options.trusted ? "" : " in a trusted folder"}`)
     const branches = results.flatMap((result) =>
       result.status === "succeeded" && result.branch ? [result.branch] : [],
     )
