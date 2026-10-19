@@ -2068,6 +2068,68 @@ describe("ConfigInstructionPlugin.Plugin keeps a link in a wide project from lea
               }),
           )
 
+  // A link to a folder is the same hole as a link to a file, and the files inside it are plain: nothing in the walk is a link,
+  // so the folder is where the question has to be asked. Each row links a folder on the way to the rules, or the rules folder
+  // itself, to a folder of notes elsewhere under home (or to home itself); the plain instruction file beside it is the control.
+  const folderLinks = [
+    { name: "a subfolder of .orbit/rules", at: ".orbit/rules/team", target: "Documents/notes" },
+    { name: ".orbit/rules itself", at: ".orbit/rules", target: "Documents/notes" },
+    { name: ".orbit itself", at: ".orbit", target: "Documents/orbit-notes" },
+    { name: "a subfolder of .orbit/rules, linked to home itself", at: ".orbit/rules/team", target: "." },
+    {
+      name: "the vendor rules folder",
+      at: `${CompatNames.vendor.directory}/${CompatNames.vendor.rules}`,
+      target: "Documents/notes",
+    },
+  ] as const
+
+  for (const place of wide)
+    for (const granted of [false, true])
+      for (const link of folderLinks)
+        it.live(
+          `${place.name} project, ${granted ? "trusted for the session" : "not trusted"}: ${link.name} linked to a folder sends nothing from it`,
+          () =>
+            Effect.gen(function* () {
+              const base = yield* folders
+              const directory = path.join(base.home, "Downloads", "x")
+              const where = { ...base, repo: place.repo(base.home), directory }
+              yield* write(path.join(base.home, "Documents", "notes", "diary.md"), "PRIVATE NOTES MARKER")
+              yield* write(path.join(base.home, "Documents", "notes", "deep", "more.md"), "PRIVATE NOTES MARKER")
+              yield* write(path.join(base.home, "Documents", "orbit-notes", "rules", "diary.md"), "PRIVATE NOTES MARKER")
+              yield* write(path.join(directory, "AGENTS.md"), "PLAIN RULE MARKER")
+              const at = path.join(directory, link.at)
+              yield* Effect.promise(() => fs.mkdir(path.dirname(at), { recursive: true }))
+              yield* Effect.promise(() =>
+                fs.symlink(path.join(base.home, link.target), at, process.platform === "win32" ? "junction" : "dir"),
+              )
+              yield* Effect.gen(function* () {
+                const trust = yield* ProjectTrust.Service
+                if (granted) yield* trust.grant({ persist: false, via: "test" })
+                const discovery = yield* start()
+                const text = (yield* readBody(yield* discovery.load())).text
+                expect(text).not.toContain("PRIVATE NOTES MARKER")
+                expect(text).toContain("PLAIN RULE MARKER")
+              }).pipe(
+                Effect.provide(
+                  layerFor(where, {
+                    trusted: false,
+                    // The vendor's folder is read only while compatibility is on, so the row switches it on.
+                    configLayer: Config.testLayer([], {
+                      enabled: true,
+                      roots: [
+                        {
+                          path: AbsolutePath.make(path.join(directory, CompatNames.vendor.directory)),
+                          kind: "vendor" as const,
+                          scope: "project" as const,
+                        },
+                      ],
+                    }),
+                  }),
+                ),
+              )
+            }),
+        )
+
   // The control: the same names as plain files in the started folder are sent, so the rows above fail only because of the link.
   for (const link of links)
     it.live(`home project, not trusted: ${link.name} as a plain file in the started folder is sent`, () =>
