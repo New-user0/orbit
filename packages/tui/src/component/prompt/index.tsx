@@ -656,6 +656,8 @@ export function Prompt(props: PromptProps) {
               (data.location.info()?.project.directory === "/" ? undefined : data.location.info()?.project.directory) ||
               data.location.default().directory ||
               paths.cwd,
+          }).catch((error) => {
+            toast.show({ variant: "warning", message: plain(errorMessage(error)) })
           })
           if (!content) return
           const normalized = normalizePromptContent(content)
