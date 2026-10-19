@@ -396,19 +396,21 @@ const layer = Layer.effect(
       const id = cachedID ?? (trusted ? yield* hgRoot(worktree) : undefined)
       // The ID the folder had while it was untrusted, so the sessions made then follow it into the trusted project.
       const earlier = ID.make(Hash.fast(`directory:${worktree}`))
-      const resolved = id ?? (trusted ? ID.global : earlier)
+      const resolved = id ?? earlier
       return {
         previous: trusted && earlier !== resolved && (yield* known(earlier)) ? earlier : cachedID,
-        // An untrusted folder is its own project, as a folder without version control is, and not `ID.global`: saved
-        // "always allow" answers are keyed by project ID, so every untrusted folder that shared `global` would share them.
+        // A folder with no changeset to name it by (untrusted, or hg missing or failing) is its own project, as a folder
+        // without version control is, before and after the grant, and not `ID.global`: saved "always allow" answers are
+        // keyed by project ID, so every such folder that shared `global` would share them.
         id: resolved,
         directory: worktree,
         vcs: { type: "hg" as const, store },
       }
     })
 
-    // The nearest `.git` or `.hg`. Git passes over a `.git` directory that has no `HEAD` and looks in the folder above, and
-    // stops at a `.git` file that is no good, so a `.git` directory counts when `GitLayout` finds a layout in it.
+    // The nearest `.git` or `.hg`. Git passes over a `.git` directory that it does not take for a repository and looks in
+    // the folder above, and stops at a `.git` file that is no good, so a `.git` directory counts when `GitLayout` finds a
+    // layout in it, and the folder named here is the one git uses.
     const marker = (
       start: string,
     ): Effect.Effect<
@@ -442,7 +444,10 @@ const layer = Layer.effect(
       // files, and is its own project when they name no remote, as an untrusted Mercurial folder is.
       const trusted = holder ? (yield* trust.status(layout?.canonical ?? holder)).trusted : false
       const repo = holder && trusted ? yield* git.repo.discover(holder) : undefined
-      if (layout && !trusted) {
+      // A trusted folder that git gives no answer for (git on no PATH, a config or an owner that git refuses) is read from
+      // its files as well, as it was before the grant, so that its project, its folders and the decision that covers them
+      // stay what they were (class 3).
+      if (layout && (!trusted || !repo)) {
         return yield* persist({
           id:
             remoteID(yield* GitLayout.remote(fs, layout)) ??
@@ -457,17 +462,29 @@ const layer = Layer.effect(
         const cachedID = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
         const id = (yield* remote(repo)) ?? cachedID ?? (yield* rootCommit(repo))
         // The ID this folder had while it was untrusted (above), so its sessions follow it into the trusted project.
+        const pretrust = layout ? (yield* stored(layout.canonical)).pretrust : undefined
         const earlier = layout
           ? (remoteID(yield* GitLayout.remote(fs, layout)) ??
-            (yield* stored(layout.canonical)).pretrust ??
+            pretrust ??
             ID.make(Hash.fast(`directory:${layout.worktree}`)))
           : undefined
-        // A shipped `.git/orbit` names the ID but does not drop the sessions made before trust.
-        const previous = earlier && earlier !== id && (yield* known(earlier)) ? earlier : cachedID
+        // A repository that git cannot name, with no remote and no commit yet, keeps the name it had before the grant and is
+        // never put in `global`, the project that every such folder would share with its sessions and memory.
+        const named = id ?? earlier ?? ID.global
+        // The sessions follow the repository from the ID it had before (above), or from the one its folder named it by
+        // while it had no name, which a remote added since then no longer leads to. A shipped `.git/orbit` names the ID
+        // but does not drop the sessions made before trust.
+        const [moved] = yield* Effect.filter(
+          [...new Set([earlier, pretrust])].filter(
+            (candidate): candidate is ID => candidate !== undefined && candidate !== named,
+          ),
+          known,
+        )
+        const previous = moved ?? cachedID
         const canonical = repo.gitDirectory === repo.commonDirectory ? repo.worktree : yield* mainCheckout(repo)
         return yield* persist({
           previous,
-          id: id ?? ID.global,
+          id: named,
           directory: repo.worktree,
           canonical,
           vcs: { type: "git" as const, store: repo.commonDirectory },

@@ -25,5 +25,12 @@ export const traced = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         }),
     )
     const trace = (yield* Effect.promise(() => Bun.file(file).exists())) ? yield* Effect.promise(() => Bun.file(file).text()) : ""
-    return { value, git: [...trace.matchAll(/\sstart (.*)$/gm)].map((line) => line[1]!.trim()) }
+    return {
+      value,
+      git: [...trace.matchAll(/\sstart (.*)$/gm)].map((line) => line[1]!.trim()),
+      // The work tree of each repository that a git process opened, which git writes once it has found one: a process
+      // that found none writes no such line. The event is the third field of a line, so a command named `worktree` in a
+      // `start` line is not taken for one.
+      worktrees: [...trace.matchAll(/^\S+\s+\S+\s+worktree (.*)$/gm)].map((line) => path.resolve(line[1]!.trim())),
+    }
   })

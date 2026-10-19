@@ -2806,8 +2806,8 @@ for (const key of programKeys) {
         refused: door === "flow resume" || door === "flow replay",
       })
       expect({ door, ran: await Bun.file(marker).exists() }).toEqual({ door, ran: false })
-      // The tasks of an eval run agents, whose session snapshots the folder in a repository that Orbit owns and that applies
-      // no program of the clone; what must not appear is a process of the runner's own, which reads the clone itself.
+      // The tasks of an eval run agents in the folder, which this row does not judge; what must not appear is a process of
+      // the runner's own, which reads the clone itself.
       const started =
         ((await Bun.file(trace).exists()) ? await Bun.file(trace).text() : "").match(/cmd_name \S+/g) ?? []
       const runner = new Set(["rev-parse", "worktree", "branch", "reset", "merge", "commit"])

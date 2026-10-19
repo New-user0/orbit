@@ -11,7 +11,9 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { git, repository } from "./fixture/git"
 import { type Found, folders, forgeries } from "./fixture/git-forged"
+import { shapes } from "./fixture/git-passed-over"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
+import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -136,6 +138,68 @@ describe("GitLayout.locate, where git makes the layout", () => {
       expect(yield* locate(path.join(root, "missing"))).toBeUndefined()
     }),
   )
+
+  // A `HEAD` that git takes in each of its spellings: a detached commit, and a ref after no space or after a tab.
+  it.live("reads a repository whose HEAD is detached, or names its ref after no space or a tab, as git does", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const folder = path.join(root, "repo")
+      yield* repository(folder)
+      const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: folder }).stdout.toString().trim()
+
+      for (const text of [`${commit}\n`, "ref:refs/heads/main\n", "ref:\trefs/heads/main\n"]) {
+        yield* Effect.promise(() => fs.writeFile(path.join(folder, ".git", "HEAD"), text))
+        expect(yield* locate(folder)).toEqual(yield* oracle(folder))
+      }
+    }),
+  )
+
+  // Where Orbit cannot match what git does, it passes over a `.git` that git might take, so that the folder it names lies
+  // above the one git uses and a grant of it covers that one: a `HEAD` past 4 KiB (git reads its first 255 bytes) and a
+  // `HEAD` that is a link (git takes one whose target starts with `refs/`). The link row needs an account that can link
+  // a file. Mutation: dropping the link check fails the link row, and reading `HEAD` with no limit the long one.
+  it.live("passes over a .git whose HEAD is over 4 KiB", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const folder = path.join(root, "repo")
+      yield* repository(folder)
+      yield* Effect.promise(() => fs.writeFile(path.join(folder, ".git", "HEAD"), `ref: refs/heads/main\n${" ".repeat(5000)}`))
+
+      expect(yield* locate(folder)).toBeUndefined()
+    }),
+  )
+
+  ;(canLinkFile ? it.live : it.live.skip)("passes over a .git whose HEAD is a link", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const folder = path.join(root, "repo")
+      yield* repository(folder)
+      yield* Effect.promise(async () => {
+        await fs.rename(path.join(folder, ".git", "HEAD"), path.join(root, "HEAD"))
+        await fs.symlink(path.join(root, "HEAD"), path.join(folder, ".git", "HEAD"), "file")
+      })
+
+      expect(yield* locate(folder)).toBeUndefined()
+    }),
+  )
+
+  // Git passes over these and looks in the folder above, which here holds no repository (git-passed-over.test.ts has the
+  // rows where it does). Mutation: taking any `.git` directory with a `HEAD` file for a repository fails every row.
+  for (const [name, fill] of shapes)
+    it.live(`finds no repository for ${name}, as git finds none`, () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        const folder = path.join(root, "folder")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(folder, ".git"), { recursive: true })
+          await fs.mkdir(path.join(root, "elsewhere"))
+          await fill(path.join(folder, ".git"), path.join(root, "elsewhere"))
+        })
+
+        expect(Bun.spawnSync(["git", "rev-parse", "--git-dir"], { cwd: folder, stderr: "ignore" }).exitCode).not.toBe(0)
+        expect(yield* locate(folder)).toBeUndefined()
+      }),
+    )
 })
 
 // What a clone ships is a layout that no git of the user made. The folder is its own canonical folder in every row, so that
@@ -163,8 +227,8 @@ describe("GitLayout.locate, where a clone makes the layout", () => {
 
   // What is read, pinned for every forgery: the recorder lists each file the layout reads. Only the pointer and the
   // `commondir` and `gitdir` of the entry it names may be read, wherever that entry is, and nothing in the victim's
-  // repository but those two files of its own worktree entry. Mutation: `linked` also reading `<target>/HEAD` fails every
-  // row whose pointer names an entry.
+  // repository but those two files of its own worktree entry. A `.git` directory of the folder's own has its `HEAD` read
+  // too. Mutation: `linked` also reading `<target>/HEAD` fails every row whose pointer names an entry.
   for (const [name, make] of forgeries)
     it.live(
       `reads only the pointer and the commondir and gitdir of the entry it names, for ${name}`,
@@ -178,7 +242,9 @@ describe("GitLayout.locate, where a clone makes the layout", () => {
             return yield* GitLayout.locate(yield* FSUtil.Service, found.crafted)
           }).pipe(Effect.provide(recorder.layer))
 
-          const read = recorder.calls.flatMap((call) => (call.startsWith("readFileString ") ? [call.slice(15)] : []))
+          const read = recorder.calls
+            .flatMap((call) => (call.startsWith("readFileString ") ? [call.slice(15)] : []))
+            .filter((file) => file !== path.join(found.crafted, ".git", "HEAD"))
           expect(read.map((file) => path.basename(file)).filter((file) => ![".git", "commondir", "gitdir"].includes(file))).toEqual([])
           const victims = read.filter((file) => !path.relative(found.victim, file).startsWith(".."))
           expect(victims.filter((file) => path.dirname(file) !== found.entry)).toEqual([])
@@ -247,6 +313,32 @@ describe("GitLayout.locate, where a clone makes the layout", () => {
           }).pipe(Effect.provide(recorder.layer))
 
           expect(layout).toMatchObject({ verified: false, canonical: found.crafted })
+          expect(sharesTouched(recorder.touched)).toEqual([])
+        }),
+      SLOW,
+    )
+
+  // A `.git` directory's `commondir` is where git looks for `objects` and `refs`, so it is asked about too. A share is not
+  // looked at, and the `.git` counts as not a repository, which is the stricter answer: the folder above is named.
+  // Mutation: asking `fs.stat` for `objects` and `refs` past the share check fails every row.
+  for (const target of shares)
+    it.live(
+      `never touches a share that a .git directory's commondir names (${target})`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* folders
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(found.crafted, ".git"))
+            await fs.writeFile(path.join(found.crafted, ".git", "HEAD"), "ref: refs/heads/main\n")
+            await fs.writeFile(path.join(found.crafted, ".git", "commondir"), `${target}\n`)
+          })
+          const recorder = recordedFileSystem()
+
+          const layout = yield* Effect.gen(function* () {
+            return yield* GitLayout.locate(yield* FSUtil.Service, found.crafted)
+          }).pipe(Effect.provide(recorder.layer))
+
+          expect(layout).toBeUndefined()
           expect(sharesTouched(recorder.touched)).toEqual([])
         }),
       SLOW,

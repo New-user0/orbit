@@ -62,7 +62,7 @@ describe("the queries of the git snapshot", () => {
     }),
   )
 
-  it.live("puts --no-optional-locks before status, and runs it in the folder it is given", () =>
+  it.live("puts --no-optional-locks before status, and runs it in the folder it is given, up to the folder above it", () =>
     Effect.gen(function* () {
       const root = yield* repo
       yield* commits(root, ["root"])
@@ -73,7 +73,7 @@ describe("the queries of the git snapshot", () => {
       })
       const git = yield* Git.Service
 
-      const run = yield* traced(git.status.short(AbsolutePath.make(path.join(root, "sub")), 64 * 1024))
+      const run = yield* traced(git.status.short(AbsolutePath.make(path.join(root, "sub")), 64 * 1024, root))
 
       // A change at the root, seen from a subfolder, carries the `../` that git prints, and the untracked folder itself collapses to `./`.
       expect(run.value.split("\n").toSorted()).toEqual(["?? ../top.txt", "?? ./"])

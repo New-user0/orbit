@@ -98,16 +98,12 @@ above, which also stops it loading that product's skills, output styles and inst
 ### Snapshots, worktree lists and `orb flow` start no git in a folder that is not trusted
 
 A repository's own config can name programs for git to run and files or network shares for it to open, so Orbit starts
-git in a repository only once its folder is trusted. Until then session snapshots work from a separate git directory of
-Orbit's own that is not seeded from the repository and switches off every `filter`, `diff` and `merge` driver that the
-folder's `.gitattributes` names, so no filter, diff or merge program of your git config (git-lfs included) runs on
-the folder's files and no `.lfsconfig` host is contacted (`snapshot-untrusted-git.test.ts`; the hooks of your own git
-config, `core.hooksPath` and `init.templateDir`, still run during a snapshot, with the folder as the working directory)
-(undo still works, and `.gitignore` files still apply, and snapshots
-taken before the folder was trusted stay usable once it is trusted, but not the other way round; while a folder below
-the session's folder holds a `.git` entry of its own, which git would open to see where it points, no snapshot is taken
-at all, so undo is not available for those steps until the folder is trusted or that entry is gone, and Orbit's log names
-the folder), the list of worktrees
+git in a repository only once its folder is trusted. Until then a session takes no undo snapshot: the steps it runs
+before you trust the folder cannot be undone, as in a folder without git, comparing or restoring a snapshot from a time
+when the folder was trusted fails with "The folder is not trusted", and Orbit's log says once why there is no snapshot.
+The first step after you trust the folder takes a snapshot again, without a restart (`snapshot-untrusted-git.test.ts`,
+`snapshot-trust.test.ts`, `snapshot-trust-transition.test.ts`). A snapshot needs git, and git applies the config of
+the folder and of any repository nested in it, so there is no partial snapshot either. Meanwhile the list of worktrees
 shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
 folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`
 and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a repository, with no
@@ -124,6 +120,30 @@ trusted and by its first commit afterwards; the sessions made before trust move 
 path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
 grant, before the folder was opened again, can be restored (`snapshot-trust-restart.test.ts`). Saved "always allow"
 answers stay with the old ID, so Orbit asks again.
+
+### Orbit's git stays inside the folder you trusted
+
+Git takes a `.git` directory for a repository only when it holds `objects` and `refs` and a `HEAD` that names a branch
+or a commit; it goes on past any other `.git` directory to the repository in a folder above, and uses that repository's
+config. Orbit used to take such a folder for a repository of its own and ask whether to trust it, and once you did, the
+git snapshot, the Git provider and the ignore check of language server results ran git in the repository above, which
+nobody had trusted. Orbit now names the repository above as the project, as git does, so the trust question is about the
+folder git will work in, and every git that Orbit starts for a session looks for a repository no further up than the
+project's folder. A `.git` directory whose `HEAD` is a link is passed over too. On a computer where the folder above a
+project has `;` (Windows) or `:` (elsewhere) in its path, git cannot be told to stop there, so Orbit starts no git for that
+project (`git-passed-over.test.ts`, `git-layout.test.ts`).
+
+### A repository that git or Mercurial cannot name keeps its project once trusted
+
+Orbit names a project by what git or Mercurial says about it once you trust the folder, and some repositories get no
+answer. A git repository with no commit and no remote, and a Mercurial folder with no changeset or with no `hg`
+installed, used to move into the shared `global` project at the grant, taking along the sessions and memory notes made
+before it; they now keep the project named by their folder. A trusted git repository that git cannot read at all (git not
+on PATH, a config line git rejects, or a folder that git refuses because another account owns it) used to become a plain
+folder named by the subfolder you started in, so the sessions made before the grant were left behind and the next start
+asked about that subfolder again; it is now named from its `.git` files as it was before the grant, with the same folders
+and the same trust decision (`project-git-trust.test.ts`, "Project.resolve keeps a folder's project across the grant when
+git or Mercurial cannot name it"; `project.test.ts`).
 
 ### A project's config waits for its folder to be trusted
 
@@ -988,11 +1008,12 @@ is not trusted and that the command goes on from a run that the folder's run sto
 as the JSON error that `orb run --format json` prints. A server that cannot say whether the folder is trusted, because
 it is older than workspace trust, stops them as well. To ask, `orb flow replay` now always connects to a server, for a
 YAML workflow too, and one it cannot reach stops it. `orb flow run` and `orb eval` without `--resume` are not affected.
-The flow runner, for a caller that resumes in such a folder anyway, takes no worktree and no session ID from the store:
-the checks and the reviewer of a reused verify iteration work in the folder of the run, and a team member whose turn is
-reused opens a new session for its next one. (`packages/cli/test/trust.test.ts`: the rows for a run store that the
-clone ships, each with a `--trust` control, the rows that refuse before the store is opened, and the rows for a server
-older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts`.)
+The flow runner, for a caller that resumes in such a folder anyway, takes no worktree, no session ID and no base commit
+from the store: the checks and the reviewer of a reused verify iteration work in the folder of the run, no review diff
+runs git in a folder the store names, and a team member whose turn is reused opens a new session for its next one.
+(`packages/cli/test/trust.test.ts`: the rows for a run store that the clone ships, each with a `--trust` control, the
+rows that refuse before the store is opened, and the rows for a server older than workspace trust;
+`packages/flow/test/runner-resume-untrusted.test.ts`, which has a row for the review diff.)
 
 **Affects:** scripts and CI that resume or replay a run in a folder that is not trusted, including a run they started
 there themselves: they now exit with status 1.
@@ -2792,10 +2813,12 @@ Session snapshots, and the undo that restores from them, now hand every path to 
 name such as `[s]ub` (or `*` and `s*`, which Windows does not allow) as a pattern, so undoing a change to that file also
 put back every file the pattern matched, such as `sub`, and the diff of that file listed them too. A capture that left
 such a file out because it was too large dropped the files it matched from the snapshot, and one that recorded it also
-recorded a large file it matched (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for
-a pattern as a name").
+recorded a large file it matched. A session started in a folder with such a name now records only that folder: outside
+Windows a folder named `s*` also took in the files of a folder `sub` beside it, and on Windows git looked inside `sub`
+for a repository of its own (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for a
+pattern as a name").
 
-**Affects:** folders that hold files whose names git would read as a pattern.
+**Affects:** folders that hold files or folders whose names git would read as a pattern.
 
 **What to do:** Nothing.
 
@@ -3466,7 +3489,8 @@ When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name
 folder's own `.hg/hgrc` into each command. None of them is run now until you trust the folder: the branch is unknown
 and there are no changes or diffs, and they appear once you trust it. An untrusted Mercurial folder is its own project
 (identified by its path), not the shared `global` project, so its saved "always allow" answers are not shared with other
-folders; a trusted folder with no `hg` or no changeset is `global`, as before.
+folders. A trusted folder with no `hg` or no changeset keeps that name too (see "A repository that git or Mercurial
+cannot name keeps its project once trusted").
 
 **Affects:** Mercurial users who open a clone before trusting it.
 
@@ -3482,7 +3506,9 @@ programs for it to run: `core.fsmonitor`, hooks, the filter and text-conversion 
 named from the files of `.git` (the remote URL in its config, or the path of the folder when it names none), the branch is
 unknown and there are no changes, diffs or review base, and they appear once you trust the folder, with no restart. A
 repository with a remote keeps the project ID that it had. One with no remote is named by its path until you trust it (never
-`global`, whose saved "always allow" answers every such folder would share), and by its first commit afterwards, as before.
+`global`, whose saved "always allow" answers every such folder would share), and by its first commit afterwards; one with
+no commit yet keeps the name of its path (see "A repository that git or Mercurial cannot name keeps its project once
+trusted").
 The URL is read as written, so a remote that an include or a `url.<base>.insteadOf` rule supplies or rewrites gives the
 folder another project ID until you trust it. A linked worktree follows the decision for its main checkout. A `.git` that is a link, a submodule or a separate git
 directory, or that names another repository's directories, is read for its remote only after you trust the folder, and

@@ -64,6 +64,9 @@ const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const trust = yield* ProjectTrust.Service
     const directory = AbsolutePath.make(location.directory)
+    // The folder that the trust decision covers. Git looks for the repository no further up than it, so a `.git` that
+    // git passes over cannot hand the snapshot to an untrusted repository above.
+    const top = AbsolutePath.make(location.project.directory)
 
     // What this process already captured for a session since trust last changed. A preview and the admission that follows
     // it share one snapshot, and a repository that fails does not run git again at every step.
@@ -77,7 +80,7 @@ const layer = Layer.effect(
     )
 
     const capture = Effect.fn("VcsInstructions.capture")(function* (late: boolean) {
-      const status = yield* git.status.short(directory, STATUS_BYTES).pipe(
+      const status = yield* git.status.short(directory, STATUS_BYTES, top).pipe(
         Effect.map((text) => text.replace(/[\r\n]+$/, "")),
         Effect.catch((error) =>
           Effect.logWarning("git snapshot skipped: git status failed", { directory, error: error.message }).pipe(
@@ -88,10 +91,10 @@ const layer = Layer.effect(
       if (status === undefined) return Instructions.removed
       const [branch, main, user, commits] = yield* Effect.all(
         [
-          git.history.current(directory),
-          git.history.mainBranch(directory),
-          git.history.userName(directory),
-          git.history.recent(directory, COMMITS),
+          git.history.current(directory, top),
+          git.history.mainBranch(directory, top),
+          git.history.userName(directory, top),
+          git.history.recent(directory, COMMITS, top),
         ],
         { concurrency: "unbounded" },
       )

@@ -355,7 +355,9 @@ describe("Project.resolve", () => {
     }),
   )
 
-  it.live("returns git global for repo with no commits and no remote", () =>
+  // Git gives a repository with no commit and no remote no name. It used to be `global`, which every such folder shared, and
+  // the sessions of its untrusted days moved there once it was trusted; it is named by its folder, before trust and after.
+  it.live("names a repo with no commits and no remote by its folder, not global", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.acquireRelease(
         Effect.promise(() => tmpdir()),
@@ -366,7 +368,7 @@ describe("Project.resolve", () => {
 
       const result = yield* project.resolve(abs(tmp.path))
 
-      expect(result.id).toBe(Project.ID.make("global"))
+      expect(result.id).toBe(Project.ID.make(Hash.fast(`directory:${yield* real(tmp.path)}`)))
       expect(result.directory).toBe(yield* real(tmp.path))
       expect(result.canonical).toBe(result.directory)
       expect(result.previous).toBeUndefined()
@@ -602,7 +604,8 @@ describe("Project.resolve", () => {
     30_000,
   )
 
-  it.live("returns global id for unreadable mercurial metadata", () =>
+  // As for a git repository that git cannot name: by its folder, before trust and after, and never `global`.
+  it.live("names a mercurial folder whose metadata cannot be read by its folder, not global", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.acquireRelease(
         Effect.promise(() => tmpdir()),
@@ -614,7 +617,7 @@ describe("Project.resolve", () => {
       const result = yield* project.resolve(abs(tmp.path))
 
       expect(result.vcs?.type).toBe("hg")
-      expect(result.id).toBe(Project.ID.make("global"))
+      expect(result.id).toBe(Project.ID.make(Hash.fast(`directory:${yield* real(tmp.path)}`)))
     }),
   )
 
