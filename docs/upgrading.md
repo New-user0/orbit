@@ -2980,7 +2980,9 @@ path, its scope (`managed`, `user`, `project` or `local`), its length in charact
 blocks are off, and the file that imported it when it was imported. `status.warnings` names each file longer than
 40,000 characters, which is still sent whole, and each import that was left out because it leads outside what the
 project may supply (`import-external`, or `import-untrusted` when trusting the folder would load it).
-`status.available` is false when a source could not be read, so the list is incomplete. `initial` is the baseline the
+`status.available` is false when a source could not be read, as when the administrator's instruction file is there and
+cannot be read, so the list is incomplete. A project instruction file that cannot be read keeps `available` true: it is
+missing from the list, and the next name in its folder is listed in its place. `initial` is the baseline the
 next request sends and `update` the instruction update the next step boundary would record, empty when nothing
 changed. Neither starts a model request or needs a provider. When a source is unavailable and the session has no
 baseline yet, `initial` and `update` are left out and `blocked` names the sources. Warnings never reach the model.

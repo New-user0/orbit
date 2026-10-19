@@ -258,18 +258,21 @@ it.live("is read only: a preview records nothing and a repeat gives the same upd
 
 it.live("lists no files for an agent that leaves instruction files out of its context", () =>
   Effect.gen(function* () {
-    const s = yield* server()
+    const managed = path.join((yield* tmpdirScoped("orbit-managed-")).path, "managed")
+    const s = yield* server({ managed })
+    yield* s.write(path.join(managed, "ORBIT.md"), "policy rules")
     yield* s.write(path.join(s.project, "ORBIT.md"), "project rules")
     const build = yield* s.preview((yield* s.session()).id)
     const explore = yield* s.preview((yield* s.session(s.project, "explore")).id)
 
-    expect(build.status.files).toHaveLength(1)
+    expect(build.status.files.map((file) => file.kind)).toEqual(["managed", "project"])
     expect(explore.initial ?? "").not.toContain("project rules")
     expect(explore.status.files).toEqual([])
     expect(explore.status.warnings).toEqual([])
-    // It reads no source, so an unreadable one leaves its empty list complete.
+    // It reads no source, so an unreadable one leaves its empty list complete. Only the administrator's file makes the
+    // source unavailable when it cannot be read; a project file that cannot be read is left out instead.
     s.unreadable.current = true
-    yield* s.write(path.join(s.project, "ORBIT.md"), "changed rules")
+    yield* s.write(path.join(managed, "ORBIT.md"), "changed policy")
     // Wait for the rescan to mark the source unavailable, so `available: true` below cannot come from discovery.
     yield* s.until((yield* s.session()).id, (preview) => !preview.status.available)
     const unreadable = yield* s.preview((yield* s.session(s.project, "explore")).id)
@@ -503,18 +506,21 @@ it.live("reads no file a link leads out of an untrusted project to, and a second
   }).pipe(Effect.scoped),
 )
 
+// The administrator's file fails closed: one that is there and cannot be read makes the source unavailable.
 it.live("reports an unavailable source, and no baseline while the session has none", () =>
   Effect.gen(function* () {
-    const s = yield* server()
-    const file = path.join(s.project, "ORBIT.md")
-    yield* s.write(file, "stored rules")
+    const managed = path.join((yield* tmpdirScoped("orbit-managed-")).path, "managed")
+    const s = yield* server({ managed })
+    const file = path.join(managed, "ORBIT.md")
+    yield* s.write(file, "stored policy")
     const initialized = yield* s.session()
     const baseline = (yield* s.preview(initialized.id)).initial
+    expect(baseline).toContain("stored policy")
     yield* s.step(initialized.id, "go")
     const fresh = yield* s.session()
 
     s.unreadable.current = true
-    yield* s.write(file, "changed rules")
+    yield* s.write(file, "changed policy")
     const blocked = yield* s.until(fresh.id, (preview) => !preview.status.available)
 
     expect(blocked.status.available).toBe(false)
@@ -524,6 +530,32 @@ it.live("reports an unavailable source, and no baseline while the session has no
     const kept = yield* s.preview(initialized.id)
     expect(kept.status.available).toBe(false)
     expect(kept.initial).toBe(baseline)
+  }).pipe(Effect.scoped),
+)
+
+// The control: a project file that cannot be read costs only itself, so the source stays available and the list is
+// complete without it.
+it.live("leaves out a project file that cannot be read and stays available", () =>
+  Effect.gen(function* () {
+    const s = yield* server()
+    const file = path.join(s.project, "ORBIT.md")
+    yield* s.write(file, "stored rules")
+    yield* s.write(path.join(s.project, "AGENTS.md"), "next rules")
+    const session = yield* s.session()
+    expect((yield* s.preview(session.id)).status.files.map((item) => item.path)).toEqual([file])
+
+    s.unreadable.current = true
+    yield* s.write(file, "changed rules")
+    const rescanned = yield* s.until(
+      (yield* s.session()).id,
+      (preview) => !preview.status.available || !preview.status.files.some((item) => item.path === file),
+    )
+
+    expect(rescanned.status.available).toBe(true)
+    // The next name of its slot takes its place, as it does when the first name is missing.
+    expect(rescanned.status.files.map((item) => item.path)).toEqual([path.join(s.project, "AGENTS.md")])
+    expect(rescanned.initial).toContain("next rules")
+    expect(rescanned.blocked).toBeUndefined()
   }).pipe(Effect.scoped),
 )
 
