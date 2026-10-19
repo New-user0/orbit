@@ -480,7 +480,8 @@ describe("the reasoning boost note", () => {
         time: { created },
         ...extra,
       }) as unknown as SessionMessage.Info
-    // A shell command the person typed is scanned like a prompt.
+    // A shell row stored before results moved to completion notices (Session.shell no longer writes one without
+    // `background`) is scanned like a prompt. The typed command's real path is pinned in session-shell.test.ts.
     expect(boosted(toLLMMessages([shell("sh", "echo ultrathink")], model), "sh")).toHaveLength(1)
     expect(boosted(toLLMMessages([shell("sh", "echo plain")], model), "sh")).toHaveLength(0)
     expect(

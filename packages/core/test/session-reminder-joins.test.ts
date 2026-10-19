@@ -1,9 +1,9 @@
 import { describe, expect } from "bun:test"
-import { LLM } from "@orbit/ai"
+import { LanguageModel, LLM } from "@orbit/ai"
 import { Auth } from "@orbit/ai/route"
 import { compileRequest } from "@orbit/ai/route/client"
 import { OpenAIChat } from "@orbit/ai/protocols"
-import { Mistral } from "@orbit/ai/providers"
+import { Mistral, OpenAICompatible } from "@orbit/ai/providers"
 import { ReminderText } from "@orbit/core/session/reminder-text"
 import { SessionMessage } from "@orbit/core/session/message"
 import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
@@ -131,6 +131,63 @@ describe("prompt notes joined by an adapter", () => {
           )
           expect(inside.bad).toBe(false)
         }
+      }),
+    )
+  }
+})
+
+// Text tool calling merges adjacent user messages into one, so a data-block reminder row and the prompt that follows
+// it must be separated by a blank line, or the prompt reads as part of the open block.
+describe("a reminder row merged with the prompt under text tool calling", () => {
+  const textTools = LanguageModel.update(
+    OpenAICompatible.configure({ apiKey: "test", baseURL: "https://local.example/v1" }).model("small"),
+    { compatibility: { toolCalling: "text" } },
+  )
+  const reminder = ReminderText.render({
+    text: "The language servers reported new problems in files changed during this session. The list follows.",
+    data: { label: "Language server problems", content: "src/a.ts:\n  error 1:1 nope" },
+  })
+  for (const [name, fields] of [
+    ["a plain prompt", {}],
+    ["a prompt with an @agent hint", { agents: [{ name: "explore" }] }],
+  ] as const) {
+    it.effect(`keeps ${name} out of the reminder's data block`, () =>
+      Effect.gen(function* () {
+        const messages = toLLMMessages(
+          [
+            {
+              id: "msg_00000001",
+              type: "assistant",
+              model: { providerID: "fake", id: "fake-model" },
+              content: [{ type: "text", text: "done" }],
+              time: { created: 0, completed: 1 },
+            },
+            {
+              id: "msg_00000002",
+              type: "synthetic",
+              text: reminder,
+              metadata: { reminder: { kind: "lsp", label: "Language server problems" } },
+              time: { created: 2 },
+            },
+            { id: "msg_00000003", type: "user", text: "please fix the failing test", time: { created: 3 }, ...fields },
+          ] as unknown as SessionMessage.Info[],
+          ref,
+          "fake",
+        )
+        const prepared = yield* compileRequest(LLM.request({ model: textTools, messages }))
+        const users = (prepared.body.messages as ReadonlyArray<{ role: string; content: unknown }>).filter(
+          (message) => message.role === "user",
+        )
+        expect(users).toHaveLength(1)
+        const content = users[0]?.content
+        const joined =
+          typeof content === "string"
+            ? content
+            : (content as ReadonlyArray<{ text?: string }>).map((part) => part.text ?? "").join("")
+        const lines = joined.split("\n")
+        // No text follows a closing fence on its line, and the prompt starts its own line.
+        expect(lines.filter((line) => /^`{3,}[^`\s]/.test(line))).toEqual([])
+        expect(lines).toContain("please fix the failing test")
       }),
     )
   }

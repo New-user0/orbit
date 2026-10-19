@@ -266,6 +266,8 @@ describe("Session.shell", () => {
         if (completion?.type !== "synthetic") return yield* Effect.die("Missing shell completion")
         expect(completion.payload.metadata).toEqual({
           source: "shell",
+          origin: "user",
+          command,
           shellID: message.shellID,
           state: "completed",
           exit,
@@ -415,4 +417,36 @@ describe("Session.shell", () => {
       expect(fixture.control.wakes).toEqual([])
     }),
   )
+
+  // The only path a typed command takes to the model is its completion notice, so the reasoning note is decided there.
+  for (const [command, boosted] of [
+    ["echo ultrathink", true],
+    ["echo plain", false],
+  ] as const) {
+    it.live(`a typed shell command ${boosted ? "with" : "without"} the reasoning keyword ${boosted ? "gets" : "gets no"} note`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        yield* fixture.session.shell({ sessionID: fixture.created.id, command })
+        const completion = (yield* fixture.session.inbox(fixture.created.id)).find((item) => item.type === "synthetic")
+        if (completion?.type !== "synthetic") return yield* Effect.die("Missing shell completion")
+        const lowered = toLLMMessages(
+          [
+            ...(yield* fixture.session.context(fixture.created.id)),
+            {
+              id: "msg_zzzz",
+              type: "synthetic",
+              text: completion.payload.text,
+              metadata: completion.payload.metadata,
+            } as unknown as SessionMessage.Info,
+          ],
+          { providerID: Provider.ID.make("fake"), id: ID.make("fake-model") },
+          "fake",
+        )
+        const text = lowered
+          .flatMap((message) => message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])))
+          .join("\n")
+        expect(text.includes("high level of reasoning effort")).toBe(boosted)
+      }),
+    )
+  }
 })
