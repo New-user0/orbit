@@ -98,7 +98,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   through the repository's own `info/exclude` only, and only for a Location whose project is a git one, asked at the project
   root the Location resolved and never by walking up (a Mercurial project nested in a repository gets no step, and no git
   process starts for it): `GitLayout.locate` must report `verified` (the nine forged layouts of `git-forged.ts` get no line
-  and at most one log line), `info` and `exclude` must not be links, the exclude file's folder must
+  and at most one log line), `info` and `exclude` must not be links (an `exclude` that links to a file outside the git
+  directory, or dangles, gets no line and one warning, trusted or not, with a plain file as the control: the "when
+  info/exclude is" rows; mutation: dropping the `exclude` term of the link check fails the four link rows), the exclude file's folder must
   stay inside the verified common directory, and no git process starts while the folder is untrusted (the "already
   ignored" question is asked of git, with fsmonitor off, only once it is trusted). A failure of that step is logged and
   keeps the note. The text is the person's own and is not filtered; an import token in it meets the import gate when the

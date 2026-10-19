@@ -833,6 +833,50 @@ describe("InstructionNotes.add", () => {
       }),
     )
 
+    // Class 4: a repository's `.git/info/exclude` that is a link would carry the line to a file outside the git directory, or
+    // create one at the place a dangling link names. The step leaves both alone with one warning, and the note stands. A
+    // plain exclude file is the control, in both trust states.
+    const excludeShapes = [
+      { name: "a plain file", link: undefined },
+      { name: "a link to a file outside the git directory", link: "file" },
+      { name: "a dangling link to a place outside the git directory", link: "dangling" },
+    ] as const
+    for (const shape of excludeShapes)
+      for (const trusted of [true, false])
+        (shape.link === undefined || canLinkFile ? it.live : it.live.skip)(
+          `${shape.link === undefined ? "writes the line" : "writes the note but no line"} when info/exclude is ${shape.name} (${trusted ? "trusted" : "untrusted"})`,
+          () =>
+            Effect.gen(function* () {
+              const where = yield* repo
+              const file = path.join(where.root, ".git", "info", "exclude")
+              const target = path.join(where.base, shape.link === "dangling" ? "not-there.txt" : "outside.txt")
+              yield* Effect.promise(async () => {
+                if (shape.link === undefined) return
+                if (shape.link === "file") await fs.writeFile(target, "OUTSIDE\n")
+                await fs.rm(file, { force: true })
+                await fs.symlink(target, file, "file")
+              })
+              const warnings: unknown[] = []
+              const logger = Logger.make((entry) => {
+                const message = Array.isArray(entry.message) ? entry.message[0] : entry.message
+                if (message === "instruction note not excluded from git") warnings.push(entry.message)
+              })
+              yield* Effect.gen(function* () {
+                const { notes } = yield* start
+                expect(yield* notes.add({ scope: "local", text: "n" })).toMatchObject({ created: true, loaded: true })
+              }).pipe(Effect.provide(layerFor({ ...where, trusted })), Effect.provide(Logger.layer([logger])))
+              expect(yield* read(path.join(where.root, "ORBIT.local.md"))).toBe("- n\n")
+              if (shape.link === undefined) {
+                expect(lines(yield* exclude(where.root))).toHaveLength(1)
+                expect(warnings).toEqual([])
+                return
+              }
+              if (shape.link === "file") expect(yield* read(target)).toBe("OUTSIDE\n")
+              else expect(yield* exists(target)).toBe(false)
+              expect(warnings).toMatchObject([["instruction note not excluded from git", { reason: "exclude file is a link" }]])
+            }),
+        )
+
     it.live("writes no line when .git/info is a link that leads out of the git directory", () =>
       Effect.gen(function* () {
         const where = yield* repo
