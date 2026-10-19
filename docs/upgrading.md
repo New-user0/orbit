@@ -3854,20 +3854,6 @@ A project or local config in a folder that is not trusted can no longer set `age
 
 **What to do:** Trust the folder if you want its prompt to apply.
 
-
-## A file outside the project is trusted by the folder that owns it, and two shapes of owner stay refused
-
-When a tool or a program works on a file outside the project, Orbit asks whether the folder that owns the file is trusted. The owner is the nearest folder above the file that holds `.git` or `.hg`, or else the folder itself. Two shapes are refused, and both fail closed (they refuse, never open):
-
-- A home folder that is itself a git repository (a dotfiles repository) owns everything below it, including a folder you granted trust to inside it, so that folder is refused until you trust the home folder for the session. Inside a home folder without `.git`, a granted folder owns itself and is served. Either way, a trusted repository that you reach through a link that lives in a home folder you have not trusted is refused.
-- A folder you granted trust to that carries no `.git` or `.hg` serves the files it holds, but a link inside it that leads to a trusted repository is refused: a program that walks up the spelling of that path meets the link, and the folder that holds it owns itself, so it cannot lend that repository its trust.
-
-A trusted repository that sits inside an untrusted folder is served, because you granted that nested folder yourself; a formatter that walks up from a file there can read the outer folder's config. The project itself behaves the same way. No change is planned for these three edges (FU-M3-115: accepted, documented; `project-trust-owner-edges.test.ts` pins the first two).
-
-**Affects:** people whose home folder is a git repository, and people who grant trust to a folder without a marker.
-
-**What to do:** Open the project from a folder that has a marker, or grant trust to the folder that holds the project, to have its files trusted.
-
 ## A provider package written as an absolute file path loads again
 
 A `package` of a provider that is a plain absolute file path (`/opt/providers/acme.mjs`, `C:\providers\acme.mjs`) loads as the `file://` URL of that file. In the compiled binary such a path did not load at all, because the binary never looks a name up in the folder it starts in. A relative path is still refused: it would be read against Orbit's own folder, not the folder of the config that wrote it.
