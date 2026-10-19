@@ -15,12 +15,14 @@ export async function tmpdir() {
   }
 }
 
-// Bun's rm ignores maxRetries, and a SQLite handle that has just closed can hold its file for a moment on Windows.
+// Bun's rm ignores maxRetries, and a SQLite handle that has just closed can hold its file for a moment on Windows (EBUSY,
+// or EPERM while the file is still being deleted).
+const RETRY = new Set(["EBUSY", "EPERM"])
 async function remove(directory: string, retries = 30): Promise<void> {
   try {
     await rm(directory, { recursive: true, force: true })
   } catch (error) {
-    if (retries === 0 || !(error instanceof Error) || !("code" in error) || error.code !== "EBUSY") throw error
+    if (retries === 0 || !(error instanceof Error) || !("code" in error) || !RETRY.has(String(error.code))) throw error
     Bun.gc(true)
     await Bun.sleep(100)
     return remove(directory, retries - 1)

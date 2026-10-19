@@ -230,6 +230,32 @@ describe("the baseline section", () => {
   )
 
   it.live(
+    "claims that subagents share the folder only for a session that has no parent and no fork source",
+    () =>
+      scenario(() =>
+        Effect.gen(function* () {
+          const scratchpad = yield* SessionScratchpad.Service
+          const claim = "Subagents of this session share the folder"
+          // The key goes back one level, so the subagents of a fork or of a subagent use that session's own folder.
+          for (const [session, shares] of [
+            [lineage({ id: "ses_root" }), true],
+            [lineage({ id: "ses_child", parentID: "ses_root" }), false],
+            [lineage({ id: "ses_fork", fork: "ses_root" }), false],
+            [lineage({ id: "ses_forkchild", parentID: "ses_fork" }), false],
+          ] as const) {
+            const text = (yield* readInitial(scratchpad.source(session))).text
+            expect([session.id, text.includes(claim)]).toEqual([session.id, shares])
+          }
+          // The key a fork's subagent uses is the fork's own, which is what the claim leaves out.
+          expect(SessionScratchpad.key(lineage({ id: "ses_forkchild", parentID: "ses_fork", fork: "ses_root" }))).toBe(
+            "ses_fork",
+          )
+        }),
+      ),
+    timeout,
+  )
+
+  it.live(
     "is the same for a subagent and a fork of the session, and says nothing again while the folder is the same",
     () =>
       scenario(() =>

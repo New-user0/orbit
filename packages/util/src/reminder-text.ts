@@ -23,5 +23,9 @@ export const block = (label: string, content: string) => {
   return `${heading(label)}:\n${fence}\n${neutralize(content)}\n${fence}`
 }
 
-/** The envelope around harness-written text. Outside text never goes in `text`; it follows as `block`s. */
+/**
+ * The envelope around harness-written text. Bulk text from outside (a file's contents, a selection) follows as a
+ * `block`. A short name or message from outside goes in `text` only after the caller has put it on one line and
+ * escaped it (`heading`).
+ */
 export const envelope = (text: string) => `<system-reminder>\n${text}\n</system-reminder>`
