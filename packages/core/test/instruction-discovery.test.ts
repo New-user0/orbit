@@ -4010,6 +4010,49 @@ describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
       }),
     )
 
+    // Class 15 on a bound of time: one pass spends one allowance of import tokens over every file it loads, the walk's
+    // instruction files and the rule files of every level alike, so a clone that spreads its tokens over many files gets
+    // no more walks than one file would. Each token here names a missing file, which costs one look; the pass looks up
+    // `MAX_IMPORTS` of them in all and warns once.
+    it.live("looks up no more import tokens in one pass than the cap, spread over the walk's files and rule files", () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const tokens = (name: string) =>
+          `${name}\n\n${Array.from({ length: ConfigInstructionFile.MAX_IMPORTS }, (_, n) => `@./no-such/${name}-${n}.md`).join("\n")}\n`
+        yield* write(where.rootFile, tokens("root"))
+        for (const name of ["a", "b", "c"]) yield* write(path.join(rulesOf(where.repo), `${name}.md`), tokens(name))
+        yield* write(path.join(rulesOf(where.directory), "deep.md"), tokens("deep"))
+        const looked: string[] = []
+        const counting = Layer.effect(
+          FSUtil.Service,
+          FSUtil.Service.pipe(
+            Effect.map((fs) =>
+              FSUtil.Service.of({
+                ...fs,
+                isFile: (target) => (target.includes("no-such") && looked.push(target), fs.isFile(target)),
+              }),
+            ),
+          ),
+        ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+        const warnings: unknown[] = []
+        const logger = Logger.make((entry) => {
+          const message = Array.isArray(entry.message) ? entry.message[0] : entry.message
+          if (message === "instruction imports skipped") warnings.push(entry.message)
+        })
+        yield* Effect.gen(function* () {
+          const { text } = yield* baseline()
+          // Every file still loads; only what they import is cut.
+          for (const name of ["root", "a", "b", "c", "deep"]) expect(text).toContain(name)
+        }).pipe(
+          Effect.provide(layerFor(where, { trusted: false, filesystemLayer: counting })),
+          Effect.provide(Logger.layer([logger])),
+        )
+        expect(looked).toHaveLength(ConfigInstructionFile.MAX_IMPORTS)
+        expect(warnings).toHaveLength(1)
+      }),
+      60_000,
+    )
+
     it.live("still loads the person's rules and the administrator's", () =>
       Effect.gen(function* () {
         const where = yield* folders
