@@ -988,11 +988,12 @@ is not trusted and that the command goes on from a run that the folder's run sto
 as the JSON error that `orb run --format json` prints. A server that cannot say whether the folder is trusted, because
 it is older than workspace trust, stops them as well. To ask, `orb flow replay` now always connects to a server, for a
 YAML workflow too, and one it cannot reach stops it. `orb flow run` and `orb eval` without `--resume` are not affected.
-The flow runner, for a caller that resumes in such a folder anyway, takes no worktree and no session ID from the store:
-the checks and the reviewer of a reused verify iteration work in the folder of the run, and a team member whose turn is
-reused opens a new session for its next one. (`packages/cli/test/trust.test.ts`: the rows for a run store that the
-clone ships, each with a `--trust` control, the rows that refuse before the store is opened, and the rows for a server
-older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts`.)
+The flow runner, for a caller that resumes in such a folder anyway, takes no worktree, no session ID and no base commit
+from the store: the checks and the reviewer of a reused verify iteration work in the folder of the run, no review diff
+runs git in a folder the store names, and a team member whose turn is reused opens a new session for its next one.
+(`packages/cli/test/trust.test.ts`: the rows for a run store that the clone ships, each with a `--trust` control, the
+rows that refuse before the store is opened, and the rows for a server older than workspace trust;
+`packages/flow/test/runner-resume-untrusted.test.ts`, which has a row for the review diff.)
 
 **Affects:** scripts and CI that resume or replay a run in a folder that is not trusted, including a run they started
 there themselves: they now exit with status 1.

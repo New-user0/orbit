@@ -673,20 +673,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - The flow runner's git (`run` and `evaluate` in `packages/flow`: root, exclude, head, dirty check, worktrees, commits,
   merges, review diff), which reads the index and applies `core.fsmonitor`, clean filters and hooks of the clone: class 1,
   gated on `trusted`, which `orb flow run` and `orb eval` take from the server after `requireTrust` and `replay` sets to
-  false (class 12). The base commit is taken from the store of a resumed run only where git may run. Proof:
-  `packages/cli/test/trust.test.ts`, rows per key and door; the refusals that say "in a trusted folder" (a worktree
-  agent, a team in a worktree, a merge): `packages/flow/test/runner-untrusted.test.ts`.
+  false (class 12). Proof: `packages/cli/test/trust.test.ts`, rows per key and door; the refusals that say "in a
+  trusted folder" (a worktree agent, a team in a worktree, a merge): `packages/flow/test/runner-untrusted.test.ts`. The
+  base commit is taken from the store of a resumed run only where git may run. Proof: "a resume in an untrusted folder
+  takes no worktree from the run store for the review diff of a verify node" in
+  `packages/flow/test/runner-resume-untrusted.test.ts` (the store names a folder outside whose `core.fsmonitor` writes a
+  marker, and a base commit; no marker, and its trusted control writes one).
 - What a resumed run takes from the store (classes 1, 5 and 12): the worktree that a reused verify iteration's checks
   and reviewer work in, the session a reused team turn continues, the base commit and the default model. `orb flow resume`, `orb eval --resume` and `orb flow replay` refuse a folder that is not trusted, before
   they open the store (`requireTrust` with `strict: "recorded"`; `eval` reports it through `reportRunError`, as JSON
   under `--format json`). No other door resumes a stored run: the terminal UI's `/runs` dialog and the VS Code Runs view
   only read the store and hand a resume to `orb flow resume`, and the server, ACP and the SDK do not load
-  `@orbit/flow`. The runner itself, for a caller that resumes with `trusted: false`, takes no worktree and no session ID
-  from the store. Proof: `packages/cli/test/trust.test.ts`, the rows for a run store that the clone ships (a recorded
-  verify iteration whose worktree is a folder outside the clone holding a secret: refused with no model request, git or
-  read, and a `--trust` control that reads it), the rows that refuse before the store is opened, and the rows for a server
-  older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts` (the reviewer's folder, the check's
-  folder and a team member's session, each with a trusted control).
+  `@orbit/flow`. The runner itself, for a caller that resumes with `trusted: false`, takes no worktree, no session ID
+  and no base commit from the store. Proof: `packages/cli/test/trust.test.ts`, the rows for a run store that the clone
+  ships (a recorded verify iteration whose worktree is a folder outside the clone holding a secret: refused with no model
+  request, git or read, and a `--trust` control that reads it), the rows that refuse before the store is opened, and the
+  rows for a server older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts` (the reviewer's folder, the check's
+  folder, a team member's session and the review diff, each with a trusted control).
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
