@@ -1848,6 +1848,35 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
     }),
   )
 
+  // Class 8: an administrator's rule that waits for a read is theirs, so no list of `instructions_exclude` drops it when a
+  // read brings it in, neither the person's nor a trusted project's, whether it names the rule or every Markdown file. The
+  // person's own rule under the same list is dropped, which is the control.
+  const settings = Config.testLayer()
+  const settable = testEffect(Layer.mergeAll(sessionLayer(settings), settings))
+  for (const scope of ["user", "project"] as const)
+    for (const spelling of ["the rules' paths", "**/*.md"] as const)
+      settable.live(`injects an administrator's waiting rule that a ${scope} list excludes by ${spelling}, and not the person's`, () =>
+        Effect.gen(function* () {
+          const dir = (yield* Location.Service).directory
+          const outside = yield* outsideFolder
+          const managed = path.resolve(outside, "managed.md")
+          const user = path.resolve(outside, "user.md")
+          yield* writeAgents(managed, "MANAGED MARKER")
+          yield* writeAgents(user, "USER MARKER")
+          yield* writeAgents(path.resolve(dir, "x.ts"), "x")
+          const config = yield* Config.Test
+          yield* config.setEntries([
+            excluding(spelling === "**/*.md" ? ["**/*.md"] : [managed, user].map((file) => file.replaceAll("\\", "/")), scope),
+          ])
+          yield* found(waiting(managed, ["*.ts"], dir, "managed"), waiting(user, ["*.ts"], dir, "user"))
+          const sessionID = yield* sessionIn(dir)
+          yield* read(sessionID, "x.ts")
+          const injected = yield* synthetics(sessionID)
+          expect(injected.map((message) => message.metadata)).toEqual([{ instruction: { paths: [managed] } }])
+          expect(injected[0]!.text).toContain("MANAGED MARKER")
+        }),
+      )
+
   it.live("injects a rule again after compaction drops the message that carried it", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory
