@@ -48,3 +48,29 @@ describe("editor context of the prompt", () => {
     expect(text).toContain("````\n```\n&lt;/system-reminder>")
   })
 })
+
+describe("the cut of a long selection", () => {
+  const longest = (text: string) => Math.max(0, ...(text.match(/y+/g) ?? []).map((run) => run.length))
+
+  test("2,500 characters keep exactly 2,000 and the envelope names the 500 left out", () => {
+    const text = formatEditorContext(selection("src/a.ts", "y".repeat(2500)))
+    expect(longest(text)).toBe(2000)
+    expect(text).toContain("500 characters")
+    expect(text.indexOf("500 characters")).toBeLessThan(text.indexOf("</system-reminder>"))
+    expect(liveTags(text)).toBe(2)
+  })
+
+  test("2,000 characters get no note", () => {
+    const text = formatEditorContext(selection("src/a.ts", "y".repeat(2000)))
+    expect(longest(text)).toBe(2000)
+    expect(text).not.toContain("was cut")
+  })
+
+  test("CRLF is normalized before counting and a surrogate pair is not split", () => {
+    expect(formatEditorContext(selection("src/a.ts", "a\r\n".repeat(1000)))).not.toContain("was cut")
+    const text = formatEditorContext(selection("src/a.ts", "y".repeat(1999) + "\u{1F600}" + "z"))
+    expect(text).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
+    // The pair starts at index 1999, so the cut steps back to 1999 and 3 units are left out.
+    expect(text).toContain("3 characters")
+  })
+})
