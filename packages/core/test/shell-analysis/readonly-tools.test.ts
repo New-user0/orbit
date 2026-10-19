@@ -425,6 +425,27 @@ describe("the working folder cannot supply the program (class 10)", () => {
     expect(entries).not.toContain("")
   })
 
+  // The other half of the probe: Windows PowerShell 5.1 does not look in the working folder for an empty entry either, and
+  // does for a dot (the control). The decoy is a real program, so a run shows in its record.
+  const powershell51 = process.platform === "win32" ? Bun.which("powershell") : undefined
+  ;(powershell51 ? test : test.skip)("Windows PowerShell 5.1 ignores the empty entries of a Windows Path", async () => {
+    await using tmp = await tmpdir()
+    const ran = await plant(tmp.path, "zzdecoy")
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !["path", "nodefaultcurrentdirectoryinexepath"].includes(key.toLowerCase())),
+    )
+    const system = path.dirname(powershell51!)
+    const run = (value: string) =>
+      Bun.spawnSync([powershell51!, "-NoProfile", "-NonInteractive", "-Command", "zzdecoy"], {
+        cwd: tmp.path,
+        env: { ...env, Path: `${system};${value}` },
+      })
+    run(";;")
+    expect(await ran()).toEqual([])
+    run(".")
+    expect(await ran()).toHaveLength(1)
+  })
+
   const onWindows = process.platform === "win32" ? describe : describe.skip
   const inspect = (command: string, ctx: ShellAnalysis.Context) =>
     Effect.runPromise(

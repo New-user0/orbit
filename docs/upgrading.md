@@ -3058,8 +3058,9 @@ analysis judges read-only (`ls`, `git status`, `cat a | grep b`, `sleep 1`) runs
 `tool_execution.max_concurrency`. Any other call, such as `touch x` or `echo hi > f`, still runs alone and waits for
 the calls before it. The decision uses the command text the model sent, before any hook rewrites it, and ignores
 `run_in_background`, the timeout and the paths the command reads. A command that cannot be analysed, an empty command,
-and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has an empty or relative
-entry (a trailing `;` in the Windows `Path` is enough) no command counts as read-only, so shell calls stay serial.
+and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has a relative entry, or an
+empty one in a POSIX `PATH`, no command counts as read-only, so shell calls stay serial. A trailing `;` in a Windows
+`Path` does not do that (see the note on `readOnly` below).
 
 **Affects:** people whose model issues several read-only shell commands in one step, and plugins that observe the
 `execute.before` and `execute.after` hooks of `Bash` and assume they never overlap.
