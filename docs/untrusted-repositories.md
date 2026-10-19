@@ -777,18 +777,26 @@ every other extension):
 **Built-in commands of the terminal UI** (`/ide`, `/terminal-setup`, `/agents` create and edit, and the route they use):
 
 - `/ide` lists the locks in the state folder that `readLocks` accepts, so nothing is read from a project folder; the name
-  and folders an editor chose reach the dialog and its toasts through `plain`. `connect` reads the chosen window's lock
+  and folders an editor chose reach the dialog and its toasts written out: the lock's name is escaped where the lock is
+  read, the name in the editor's hello where it arrives, and the toasts escape names and the session folder once more with
+  `plain`. The tests pin what is drawn, not each of those calls: the folder reaches the toast already escaped, so
+  removing the `plain` of the toast alone fails no test. `connect` reads the chosen window's lock
   again and dials `127.0.0.1` with the token in the one header; a window that never says hello is not retried and ends
   with a timeout. `/ide open` finds the editor's program with `which` (PATH only) and starts it through cross-spawn with
   the folder as its only argument, never through a shell. Proof: `test/context/editor-ide.test.tsx`,
-  `test/component/dialog-ide.test.tsx` ("without control characters"), `test/editor-program.test.ts` (a `code.cmd` and
+  `test/component/dialog-ide.test.tsx` ("without control characters"), `test/builtin-commands.test.tsx` (the toast of
+  `/ide open` with an escape sequence in the editor's name and in the session folder), `test/context/editor-ide.test.tsx`
+  (the names in the lock and in hello), `test/editor-program.test.ts` (a `code.cmd` and
   `code.exe` decoy in the working folder, with `NoDefaultCurrentDirectoryInExePath` removed, and the control).
 - `/terminal-setup` starts no program. It reads and writes one file of the person's own editor, never of a project: the
   keybindings file of the editor's user folder. A file that does not parse as a list (errors counted, not only a wrong
   type), one that holds the binding already, and one that binds Shift+Enter in the terminal to something else are left as
   they were and leave no backup; an edit is backed up first, under a name that never replaces an earlier backup, and a
   failed backup writes nothing. Remote editors (the git helper or `PATH` lies in the folder an editor keeps its server in,
-  which `CompatEditors` names) are not written. The path goes through `plain`. Proof: `test/util/terminal-setup.test.ts`.
+  which `CompatEditors` names) are not written. The path goes through `plain`, in the confirm dialog and in the outcome toast, and so does the reason a
+  write failed. Proof: `test/util/terminal-setup.test.ts` and `test/component/terminal-setup.test.tsx` (the five outcomes
+  with an escape sequence in the path and the reason, and the confirm dialog drawn with one in `APPDATA`; replacing every
+  `plain` of `terminal-setup.tsx` fails all six rows).
 - `/agents` create writes `<config directory>/agents/<name>.md` from the TUI process, only when the server is on this
   machine. The name passes `ConfigAgent.isName` and the 3-to-50 rule, so it is one segment; every value is written as a
   JSON string (a valid YAML scalar), so no text of the person's adds a key or ends the front matter. Before anything is

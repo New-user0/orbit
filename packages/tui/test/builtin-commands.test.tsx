@@ -141,3 +141,48 @@ test("/ide with an argument other than open says how it is used", async () => {
   await command(setup, "/ide nonsense")
   await setup.waitForFrame((frame) => frame.replace(/\s+/g, " ").includes("or /ide open"))
 })
+
+// Class 9: the folder of the session and the name an editor gave its lock reach the toasts of /ide, and each can hold an
+// escape sequence. `plain` at the toast keeps a folder name from acting on the terminal.
+test("the toasts of /ide open write out the control characters of a folder and an editor name", async () => {
+  await using state = await tmpdir()
+  const root = path.parse(process.cwd()).root
+  const hostile = path.join(root, "evil\u001b]0;pwn\u0007\u001b[2Jdir")
+  const folder = path.join(state.path, "ide")
+  await mkdir(folder, { recursive: true })
+  await writeFile(
+    path.join(folder, "4242.lock"),
+    JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      port: 4242,
+      workspaceFolders: [root],
+      // No program of this name exists, so Orbit says it cannot start it and starts nothing.
+      ideName: "Nope\u001b[31m\u001b]0;x\u0007Editor",
+      authToken: IdeLock.token(),
+    }),
+  )
+  const evil = { directory: hostile, project: { id: "project", directory: hostile, canonical: hostile } }
+  for (const name of variables) delete process.env[name]
+  await using setup = await createAppFixture({
+    state: state.path,
+    width: 160,
+    config: { animations: false },
+    fetch: (url) => {
+      if (url.pathname === "/api/fs/list") return json({ location: evil, data: [] })
+      if (url.pathname === "/api/location") return json(evil)
+      if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
+      if (url.pathname === "/api/agent")
+        return json({ location: evil, data: [{ id: "build", mode: "primary", hidden: false, permissions: [] }] })
+      if (url.pathname === "/api/provider") return json({ location: evil, data: [{ id: "provider", name: "Provider" }] })
+      if (url.pathname === "/api/model")
+        return json({ location: evil, data: [{ id: "model", providerID: "provider", name: "Model", variants: [] }] })
+    },
+  })
+  await command(setup, "/ide open", 2)
+  const frame = await setup.waitForFrame((frame) => frame.includes("cannot start"))
+  // The toast names the editor and the folder with their escape characters written out, not acted on.
+  const toast = frame.replace(/\s+/g, "")
+  expect(toast).toContain("Nope\\x1b[31m\\x1b]0;x\\x07Editor")
+  expect(toast).toContain("evil\\x1b]0;pwn\\x07\\x1b[2Jdir")
+})

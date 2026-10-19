@@ -48,7 +48,10 @@ async function renderEditor(input: { cwd: string; state: string; connect?: numbe
   return { editor, destroy: () => setup.renderer.destroy() }
 }
 
-async function bridge(state: string, options: { hello?: boolean | number; folders?: string[]; name?: string } = {}) {
+async function bridge(
+  state: string,
+  options: { hello?: boolean | number; folders?: string[]; name?: string; helloName?: string } = {},
+) {
   const token = IdeLock.token()
   const upgrades: Record<string, string>[] = []
   const sockets = new Set<{ send(data: string): void; close(code?: number): void }>()
@@ -64,7 +67,7 @@ async function bridge(state: string, options: { hello?: boolean | number; folder
       close: (socket) => void sockets.delete(socket),
       message(socket, message) {
         if (JSON.parse(String(message)).type === "hello" && options.hello !== false)
-          socket.send(JSON.stringify({ type: "hello", version: options.hello ?? 1, editor: options.name ?? "Test Editor" }))
+          socket.send(JSON.stringify({ type: "hello", version: options.hello ?? 1, editor: options.helloName ?? options.name ?? "Test Editor" }))
       },
     },
   })
@@ -130,6 +133,23 @@ test("connect links to the window picked, reads the token from its lock, and the
     expect(setup.editor.server()?.name).toBe("Test Editor")
     expect(setup.editor.list().current).toBe(window.port)
     expect(window.upgrades).toHaveLength(1)
+  } finally {
+    setup.destroy()
+    await window.stop()
+    await root[Symbol.asyncDispose]()
+  }
+})
+
+// Class 9: the name in the editor's hello is the editor's own to choose, and it reaches the footer and the toast of
+// "No editor" through `server().name`.
+test("the name an editor sends in hello is written out, and the one in its lock too", async () => {
+  const { root, cwd, state } = await scene()
+  const window = await bridge(state, { folders: [cwd], name: "Lock\u001b[2J", helloName: "Hello\u001b]0;x\u0007\u001b[31m" })
+  const setup = await renderEditor({ cwd, state })
+  try {
+    expect(setup.editor.list().matched.map((item) => item.name)).toEqual(["Lock\\x1b[2J"])
+    expect(await setup.editor.connect(window.port)).toBe("connected")
+    expect(setup.editor.server()?.name).toBe("Hello\\x1b]0;x\\x07\\x1b[31m")
   } finally {
     setup.destroy()
     await window.stop()
