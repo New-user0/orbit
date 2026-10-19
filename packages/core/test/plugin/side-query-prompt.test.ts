@@ -7,6 +7,7 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginHost } from "@orbit/core/plugin/host"
 import { OptimizePlugin } from "@orbit/core/plugin/optimize"
+import { OutputStylePlugin } from "@orbit/core/plugin/output-style"
 import { PromptConfigPlugin } from "@orbit/core/plugin/prompt-config"
 import { SubagentPromptPlugin } from "@orbit/core/plugin/subagent-prompt"
 import { Provider } from "@orbit/core/provider"
@@ -46,6 +47,13 @@ const rows: ReadonlyArray<{
     keys: {},
     rewritten: (text) => text.startsWith("You are Orbit") && text !== EXTRACTION,
   },
+  {
+    name: "a root session with an output style",
+    child: false,
+    model: "plain-model",
+    keys: { output_style: "explanatory" },
+    rewritten: (text) => text.includes("# Output style: Explanatory\n"),
+  },
 ]
 
 describe("side query prompt", () => {
@@ -66,6 +74,7 @@ describe("side query prompt", () => {
       const host = yield* PluginHost.make(yield* Plugin.Service)
       yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(host), { discard: true })
       yield* PromptConfigPlugin.Plugin.effect(host)
+      yield* OutputStylePlugin.Plugin.effect(host)
       yield* SubagentPromptPlugin.Plugin.effect(host)
       const root = yield* host.session.create({ title: "root" })
       const session = row.child ? yield* host.session.create({ title: "child", parentID: root.id }) : root

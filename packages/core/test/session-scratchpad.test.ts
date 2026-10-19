@@ -213,7 +213,7 @@ describe("the baseline section", () => {
               "",
               `\`${folder}\``,
               "",
-              "Temporary files belong there instead of in the system temp folder, unless the user says otherwise. Subagents of this session share the folder, and it is not part of the user's project.",
+              "Temporary files belong there instead of in the system temp folder, unless the user says otherwise. It is not part of the user's project.",
             ].join("\n"),
           )
           // The retired wording, as data: the emphasised rule, the use-case list and the closing sentence.
@@ -230,21 +230,22 @@ describe("the baseline section", () => {
   )
 
   it.live(
-    "claims that subagents share the folder only for a session that has no parent and no fork source",
+    "renders the same section for a root, a subagent, a fork and a subagent of a fork, with the folder of its own key",
     () =>
       scenario(() =>
         Effect.gen(function* () {
           const scratchpad = yield* SessionScratchpad.Service
-          const claim = "Subagents of this session share the folder"
           // The key goes back one level, so the subagents of a fork or of a subagent use that session's own folder.
-          for (const [session, shares] of [
-            [lineage({ id: "ses_root" }), true],
-            [lineage({ id: "ses_child", parentID: "ses_root" }), false],
-            [lineage({ id: "ses_fork", fork: "ses_root" }), false],
-            [lineage({ id: "ses_forkchild", parentID: "ses_fork" }), false],
-          ] as const) {
+          // The section names the folder only, so no session claims what its subagents share.
+          for (const session of [
+            lineage({ id: "ses_root" }),
+            lineage({ id: "ses_child", parentID: "ses_root" }),
+            lineage({ id: "ses_fork", fork: "ses_root" }),
+            lineage({ id: "ses_forkchild", parentID: "ses_fork" }),
+          ]) {
             const text = (yield* readInitial(scratchpad.source(session))).text
-            expect([session.id, text.includes(claim)]).toEqual([session.id, shares])
+            expect([session.id, text.includes("share")]).toEqual([session.id, false])
+            expect(text).toContain(scratchpad.path(session)!)
           }
           // The key a fork's subagent uses is the fork's own, which is what the claim leaves out.
           expect(SessionScratchpad.key(lineage({ id: "ses_forkchild", parentID: "ses_fork", fork: "ses_root" }))).toBe(

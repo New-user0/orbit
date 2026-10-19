@@ -181,7 +181,7 @@ describe("file names reaching the model", () => {
         Effect.gen(function* () {
           const messages = toLLMMessages(build(`docs/${spelling}REPRO-NAME.pdf`), ref, "fake")
           for (const model of named) {
-            const body = JSON.stringify((yield* compileRequest(LLM.request({ model, messages }))).body)
+            const body = decoded((yield* compileRequest(LLM.request({ model, messages }))).body)
             expect(body).toContain("REPRO-NAME")
             expect(live(body)).toBe(false)
           }

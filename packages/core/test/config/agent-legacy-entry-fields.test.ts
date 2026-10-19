@@ -31,6 +31,22 @@ describe("legacy agent and mode entries", () => {
         expect(result.paths).toContain(`${door}.build.${field}`)
       })
 
+  // The per-entry notes of the tools map and the permission object are reported at the entry's own path.
+  const notes = [
+    { name: "a tool that is not a boolean", entry: { tools: { edit: "maybe" } }, path: "tools.edit" },
+    { name: "a permission that is not an action", entry: { permission: { bash: "maybe" } }, path: "permission.bash" },
+    {
+      name: "a pattern that is not an action",
+      entry: { permission: { bash: { "rm *": "maybe" } } },
+      path: "permission.bash.rm *",
+    },
+  ]
+  for (const door of ["agent", "mode"] as const)
+    for (const row of notes)
+      test(`${door}: ${row.name} is named at its own path`, () => {
+        expect(agents({ [door]: { plan: row.entry } }).paths).toEqual([`${door}.plan.${row.path}`])
+      })
+
   for (const door of ["agent", "mode"] as const) {
     test(`${door}: a provider model keeps its variant`, () => {
       expect(agents({ [door]: { build: { model: "acme/model-1", variant: "high" } } }).agents.build?.model).toEqual({

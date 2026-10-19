@@ -2078,7 +2078,7 @@ An IPv4 address in the managed `denied_domains` list now also denies its mapped 
 
 ### One bad field no longer drops its agent entry or its settings object
 
-In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry, or in an entry of the older `agent` and `mode` maps (`color`, `model`, `steps`, `mode`, `description`, `options`, or one rule in its `permissions`) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
+In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry, or in an entry of the older `agent` and `mode` maps (`color`, `model`, `steps`, `mode`, `description`, `options`, or one entry of its `permission` object or `tools` map) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
 
 **Affects:** anyone with a typo in one of these entries, administrators most of all; `orb doctor` lists each skipped field.
 
@@ -2763,7 +2763,7 @@ and nothing is fetched to find it. A model that the catalog has no cutoff for ge
 optional `knowledge` field (`YYYY-MM`), so the generated client changed too.
 
 Each session has a scratchpad: the folder `sessions/<ID of the session its lineage goes back to>` in Orbit's temporary
-folder. The name goes back one level only: a subagent and a fork use the folder of the session they came from, but a subagent that a fork or another subagent starts uses the folder named by that session's own ID, so only a session with no parent and no fork source tells the model that its subagents share the folder (`FU-M4-r3-scratch` tracks resolving the whole lineage). The baseline names it and tells the model to
+folder. The name goes back one level only: a subagent uses its parent's folder, a fork uses its source's folder, and a fork of a subagent or of a fork uses the folder of the session it came from. The baseline names the folder and says the same for every session, so an exact fork repeats its parent's system parts. Resolving the whole lineage is deferred by the plan's appendix (`FU-M4-r3-scratch`). The baseline names it and tells the model to
 keep its temporary files there instead of in the system temp folder. Orbit makes it when a run starts. Every agent that
 may edit files (not Plan, whose mode denies `Edit *`, so its writes there still ask until permissions-7) may edit in the folder of the session that asks without a question, and only where the real place of the
 file is in that folder (a link inside it that leads elsewhere is decided by where it leads), and your own rules for the
@@ -2901,6 +2901,8 @@ Three notes are now written while a user message is lowered, from fields the mes
 - A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative for the platform the server runs on (on Linux and macOS a Windows spelling such as `C:...`, `\...` or `\host...` is relative; a `~name/` spelling counts as relative; only `~`, `~/` and, on Windows, `~\` mean the home folder), cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI keep sending the editor context as a hidden item until a later change moves them.
 
 `orb run --bare` and vanilla instances keep the mid-turn note and drop the hints and the editor note. On a normal instance, compaction summaries and session generations (/btw and the keep-alive warm-up) lower a prompt like the main request, so they share its cache and see the selection; retained recent messages never carry the hints or the editor note. A redacted session export now replaces `editor.path` and the selected text.
+
+Each of these notes (the mid-turn note, every `@agent` hint, the editor note and the reasoning-effort note) now ends with a blank line when it is lowered, so a provider route that joins a message's text parts with nothing, such as the chat-completions providers, keeps every closing fence on its own line and starts your words on a new line outside the quoted block. Stored messages are unchanged; a running session sees one more prompt-cache miss.
 
 Sessions that already hold steered messages gain the note once when first lowered by this build, so a running session sees one prompt-cache miss. A steer that follows a fork, an import or a crash that cut history right after a tool step also gets the note, and the first steer after a completed checkpoint does not.
 
@@ -3595,7 +3597,10 @@ of the default prompt is replaced by one that says the agent helps the way the o
 describes. A prompt that does not open with the default line, such as a model's own prompt or an agent's system prompt,
 keeps its first line. So does a prompt whose style comes from a folder that is not trusted yet: Orbit still reads that
 style and puts its text last in the prompt, but the clone's style does not get to say what the agent is for until you
-trust the folder. No style removes the rules about approval, which stay in the sections that every style keeps.
+trust the folder. No style removes the rules about approval, which stay in the sections that every style keeps. The
+style also applies to the requests that compact a conversation and to the background generate requests (such as cache
+warming), so they carry the same system prompt as your messages and reuse its cached prefix; a one-shot side query such
+as a web page extraction keeps its own text.
 
 **Affects:** people with a custom output style that has no `keep-coding-instructions` key, including styles kept in
 another product's folder that Orbit reads while compatibility is on, and people who open a repository with a style of

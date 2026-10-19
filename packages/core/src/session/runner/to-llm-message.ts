@@ -414,11 +414,14 @@ function toLLMMessage(
         context &&
         message.metadata?.origin !== "agent" &&
         [message.text, ...(message.skills ?? []).map((skill) => skill.text ?? "")].some(SessionEffort.requested)
+      // Chat adapters join a message's text parts with nothing, so each note ends with a blank line: a closing fence
+      // must stand alone, and the person's words must not read as part of the quoted block.
+      const note = (text: string) => Message.text(`${text}\n\n`)
       const content = [
-        ...(queued ? [Message.text(queuedNote(message.metadata?.origin))] : []),
-        ...(context && message.agents?.length ? agentHints(message.agents).map((hint) => Message.text(hint)) : []),
-        ...(context && message.editor ? [Message.text(editorNote(message.editor))] : []),
-        ...(boosted ? [Message.text(ReminderText.render({ text: SessionEffort.note }))] : []),
+        ...(queued ? [note(queuedNote(message.metadata?.origin))] : []),
+        ...(context && message.agents?.length ? agentHints(message.agents).map(note) : []),
+        ...(context && message.editor ? [note(editorNote(message.editor))] : []),
+        ...(boosted ? [note(ReminderText.render({ text: SessionEffort.note }))] : []),
         ...(message.skills ?? []).flatMap((skill) => (skill.text === undefined ? [] : [Message.text(skill.text)])),
         ...(message.text === "" ? [] : [Message.text(message.text)]),
         ...userAttachmentContent(message.files ?? []),
