@@ -3820,3 +3820,41 @@ A project or local config in a folder that is not trusted can no longer set `age
 **Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
 
 **What to do:** Trust the folder if you want its prompt to apply.
+
+
+## A file outside the project is trusted by the folder that owns it, and two shapes of owner stay refused
+
+When a tool or a program works on a file outside the project, Orbit asks whether the folder that owns the file is trusted. The owner is the nearest folder above the file that holds `.git` or `.hg`, or else the folder itself. Two shapes are refused, and both fail closed (they refuse, never open):
+
+- A home folder that is itself a git repository (a dotfiles repository) is never trusted as an owner. A trusted folder that you reach through a link that lives in that home folder is refused too.
+- A folder you granted trust to that carries no `.git` or `.hg`, and whose parent is neither trusted nor above the project you opened, is refused for the files it holds.
+
+A trusted repository that sits inside an untrusted folder is served, because you granted that nested folder yourself; a formatter that walks up from a file there can read the outer folder's config. The project itself behaves the same way. No change is planned for these three edges (FU-M3-115: accepted, documented).
+
+**Affects:** people whose home folder is a git repository, and people who grant trust to a folder without a marker.
+
+**What to do:** Open the project from a folder that has a marker, or grant trust to the folder that holds the project, to have its files trusted.
+
+## A provider package written as an absolute file path loads again
+
+A `package` of a provider that is a plain absolute file path (`/opt/providers/acme.mjs`, `C:\providers\acme.mjs`) loads as the `file://` URL of that file, which is how it loaded before the compiled binary stopped looking names up in the folder it starts in. A relative path is still refused: it would be read against Orbit's own folder, not the folder of the config that wrote it.
+
+**Affects:** people whose provider config names a package by an absolute file path.
+
+**What to do:** Nothing. Use an absolute path or a `file://` URL, not a relative one.
+
+## The embedded SDK gives `SessionNotFoundError` for an unknown session
+
+`sessions.get` of the embedded Effect client used to fail with the core error `Session.NotFoundError` for a session that does not exist. It now fails with the protocol's `SessionNotFoundError` (with `sessionID` and `message`), the error the HTTP client already gave, so one handler covers both transports.
+
+**Affects:** code that calls `sessions.get` on an embedded `Orbit` from `@orbit/sdk/effect` and catches the core error.
+
+**What to do:** Catch `SessionNotFoundError` (tag `"SessionNotFoundError"`) instead of `Session.NotFoundError`.
+
+## One experimental key does not hide another
+
+A later settings file that has an `experimental` block no longer hides the keys of an earlier block that it does not set. `allow_local_fetch`, `portable_shell_scanner` and `subagent_depth` each take the value of the last file that sets that key, so a project that sets a depth leaves your own `allow_local_fetch`. An untrusted project's block is still withheld. The other nested blocks (`compaction`, `tool_output`, `media`, `shell_tool`, `sandbox`) still take the whole block from the last file.
+
+**Affects:** people who set `experimental` keys in both their own config and a project's.
+
+**What to do:** Nothing.

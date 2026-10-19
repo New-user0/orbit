@@ -2134,8 +2134,11 @@ These come from how M1 and M2 were run, and they apply to any change in this are
 Not fixed in M1. Each entry is a place where the promise at the top of this page does not hold yet, or rests on a
 decision that is still open. Do not claim otherwise in docs or in a PR, and do not widen one. An entry that names a task
 is carried by it, and one that names none has no task yet: give it one. An entry reads `Accepted by the owner until
-<task>` once the owner has said so in writing. None does yet, so until one does, a change that touches that surface
-fixes it or asks.
+<task>` once the owner has said so in writing. The owner's rules of 2026-10-14 ("What ever reference is doing") and
+2026-10-18 ("same as free-code-main repo does", "reference decides") count as that writing for the gaps the reference
+decided to accept: FU-M1-013, FU-M1-026, FU-M1-050, FU-M1-080 and FU-M1-088. The first two have an entry below that says
+so; the other three have no entry, and their register rows record the acceptance. Any other entry is not accepted, so a
+change that touches that surface fixes it or asks.
 
 The program-wide register of every follow-up, these gaps included, with each one's carrier and status, is [follow-ups.md](follow-ups.md).
 
@@ -2143,6 +2146,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   mapped network drive is read, where it was always refused before the outside rule, and an untrusted repository's one is
   still resolved and statted before `allow` refuses it (9b order). Unmapped `\\server` and `//server` spellings are
   refused before any disk access. Carried by `permissions-3a` as FU-M3-003; see "A share named before anyone is asked" below.
+  Accepted by the owner until `permissions-3a` (FU-M1-026): the reference treats a drive letter as an ordinary path. A
+  word that a shell builds as it runs stays with `shell-safety-12`.
 - **Fingerprints stop short of three things.** The skill and agent directories of other products' roots
   are not digested, so a hook added to a skill there is not asked about, and no consumer of those hooks exists yet:
   hooks-21 must digest them before it runs one. The modules that a plugin's entry file imports are not digested
@@ -2203,12 +2208,18 @@ The program-wide register of every follow-up, these gaps included, with each one
   so does `az` (the token command of the Azure provider, started in the folder that the server runs in). The fix is in the
   spawner: find the program with `which` and fail for a name that is not found. It changes what a relative `PATH` entry
   of a child does, which is the owner's question above. Register row FU-M4-001, task `sweep`.
+- **`@orbit/client` starts a bare `orb` on Windows.** With no `options.command` the client starts `["orb", "serve",
+  "--service"]` through `node:child_process`, so a host on Windows whose working folder holds an `orb.exe` can start that
+  one. The client may depend only on Schema and Protocol, so it cannot use `which`. Documented, not enforced
+  (FU-M1-075): the client README tells a host to pass an absolute command or to set `NoDefaultCurrentDirectoryInExePath`.
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
   `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
   a program in the working folder that way (`util.which` in `packages/util/test/which.test.ts`). A child that is handed a
   `PATH` with an explicit relative entry still searches it: a hand probe with Bun 1.4.2 on Windows had `cmd.exe` run a
   project `.cmd` through a `.` entry even with `NoDefaultCurrentDirectoryInExePath` set (no test pins this). That needs the person's own `PATH` or the person's own config to name
   the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).
+  Accepted by the owner (FU-M1-013, 2026-10-18): the reference hands a child the person's `PATH` as it is, and no task
+  carries it.
 - **The external editor** is fixed (FU-M1-014, task `clients-ux-14`). `openEditor` and `openFile` in
   `packages/tui/src/editor.ts` share one launcher: the editor is found with `which` on `PATH` alone, started by the path
   that was found through cross-spawn with `ProgramLookup.environment(undefined)` and no shell, so a `code.cmd`,
