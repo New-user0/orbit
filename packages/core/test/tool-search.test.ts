@@ -943,7 +943,7 @@ describe("search tools", () => {
       })
       yield* withTools(tmp.path, (registry) =>
         Effect.gen(function* () {
-          const result = yield* executeTool(registry, call("Glob", { pattern: "*.ts" }))
+          const result = yield* executeTool(registry, call("Glob", { pattern: "**/*.ts" }))
           expect(result.output).toEqual([
             { path: "old.ts", type: "file" },
             { path: "middle.ts", type: "file" },
@@ -960,16 +960,19 @@ describe("search tools", () => {
       const tmp = yield* tmpdirScoped()
       yield* Effect.promise(async () => {
         await fs.mkdir(path.join(tmp.path, ".git"))
-        await Bun.write(path.join(tmp.path, ".gitignore"), "ignored.ts\n")
+        await Bun.write(path.join(tmp.path, ".gitignore"), "ignored.ts\nbuild/\n")
         await Bun.write(path.join(tmp.path, "ignored.ts"), "x\n")
+        // A file inside an ignored folder is only listed when the search itself ignores no ignore file.
+        await Bun.write(path.join(tmp.path, "build", "inside.ts"), "x\n")
         await Bun.write(path.join(tmp.path, ".dotfile.ts"), "x\n")
         await Bun.write(path.join(tmp.path, "plain.ts"), "x\n")
       })
       yield* withTools(tmp.path, (registry) =>
         Effect.gen(function* () {
-          const result = yield* executeTool(registry, call("Glob", { pattern: "*.ts" }))
+          const result = yield* executeTool(registry, call("Glob", { pattern: "**/*.ts" }))
           expect((result.output as ReadonlyArray<{ path: string }>).map((entry) => entry.path).sort()).toEqual([
             ".dotfile.ts",
+            path.join("build", "inside.ts"),
             "ignored.ts",
             "plain.ts",
           ])
