@@ -152,7 +152,7 @@ rest:
   both directions and keeps only `git_status: false`, so a repository can turn the snapshot off but never back on over
   your own choice. An agent's `initial_prompt` is dropped when it starts with `/`.
 - **Kept as written:** everything else, such as `username`, `snapshots` and `watcher`, and the fields of an agent that
-  only describe it.
+  only describe it, except that a folder that is not trusted cannot rewrite the description or initial prompt of an agent that already exists.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
 `{file:path}` reference is read only when it names a file inside the project's folder, not through a link that leaves
@@ -2757,7 +2757,7 @@ from the reply (a fenced or bare JSON answer in prose is not an answer). Other c
   JSON, so pass a file there.
 - `ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES` (1 to 20) sets `attempts` for the prompts of a run; any other value is a usage error.
 - A failed run reports the new subtype `error_max_structured_output_retries` for the attempt limit, and `reason:
-  "invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
+"invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
   attempts and its own result line.
 - An older server refuses a request that carries `turn.output`, and a server that drops it fails the run; neither falls
   back to parsing text.
@@ -3806,7 +3806,7 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 ## Instruction files run from general to specific, with local variants and a managed file
 
 - The instruction files in the first request now run from general to specific, because the later one takes precedence: the managed file, the global file, then the project's folders from the farthest ancestor to the one the session started in (they ran nearest first before). The baseline opens with a short header that says so, and that the files are standing background to apply where they bear on the task. Every running session with instruction files takes one prompt-cache miss, because its baseline is rendered again with the header. The project memory index (`MEMORY.md`) comes after the project files.
-- `ORBIT.local.md` (and the reference vendor's local file while compatibility is on) is looked up in every folder of the walk, after that folder's shared file, and loads even in a folder with no shared file. Keep it out of version control. The first-of rule for shared names (`ORBIT.md`, then `AGENTS.md`) is unchanged and applies to the local names separately.
+- `ORBIT.local.md` (and the reference vendor's local file while compatibility is on) is looked up in every folder of the walk, after that folder's shared file, and loads even in a folder with no shared file. Keep it out of version control. A repository can ship one too, so the baseline labels it (and every file it imports) as a local variant that carries no approval from the user, in a trusted folder as well as an untrusted one, and the header says a project's file cannot approve a risky action, local variants included. The first-of rule for shared names (`ORBIT.md`, then `AGENTS.md`) is unchanged and applies to the local names separately.
 - A file named `ORBIT.md` in the managed folder (`%ProgramFiles%\Orbit` on Windows, `/Library/Application Support/Orbit` on macOS, `/etc/orbit` elsewhere, or `ORBIT_MANAGED_DIR`) is organisation policy: it loads in every project, trusted or not, and `instructions_exclude` cannot remove it. Its imports outside the project load only once the project is trusted. `ORBIT_DISABLE_INSTRUCTIONS`, `orb run --bare` and an agent whose `context.instructions` is `false` switch it off.
 - A session whose project files come from two or more different folders sees one short note that the order changed. A worktree inside its main checkout skips the main checkout's shared files above the worktree and keeps its local ones.
 
@@ -3888,7 +3888,7 @@ the provider's prompt cache is cold for it).
 
 ## An untrusted folder cannot change the prompt of an agent that exists
 
-A project or local config in a folder that is not trusted can no longer set `agents.<id>.system` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged.
+A project or local config in a folder that is not trusted can no longer set `agents.<id>.system`, `description` or `initial_prompt` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged.
 
 **Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
 

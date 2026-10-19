@@ -533,6 +533,8 @@ describe("the approval carve-out in every text that ranks instruction files", ()
     trinity: TRINITY,
     local: LOCAL,
   })
+  test("the header names local variants among the files that cannot approve", () =>
+    expect(InstructionDiscovery.HEADER).toContain("cannot approve a risky action in advance, a local variant included"))
   for (const [name, text] of rows) {
     test(`${name} keeps the carve-out and ranks no project text above approval`, () => {
       expect([name, carveOut.test(text)]).toEqual([name, true])

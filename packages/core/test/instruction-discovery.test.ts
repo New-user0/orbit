@@ -1861,6 +1861,15 @@ describe("ConfigInstructionPlugin.Plugin keeps a project's imports inside the pr
             expect(files.map((item) => item.kind)).toEqual(files.map(() => "local"))
             const text = (yield* readBody(yield* discovery.load())).text
             expect(text.includes("ABOVE MARKER")).toBe(trusted)
+            // Neither the file nor what it imports is called the person's private notes, trusted or not.
+            for (const header of text.split("\n").filter((line) => line.startsWith("Instructions from: ")))
+              expect([name, world, header.includes("private"), header.includes("kept out of the repository")]).toEqual([
+                name,
+                world,
+                false,
+                false,
+              ])
+            expect(text.split("\n").filter((line) => line.includes("carries no approval from the user")).length).toBe(files.length)
           }).pipe(scoped(where, trusted))
         }),
       )
@@ -3148,7 +3157,7 @@ describe("InstructionDiscovery renders kinds, the header and order notes", () =>
           .split("\n")[0]!
       expect(block("/m/ORBIT.md")).toContain("installed by an administrator")
       expect(block("/m/more.md")).toContain("installed by an administrator")
-      expect(block("/repo/ORBIT.local.md")).toContain("private notes for this folder")
+      expect(block("/repo/ORBIT.local.md")).toContain("carries no approval from the user")
       // A plain file has no label.
       expect(block("/repo/AGENTS.md")).toBe("Instructions from: /repo/AGENTS.md")
     }),
@@ -3182,7 +3191,7 @@ describe("InstructionDiscovery renders kinds, the header and order notes", () =>
         yield* discovery.load(),
         stored([{ path: "/repo/ORBIT.local.md", content: "same" }]),
       )
-      expect(update.text).toContain("private notes for this folder")
+      expect(update.text).toContain("carries no approval from the user")
     }),
   )
 

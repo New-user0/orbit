@@ -119,7 +119,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   core rules follow a replacement. A drive letter mapped to a share is not detected (follow-up). Proof: the scope table
   in `test/plugin/prompt-config.test.ts` ("system prompt keys by scope"), `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`. The same text can arrive as `agents.<id>.system`, because an agent with a prompt
-  of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system` from
+  of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system`, `description` (the text of the agent listing) and `initial_prompt` from
   a document of a folder that is not trusted when the agent already exists; an agent the folder defines itself keeps
   its prompt. Proof: `test/config/agent-untrusted-system.test.ts`.
 - `language` and `output_style` in the config: text that steers every reply (a reply language, a named style whose file
@@ -217,7 +217,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     control (all but `core.pager`, which git runs only for a terminal that no test has); git's own trace (`GIT_TRACE2`)
     says whether any git started.
 - The git snapshot of a session (`VcsInstructions`, `packages/core/src/vcs/instructions.ts`): `status --short`, `log
-  --oneline`, `config user.name` and the refs of `origin` run in the session's folder, and git applies that folder's
+--oneline`, `config user.name` and the refs of `origin` run in the session's folder, and git applies that folder's
   config to them (`core.fsmonitor`, `include.path`, `gpg.program` with `log.showSignature`), with no `-c` override. The
   source asks `ProjectTrust.trusted()` first at every read, whatever else it knows, and starts no git for a folder that is
   not trusted. A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
@@ -1430,12 +1430,12 @@ one table covers every spelling.
     `trustOptions`, `load` and `resume` use before `requireTrust`) with a file linked to it, and controls.
   - `packages/core/test/link-share-bounds.test.ts`: the work the checks do (folders listed, links read) and a child
     process with a deadline.
-  Mutations: `LinkShare.scan` entering a link entry without asking fails the nested rows of `share-roots.test.ts`;
-  taking the check out of `discoverThemes` or `Store.at` fails the rows of their files; reverting `LinkShare` and
-  `FSUtil.up` to the walk that starts again from the root at every hop fails three rows of `link-share-bounds.test.ts`.
-  Not covered, and still a gap: the terminal UI's plugin folders, the VS Code diff view (another process), the native
-  watcher. (The git calls of the flow runner are a different class: they wait for trust, see the Known gaps on
-  `orb flow run`.)
+    Mutations: `LinkShare.scan` entering a link entry without asking fails the nested rows of `share-roots.test.ts`;
+    taking the check out of `discoverThemes` or `Store.at` fails the rows of their files; reverting `LinkShare` and
+    `FSUtil.up` to the walk that starts again from the root at every hop fails three rows of `link-share-bounds.test.ts`.
+    Not covered, and still a gap: the terminal UI's plugin folders, the VS Code diff view (another process), the native
+    watcher. (The git calls of the flow runner are a different class: they wait for trust, see the Known gaps on
+    `orb flow run`.)
 
 **Review questions:**
 
@@ -2362,7 +2362,7 @@ The program-wide register of every follow-up, these gaps included, with each one
   spawner: find the program with `which` and fail for a name that is not found. It changes what a relative `PATH` entry
   of a child does, which is the owner's question above. Register row FU-M4-001, task `sweep`.
 - **`@orbit/client` starts a bare `orb` on Windows.** With no `options.command` the client starts `["orb", "serve",
-  "--service"]` through `node:child_process`, so a host on Windows whose working folder holds an `orb.exe` can start that
+"--service"]` through `node:child_process`, so a host on Windows whose working folder holds an `orb.exe` can start that
   one. The client may depend only on Schema and Protocol, so it cannot use `which`. Documented, not enforced
   (FU-M1-075): the client README tells a host to pass an absolute command or to set `NoDefaultCurrentDirectoryInExePath`.
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
