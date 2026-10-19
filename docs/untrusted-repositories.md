@@ -456,7 +456,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   another product while compatibility is on, `rules` in the config folder, and `rules` beside the managed file; read by
   `ConfigInstructionRules.scan` and loaded by `ConfigInstructionPlugin` and, for the folders a read passes through, by
   `InstructionTriggers` and `SessionInstructions`; classes 1, 4, 6, 7, 11 and 14). The scan opens nothing before the gate:
-  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), a folder is
+  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), and the loader's
+  own check of whether a rules folder is there to watch skips such a folder before it stats it (proof: the "never stats,
+  lists or watches a share that a rules folder of the project links to" rows of `test/instruction-discovery.test.ts`,
+  Orbit's and the other product's rules folder, trusted and untrusted, Windows with link rights; mutation: dropping the
+  share term of that check fails both), a folder is
   entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
   `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
   a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
