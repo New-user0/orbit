@@ -76,7 +76,9 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
     yield* Effect.promise(() => Promise.all([home, config, project].map((dir) => fs.mkdir(dir, { recursive: true }))))
     yield* Effect.promise(() => Bun.$`git init -q`.cwd(project).quiet())
     const llm = yield* TestLLM.Test.pipe(Effect.provide(TestLLM.testLayer({ fallback: TestLLM.text("side", "side_text") })))
-    const unreadable = { current: false }
+    // `managed` makes the administrator's ORBIT.md unreadable and `project` the project's. A managed file that cannot be
+    // read fails closed (the source is unavailable); a project file costs only itself.
+    const unreadable = { managed: false, project: false }
     const reads: string[] = []
     const replacements: LayerNode.Replacements = [
       Global.node.replace(Global.layerWith({ home, config, data: path.join(root, "data"), cache: path.join(root, "cache"), state: path.join(root, "state"), tmp: path.join(root, "tmp") })),
@@ -95,7 +97,10 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
                 ...fs,
                 readFileStringSafe: (file) =>
                   Effect.sync(() => reads.push(file)).pipe(Effect.andThen(
-                  unreadable.current && path.basename(file) === "ORBIT.md" ? Effect.undefined : fs.readFileStringSafe(file))),
+                  path.basename(file) === "ORBIT.md" &&
+                    (path.dirname(file).toLowerCase() === options.managed?.toLowerCase() ? unreadable.managed : unreadable.project)
+                    ? Effect.undefined
+                    : fs.readFileStringSafe(file))),
               }),
             ),
           ),
@@ -258,23 +263,41 @@ it.live("is read only: a preview records nothing and a repeat gives the same upd
 
 it.live("lists no files for an agent that leaves instruction files out of its context", () =>
   Effect.gen(function* () {
-    const s = yield* server()
+    const managed = path.join((yield* tmpdirScoped("orbit-managed-")).path, "managed")
+    const s = yield* server({ managed })
     yield* s.write(path.join(s.project, "ORBIT.md"), "project rules")
+    yield* s.write(path.join(managed, "ORBIT.md"), "policy")
     const build = yield* s.preview((yield* s.session()).id)
     const explore = yield* s.preview((yield* s.session(s.project, "explore")).id)
 
-    expect(build.status.files).toHaveLength(1)
+    expect(build.status.files).toHaveLength(2)
     expect(explore.initial ?? "").not.toContain("project rules")
     expect(explore.status.files).toEqual([])
     expect(explore.status.warnings).toEqual([])
     // It reads no source, so an unreadable one leaves its empty list complete.
-    s.unreadable.current = true
-    yield* s.write(path.join(s.project, "ORBIT.md"), "changed rules")
+    s.unreadable.managed = true
+    yield* s.write(path.join(managed, "ORBIT.md"), "changed policy")
     // Wait for the rescan to mark the source unavailable, so `available: true` below cannot come from discovery.
     yield* s.until((yield* s.session()).id, (preview) => !preview.status.available)
     const unreadable = yield* s.preview((yield* s.session(s.project, "explore")).id)
     expect(unreadable.status.files).toEqual([])
     expect(unreadable.status.available).toBe(true)
+  }).pipe(Effect.scoped),
+)
+
+it.live("leaves an unreadable project ORBIT.md out and lets the next name of its slot take its place", () =>
+  Effect.gen(function* () {
+    const s = yield* server()
+    const first = path.join(s.project, "ORBIT.md")
+    yield* s.write(first, "first name rules")
+    yield* s.write(path.join(s.project, "AGENTS.md"), "SECOND NAME MARKER")
+    s.unreadable.project = true
+    const preview = yield* s.preview((yield* s.session()).id)
+
+    expect(preview.status.available).toBe(true)
+    expect(preview.status.files.map((file) => file.path)).toEqual([path.join(s.project, "AGENTS.md")])
+    expect(preview.initial).toContain("SECOND NAME MARKER")
+    expect(preview.initial).not.toContain("first name rules")
   }).pipe(Effect.scoped),
 )
 
@@ -505,15 +528,16 @@ it.live("reads no file a link leads out of an untrusted project to, and a second
 
 it.live("reports an unavailable source, and no baseline while the session has none", () =>
   Effect.gen(function* () {
-    const s = yield* server()
-    const file = path.join(s.project, "ORBIT.md")
+    const managed = path.join((yield* tmpdirScoped("orbit-managed-")).path, "managed")
+    const s = yield* server({ managed })
+    const file = path.join(managed, "ORBIT.md")
     yield* s.write(file, "stored rules")
     const initialized = yield* s.session()
     const baseline = (yield* s.preview(initialized.id)).initial
     yield* s.step(initialized.id, "go")
     const fresh = yield* s.session()
 
-    s.unreadable.current = true
+    s.unreadable.managed = true
     yield* s.write(file, "changed rules")
     const blocked = yield* s.until(fresh.id, (preview) => !preview.status.available)
 
