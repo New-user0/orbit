@@ -170,10 +170,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     or global config defines (git-lfs among them), and an `.lfsconfig` names the host that git-lfs contacts. Orbit's
     untrusted snapshot repository therefore holds `info/attributes` with `* !filter !diff !merge`, which outranks the
     folder's file. It is written before the first capture, and again, with the index dropped, when a repository made by
-    an earlier version lacks it. The patch comparison also passes `--no-textconv`. The same test file has rows for a clean
-    filter (a new repository and one from an earlier version), a textconv program, and an LFS pointer restore against a
-    local server (skipped where `git lfs` is missing), each with a trusted control that does run the driver or contact the
-    host. Mutation: emptying the attributes text fails the clean-filter rows and the LFS row.
+    an earlier version lacks it: that index may hold entries that a clean filter rewrote, and a restore would write the
+    cleaned text over the person's file (the row "gives back the person's bytes on a restore from a repository of an
+    earlier version whose index holds cleaned entries", which fails with the index drop removed). The patch comparison of an
+    untrusted folder also passes `--no-textconv`, and a trusted folder's does not, so it compares as it always did (the
+    rows "runs no textconv program for a comparison even when the snapshot repository's attributes name one", which writes
+    the driver back into the attributes file so that the flag is what it tests, and its trusted control). The same test file
+    has rows for a clean filter (a new repository and one from an earlier version), a textconv program, and an LFS pointer
+    restore against a local server (skipped where `git lfs` is missing), each with a trusted control that does run the
+    driver or contact the host. Mutation: emptying the attributes text fails the clean-filter rows and the LFS row. Not
+    covered: the hooks of the person's own git config, which still run (Known gaps, "The hooks of the person's own git
+    config during a snapshot").
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
@@ -2372,6 +2379,15 @@ The program-wide register of every follow-up, these gaps included, with each one
   Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
   (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does
   start it), because `hg` loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
+- **The hooks of the person's own git config during a snapshot** (M4 round 3 re-check). The untrusted snapshot repository
+  switches off the drivers that the folder's `.gitattributes` picks, but not the hooks of the person's own git config:
+  with `core.hooksPath` in a global or system config, `reference-transaction`, `post-index-change` and `post-checkout`
+  run during a capture and a restore, with the folder as the working directory, and `init.templateDir` is the same channel
+  at `git init`. The probe of the re-check saw no code of the folder run and no request reach the network: the hooks are the
+  person's own, and what git-lfs's `post-checkout` does there (it makes a file read-only when the folder's attributes
+  say `lockable`) sent nothing to the host that `.lfsconfig` names. Not pinned by a test here. Closing it means pointing
+  `core.hooksPath` of the snapshot repository at an empty folder that Orbit owns and running `init --template=` with an
+  empty value (hardening, left for the register of M4 verification round 4).
 - **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4). The `@path` imports
   of prompts-context-9b do not wire it; it stays unread and its guard waits for whichever task wires it.
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and

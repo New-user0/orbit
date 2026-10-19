@@ -160,7 +160,7 @@ const layer = Layer.effect(
                 Effect.orDie,
               )
           }
-          return { source: source ?? snapshotRepository, worktree, snapshotRepository }
+          return { source: source ?? snapshotRepository, worktree, snapshotRepository, trusted }
         }).pipe(Effect.forkIn(lifetime)),
       )
     const trustedFiber = yield* open(true)
@@ -201,6 +201,7 @@ const layer = Layer.effect(
       const repo = yield* repository.pipe(Effect.mapError((cause) => failure(operation, cause)))
       return {
         source: repo.source,
+        trusted: repo.trusted,
         repository: repo.snapshotRepository,
         from: Git.TreeID.make(input.from),
         to: Git.TreeID.make(input.to),
@@ -238,6 +239,8 @@ const layer = Layer.effect(
           to: compared.to,
           context: input.context,
           paths: input.paths,
+          // The repository of an untrusted folder runs no textconv program; a trusted one compares as it always did.
+          noTextconv: !compared.trusted,
         })
         .pipe(Effect.mapError((cause) => failure("diff", cause)))
       const skipped = yield* ignored(

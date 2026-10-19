@@ -231,8 +231,8 @@ describe("Snapshot runs no attribute driver of the person's config for an untrus
   driverRow(false, true)
   driverRow(true, false)
 
-  // The textconv program is run by the comparison itself, so it gets its own row; the trusted comparison passes
-  // `--no-textconv` too (a patch has no use for converted text), so its control is the plain command in the folder.
+  // The textconv program is run by the comparison itself, so it gets its own row; the control is the plain command in
+  // the folder. The comparison of a trusted folder keeps its textconv programs (the next rows).
   it.live(
     "a textconv program picked by .gitattributes",
     () =>
@@ -275,6 +275,115 @@ describe("Snapshot runs no attribute driver of the person's config for an untrus
       }),
     SLOW,
   )
+
+  // Class 14 (M4 round 3 re-check): a repository that an earlier version made has no `info/attributes`, and its index may
+  // hold entries that a clean filter of the person's config rewrote. Capturing an unchanged file keeps such an entry, and a
+  // restore would write the cleaned text over the person's file, so the index is dropped when the file is written. The row
+  // above builds its earlier repository with the current code, so its index holds no cleaned entry and it cannot see this.
+  // Mutation: the `fs.remove(index)` line deleted in `Snapshot` gives "CLEANED\n" here.
+  it.live(
+    "gives back the person's bytes on a restore from a repository of an earlier version whose index holds cleaned entries",
+    () =>
+      Effect.gen(function* () {
+        const base = (yield* tmpdirScoped()).path
+        const root = path.join(base, "clone")
+        yield* repository(root)
+        const globalConfig = path.join(base, "global.gitconfig")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(globalConfig, `[filter "probe"]\n\tclean = "sed s/one/CLEANED/"\n`)
+          await fs.writeFile(path.join(root, ".gitattributes"), "*.txt filter=probe\n")
+          await fs.writeFile(path.join(root, "b.txt"), "one\n")
+        })
+        const data = (yield* tmpdirScoped()).path
+
+        const restored = yield* withGlobalConfig(
+          globalConfig,
+          Effect.gen(function* () {
+            // The repository as the current code makes it, then made to look like an earlier version's: no attributes file,
+            // and an index filled by `git add` under the clean filter.
+            yield* Effect.gen(function* () {
+              yield* (yield* Snapshot.Service).capture()
+            }).pipe(Effect.provide(layerFor(root, data, false)))
+            const parent = path.join(data, "snapshot", "untrusted")
+            const [name] = yield* Effect.promise(() => fs.readdir(parent))
+            const gitDirectory = path.join(parent, name!)
+            yield* Effect.promise(async () => {
+              await fs.rm(path.join(gitDirectory, "info", "attributes"), { force: true })
+              await fs.rm(path.join(gitDirectory, "index"), { force: true })
+              // An old modification time, so that a later capture trusts the index entry of the unchanged file.
+              const old = new Date(Date.now() - 60_000)
+              await fs.utimes(path.join(root, "b.txt"), old, old)
+              await git(root, "--git-dir", gitDirectory, "--work-tree", root, "add", "--all")
+              await new Promise((resolve) => setTimeout(resolve, 1100))
+            })
+            // The upgraded code: capture, change the file, restore.
+            return yield* Effect.gen(function* () {
+              const snapshot = yield* Snapshot.Service
+              const first = yield* snapshot.capture()
+              yield* Effect.promise(() => fs.writeFile(path.join(root, "b.txt"), "edited\n"))
+              if (!first) return expect.unreachable("capture is disabled")
+              yield* snapshot.restore({ files: new Map([[RelativePath.make("b.txt"), first]]) })
+              return yield* Effect.promise(() => fs.readFile(path.join(root, "b.txt"), "utf8"))
+            }).pipe(Effect.provide(layerFor(root, data, false)))
+          }),
+        )
+
+        expect(restored).toBe("one\n")
+      }),
+    SLOW,
+  )
+
+  // The attributes file unsets every `diff` driver, so a textconv program is out of reach already; `--no-textconv` is the
+  // second line, and the untrusted row takes the first away by writing the folder's driver into the attributes file of the
+  // snapshot repository after it was made. A trusted folder compares as it did before this round and shows the converted
+  // text, which is the control.
+  // Mutation: `--no-textconv` taken out of the comparison fails the untrusted row; passing it for a trusted folder as well
+  // fails the control.
+  for (const implicit of [false, true])
+    it.live(
+      implicit
+        ? "compares a trusted folder with the textconv program its attributes name (control)"
+        : "runs no textconv program for a comparison even when the snapshot repository's attributes name one",
+      () =>
+        Effect.gen(function* () {
+          const base = (yield* tmpdirScoped()).path
+          const root = path.join(base, "clone")
+          yield* repository(root)
+          const marker = path.join(base, "marker.txt")
+          const globalConfig = path.join(base, "global.gitconfig")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(globalConfig, `[diff "probe"]\n\ttextconv = "echo textconv >> ${fwd(marker)}; cat"\n`)
+            await fs.writeFile(path.join(root, ".gitattributes"), "*.txt diff=probe\n")
+            await fs.writeFile(path.join(root, "a.txt"), "one\n")
+          })
+          const data = (yield* tmpdirScoped()).path
+
+          const files = yield* withGlobalConfig(
+            globalConfig,
+            Effect.gen(function* () {
+              const snapshot = yield* Snapshot.Service
+              const before = yield* snapshot.capture()
+              if (!implicit) {
+                const parent = path.join(data, "snapshot", "untrusted")
+                const [name] = yield* Effect.promise(() => fs.readdir(parent))
+                yield* Effect.promise(() =>
+                  fs.writeFile(path.join(parent, name!, "info", "attributes"), "*.txt diff=probe\n"),
+                )
+              }
+              yield* Effect.promise(() => fs.writeFile(path.join(root, "a.txt"), "two\n"))
+              const after = yield* snapshot.capture()
+              if (!before || !after) return expect.unreachable("capture is disabled")
+              return (yield* snapshot.diff({ from: before, to: after })).map((item) => item.file)
+            }).pipe(Effect.provide(layerFor(root, data, implicit))),
+          )
+
+          const ran = yield* Effect.promise(() => fs.readFile(marker, "utf8").catch(() => ""))
+          expect(files).toContain("a.txt")
+          if (implicit) expect(ran).not.toBe("")
+          else expect(ran).toBe("")
+        }),
+      SLOW,
+    )
 
   const lfs = Bun.spawnSync(["git", "lfs", "version"]).exitCode === 0
   for (const implicit of [false, true])
