@@ -140,7 +140,13 @@ export function normalize(input: unknown): Result {
   )
 
   const legacyAgents = mapValues(
-    decodeMap(plainNames(input.agent, ["agent"], diagnostics), ConfigAgentV1.Info, ["agent"], diagnostics, decodeValue),
+    decodeMap(
+      preparedEntries(plainNames(input.agent, ["agent"], diagnostics), ["agent"], diagnostics),
+      ConfigAgentV1.Info,
+      ["agent"],
+      diagnostics,
+      decodeValue,
+    ),
     (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value)),
   )
   const legacySmallModel = own(input, "small_model")
@@ -161,7 +167,13 @@ export function normalize(input: unknown): Result {
       ...legacyAgents.title,
     }
   const modeAgents = mapValues(
-    decodeMap(plainNames(input.mode, ["mode"], diagnostics), ConfigAgentV1.Info, ["mode"], diagnostics, decodeValue),
+    decodeMap(
+      preparedEntries(plainNames(input.mode, ["mode"], diagnostics), ["mode"], diagnostics),
+      ConfigAgentV1.Info,
+      ["mode"],
+      diagnostics,
+      decodeValue,
+    ),
     (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
   )
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
@@ -738,6 +750,22 @@ function diagnoseProviderUnsupported(value: unknown, path: string[], diagnostics
 
 // An agent name becomes a folder, a file name and a title, so a key that is not a plain name defines no agent and costs
 // only itself.
+// Each entry of a legacy `agent` or `mode` map goes through the same preparation as the entries of `agents`, so a bad
+// tools or permission entry costs only itself and the denies beside it hold.
+function preparedEntries(value: unknown, path: string[], diagnostics: Diagnostic[]) {
+  if (!isRecord(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).map(([id, entry]) => {
+      if (!isRecord(entry)) return [id, entry]
+      const prepared = LegacyAgent.prepare(entry)
+      prepared.notes.forEach((note) =>
+        diagnostics.push({ kind: "unsupported", path: [...path, id, note.key], message: note.message }),
+      )
+      return [id, prepared.entry]
+    }),
+  )
+}
+
 function plainNames(value: unknown, path: string[], diagnostics: Diagnostic[]) {
   if (!isRecord(value)) return value
   return Object.fromEntries(

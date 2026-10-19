@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import fsp from "fs/promises"
 import path from "path"
 import { Effect, Layer, Logger } from "effect"
@@ -222,4 +222,75 @@ describe("one bad entry in an agent costs only itself, so the denies beside it h
       expect(Permission.evaluate("shell", "*", agent.permissions).effect).toBe("deny")
     }),
   )
+})
+
+// Mutation: with onlyActions keeping any record, or with the top-level agent and mode maps decoded without
+// LegacyAgent.prepare, every row below that is not a control fails (the whole permission field or entry is dropped).
+describe("a pattern object for an action-only key costs only itself, in every door", () => {
+  const badKeys = ["question", "websearch", "doom_loop"]
+  const bad = (key: string) => ({ bash: "deny", [key]: { "*": "allow" } })
+  const yamlFor = (key: string) =>
+    `description: x\ntemperature: 0.5\npermission:\n  bash: deny\n  ${key}:\n    "*": allow`
+
+  badKeys.forEach((key) => {
+    it.live(`markdown: ${key} pattern object keeps the shell deny`, () =>
+      Effect.gen(function* () {
+        const agent = yield* loadOne(yamlFor(key))
+        expect(Permission.evaluate("shell", "*", agent.permissions).effect).toBe("deny")
+      }),
+    )
+    it.live(`orbit.json agents with a tools map: ${key} pattern object keeps the shell deny`, () =>
+      Effect.gen(function* () {
+        const document = jsonDocument({
+          agents: { a: { description: "x", tools: { edit: false }, permission: bad(key) } },
+        })
+        const agent = yield* get(yield* load({}, () => [document]), "a")
+        expect(Permission.evaluate("shell", "*", agent!.permissions).effect).toBe("deny")
+      }),
+    )
+    it.live(`orbit.json top-level agent map: ${key} pattern object keeps build's shell deny`, () =>
+      Effect.gen(function* () {
+        const document = jsonDocument({ agent: { build: { permission: bad(key) } } })
+        const agent = yield* get(yield* load({}, () => [document]), "build")
+        expect(Permission.evaluate("shell", "*", agent!.permissions).effect).toBe("deny")
+      }),
+    )
+    it.live(`orbit.json top-level mode map: ${key} pattern object keeps the shell deny`, () =>
+      Effect.gen(function* () {
+        const document = jsonDocument({ mode: { build: { permission: bad(key) } } })
+        const agent = yield* get(yield* load({}, () => [document]), "build")
+        expect(Permission.evaluate("shell", "*", agent!.permissions).effect).toBe("deny")
+      }),
+    )
+    test(`names the dropped ${key} in the note`, () => {
+      const prepared = LegacyAgent.prepare({ permission: bad(key) })
+      expect(prepared.notes.map((note) => note.key)).toEqual([`permission.${key}`])
+      expect(prepared.entry.permission).toEqual({ bash: "deny" })
+    })
+  })
+
+  it.live("orbit.json top-level agent map: a tools map keeps the deny for build", () =>
+    Effect.gen(function* () {
+      const document = jsonDocument({ agent: { build: { tools: { bash: false, edit: "ask" } } } })
+      const agent = yield* get(yield* load({}, () => [document]), "build")
+      expect(Permission.evaluate("shell", "*", agent!.permissions).effect).toBe("deny")
+    }),
+  )
+  it.live("orbit.json top-level mode map: a tools map keeps the deny for plan", () =>
+    Effect.gen(function* () {
+      const document = jsonDocument({ mode: { plan: { tools: { bash: false, edit: "ask" } } } })
+      const agent = yield* get(yield* load({}, () => [document]), "plan")
+      expect(Permission.evaluate("shell", "*", agent!.permissions).effect).toBe("deny")
+    }),
+  )
+  test("a pattern object for a rule key keeps its valid patterns", () => {
+    const prepared = LegacyAgent.prepare({ permission: { bash: { "*": "deny", "rm *": "maybe" } } })
+    expect(prepared.entry.permission).toEqual({ bash: { "*": "deny" } })
+    expect(prepared.notes.map((note) => note.key)).toEqual(["permission.bash.rm *"])
+  })
+  test("control: a clean action for an action-only key stays", () => {
+    const prepared = LegacyAgent.prepare({ permission: { websearch: "deny", bash: "deny" } })
+    expect(prepared.entry.permission).toEqual({ websearch: "deny", bash: "deny" })
+    expect(prepared.notes).toEqual([])
+  })
 })
