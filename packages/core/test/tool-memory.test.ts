@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { $ } from "bun"
 import { Effect, Layer } from "effect"
 import fs from "fs/promises"
 import path from "path"
@@ -16,6 +17,9 @@ import { Permission } from "@orbit/core/permission"
 import { Session } from "@orbit/core/session"
 import { Tool } from "@orbit/core/tool"
 import { MemoryTool } from "@orbit/core/tool/plugin/memory"
+import { Database } from "@orbit/core/database/database"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { repository } from "./fixture/git"
 import { tempLocationLayer } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
@@ -181,6 +185,49 @@ describe("memory tool", () => {
           ),
         )
       }),
+    ),
+  )
+})
+
+// A repository with no remote and a linked worktree, through the real Project and Location: the folders are opened while
+// nobody trusts them, a note is saved, and the main checkout is opened again after trust. The note must still be listed.
+describe("memory notes saved before trust, through a real Location", () => {
+  ;[
+    { name: "the main checkout alone", linkedFirst: false },
+    { name: "the linked checkout opened untrusted first", linkedFirst: true },
+  ].forEach((row) =>
+    it.live(`lists a note saved untrusted with ${row.name}`, () =>
+      Effect.gen(function* () {
+        const base = (yield* tmpdirScoped()).path
+        const root = path.join(base, "clone")
+        yield* repository(root)
+        const linked = path.join(base, "linked")
+        yield* Effect.promise(() => $`git worktree add ${linked} -b side`.cwd(root).quiet())
+        const data = (yield* tmpdirScoped()).path
+        const build = (directory: string, implicit: boolean) =>
+          AppNodeBuilder.build(
+            LayerNode.group([Tool.node, node, Bus.node, InstructionDiscovery.node, WorkspaceTrust.node, Location.node]),
+            [
+              WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit })),
+              Location.node.replace(Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
+              Global.node.replace(Global.layerWith({ data, config: path.join(data, "config") })),
+              Permission.node.replace(allowAllPermission),
+              Database.node.replace(Database.configured({ path: path.join(data, "orbit.db") })),
+            ],
+          )
+        if (row.linkedFirst)
+          yield* Location.Service.use(() => Effect.void).pipe(Effect.provide(build(linked, false)))
+        yield* Effect.gen(function* () {
+          const registry = yield* Tool.Service
+          yield* executeTool(registry, call({ action: "save", name: "pretrust", content: "# Saved before trust" }))
+        }).pipe(Effect.provide(build(root, false)))
+        const listed = yield* Effect.gen(function* () {
+          const registry = yield* Tool.Service
+          return text(yield* executeTool(registry, call({ action: "list" })))
+        }).pipe(Effect.provide(build(root, true)))
+        expect(listed).toContain("[pretrust](pretrust.md): Saved before trust")
+      }),
+      90_000,
     ),
   )
 })

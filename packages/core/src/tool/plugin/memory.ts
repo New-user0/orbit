@@ -75,8 +75,14 @@ export const Plugin = {
     // Location keeps the ID it was bound with, so notes can sit under the path-named folder. Move them over; a note that
     // already has the name here wins, and the index is rebuilt from the files.
     const moved = yield* Effect.forEach(
-      [...new Set([location.project.directory, location.project.canonical])]
-        .map((folder) => path.join(global.data, "memory", Hash.fast(`directory:${folder}`)))
+      [
+        ...new Set([
+          ...[location.project.directory, location.project.canonical].map((folder) => Hash.fast(`directory:${folder}`)),
+          // The ID the project row held before trust: another checkout of a repository with no remote may have named it.
+          ...(location.previousProjectID ? [location.previousProjectID] : []),
+        ]),
+      ]
+        .map((id) => path.join(global.data, "memory", id))
         .filter((legacy) => legacy !== directory),
       (legacy) =>
         Effect.gen(function* () {
