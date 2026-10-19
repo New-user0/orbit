@@ -220,18 +220,30 @@ const layer = Layer.effect(
       return inside(source.path) ? (yield* trust.status(root)).trusted : source.trusted !== false
     })
 
+    // The real path of a config folder, as a root, when the folder is not a link out of the one that holds it.
+    const ownFolder = Effect.fnUntraced(function* (folder: string) {
+      const real = yield* fs.resolve(folder)
+      return FSUtil.contains(yield* fs.resolve(path.dirname(folder)), real) ? [real] : []
+    })
+
     const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
       // A project that is the home directory or a filesystem root contains everything below it, so being inside it proves
       // nothing about a link: its config may supply a file from its own config folder, the folder the session started in
       // and a folder that can be trusted for good, as an import may, and a decision for the project does not widen that.
+      // Only a project's or a local source is bounded this way: the person's own sources (the global config folder, the
+      // home entries, a vendor's user root) and the administrator's are theirs wherever the session starts.
       const wide =
+        (source.scope === "project" || source.scope === "local") &&
         inside(source.path) &&
         (yield* Effect.forEach([location.project.directory, location.project.canonical], (folder) => trust.status(folder))).some(
           (state) => !state.persistent,
         )
       if (!wide && (yield* trustedSource(source))) return true
-      const roots = wide ? [...(yield* importRoots()), source.path] : yield* boundOf(source.path)
-      if (yield* stays([...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
+      // The config folder stands for itself only where it is a folder of the project's own: one that is a link leads
+      // to wherever its target is, so its real path is not admitted (the import roots are already real).
+      const own = wide ? yield* ownFolder(source.path) : []
+      const roots = wide ? [...(yield* importRoots()), source.path, ...own] : yield* boundOf(source.path)
+      if (yield* stays(wide ? roots : [...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
       if (skipped.has(file)) return false
       skipped.add(file)
       yield* Effect.logWarning("config file skipped", {

@@ -359,9 +359,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Agent, command, skill, compat skill and output style files: `ProjectTrust.supplies` for the path, `ConfigMarkdown` for
   the text, `ConfigTrust.sanitize` and `sanitizeCommands` for what they may say. Proof: `project-trust.test.ts`,
   `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`. When the project is the home folder or a filesystem root,
-  `supplies` holds a source to its own config folder, the folder the session started in and a folder that can be trusted for
-  good, trusted for the session or not, because everything below home is inside the project (class 4): the "holds a config
-  directory below a project at home to its own folder" rows of `project-trust.test.ts` (mutation: the pre-fix bound fails both).
+  `supplies` holds a project's or a local source to its own config folder, the folder the session started in and a folder
+  that can be trusted for good, trusted for the session or not, because everything below home is inside the project
+  (class 4): the "holds a config directory below a project at home to its own folder" rows of `project-trust.test.ts`
+  (mutation: the pre-fix bound fails both). The config folder's own real path counts only when the folder is not a link out
+  of the folder that holds it: the "holds a config folder that is a link out" rows (mutation: admitting the real path of
+  the config folder whatever it is fails the 2 home rows). The bound never applies to the person's own sources, which are
+  the user scope (the global config folder, the home entries, a vendor's user root) or the administrator's, wherever the
+  session starts: the "does not hold the person's own sources when the project is home" rows (mutation: computing the
+  bound for every scope fails 3 of the 4 rows, and the 2 end-to-end rows of `test/supplies-home.test.ts` in `packages/cli`).
 - What a style and a skill may say to the model (class 8, prompt form): reading is the entry above, and it lets the text
   of a folder that is not trusted reach the prompt, so two things limit what that text is taken for. An output style from
   such a folder goes last under its own heading but does not replace the prompt's opening line, which says what the agent
@@ -402,7 +408,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   with the path the walk built for it, not only of a link to a file (class 4): the "linked to a folder sends nothing from it"
   rows of the same file (a linked subfolder of `.orbit/rules`, `.orbit/rules` itself, `.orbit` itself, a subfolder linked to
   home itself, and the vendor's rules folder; home and root projects, untrusted and trusted for the session; mutation: asking
-  the folder without its spelling fails all 20 rows). The note target asks the same filter (the "two names for one slot" rows of
+  the folder without its spelling fails none of the 20 rows alone, because the `supplies` bound refuses the same links, and fails all 20 with the `supplies` bound of f7f7e010 restored: each guard is enough, so the rows pin the two together). The note target asks the same filter (the "two names for one slot" rows of
   `test/instruction-notes.test.ts`, which run where a link to a file can be made; mutation: dropping the `leadsOut` term of the
   survivors filter fails them on Linux).
   `instructions_exclude` names files to leave out. Exclusion only removes files, and comes before `reachable` in both

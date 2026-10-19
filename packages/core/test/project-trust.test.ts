@@ -915,6 +915,75 @@ describe("ProjectTrust.supplies", () => {
       }),
     )
 
+  // The person's own sources are theirs wherever the session starts: a session at home, or below a home repository,
+  // puts the global config folder and a vendor's user root inside the project's folders, and a link from them to the
+  // person's dotfiles must still be read.
+  for (const startedAtHome of [true, false])
+    for (const granted of [false, true])
+      it.live(`does not hold the person's own sources when the project is home, started ${startedAtHome ? "at home" : "below it"}, ${granted ? "trusted for the session" : "not trusted"}`, () =>
+        Effect.gen(function* () {
+          const bareFolders = yield* bare
+          const folders = { ...bareFolders, repo: bareFolders.home }
+          const started = startedAtHome ? folders.home : path.join(folders.home, "Downloads", "x")
+          const dotfiles = path.join(folders.home, "dotfiles")
+          const vendor = path.join(folders.home, ".vendorx")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(started, { recursive: true })
+            await write(path.join(dotfiles, "skills", "s", "SKILL.md"), "mine")
+            await write(path.join(dotfiles, "agents", "mine.md"), "mine")
+            await fs.mkdir(vendor, { recursive: true })
+            await fs.symlink(path.join(dotfiles, "skills"), path.join(folders.globalConfig, "skills"), "junction")
+            await fs.symlink(path.join(dotfiles, "agents"), path.join(vendor, "agents"), "junction")
+          })
+          yield* Effect.gen(function* () {
+            const project = yield* ProjectTrust.Service
+            if (granted) yield* project.grant({ persist: false, via: "test" })
+            expect(
+              yield* Effect.forEach(
+                [
+                  [{ path: folders.globalConfig, scope: "user" as const }, path.join(folders.globalConfig, "skills", "s", "SKILL.md")],
+                  [{ path: vendor, scope: "user" as const }, path.join(vendor, "agents", "mine.md")],
+                  [{ path: vendor, scope: "user" as const }, path.join(vendor, "agents")],
+                ] as const,
+                ([source, file]) => project.supplies(source, file),
+              ),
+            ).toEqual([true, true, true])
+          }).pipe(Effect.provide(loader(folders, undefined, started)))
+        }),
+      )
+
+  // A config folder that is itself a link leads to wherever its target is, and the folders of a project at home reach
+  // everything under home, so its real path is not one of the folders a file may come from. An ordinary project that is
+  // trusted for the session holds nothing back, which is the control.
+  for (const wide of [true, false])
+    for (const granted of [false, true])
+      it.live(`holds a config folder that is a link out to the folder it points at, ${wide ? "project at home" : "ordinary project"}, ${granted ? "trusted for the session" : "not trusted"}`, () =>
+        Effect.gen(function* () {
+          const bareFolders = yield* bare
+          const folders = wide ? { ...bareFolders, repo: bareFolders.home } : bareFolders
+          const started = wide ? path.join(folders.home, "Downloads", "x") : folders.repo
+          const target = path.join(folders.home, "work", "secret", ".orbit")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(started, { recursive: true })
+            await write(path.join(target, "agents", "private.md"), "private agent")
+            await write(path.join(target, "skills", "s", "SKILL.md"), "private skill")
+            await fs.symlink(target, path.join(started, ".orbit"), "junction")
+          })
+          yield* Effect.gen(function* () {
+            const project = yield* ProjectTrust.Service
+            if (granted) yield* project.grant({ persist: false, via: "test" })
+            const orbit = path.join(started, ".orbit")
+            const source = { path: orbit, scope: "project", trusted: false } as const
+            expect(
+              yield* Effect.forEach(
+                [path.join(orbit, "agents", "private.md"), path.join(orbit, "skills", "s", "SKILL.md")],
+                (file) => project.supplies(source, file),
+              ),
+            ).toEqual(granted && !wide ? [true, true] : [false, false])
+          }).pipe(Effect.provide(loader(folders, undefined, started)))
+        }),
+      )
+
   it.live("holds a folder above the project to that folder, and to its own decision rather than the project's", () =>
     Effect.gen(function* () {
       const folders = yield* bare
