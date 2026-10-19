@@ -3837,7 +3837,7 @@ A trusted repository that sits inside an untrusted folder is served, because you
 
 ## A provider package written as an absolute file path loads again
 
-A `package` of a provider that is a plain absolute file path (`/opt/providers/acme.mjs`, `C:\providers\acme.mjs`) loads as the `file://` URL of that file, which is how it loaded before the compiled binary stopped looking names up in the folder it starts in. A relative path is still refused: it would be read against Orbit's own folder, not the folder of the config that wrote it.
+A `package` of a provider that is a plain absolute file path (`/opt/providers/acme.mjs`, `C:\providers\acme.mjs`) loads as the `file://` URL of that file. In the compiled binary such a path did not load at all, because the binary never looks a name up in the folder it starts in. A relative path is still refused: it would be read against Orbit's own folder, not the folder of the config that wrote it.
 
 **Affects:** people whose provider config names a package by an absolute file path.
 
