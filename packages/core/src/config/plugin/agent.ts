@@ -149,7 +149,11 @@ export const Plugin = define({
             if (item.mcp_servers !== undefined) agent.mcpServers = mutable(item.mcp_servers)
             if (item.hooks !== undefined) agent.hooks = mutable(item.hooks)
             if (item.skills !== undefined) agent.skills = [...item.skills]
-            if (item.initial_prompt !== undefined && item.initial_prompt.trim() !== "")
+            if (
+              item.initial_prompt !== undefined &&
+              item.initial_prompt.trim() !== "" &&
+              !(document.trusted === false && exists)
+            )
               agent.initialPrompt = item.initial_prompt
             if (item.memory !== undefined) agent.memory = item.memory
             if (item.background === true) agent.background = true
@@ -160,10 +164,12 @@ export const Plugin = define({
               Object.assign(agent.request.headers, item.request.headers ?? {})
               Object.assign(agent.request.body, item.request.body ?? {})
             }
-            // An agent's own prompt makes a session skip the person's `system_prompt`, so a folder that is not trusted
-            // may write it only for an agent it defines itself.
+            // An agent's own prompt makes a session skip the person's `system_prompt`, and its description and first
+            // message are text the model reads, so a folder that is not trusted may write them only for an agent it
+            // defines itself.
             if (item.system !== undefined && !(document.trusted === false && exists)) agent.system = item.system
-            if (item.description !== undefined) agent.description = item.description
+            if (item.description !== undefined && !(document.trusted === false && exists))
+              agent.description = item.description
             if (item.mode !== undefined) agent.mode = item.mode
             if (item.hidden !== undefined) agent.hidden = item.hidden
             if (item.color !== undefined) agent.color = item.color

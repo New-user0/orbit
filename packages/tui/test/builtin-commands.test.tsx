@@ -187,3 +187,29 @@ test("the toasts of /ide open write out the control characters of a folder and a
   expect(toast).toContain("Nope\\x1b[31m\\x1b]0;x\\x07Editor")
   expect(toast).toContain("evil\\x1b]0;pwn\\x07\\x1b[2Jdir")
 })
+
+// An editor that cannot start or that fails is named in a warning; the prompt is not left looking untouched.
+// Mutation: remove the `.catch` on `openEditor` in the `prompt.editor` command and both rows fail.
+test.each([
+  ["is not on PATH", "orbit-missing-editor-xyz", "Cannot find the editor orbit-missing-editor-xyz on PATH"],
+  ["exits with an error", `bun -e "process.exit(3)"`, "Editor exited with code 3"],
+])("/editor with an editor that %s shows a warning", async (_name, editor, message) => {
+  const saved = { VISUAL: process.env.VISUAL, EDITOR: process.env.EDITOR }
+  process.env.VISUAL = editor
+  delete process.env.EDITOR
+  try {
+    await using state = await tmpdir()
+    await using setup = await render(state.path)
+    await command(setup, "/editor")
+    // The toast wraps inside its box, so the row looks for the part that stays on one line.
+    // The editor is looked up and run before the toast shows, which the frame wait alone does not outlast.
+    await Bun.sleep(1500)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain(message.slice(0, 32))
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+})
