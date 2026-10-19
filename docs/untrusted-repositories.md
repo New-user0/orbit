@@ -418,11 +418,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   trusted. A filesystem root is treated the same way by `ProjectTrust`, but no test here pins a session started at one
   (FU-M4-44). Proof: `test/session-instructions.test.ts` ("a symlink to, trusted or not", "InstructionTriggers"). A
   project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind `settings`): the lists
-  of every scope are added up, so a repository's would hide the user's own files from the model. One file follows at most
-  256 import tokens (`MAX_IMPORTS`), with one warning, because each token costs a walk of its path and a clone chooses how
-  many a file holds (class 15 on a bound of time; proof: 'follows no more import tokens in one file than the cap' in
-  `test/config/instruction-file.test.ts`, which counts the paths asked about, not seconds; mutation: following every token
-  fails it, 10,002 asked against 256).
+  of every scope are added up, so a repository's would hide the user's own files from the model. One pass follows at most
+  256 import tokens (`MAX_IMPORTS`) over all the files of it, with one warning, because each token costs a walk of its path
+  and a clone chooses how many a file holds and how many files it imports (class 15 on a bound of time; proof: 'follows no
+  more import tokens in one file than the cap' and 'in one pass than the cap, however many files hold them' in
+  `test/config/instruction-file.test.ts`, which count the paths asked about, not seconds; mutation: following every token
+  fails the first, 10,002 asked against 256, and the cap per file alone fails the second).
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
@@ -468,10 +469,18 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   nested rules folder again on the next read, until a rescan'; mutation: `CACHE_MILLIS = 0` fails it; the ageing out itself has
   no test; the rule files themselves are opened again on every read), and `ConfigInstructionRules.scan` asks the gate of a
   folder and of a file reached through a link, not of a plain file in a folder the gate accepted (proof: the "does not ask
-  it of a plain file" row of `test/config/instruction-rules.test.ts`). What a read costs is not bounded by those: it grows
-  with the subfolders of the rules folders and with the imports of the rules on the way, which a repository chooses, and
-  empty subfolders and many imports count against none of the budgets. The reference walks nested rules folders on every
-  read in the same way. It costs time only: no code runs and nothing is sent. The row is FU-M4-r2-rule-scan. A rule or
+  it of a plain file" row of `test/config/instruction-rules.test.ts`). What a pass costs is bounded by two more
+  budgets (class 15, FU-M4-r5-pass-budget): one scan of a rules folder enters at most `MAX_FOLDERS` (256) folders, empty ones
+  included, with one warning (proof: the "enters at most MAX_FOLDERS folders" row of `test/config/instruction-rules.test.ts`,
+  counting the `leads`, `isDir` and gate calls over 2,048 empty folders; mutation: the scan without the budget fails it), and
+  one pass follows at most `MAX_IMPORTS` (256) import tokens over every file of it, the root file and what it imports,
+  with one warning, and remembers a missing target and an importer's refused one so that a token written again costs
+  nothing (proof: the "in one pass than the cap, however many files hold them" and "does not walk a missing target again"
+  rows of `test/config/instruction-file.test.ts`, counting the paths asked; mutation: the cap per file alone fails both).
+  A pass is a refresh, a read of the folders on the way, or a request for note targets. What is left unbounded is the
+  number of passes: a watcher, config or trust event, or a read after the 30 seconds a listing is kept, runs one more, each
+  within the two budgets. The reference walks nested rules folders on every read in the same way and has no such cap
+  (they are Orbit's own limits). It costs time only: no code runs and nothing is sent. A rule or
   instruction file of a read that fails to read for another reason (a file another program holds open) costs only itself,
   with one warning (proof: the "still hands over the other nested files of a read when ... fails to read" rows of
   `test/session-instructions.test.ts`).
