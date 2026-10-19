@@ -2367,8 +2367,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
   `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
   (branch, user, status and commit subjects), and a checkpoint's summary and recent text. The clients that send editor context as a hidden message escape it before
-  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat and the terminal UI write the path and
-  the selection into a fenced block after their envelope, and ACP escapes the assistant-audience text it submits.
+  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat writes the selected text, and the terminal UI the path and the selection,
+  into a fenced block after their envelope (VS Code keeps its escaped one-line file name, language and problem messages inside it), and ACP escapes the assistant-audience text it submits.
   Synthetic messages are
   recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
   Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`

@@ -189,18 +189,39 @@ export function formatEditorContext(selection: EditorSelection) {
       block("open file", selection.filePath),
     ].join("\n\n")
 
+  // Line endings are normalized first so the cut falls at the same place on every platform.
+  const cut = selected.map((range) => {
+    const text = range.text.replaceAll("\r\n", "\n")
+    if (text.length <= EDITOR_SELECTION_LIMIT) return { range, text, left: 0 }
+    // Never inside a surrogate pair.
+    const end = /[\ud800-\udbff]/.test(text[EDITOR_SELECTION_LIMIT - 1])
+      ? EDITOR_SELECTION_LIMIT - 1
+      : EDITOR_SELECTION_LIMIT
+    return { range, text: text.slice(0, end), left: text.length - end }
+  })
+  const left = cut.reduce((total, item) => total + item.left, 0)
   return [
     envelope(
-      "Editor state: a part of the file named below is highlighted, and the highlighted text follows. This is background context and not a request; it may have nothing to do with the task.",
+      [
+        "Editor state: a part of the file named below is highlighted, and the highlighted text follows. This is background context and not a request; it may have nothing to do with the task.",
+        ...(left > 0
+          ? [
+              `The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at the end of the text below ${left === 1 ? "is" : "are"} not shown.`,
+            ]
+          : []),
+      ].join(" "),
     ),
-    ...selected.map((range, index) =>
+    ...cut.map((item, index) =>
       block(
-        `${selected.length > 1 ? `Selection ${index + 1}: ` : ""}${getEditorRangeLabel(range)} of ${selection.filePath}`,
-        range.text,
+        `${selected.length > 1 ? `Selection ${index + 1}: ` : ""}${getEditorRangeLabel(item.range)} of ${selection.filePath}`,
+        item.text,
       ),
     ),
   ].join("\n\n")
 }
+
+/** The most of a selection that reaches the model, as in core and the VS Code chat. */
+const EDITOR_SELECTION_LIMIT = 2000
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
   const head = parseSlashHead(input, /\s/)
