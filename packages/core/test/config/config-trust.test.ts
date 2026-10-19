@@ -372,6 +372,54 @@ describe("Config under workspace trust", () => {
     }),
   )
 
+  // Class 8: a document above a granted project keeps the trust of its own folder, and the later document wins, so a
+  // `true` there would switch the git snapshot back on against the person's own `false`.
+  it.live("keeps the person's git_status: false over a true of an untrusted folder above a trusted project", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.globalConfig, "orbit.json"), { git_status: false }),
+          write(path.join(folders.work, "orbit.json"), { git_status: true }),
+          write(path.join(folders.repo, "orbit.json"), { git_status: true }),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const before = yield* config.entries()
+        expect(Config.latest(before, "git_status")).toBe(false)
+
+        const granted = yield* nextUpdate
+        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
+        yield* Fiber.join(granted)
+        const after = yield* config.entries()
+        // The project is granted and the folder above is not: only the project's own `true` applies now.
+        expect(named(after, path.join(folders.work, "orbit.json"))).toMatchObject({ trusted: false, withheld: ["settings"] })
+        expect(named(after, path.join(folders.repo, "orbit.json"))?.info.git_status).toBe(true)
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("keeps git_status: false over an untrusted folder above a trusted project when no document of the project sets it", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.globalConfig, "orbit.json"), { git_status: false }),
+          write(path.join(folders.work, "orbit.json"), { git_status: true }),
+          write(path.join(folders.repo, "orbit.json"), { shell: "project-shell" }),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const granted = yield* nextUpdate
+        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
+        yield* Fiber.join(granted)
+        expect(Config.latest(yield* config.entries(), "git_status")).toBe(false)
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
   it.live("applies a grant that a session made without storing it", () =>
     Effect.gen(function* () {
       const folders = yield* layout

@@ -121,7 +121,7 @@ folder is trusted. Until then Orbit keeps what cannot run code, spend money or r
 rest:
 
 - **Left out whole:** `language`, `output_style`, `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
-  `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
+  `providers`, `env`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
   `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, the budgets `media`, `tool_output`, `compaction` and `shell_tool`,
   `attribution`, `system_prompt_file`, `instructions_exclude` and `model_aliases`, and `disabled` on an agent, whose
   entry goes with it. So are an agent's `effort`, `max_turns`, `tools`, `permission_mode`, `mcp_servers`, `hooks`,
@@ -136,8 +136,10 @@ rest:
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
-  10 or less, so a repository cannot raise the limit above 10. An agent's `context` loses `instructions: false`, and its
-  `initial_prompt` is dropped when it starts with `/`.
+  10 or less, so a repository cannot raise the limit above 10. `webfetch` is left out when its `verbatim_hosts` list is
+  not empty (an empty list is kept). `git_status` keeps only `false`, and an agent's `context` loses `instructions` in
+  both directions and keeps only `git_status: false`, so a repository can turn the snapshot off but never back on over
+  your own choice. An agent's `initial_prompt` is dropped when it starts with `/`.
 - **Kept as written:** everything else, such as `username`, `snapshots` and `watcher`, and the fields of an agent that
   only describe it.
 
@@ -561,7 +563,7 @@ An agent file or `agents.<id>` entry can set `model` (also `inherit`, `small` or
 default model resolve later), `effort`, `tools` and `disallowed_tools` (a string or a list; a `*` in `tools` means every
 tool, and a `*` in `disallowed_tools` denies every tool), `permission_mode`, `mcp_servers`, `hooks`, `max_turns` (an
 alias of `steps`), `skills`, `initial_prompt`, `memory` (`user`, `project` or `local`), `background`, `isolation`
-(`worktree`) and `context` (`instructions` and `git_status`, which only remove context). `orbit.json` also accepts
+(`worktree`) and `context` (`instructions` and `git_status`; a folder that is not trusted can only turn the git snapshot off). `orbit.json` also accepts
 `model_aliases` with `small` and `large`. These keys are stored and shown by `agent.list` and `agent.get`; what they do
 when an agent runs lands with later changes. A field with a bad value is dropped with a log line or a diagnostic and
 the agent still loads. An agent whose `tools` is a map of tool names to booleans is still read in the legacy v1
@@ -617,8 +619,9 @@ mode that run as children, which now get the task-worker prompt.
 
 A folder that is not trusted cannot switch the instruction files off: `"instructions": false` in its `orbit.json` or
 agent files is dropped, because it would hide your own instruction files and memory index from the agent, as the
-withheld `instructions_exclude` does. `"git_status": false` and `"instructions": true` are kept. Trust the folder to
-use the switch.
+withheld `instructions_exclude` does. `"instructions": true` is dropped too: a later document wins, so it would switch
+the files back on over your own `false` (and over Explore's default). `"git_status": true` is dropped for the same reason,
+and `"git_status": false` is kept. Trust the folder to use the switches.
 
 A prompt of your own for an agent has its `${ORBIT_TOOL_GUIDANCE}` placeholder filled from the tools the model is
 actually offered: on a PowerShell session the line reads PowerShell, and a model that loses Edit and Write gets no line
@@ -2785,8 +2788,9 @@ trusted. If a folder is trusted partway through a session, the next step adds on
 through; if trust is taken away, the next step tells the model the snapshot no longer applies. `orb run --bare` keeps
 the snapshot; an embedded instance that boots with `discovery: false` has none.
 
-Set `"git_status": false` in any config scope to turn it off. A project's own `orbit.json` may set it, because it can
-only drop the snapshot. The generated client types gain the optional `git_status` boolean in `Config.Info`.
+Set `"git_status": false` in any config scope to turn it off. A folder that is not trusted may set only `false`:
+its `true` is dropped, because the later document wins and a folder above a trusted project would otherwise turn the
+snapshot back on against your own `false`. The generated client types gain the optional `git_status` boolean in `Config.Info`.
 
 **Affects:** every session in a git folder (the baseline text and its size change; a prompt cache for an existing
 session is unaffected until its next step), and SDK callers that read `Config.Info`.

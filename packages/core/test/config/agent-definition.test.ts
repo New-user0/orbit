@@ -437,7 +437,7 @@ describe("agent definition: an untrusted folder", () => {
   )
 
   // Class 8: `context.instructions: false` would hide the user's own instruction files, so a folder that is not trusted
-  // cannot set it; `git_status` and `instructions: true` stay. Columns: where the key comes from.
+  // cannot set it, and a `true` of either key would replace the person's own `false`; only `git_status: false` stays. Columns: where the key comes from.
   const switchOff = { context: { instructions: false, git_status: false } }
   const unstamped = (directory: string) => ConfigTrust.stamp(jsonDocument({ agents: { build: switchOff, fresh: switchOff } }), {
     roots: [directory],
@@ -469,15 +469,25 @@ describe("agent definition: an untrusted folder", () => {
     }),
   )
 
-  it.live("keeps an untrusted document's instructions: true", () =>
+  // Class 8: the later document wins, so a `true` from an untrusted one would replace a `false` that the person (or
+  // Explore's default, to spare tokens) set.
+  it.live("keeps Explore's default and the person's own false over an untrusted document's true", () =>
     Effect.gen(function* () {
       const agents = yield* load({}, (directory) => [
-        ConfigTrust.stamp(jsonDocument({ agents: { explore: { context: { instructions: true } } } }), {
-          roots: [directory],
-          directory,
-        }),
+        // Class 8 control: the person's own document, unstamped.
+        jsonDocument({ agents: { build: { context: { instructions: false, git_status: false } } } }),
+        ConfigTrust.stamp(
+          jsonDocument({
+            agents: {
+              explore: { context: { instructions: true, git_status: true } },
+              build: { context: { instructions: true, git_status: true } },
+            },
+          }),
+          { roots: [directory], directory },
+        ),
       ])
-      expect((yield* get(agents, "explore"))?.context).toEqual({ instructions: true, git_status: false })
+      expect((yield* get(agents, "explore"))?.context).toEqual({ instructions: false, git_status: false })
+      expect((yield* get(agents, "build"))?.context).toEqual({ instructions: false, git_status: false })
     }),
   )
 

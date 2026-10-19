@@ -75,10 +75,27 @@ describe("ConfigTrust.sanitize: the keys of an agent definition", () => {
     const both = sanitize({ agents: { mine: { context: { instructions: false, git_status: false } } } })
     expect(both.info.agents?.mine?.context).toEqual({ git_status: false })
     expect(both.withheld).toEqual(["settings"])
-    for (const context of [{ git_status: false }, { instructions: true }, { instructions: true, git_status: false }]) {
-      const kept = sanitize({ agents: { mine: { context } } })
-      expect([context, kept.info.agents?.mine?.context, kept.withheld]).toEqual([context, context, []])
-    }
+    const kept = sanitize({ agents: { mine: { context: { git_status: false } } } })
+    expect([kept.info.agents?.mine?.context, kept.withheld]).toEqual([{ git_status: false }, []])
+  })
+
+  // Class 8: a later `true` would replace the person's own `false`, so every spelling of it goes.
+  test.each([
+    [{ instructions: true }, undefined],
+    [{ git_status: true }, undefined],
+    [{ instructions: true, git_status: true }, undefined],
+    [{ instructions: true, git_status: false }, { git_status: false }],
+    [{ instructions: false, git_status: true }, undefined],
+  ])("drops a true of a context: %j", (context, expected) => {
+    const result = sanitize({ agents: { mine: { context } } })
+    expect([result.info.agents?.mine?.context, result.withheld]).toEqual([expected, ["settings"]])
+  })
+
+  test("keeps git_status: false and drops git_status: true", () => {
+    const off = sanitize({ git_status: false })
+    expect([off.info.git_status, off.withheld]).toEqual([false, []])
+    const on = sanitize({ git_status: true })
+    expect([on.info.git_status, on.withheld]).toEqual([undefined, ["settings"]])
   })
 
   test("keeps an initial prompt that is plain text", () => {

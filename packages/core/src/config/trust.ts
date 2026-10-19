@@ -175,11 +175,19 @@ function initialPrompt(value: string): Outcome<string> {
   return value.trimStart().startsWith("/") ? { value: undefined, withheld: ["commands"] } : { value, withheld: [] }
 }
 
-// `git_status: false` and `instructions: true` stay; `instructions: false` goes.
+// `instructions` is left out in either direction: `false` would hide the person's own files from the agent, and `true`
+// would replace the person's own `false` (and an agent's default, such as Explore's, that leaves them out to spare
+// tokens), because the later document wins. `git_status` keeps only `false`, which can drop the snapshot and never add it.
 function agentContext(value: NonNullable<ConfigAgent.Info["context"]>): Outcome<NonNullable<ConfigAgent.Info["context"]>> {
-  if (value.instructions !== false) return { value, withheld: [] }
-  const kept = value.git_status === undefined ? undefined : { git_status: value.git_status }
+  if (value.instructions === undefined && value.git_status !== true) return { value, withheld: [] }
+  const kept = value.git_status === false ? { git_status: false } : undefined
   return { value: kept, withheld: ["settings"] }
+}
+
+// Only `false` is kept, for the reason that applies to the agent's `context`: a `true` would switch the git snapshot back
+// on against the person's own opt-out.
+function gitStatus(value: boolean): Outcome<boolean> {
+  return value === false ? { value, withheld: [] } : { value: undefined, withheld: ["settings"] }
 }
 
 function agents(
@@ -244,8 +252,9 @@ export const classification = {
     // The names small and large pick the models that agents run on, which the user pays for. The owner chose to withhold it.
     model_aliases: withhold("providers"),
     output_token_cap: withhold("providers"),
-    // It can only drop the git snapshot, and the snapshot runs only in a trusted folder anyway.
-    git_status: inert,
+    // Only turning the snapshot off is kept. A folder above a trusted project could otherwise switch it back on against
+    // the person's own `false`, because the later document wins.
+    git_status: filter(gitStatus),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     // Both are text that reaches the model and, as the last entry wins, a repository's value would outrank the person's own.

@@ -7,6 +7,7 @@ import path from "path"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Document, Info } from "@orbit/schema/config"
+import { ConfigTrust } from "@orbit/core/config/trust"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
@@ -178,7 +179,7 @@ const setup = Effect.gen(function* () {
   const setStatus = (value: boolean | undefined) =>
     control.setEntries([new Document({ type: "document", info: new Info(value === undefined ? {} : { git_status: value }) })])
   const grant = trust.grant({ persist: false, via: "test" })
-  return { context, db, trust, found, step, stepped, stored, setStatus, grant, ran: found.ran }
+  return { context, db, trust, found, step, stepped, stored, setStatus, setEntries: control.setEntries, grant, ran: found.ran }
 })
 
 const mentions = (git: readonly string[], command: string) => git.filter((line) => line.includes(command))
@@ -276,6 +277,33 @@ describe("the git snapshot in the baseline of a session", () => {
       const removed = yield* stepped(ids.child)
       expect(removed.value.delta[key]).toBe("removed")
       expect(yield* stored(ids.child)).toBeUndefined()
+    }),
+  )
+
+  // Class 8: the entries of a folder above a trusted project keep that folder's own trust, and the later document wins.
+  // A `true` there must not switch the snapshot back on against the person's own `false`.
+  it.live("takes no snapshot when an untrusted document turns git_status back on over the person's false", () =>
+    Effect.gen(function* () {
+      const { grant, stepped, stored, found, ran, setEntries } = yield* setup
+      yield* grant
+      const above = (trusted: boolean) => {
+        const document = new Document({ type: "document", scope: "project", info: new Info({ git_status: true }) })
+        const directory = AbsolutePath.make(found.root)
+        return trusted ? document : ConfigTrust.stamp(document, { roots: [directory], directory })
+      }
+      const user = new Document({ type: "document", scope: "user", info: new Info({ git_status: false }) })
+
+      yield* setEntries([user, above(false)])
+      const off = yield* stepped(ids.main)
+      expect(Object.keys(off.value.delta)).not.toContain(key)
+      expect(off.git).toEqual([])
+      expect(yield* ran()).toEqual([])
+      expect(yield* stored(ids.main)).toBeUndefined()
+
+      // The trusted control: the same two documents with the second one trusted take the snapshot.
+      yield* setEntries([user, above(true)])
+      yield* stepped(ids.main)
+      expect(yield* stored(ids.main)).toBeDefined()
     }),
   )
 

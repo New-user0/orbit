@@ -190,8 +190,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   source asks `ProjectTrust.trusted()` first at every read, whatever else it knows, and starts no git for a folder that is
   not trusted. A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
   once when trust is granted, as a durable update. A repository is told by `Location.vcs`, which `Project.resolve` reads
-  from files, never by `Git.repo.discover`, which starts `git rev-parse`. `git_status` is inert in `ConfigTrust`: it can
-  only drop the snapshot. Proof: `test/session-context-vcs.test.ts` (an untrusted run with `core.fsmonitor` planted
+  from files, never by `Git.repo.discover`, which starts `git rev-parse`. `git_status` is a filter in `ConfigTrust` that keeps
+  only `false`, as does the agent `context`: the later document wins, so a folder above a trusted project could
+  otherwise switch the snapshot back on over the person's own `false` (`test/config/config-trust.test.ts`,
+  `test/config/trust.test.ts`). Proof: `test/session-context-vcs.test.ts` (an untrusted run with `core.fsmonitor` planted
   leaves no marker and no git in the trace, a trusted control writes the marker, and a revoke starts no git),
   `test/git-snapshot.test.ts`, `test/vcs-instructions.test.ts`.
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
