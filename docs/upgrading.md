@@ -2828,14 +2828,16 @@ put the value in your own config.
 
 The editor context that these clients send with a message used to put the file path and the selected text inside the
 reminder envelope itself, so a selection that held a reminder tag could close the envelope and write a fake one. Now the
-envelope holds only text written by the client, and the path and the selection follow it in a labelled fenced block
-whose fence the text cannot close; a look-alike tag in either is escaped. Text that an ACP editor marks for the
+selected text always follows the envelope in a labelled fenced block whose fence the text cannot close, and a look-alike
+tag in it is escaped. The terminal UI puts the path in that block too. The VS Code chat keeps the file name, its language
+and any problem messages on one line inside the envelope, with every `<` and `>` in them escaped, so no tag can be formed
+there. The terminal UI now cuts a selection at 2,000 characters, as the VS Code chat and the core note already did, and its envelope says how many characters were left out (before, the whole selection up to the editor bridge's 100,000-character cap was sent). Text that an ACP editor marks for the
 assistant is escaped the same way. The reminder tags are written as `&lt;system-reminder>` in what the model sees. The
 rules are shared in `packages/util/src/reminder-text.ts`.
 
 **What to do:** Nothing.
 
-### Text that looks like a reminder is escaped wherever it comes from a file or a tool
+### Text that looks like a reminder is escaped in the listed places that carry a file or a tool's text
 
 Orbit now has a reminder framework: model-facing context that the harness adds beside the conversation, stored as hidden
 `session.synthetic` rows (`metadata.reminder.kind`) or worked out each time a request is built. No built-in reminder is
@@ -2847,7 +2849,7 @@ true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lower
 tool errors (local and MCP, also when a server splits one result into several text parts and a tag is cut across them, and also a text or JSON file that a result carries, such as an MCP resource), attached files (including a file that an ACP editor embeds in a prompt) and folder listings, the Code Mode tool listing (which carries MCP tool descriptions), the output of a shell command you ran or that ran in the
 background, the reply of a background subagent, the summary and recent text of a compaction checkpoint, instruction files
 with their updates (including the ones loaded when a file is read), MCP server instructions, and the git snapshot (branch,
-user, status and commit subjects). The stored row keeps the original
+user, status and commit subjects). Some sinks are not covered yet (skill and reference listings, plugin system parts, direct MCP tool descriptions, a hosted tool's result, image and PDF bytes); `docs/untrusted-repositories.md` lists them under Known gaps and `FU-M4-36` tracks them. The stored row keeps the original
 bytes; only the request changes, and only for text that held such a tag. A prompt you type is not changed.
 
 A compaction no longer reads reminder rows, because the next step collects them again after the checkpoint.
@@ -2926,7 +2928,7 @@ A `.orbit/rules` folder (and, with compatibility on, the other product's `rules`
 
 ### A reply language setting and the `ultrathink` keyword
 
-The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. The key is allowed in a project's config, because it is only text in the prompt.
+The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. A project's `language` applies only once its folder is trusted (see the note on untrusted folders and reply language above); until then your own value stays in force.
 
 A prompt you send that starts a turn and holds the word `ultrathink` (any case, as a whole word), a shell command you type while the agent is idle that holds it, and a command or skill whose text holds it (a skill activated through the API included) now carry a short note asking for a high level of reasoning effort for that turn. Queued input that starts its own turn gets the note too. No model, variant or request setting changes, and the note stays in the conversation from then on, so the cached prompt prefix is unaffected. Input delivered mid-turn (a steer, a shell command or an activated skill that follows a tool step), the prompt a parent agent gives a subagent, the child prompt of a command that runs as a subagent, and background completions never carry it. `orb run --bare` does not carry the note.
 
