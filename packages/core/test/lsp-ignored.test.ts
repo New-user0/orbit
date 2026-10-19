@@ -39,7 +39,12 @@ const repository = Effect.gen(function* () {
   return { root, real, link }
 })
 
-const lsp = (directory: string, options?: { readonly untrusted?: boolean; readonly git?: Layer.Layer<Git.Service> }) =>
+// `project` is the folder that `Project.resolve` names for the Location: the repository's real folder, which git is kept
+// inside of. It is the Location's own folder when not given.
+const lsp = (
+  directory: string,
+  options?: { readonly untrusted?: boolean; readonly git?: Layer.Layer<Git.Service>; readonly project?: string },
+) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
       AppNodeBuilder.build(Lsp.node, [
@@ -53,7 +58,12 @@ const lsp = (directory: string, options?: { readonly untrusted?: boolean; readon
         Location.node.replace(
           Layer.succeed(
             Location.Service,
-            Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
+            Location.Service.of(
+              location(
+                { directory: AbsolutePath.make(directory) },
+                { projectDirectory: options?.project === undefined ? undefined : AbsolutePath.make(options.project) },
+              ),
+            ),
           ),
         ),
       ]),
@@ -99,7 +109,7 @@ describe("Lsp.ignored", () => {
         const { real, link } = yield* repository
         yield* Effect.promise(() => fs.mkdir(path.join(real, "sub"), { recursive: true }))
         const base = spelling === "real" ? real : link
-        const service = yield* lsp(path.join(base, "sub"))
+        const service = yield* lsp(path.join(base, "sub"), { project: real })
         const file = path.join(base, "ignored", "a.fake")
         // In the link Location, the real spelling of the same file is handled too.
         const other = path.join(real, "ignored", "a.fake")

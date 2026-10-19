@@ -27,6 +27,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { emptyManagedNode } from "./fixture/config-nodes"
 import { git, initRepo } from "./fixture/git"
 import { type Found, folders, forgeries } from "./fixture/git-forged"
+import { inner, opened, outer, shapes } from "./fixture/git-passed-over"
 import { traced } from "./fixture/git-trace"
 import { location } from "./fixture/location"
 import { canLinkFile } from "./fixture/symlink"
@@ -891,6 +892,50 @@ describe("InstructionNotes.add", () => {
           yield* notes.add({ scope: "local", text: "n" })
           expect(yield* Effect.promise(() => fs.readdir(away))).toEqual([])
         }).pipe(Effect.provide(layerFor(where)))
+      }),
+    )
+
+    // Classes 1 and 3, the rows of `git-passed-over.test.ts` for this surface: a project `sub` whose `.git` git passes over,
+    // in an untrusted repository whose config names programs. The Location names `sub` as a git project, as a resolve that
+    // took that `.git` for a repository named it, and the person trusts `sub`. The question whether the note is already
+    // ignored starts git for `sub` only, and never in the repository above. Mutation: `Git.ceiling` answering `{}`, with
+    // `GitLayout.locate` taking any `.git` directory with a `HEAD` file as before, fails the first four rows (the fifth
+    // shape's layout is not verified, so it gets no exclude step at all).
+    const local = (found: { readonly folder: string; readonly sub: string }) =>
+      traced(
+        Effect.gen(function* () {
+          const trust = yield* ProjectTrust.Service
+          yield* trust.grant({ persist: false, via: "test" })
+          const { notes } = yield* start
+          expect((yield* notes.add({ scope: "local", text: "n" })).created).toBe(true)
+        }).pipe(
+          Effect.provide(
+            layerFor({ base: found.folder, root: found.sub, config: path.join(found.folder, "config"), trusted: false, vcs: "git" }),
+          ),
+        ),
+      )
+
+    for (const [name, fill] of shapes)
+      it.live(`starts no git in the untrusted repository above a trusted folder for ${name}`, () =>
+        Effect.gen(function* () {
+          const found = yield* outer(fill)
+
+          const result = yield* local(found)
+
+          expect(opened(result.worktrees, found.root)).toBe(false)
+          expect(yield* found.ran()).toEqual([])
+        }),
+      )
+
+    it.live("asks git of a trusted folder whose .git git takes, and never the repository above (control)", () =>
+      Effect.gen(function* () {
+        const found = yield* outer()
+        yield* inner(found)
+
+        const result = yield* local(found)
+
+        expect(opened(result.worktrees, found.sub)).toBe(true)
+        expect(opened(result.worktrees, found.root)).toBe(false)
       }),
     )
   })

@@ -407,8 +407,9 @@ const layer = Layer.effect(
       }
     })
 
-    // The nearest `.git` or `.hg`. Git passes over a `.git` directory that has no `HEAD` and looks in the folder above, and
-    // stops at a `.git` file that is no good, so a `.git` directory counts when `GitLayout` finds a layout in it.
+    // The nearest `.git` or `.hg`. Git passes over a `.git` directory that it does not take for a repository and looks in
+    // the folder above, and stops at a `.git` file that is no good, so a `.git` directory counts when `GitLayout` finds a
+    // layout in it, and the folder named here is the one git uses.
     const marker = (
       start: string,
     ): Effect.Effect<

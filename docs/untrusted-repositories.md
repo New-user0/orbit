@@ -153,8 +153,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     opens nothing else there until the entry names the folder back
     (`packages/core/test/git-layout.test.ts`, "reads only the pointer and the commondir and gitdir of the entry it names").
     A `.git` that is a link, a submodule or separate git directory, and a layout that names another repository's
-    directories, are named and left alone: their directories are not read further. It passes over a `.git` directory that has no
-    `HEAD` and uses the repository above it, and stops at a `.git` file that is no good, as git does. A read that fails,
+    directories, are named and left alone: their directories are not read further. A `.git` directory names the project
+    only when git would take it for a repository: its `HEAD` names a ref under `refs/` or holds a commit ID, and `objects`
+    and `refs` are directories beside it, or in the directory that its `commondir` names, where nothing else is asked
+    about and a share is not looked at (`test/git-layout.test.ts`, "never touches a share that a .git directory's
+    commondir names"). Git goes on to the repository above any other `.git` directory, and so does `Project.resolve`, so
+    the folder the person is asked about is the one git uses (`test/git-passed-over.test.ts`, "Project.resolve names the
+    repository that git uses", five shapes that git passes over; `test/git-layout.test.ts`). Where Orbit cannot tell
+    exactly what git does it passes over more: a `HEAD` that is a link or is over 4 KiB (`test/git-layout.test.ts`, the
+    "passes over" rows). A `.git` file that is no good ends the search. A read that fails,
     is blocked (a share), is over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there",
     never an error, and each folder is judged alone (class 7). The project is named by the remote URL in that config as
     written, which `git remote get-url` gives a trusted folder too unless an include or `url.<base>.insteadOf` rewrites it,
@@ -216,6 +223,20 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     `DirectoryUnavailableError` (`test/worktree-untrusted-git.test.ts`, with a trusted control). In a trusted folder they
     run `git worktree add` and `remove` when a person or the model asks, which runs hooks and filters of the folder (task
     `agents-extensibility-28`).
+  - A grant covers the project's folder and not the folders above it, so no git that Orbit starts for a Location looks
+    for a repository above that folder: `Git.ceiling` gives git `GIT_CEILING_DIRECTORIES` set to the folder above it.
+    `VcsInstructions` hands the project's folder to `status.short` and `history`, the provider's commands carry it, and
+    `Git.repo.discover` looks only in the folder it is given, which `Project.resolve`, `Lsp.ignored`, `InstructionNotes`,
+    Snapshot and `WorktreeGit` give as the folder the decision covers. Without it, a `.git` in that folder that git passes
+    over would hand the command to the repository above, with that repository's config. A project whose folder above has
+    the list separator in its path (`;` on Windows, `:` elsewhere) cannot be bounded this way and gets no git. Proof:
+    `test/git-passed-over.test.ts` (five shapes that git passes over, each with the snapshot, the provider, `Lsp.ignored`,
+    `discover` and `Project.resolve` run for a Location that names the folder, after a grant of the folder; controls where
+    the folder's own repository is opened and where the repository above is opened once it is trusted; and the `Git.ceiling`
+    rows) and its rows in `test/instruction-notes.test.ts`. Mutations: `Git.ceiling` answering `{}` fails the rows of the
+    snapshot, the provider, `Lsp.ignored` and `discover`; with the `HEAD`-only check of `GitLayout` restored as well, the
+    `Project.resolve` rows and four of the five `InstructionNotes` rows fail too (that check leaves the fifth shape's
+    layout unverified, which gets no exclude step).
   - Proof: `test/project-git-trust.test.ts` (one row for each of eleven keys, a linked worktree, and every layout of
     `test/fixture/git-forged.ts`), `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts` ("finds the git
     directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts`, `test/worktree-untrusted-git.test.ts` and `test/git.test.ts`. Each row
@@ -2473,7 +2494,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
   control and with the plain git command of each key as the proof that the key is live). Snapshot (`test/snapshot-untrusted-git.test.ts`) and the worktree list (`test/worktree-untrusted-git.test.ts`) start no git in the folder's own repository while it is not trusted. The read calls
   of the `Git` service run only behind those gates: `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes`,
-  `VcsInstructions` and the snapshot check trust first, and the repository cache works only in Orbit's own clones
+  `VcsInstructions` and the snapshot check trust first, none of them lets git look for a repository above the folder
+  that was trusted (`test/git-passed-over.test.ts`), and the repository cache works only in Orbit's own clones
   (`test/worktree-untrusted-git.test.ts`, `test/lsp-ignored.test.ts`, the "starts no git process in an untrusted folder"
   row of `test/instruction-notes.test.ts`, `test/session-context-vcs.test.ts`). In a trusted folder `status.short` reaches
   `core.fsmonitor` and clean filters, and `history.recent` reaches `gpg.program` when `log.showSignature` is set

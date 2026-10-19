@@ -8,6 +8,7 @@ import { Trust } from "@orbit/schema/trust"
 import { Base, BranchList, FileStatus, Info, Mode } from "@orbit/schema/vcs"
 import { AppProcess } from "@orbit/util/process"
 import { Bus } from "../../bus.js"
+import { Git } from "../../git.js"
 import { Location } from "../../location.js"
 import { ProjectTrust } from "../../project-trust.js"
 import type { Adapter, BranchOptions, DiffOptions } from "../../vcs.js"
@@ -71,7 +72,12 @@ export const Plugin = define({
 function make(proc: AppProcess.Interface, input: { directory: string; worktree: string }) {
   // Listing commands scope pathspecs to the requested directory; per-file
   // commands run from the worktree root because git lists root-relative paths.
-  const ctx: Ctx = { git: makeGit(proc), directory: input.directory, worktree: input.worktree }
+  // The worktree is the folder that the trust decision covers, and git looks for the repository no further up than it.
+  const ctx: Ctx = {
+    git: makeGit(proc, Git.ceiling(input.worktree)),
+    directory: input.directory,
+    worktree: input.worktree,
+  }
 
   return {
     info: Effect.fn("VcsGit.info")(function* () {
@@ -183,12 +189,15 @@ const kind = (code: string): Kind => {
 
 const nuls = (text: string) => text.split("\0").filter(Boolean)
 
-function makeGit(proc: AppProcess.Interface) {
+function makeGit(proc: AppProcess.Interface, env: Record<string, string> | undefined) {
   const run = Effect.fnUntraced(
     function* (args: string[], opts: { cwd: string; maxOutputBytes?: number }) {
+      // A folder that git cannot be kept inside of gets no git, as if git had failed.
+      if (!env) return { exitCode: 1, text: () => "", truncated: false }
       const result = yield* proc.run(
         ChildProcess.make(gitExecutable, [...cfg, ...args], {
           cwd: opts.cwd,
+          env,
           extendEnv: true,
           stdin: "ignore",
         }),

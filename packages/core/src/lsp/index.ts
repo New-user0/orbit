@@ -280,9 +280,10 @@ const layer = Layer.effect(
       }),
       ignored: Effect.fn("Lsp.ignored")(
         function* (files) {
-          // git runs in this folder's repository, so the folder has to be trusted first.
+          // git runs in this folder's repository, so the folder has to be trusted first, and it is the repository in the
+          // project's folder, which the decision covers, never one above it.
           if (!(yield* trust.trusted())) return new Set<string>()
-          const repository = yield* git.repo.discover(location.directory)
+          const repository = yield* git.repo.discover(location.project.directory)
           if (!repository || files.length === 0) return new Set<string>()
           // git reports the real worktree, while results use the Location's own spelling (a junction, a link or a
           // subst drive). The worktree is re-spelled the way the Location spells it, so a path anywhere in the

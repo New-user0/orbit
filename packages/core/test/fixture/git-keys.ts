@@ -170,8 +170,8 @@ export const plain = async (cwd: string, args: readonly string[], input?: string
   await child.exited
 }
 
-/** A program that records each run in a marker file, and the reader of its runs. */
-const marker = async (folder: string) => {
+/** A program in `folder` that records each run in a marker file beside it, and the reader of its runs. */
+export const marker = async (folder: string) => {
   const file = path.join(folder, "marker.txt")
   const program = path.join(folder, "program.sh")
   await Bun.write(program, `#!/bin/sh\necho ran >> "${forward(file)}"\n`)
@@ -191,24 +191,36 @@ export const planted = (key: Key, options: { readonly remote?: string } = {}) =>
     const folder = (yield* tmpdirScoped("orbit-git-key-")).path
     const root = path.join(folder, "clone")
     const recorder = yield* Effect.promise(() => marker(folder))
-    yield* Effect.promise(async () => {
-      await fs.mkdir(root)
-      await git(root, "init", "-b", "main")
-      await git(root, "config", "commit.gpgsign", "false")
-      await git(root, "config", "user.email", "test@orbit.test")
-      await git(root, "config", "user.name", "Test")
-      await git(root, "config", "core.autocrlf", "false")
-      await git(root, "remote", "add", "origin", options.remote ?? "https://example.test/orbit/clone.git")
-      await Bun.write(path.join(root, "a.txt"), "one\n")
-      await git(root, "add", "a.txt")
-      await git(root, "commit", "-m", "one")
-      await key.plant(root, recorder.program, folder)
-      // Edited after the key is planted, so that a command that compares the tree with the index has to run a filter or a
-      // text conversion on it.
-      await Bun.write(path.join(root, "a.txt"), "two\n")
-    })
+    yield* Effect.promise(() => build(root, [key], recorder.program, folder, options.remote))
     return { root, folder, ran: () => Effect.promise(recorder.ran) }
   })
+
+/**
+ * Makes a repository at `root` with each key of `planting` planted to run `program`, a remote, a first commit and a change
+ * that is not committed yet. `folder` holds what a key keeps outside the repository. Nothing runs the program meanwhile.
+ */
+export const build = async (
+  root: string,
+  planting: readonly Key[],
+  program: string,
+  folder: string,
+  remote = "https://example.test/orbit/clone.git",
+) => {
+  await fs.mkdir(root, { recursive: true })
+  await git(root, "init", "-b", "main")
+  await git(root, "config", "commit.gpgsign", "false")
+  await git(root, "config", "user.email", "test@orbit.test")
+  await git(root, "config", "user.name", "Test")
+  await git(root, "config", "core.autocrlf", "false")
+  await git(root, "remote", "add", "origin", remote)
+  await Bun.write(path.join(root, "a.txt"), "one\n")
+  await git(root, "add", "a.txt")
+  await git(root, "commit", "-m", "one")
+  for (const key of planting) await key.plant(root, program, folder)
+  // Edited after the keys are planted, so that a command that compares the tree with the index has to run a filter or a
+  // text conversion on it.
+  await Bun.write(path.join(root, "a.txt"), "two\n")
+}
 
 /** What the plain command of a row ran in a repository of its own, which shows that the key is live there. */
 export const live = (key: Key) =>

@@ -42,7 +42,8 @@ export interface Layout {
 
 /**
  * The layout of the git directory in `folder`, or none when the folder holds no `.git` that git would take for one. It
- * reads at most three small files (the `.git` pointer, and the `commondir` and `gitdir` of its entry) and starts no process.
+ * reads at most three small files (the `HEAD` and `commondir` of a `.git` directory, or the `.git` pointer and the
+ * `commondir` and `gitdir` of its entry) and starts no process.
  */
 export const locate = Effect.fn("GitLayout.locate")(function* (fs: FSUtil.Interface, folder: string) {
   const files = reader(fs)
@@ -149,12 +150,26 @@ const unverified = (here: AbsolutePath, entry: string): Layout => ({
   verified: false,
 })
 
-// A `.git` directory that git takes for a repository has a `HEAD` file.
+// Git takes a `.git` directory for a repository when its `HEAD` names a ref under `refs/` or holds a commit ID, and the
+// directory with its shared files has `objects` and `refs`. It passes over any other `.git` directory and looks in the
+// folder above, so a folder whose `.git` git would pass over must not stand for the repository: the person would be asked
+// about this folder while git works in the one above (class 3). Where Orbit cannot match git exactly it is stricter, and
+// the folder it names then lies above the one git uses: a `HEAD` that is a link, a `HEAD` past 4 KiB, and an `objects` or
+// `refs` that is not a directory are passed over.
 const ordinary = Effect.fnUntraced(function* (files: Files, here: AbsolutePath, entry: string) {
-  if ((yield* files.stat(path.join(entry, "HEAD")))?.type !== "File") return undefined
+  const head = path.join(entry, "HEAD")
+  if ((yield* files.link(head)) || !HEAD_TEXT.test((yield* files.text(head, POINTER_LIMIT))?.slice(0, 255) ?? ""))
+    return undefined
   // `commondir` moves refs, objects and config to another directory. `git worktree add` writes it into an entry under
-  // `worktrees` and never into a `.git` directory, so one here is a layout that a clone forged for git to follow.
-  if ((yield* files.stat(path.join(entry, "commondir"))) !== undefined) return unverified(here, entry)
+  // `worktrees` and never into a `.git` directory, so one here is a layout that a clone forged for git to follow. Git
+  // looks for `objects` and `refs` in the directory it names, which is read no further than that.
+  const commondir = path.join(entry, "commondir")
+  if ((yield* files.stat(commondir)) !== undefined) {
+    const named = line(yield* files.text(commondir, POINTER_LIMIT))
+    if (named === undefined || !(yield* shared(files, path.resolve(entry, FSUtil.windowsPath(named))))) return undefined
+    return unverified(here, entry)
+  }
+  if (!(yield* shared(files, entry))) return undefined
   return {
     worktree: here,
     gitDirectory: AbsolutePath.make(entry),
@@ -162,6 +177,18 @@ const ordinary = Effect.fnUntraced(function* (files: Files, here: AbsolutePath, 
     canonical: here,
     verified: true,
   } satisfies Layout
+})
+
+// What git reads of `HEAD`: its first 255 bytes, which start with `ref:`, any spaces, tabs or line breaks, and `refs/`, or
+// with a commit ID (40 hex digits, which a 64-digit one starts with too).
+const HEAD_TEXT = /^(?:ref:[ \t\r\n]*refs\/|[0-9a-fA-F]{40})/
+
+// The directories that every git directory needs beside its `HEAD`.
+const shared = Effect.fnUntraced(function* (files: Files, directory: string) {
+  return (
+    (yield* files.stat(path.join(directory, "objects")))?.type === "Directory" &&
+    (yield* files.stat(path.join(directory, "refs")))?.type === "Directory"
+  )
 })
 
 // A `.git` file is a pointer. An invalid one is not a repository, as for git. A valid one is a linked worktree only when its

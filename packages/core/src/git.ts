@@ -74,6 +74,10 @@ export class WorktreeError extends Schema.TaggedError<WorktreeError>()("Git.Work
 
 export interface Interface {
   readonly repo: {
+    /**
+     * The repository whose `.git` is in `input` itself. Git is kept from looking in any folder above `input`, so pass
+     * the folder that a trust decision covers, never a folder below it.
+     */
     readonly discover: (input: AbsolutePath) => Effect.Effect<Repository | undefined>
     readonly clone: (input: {
       remote: string
@@ -95,20 +99,24 @@ export interface Interface {
     readonly branch: (repository: Repository) => Effect.Effect<string | undefined>
     readonly defaultRemoteBranch: (repository: Repository, remote?: string) => Effect.Effect<string | undefined>
     readonly rootCommits: (repository: Repository) => Effect.Effect<readonly string[]>
-    /** The branch checked out in `directory`; undefined for a detached head. */
-    readonly current: (directory: AbsolutePath) => Effect.Effect<string | undefined>
+    /**
+     * The branch checked out in `directory`; undefined for a detached head. Like every command here that takes a
+     * `directory`, git looks for the repository in it and in the folders above it up to `top` (`directory` when not
+     * given), and never above: pass the folder that the trust decision covers.
+     */
+    readonly current: (directory: AbsolutePath, top?: AbsolutePath) => Effect.Effect<string | undefined>
     /**
      * The branch that pull requests usually target, read from the remote-tracking refs of `origin` only: its head, else
      * `main`, else `master`, else the name `main`. It never contacts the remote.
      */
-    readonly mainBranch: (directory: AbsolutePath) => Effect.Effect<string>
+    readonly mainBranch: (directory: AbsolutePath, top?: AbsolutePath) => Effect.Effect<string>
     /**
      * The newest `count` commits as `git log --oneline` prints them. Empty when there are none. It reaches config keys
      * (`gpg.program` when `log.showSignature` is set), so call it only behind `ProjectTrust.trusted()`.
      */
-    readonly recent: (directory: AbsolutePath, count: number) => Effect.Effect<readonly string[]>
+    readonly recent: (directory: AbsolutePath, count: number, top?: AbsolutePath) => Effect.Effect<readonly string[]>
     /** The `user.name` that git resolves in `directory`, undefined when none is set. */
-    readonly userName: (directory: AbsolutePath) => Effect.Effect<string | undefined>
+    readonly userName: (directory: AbsolutePath, top?: AbsolutePath) => Effect.Effect<string | undefined>
   }
   readonly status: {
     /**
@@ -117,7 +125,7 @@ export interface Interface {
      * longer than `maxBytes` is cut to whole lines. A failure to start git or a non-zero exit is an error: a failed
      * status must not read as a clean tree.
      */
-    readonly short: (directory: AbsolutePath, maxBytes: number) => Effect.Effect<string, OperationError>
+    readonly short: (directory: AbsolutePath, maxBytes: number, top?: AbsolutePath) => Effect.Effect<string, OperationError>
   }
   readonly sync: {
     readonly fetchRemotes: (repository: Repository, input?: { prune?: boolean }) => Effect.Effect<void, OperationError>
@@ -203,21 +211,16 @@ const layer = Layer.effect(
       locks.withLock(repository.gitDirectory)(effect)
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
-      const dotgit = yield* fs.up({ targets: [".git"], start: input, mode: "first" }).pipe(
-        Effect.map((matches) => matches[0]),
-        Effect.orElseSucceed(() => undefined),
-      )
-      if (!dotgit) return undefined
+      if (!(yield* fs.existsSafe(path.join(input, ".git")))) return undefined
 
-      const cwd = path.dirname(dotgit)
-      const result = yield* run(cwd, proc, ["rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel"])
+      const result = yield* run(input, proc, ["rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel"], input)
       const [gitDir, commonDir, topLevel] = result.text.split(/\r?\n/)
       if (!gitDir || !commonDir) return undefined
 
       return new Repository({
-        worktree: AbsolutePath.make(topLevel ? resolvePath(cwd, topLevel) : cwd),
-        gitDirectory: AbsolutePath.make(resolvePath(cwd, gitDir)),
-        commonDirectory: AbsolutePath.make(resolvePath(cwd, commonDir)),
+        worktree: AbsolutePath.make(topLevel ? resolvePath(input, topLevel) : input),
+        gitDirectory: AbsolutePath.make(resolvePath(input, gitDir)),
+        commonDirectory: AbsolutePath.make(resolvePath(input, commonDir)),
       })
     })
 
@@ -243,16 +246,16 @@ const layer = Layer.effect(
       return result.text.trim() || undefined
     })
 
-    const currentBranch = Effect.fn("Git.history.current")(function* (directory: string) {
-      const result = yield* run(directory, proc, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    const currentBranch = Effect.fn("Git.history.current")(function* (directory: string, top = directory) {
+      const result = yield* run(directory, proc, ["symbolic-ref", "--quiet", "--short", "HEAD"], top)
       if (result.exitCode !== 0) return undefined
       return result.text.trim() || undefined
     })
 
     const branch = Effect.fn("Git.history.branch")((repository: Repository) => currentBranch(repository.worktree))
 
-    const headOf = Effect.fnUntraced(function* (directory: string, remoteName: string) {
-      const result = yield* run(directory, proc, ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`])
+    const headOf = Effect.fnUntraced(function* (directory: string, remoteName: string, top = directory) {
+      const result = yield* run(directory, proc, ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`], top)
       if (result.exitCode !== 0) return undefined
       return result.text.trim().replace(new RegExp(`^refs/remotes/${remoteName}/`), "") || undefined
     })
@@ -264,21 +267,24 @@ const layer = Layer.effect(
       return yield* headOf(repository.worktree, remoteName)
     })
 
-    const mainBranch = Effect.fn("Git.history.mainBranch")(function* (directory: AbsolutePath) {
-      const head = yield* headOf(directory, "origin")
+    const mainBranch = Effect.fn("Git.history.mainBranch")(function* (directory: AbsolutePath, top = directory) {
+      const head = yield* headOf(directory, "origin", top)
       if (head) return head
       for (const name of ["main", "master"]) {
-        const result = yield* run(directory, proc, ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${name}`])
+        const result = yield* run(directory, proc, ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${name}`], top)
         if (result.exitCode === 0) return name
       }
       return "main"
     })
 
-    const recent = Effect.fn("Git.history.recent")(function* (directory: AbsolutePath, count: number) {
+    const recent = Effect.fn("Git.history.recent")(function* (directory: AbsolutePath, count: number, top = directory) {
+      const env = ceiling(top)
+      if (!env) return []
       const result = yield* proc
         .run(
           ChildProcess.make(gitExecutable, ["--no-optional-locks", "log", "--oneline", "-n", String(count)], {
             cwd: directory,
+            env,
             extendEnv: true,
             stdin: "ignore",
           }),
@@ -290,19 +296,26 @@ const layer = Layer.effect(
       return wholeLines(result.stdout.toString("utf8"), result.stdoutTruncated)
     })
 
-    const userName = Effect.fn("Git.history.userName")(function* (directory: AbsolutePath) {
-      const result = yield* run(directory, proc, ["config", "user.name"])
+    const userName = Effect.fn("Git.history.userName")(function* (directory: AbsolutePath, top = directory) {
+      const result = yield* run(directory, proc, ["config", "user.name"], top)
       if (result.exitCode !== 0) return undefined
       return result.text.trim() || undefined
     })
 
-    const shortStatus = Effect.fn("Git.status.short")(function* (directory: AbsolutePath, maxBytes: number) {
+    const shortStatus = Effect.fn("Git.status.short")(function* (
+      directory: AbsolutePath,
+      maxBytes: number,
+      top = directory,
+    ) {
       const failed = (message: string, cause?: unknown) =>
         new OperationError({ operation: "status", directory, message, cause })
+      const env = ceiling(top)
+      if (!env) return yield* failed(unbounded)
       const result = yield* proc
         .run(
           ChildProcess.make(gitExecutable, ["--no-optional-locks", "status", "--short"], {
             cwd: directory,
+            env,
             extendEnv: true,
             stdin: "ignore",
           }),
@@ -870,15 +883,36 @@ interface Result {
   readonly stderr: string
 }
 
-function run(cwd: string, proc: AppProcess.Interface, args: string[]) {
-  return execute(cwd, proc, args).pipe(Effect.orElseSucceed(() => ({ exitCode: 1, text: "", stderr: "" })))
+/**
+ * What keeps a git started in `top` or below it from using a repository above `top` (`GIT_CEILING_DIRECTORIES`). Git
+ * looks for `.git` in the folder it starts in and then in each folder above, and takes the first that it accepts, so a
+ * `.git` that Orbit took for the repository but git passes over would hand the command, with that repository's config,
+ * to a folder above that nobody was asked about (class 1, class 3). None when the folder above `top` cannot be one entry
+ * of git's list, which `path.delimiter` separates: git is then not started.
+ */
+export function ceiling(top: string): Record<string, string> | undefined {
+  const above = path.dirname(top)
+  if (above === top) return {}
+  if (above.includes(path.delimiter)) return undefined
+  return { GIT_CEILING_DIRECTORIES: above }
 }
 
-function execute(cwd: string, proc: AppProcess.Interface, args: string[]) {
+// The message of a command that was not started because `ceiling` has no answer for its folder.
+const unbounded = "Git was not started: the folder above the repository cannot be given to git as its ceiling"
+
+/** A git command in `cwd` that looks for its repository no further up than `top`; one that was not started fails. */
+function run(cwd: string, proc: AppProcess.Interface, args: string[], top?: string) {
+  return execute(cwd, proc, args, top).pipe(Effect.orElseSucceed(() => ({ exitCode: 1, text: "", stderr: "" })))
+}
+
+function execute(cwd: string, proc: AppProcess.Interface, args: string[], top?: string) {
+  const env = top === undefined ? {} : ceiling(top)
+  if (!env) return Effect.succeed({ exitCode: 1, text: "", stderr: unbounded } satisfies Result)
   return proc
     .run(
       ChildProcess.make(gitExecutable, args, {
         cwd,
+        env,
         extendEnv: true,
         stdin: "ignore",
       }),

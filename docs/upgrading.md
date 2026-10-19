@@ -125,6 +125,18 @@ path-named ID are moved to the new one when the folder is opened (`tool-memory.t
 grant, before the folder was opened again, can be restored (`snapshot-trust-restart.test.ts`). Saved "always allow"
 answers stay with the old ID, so Orbit asks again.
 
+### Orbit's git stays inside the folder you trusted
+
+Git takes a `.git` directory for a repository only when it holds `objects` and `refs` and a `HEAD` that names a branch
+or a commit; it goes on past any other `.git` directory to the repository in a folder above, and uses that repository's
+config. Orbit used to take such a folder for a repository of its own and ask whether to trust it, and once you did, the
+git snapshot, the Git provider and the ignore check of language server results ran git in the repository above, which
+nobody had trusted. Orbit now names the repository above as the project, as git does, so the trust question is about the
+folder git will work in, and every git that Orbit starts for a session looks for a repository no further up than the
+project's folder. A `.git` directory whose `HEAD` is a link is passed over too. On a computer where the folder above a
+project has `;` (Windows) or `:` (elsewhere) in its path, git cannot be told to stop there, so Orbit starts no git for that
+project (`git-passed-over.test.ts`, `git-layout.test.ts`).
+
 ### A project's config waits for its folder to be trusted
 
 The settings in a project's `orbit.json` and `orbit.local.json`, and in the hook settings and `.mcp.json` that other
