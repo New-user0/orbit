@@ -478,9 +478,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   file that answers nothing" rows and their siblings, which are shared, local and shared with a second name, untrusted and
   trusted, with a readable control, in `test/instruction-discovery.test.ts`; mutation: returning the source as unavailable
   from `readSlot` again fails 12 of them). The administrator's file still fails closed (proof: the "reports an unavailable
-  source" and "lists no files for an agent" rows of `server/test/session-instructions.test.ts`, with "leaves out a project
-  file that cannot be read" as the control; mutation: `managedSource` answering `nothing` for an unreadable file fails the
-  two). No list of `instructions_exclude` drops an administrator's rule, at the start (the "excludes the rules of the person
+  source" and "lists no files for an agent" rows of `server/test/session-instructions.test.ts`, with "leaves an unreadable
+  project ORBIT.md out" and "keeps the source available when a rescan cannot read a project file" as the controls;
+  mutation: `managedSource` answering `nothing` for an unreadable file fails the two). No list of `instructions_exclude` drops an administrator's rule, at the start (the "excludes the rules of the person
   and the project ... and never the administrator's" row of `test/instruction-discovery.test.ts`) or when a read brings in
   one that waits (the "injects an administrator's waiting rule that a user list excludes" rows and their project siblings
   in `test/session-instructions.test.ts`, with the person's rule under the same list as the control; mutation: dropping

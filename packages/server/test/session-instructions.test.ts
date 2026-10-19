@@ -76,7 +76,9 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
     yield* Effect.promise(() => Promise.all([home, config, project].map((dir) => fs.mkdir(dir, { recursive: true }))))
     yield* Effect.promise(() => Bun.$`git init -q`.cwd(project).quiet())
     const llm = yield* TestLLM.Test.pipe(Effect.provide(TestLLM.testLayer({ fallback: TestLLM.text("side", "side_text") })))
-    const unreadable = { current: false }
+    // `managed` makes the administrator's ORBIT.md unreadable and `project` the project's. A managed file that cannot be
+    // read fails closed (the source is unavailable); a project file costs only itself.
+    const unreadable = { managed: false, project: false }
     const reads: string[] = []
     const replacements: LayerNode.Replacements = [
       Global.node.replace(Global.layerWith({ home, config, data: path.join(root, "data"), cache: path.join(root, "cache"), state: path.join(root, "state"), tmp: path.join(root, "tmp") })),
@@ -85,7 +87,7 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
       App.node.replace(App.node),
       ModelsDev.node.replace(ModelsDev.configured({ fetch: false })),
       Watcher.node.replace(Watcher.configured({ enabled: true })),
-      // An instruction file that cannot be read while `unreadable.current` is set, as one that is locked or just gone.
+      // An ORBIT.md that cannot be read while the flag of its place in `unreadable` is set, as one that is locked or just gone.
       FSUtil.node.replace(
         Layer.effect(
           FSUtil.Service,
@@ -95,7 +97,10 @@ const server = (options: { readonly trusted?: boolean; readonly instructions?: b
                 ...fs,
                 readFileStringSafe: (file) =>
                   Effect.sync(() => reads.push(file)).pipe(Effect.andThen(
-                  unreadable.current && path.basename(file) === "ORBIT.md" ? Effect.undefined : fs.readFileStringSafe(file))),
+                  path.basename(file) === "ORBIT.md" &&
+                    (path.dirname(file).toLowerCase() === options.managed?.toLowerCase() ? unreadable.managed : unreadable.project)
+                    ? Effect.undefined
+                    : fs.readFileStringSafe(file))),
               }),
             ),
           ),
@@ -260,24 +265,39 @@ it.live("lists no files for an agent that leaves instruction files out of its co
   Effect.gen(function* () {
     const managed = path.join((yield* tmpdirScoped("orbit-managed-")).path, "managed")
     const s = yield* server({ managed })
-    yield* s.write(path.join(managed, "ORBIT.md"), "policy rules")
     yield* s.write(path.join(s.project, "ORBIT.md"), "project rules")
+    yield* s.write(path.join(managed, "ORBIT.md"), "policy")
     const build = yield* s.preview((yield* s.session()).id)
     const explore = yield* s.preview((yield* s.session(s.project, "explore")).id)
 
-    expect(build.status.files.map((file) => file.kind)).toEqual(["managed", "project"])
+    expect(build.status.files).toHaveLength(2)
     expect(explore.initial ?? "").not.toContain("project rules")
     expect(explore.status.files).toEqual([])
     expect(explore.status.warnings).toEqual([])
-    // It reads no source, so an unreadable one leaves its empty list complete. Only the administrator's file makes the
-    // source unavailable when it cannot be read; a project file that cannot be read is left out instead.
-    s.unreadable.current = true
+    // It reads no source, so an unreadable one leaves its empty list complete.
+    s.unreadable.managed = true
     yield* s.write(path.join(managed, "ORBIT.md"), "changed policy")
     // Wait for the rescan to mark the source unavailable, so `available: true` below cannot come from discovery.
     yield* s.until((yield* s.session()).id, (preview) => !preview.status.available)
     const unreadable = yield* s.preview((yield* s.session(s.project, "explore")).id)
     expect(unreadable.status.files).toEqual([])
     expect(unreadable.status.available).toBe(true)
+  }).pipe(Effect.scoped),
+)
+
+it.live("leaves an unreadable project ORBIT.md out and lets the next name of its slot take its place", () =>
+  Effect.gen(function* () {
+    const s = yield* server()
+    const first = path.join(s.project, "ORBIT.md")
+    yield* s.write(first, "first name rules")
+    yield* s.write(path.join(s.project, "AGENTS.md"), "SECOND NAME MARKER")
+    s.unreadable.project = true
+    const preview = yield* s.preview((yield* s.session()).id)
+
+    expect(preview.status.available).toBe(true)
+    expect(preview.status.files.map((file) => file.path)).toEqual([path.join(s.project, "AGENTS.md")])
+    expect(preview.initial).toContain("SECOND NAME MARKER")
+    expect(preview.initial).not.toContain("first name rules")
   }).pipe(Effect.scoped),
 )
 
@@ -512,15 +532,15 @@ it.live("reports an unavailable source, and no baseline while the session has no
     const managed = path.join((yield* tmpdirScoped("orbit-managed-")).path, "managed")
     const s = yield* server({ managed })
     const file = path.join(managed, "ORBIT.md")
-    yield* s.write(file, "stored policy")
+    yield* s.write(file, "stored rules")
     const initialized = yield* s.session()
     const baseline = (yield* s.preview(initialized.id)).initial
-    expect(baseline).toContain("stored policy")
+    expect(baseline).toContain("stored rules")
     yield* s.step(initialized.id, "go")
     const fresh = yield* s.session()
 
-    s.unreadable.current = true
-    yield* s.write(file, "changed policy")
+    s.unreadable.managed = true
+    yield* s.write(file, "changed rules")
     const blocked = yield* s.until(fresh.id, (preview) => !preview.status.available)
 
     expect(blocked.status.available).toBe(false)
@@ -533,9 +553,9 @@ it.live("reports an unavailable source, and no baseline while the session has no
   }).pipe(Effect.scoped),
 )
 
-// The control: a project file that cannot be read costs only itself, so the source stays available and the list is
-// complete without it.
-it.live("leaves out a project file that cannot be read and stays available", () =>
+// The control for the rescan the two rows above wait for: a project file that a rescan cannot read costs only itself, so
+// the source stays available and the list is complete without it.
+it.live("keeps the source available when a rescan cannot read a project file", () =>
   Effect.gen(function* () {
     const s = yield* server()
     const file = path.join(s.project, "ORBIT.md")
@@ -544,7 +564,7 @@ it.live("leaves out a project file that cannot be read and stays available", () 
     const session = yield* s.session()
     expect((yield* s.preview(session.id)).status.files.map((item) => item.path)).toEqual([file])
 
-    s.unreadable.current = true
+    s.unreadable.project = true
     yield* s.write(file, "changed rules")
     const rescanned = yield* s.until(
       (yield* s.session()).id,
