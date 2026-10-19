@@ -151,6 +151,7 @@ export interface Interface {
       scope: RelativePath
       ignores?: Repository
       maximumUntrackedFileBytes?: number
+      withholdNested?: boolean
     }) => Effect.Effect<{ readonly skipped: readonly RelativePath[] }, OperationError>
     /**
      * The paths git ignores. By default a tracked file that matches a pattern counts as ignored, which is what a
@@ -168,6 +169,8 @@ export interface Interface {
       scopes: readonly RelativePath[]
       ignores?: Repository
       maximumUntrackedFileBytes?: number
+      /** Leave out every folder that holds a `.git` entry of its own, so that git never opens what it names. */
+      withholdNested?: boolean
     }) => Effect.Effect<TreeID, OperationError>
     readonly write: (repository: Repository) => Effect.Effect<TreeID, OperationError>
     readonly files: (input: {
@@ -470,7 +473,10 @@ const layer = Layer.effect(
       scope: RelativePath
       ignores?: Repository
       maximumUntrackedFileBytes?: number
+      /** Keep git out of every folder that holds a `.git` entry of its own: it opens what that entry names. */
+      withholdNested?: boolean
     }) {
+      if (input.withholdNested) yield* withholdNestedRepositories(input.repository, input.scope)
       const list = (args: string[]) =>
         repositoryOperation("refresh", input.repository, args).pipe(Effect.map((result) => nuls(result.text)))
       const [tracked, untracked] = yield* Effect.all(
@@ -518,6 +524,57 @@ const layer = Layer.effect(
           { stdin: stage.join("\0") + "\0" },
         )
       return { skipped }
+    })
+
+    // `ls-files --others` and `add` look inside every untracked folder for a `.git` entry, to tell a nested repository
+    // from a plain folder, and a `.git` file that says `gitdir: \\host\share` (or a directory whose `commondir` does)
+    // makes git open that share (class 6). A folder that the snapshot repository's own `info/exclude` names is never
+    // opened, so while the project is not trusted each such folder is found here, without git, and written there.
+    const withholdNestedRepositories = Effect.fn("Git.index.withholdNested")(function* (
+      repository: Repository,
+      scope: RelativePath,
+    ) {
+      const named = /^(\.git[. ]*|git~\d+)$/i
+      const walk = (directory: string): Effect.Effect<string[]> =>
+        fs.readDirectoryEntries(directory).pipe(
+          Effect.orElseSucceed(() => []),
+          Effect.flatMap((entries) =>
+            directory !== repository.worktree && entries.some((entry) => named.test(entry.name))
+              ? Effect.succeed([directory])
+              : Effect.forEach(
+                  entries.filter(
+                    (entry) => entry.type === "directory" && !(directory === repository.worktree && named.test(entry.name)),
+                  ),
+                  (entry) => walk(path.join(directory, entry.name)),
+                  { concurrency: 16 },
+                ).pipe(Effect.map((found) => found.flat())),
+          ),
+        )
+      const lines = (yield* walk(path.join(repository.worktree, scope))).map(
+        (directory) =>
+          "/" +
+          path
+            .relative(repository.worktree, directory)
+            .replaceAll("\\", "/")
+            .replace(/[\\*?[\]#!]/g, "\\$&")
+            .replace(/ $/, "\\ ") +
+          "/",
+      )
+      const exclude = path.join(repository.gitDirectory, "info", "exclude")
+      const content = "# Written by Orbit: folders that hold a .git entry of their own.\n" + lines.sort().join("\n") + "\n"
+      if ((yield* fs.readFileStringSafe(exclude).pipe(Effect.orElseSucceed(() => undefined))) === content) return
+      yield* fs.ensureDir(path.dirname(exclude)).pipe(
+        Effect.andThen(fs.writeFileString(exclude, content)),
+        Effect.mapError(
+          (cause) =>
+            new OperationError({
+              operation: "refresh",
+              directory: repository.gitDirectory,
+              message: "Failed to configure Git exclusions",
+              cause,
+            }),
+        ),
+      )
     })
 
     const ignored = Effect.fn("Git.index.ignored")(function* (input: {
@@ -577,6 +634,7 @@ const layer = Layer.effect(
         scopes: readonly RelativePath[]
         ignores?: Repository
         maximumUntrackedFileBytes?: number
+        withholdNested?: boolean
       }) =>
         locked(
           input.repository,

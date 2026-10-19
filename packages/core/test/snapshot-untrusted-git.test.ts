@@ -372,3 +372,101 @@ describe("Snapshot starts nothing of a submodule's repository in an untrusted fo
     SLOW,
   )
 })
+
+// Class 6 (round 4): git looks inside every untracked folder for a `.git` entry, and a `.git` file naming a share, or a
+// `.git` folder whose `commondir` names one, makes it open that share. While the folder is not trusted nothing of the
+// kind may be reached. The oracle is the Windows DNS client cache: a name that something tried to open is cached, but
+// only for a few seconds, so a watcher polls the cache for the whole run. The control is a plain open of a second unique
+// name by this process, which the watcher must also see. Other systems have no such share syntax, so there the rows check
+// only what is recorded.
+const windows = process.platform === "win32"
+
+const unique = (prefix: string) => `${prefix}${Math.random().toString(36).slice(2, 12)}.example.com`
+
+/** Names under example.com that the DNS client cache held at any moment between `watch()` and `stop()`. */
+const watch = async () => {
+  const child = Bun.spawn(
+    [
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      "while ($true) { Get-DnsClientCache | Where-Object { $_.Entry -like '*.example.com' } | ForEach-Object { $_.Entry }; [Console]::Out.Flush() }",
+    ],
+    { stdout: "pipe", stderr: "ignore", stdin: "ignore" },
+  )
+  const chunks: string[] = []
+  const reading = (async () => {
+    const decoder = new TextDecoder()
+    for await (const chunk of child.stdout) chunks.push(decoder.decode(chunk))
+  })()
+  // Let the first poll finish, so that the run starts under watch.
+  await Bun.sleep(2500)
+  return async () => {
+    await Bun.sleep(1500)
+    child.kill()
+    await reading
+    return new Set(chunks.join("").split(/\r?\n/).filter(Boolean))
+  }
+}
+
+describe("Snapshot reaches no share named by a nested .git entry in an untrusted folder", () => {
+  const pointer = (name: string) => async (folder: string, host: string) => {
+    await Bun.write(path.join(folder, name), `gitdir: \\\\${host}\\share\\repo\n`)
+  }
+  const rows: ReadonlyArray<{
+    name: string
+    plant: (folder: string, host: string) => Promise<void>
+    nested: string
+  }> = [
+    { name: "a .git file in a subfolder", nested: "sub", plant: pointer(".git") },
+    { name: "a .git file several folders down", nested: path.join("a", "b", "sub"), plant: pointer(".git") },
+    { name: "a .git file with other letter case", nested: "sub", plant: pointer(".GIT") },
+    {
+      name: "a .git folder whose commondir names a share",
+      nested: "sub",
+      plant: async (folder, host) => {
+        await fs.mkdir(path.join(folder, ".git"), { recursive: true })
+        await Bun.write(path.join(folder, ".git", "HEAD"), "ref: refs/heads/main\n")
+        await Bun.write(path.join(folder, ".git", "commondir"), `\\\\${host}\\share\\repo\n`)
+      },
+    },
+  ]
+
+  for (const row of rows)
+    it.live(
+      row.name,
+      () =>
+        Effect.gen(function* () {
+          const root = path.join((yield* tmpdirScoped()).path, "clone")
+          const host = unique("nested")
+          const control = unique("control")
+          yield* repository(root)
+          const folder = path.join(root, row.nested)
+          yield* Effect.promise(async () => {
+            await fs.mkdir(folder, { recursive: true })
+            await row.plant(folder, host)
+            await Bun.write(path.join(folder, "inner.txt"), "inner\n")
+            await Bun.write(path.join(root, "top.txt"), "top\n")
+          })
+          const data = (yield* tmpdirScoped()).path
+          const stop = windows ? yield* Effect.promise(watch) : undefined
+          const files = yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const first = yield* snapshot.capture()
+            yield* Effect.promise(() => fs.appendFile(path.join(root, "top.txt"), "more\n"))
+            const second = yield* snapshot.capture()
+            if (!first || !second) return expect.unreachable("capture is disabled")
+            return (yield* snapshot.files({ from: first, to: second })).map(String)
+          }).pipe(Effect.provide(layerFor(root, data, false)))
+          yield* Effect.promise(() => fs.stat(`\\\\${control}\\share\\x`).catch(() => undefined))
+          const names = stop ? yield* Effect.promise(stop) : undefined
+
+          // The nested folder is left out; the rest of the folder is still recorded.
+          expect(files).toEqual(["top.txt"])
+          if (!names) return
+          expect(names.has(control)).toBe(true)
+          expect(names.has(host)).toBe(false)
+        }),
+      SLOW,
+    )
+})

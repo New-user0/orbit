@@ -190,6 +190,7 @@ const layer = Layer.effect(
             scopes: [yield* scope(repo.worktree)],
             ignores: repo.source,
             maximumUntrackedFileBytes: 2 * 1024 * 1024,
+            withholdNested: !(yield* trust.trusted()),
           }),
         )
       }).pipe(

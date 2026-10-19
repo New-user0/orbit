@@ -157,11 +157,22 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     files.
   - Snapshot: an untrusted folder's snapshot runs git only in Orbit's own git directory, with the folder as the work tree
     (`test/snapshot-untrusted-git.test.ts`, which traces every git process and finds none outside it). A directory of the
-    folder that is a repository itself is a gitlink there, so the comparisons (`diff-files`, `diff`) pass
+    folder that is a repository itself and that an earlier capture recorded is a gitlink there, so the comparisons (`diff-files`, `diff`) pass
     `--ignore-submodules=all` and the restore passes `--no-recurse-submodules`; without them git starts a status inside the
     nested repository with the config that repository ships. The same file has a row for `core.fsmonitor`,
     `core.hooksPath` and `.git/hooks` in a nested repository, each with a plain-git control, and a row for a real
     submodule whose `.git` file points into the clone's `.git/modules`.
+    Git still opens what a nested `.git` entry names, only to decide whether the folder is a repository: a `.git` file
+    that says `gitdir: \\host\share\repo`, or a `.git` folder whose `commondir` names a share, makes `ls-files --others`
+    and `add` contact that host (class 6). So before each untrusted capture `Git.index.refresh` finds, without git, every
+    folder below the scope that holds an entry named `.git` (any letter case, trailing dots or spaces, or the short name
+    `git~1`; links are not followed) and writes them to the snapshot repository's `info/exclude`, so git never enters
+    them and their files are not recorded. Proof: "Snapshot reaches no share named by a nested .git entry in an
+    untrusted folder" in `snapshot-untrusted-git.test.ts` (four spellings; a watcher polls the Windows DNS cache for the
+    whole run, and a plain open of a second unique name is the control that the watcher sees such lookups; the rows run
+    on Windows only for the cache, and everywhere for what is recorded). Mutation: `withholdNested: false` in
+    `snapshot.ts` makes all four rows fail. A folder that gains its `.git` entry between the scan and the git command is
+    not covered.
     The folder's `.gitattributes` can pick `filter=`, `diff=` and `merge=` drivers whose programs the person's own system
     or global config defines (git-lfs among them), and an `.lfsconfig` names the host that git-lfs contacts. Orbit's
     untrusted snapshot repository therefore holds `info/attributes` with `* !filter !diff !merge`, which outranks the
@@ -796,8 +807,9 @@ every other extension):
 - `/ide` lists the locks in the state folder that `readLocks` accepts, so nothing is read from a project folder; the name
   and folders an editor chose reach the dialog and its toasts written out: the lock's name is escaped where the lock is
   read, the name in the editor's hello where it arrives, and the toasts escape names and the session folder once more with
-  `plain`. The tests pin what is drawn, not each of those calls: the folder reaches the toast already escaped, so
-  removing the `plain` of the toast alone fails no test. `connect` reads the chosen window's lock
+  `plain`. The tests pin what is drawn, not each of those calls: the toast draws every message through `bodyText`
+  (`packages/tui/src/ui/toast.tsx`), so the toast's own `plain` is a second guard that no row pins alone, and the drawn
+  row pins the two together. `connect` reads the chosen window's lock
   again and dials `127.0.0.1` with the token in the one header; a window that never says hello is not retried and ends
   with a timeout. `/ide open` finds the editor's program with `which` (PATH only) and starts it through cross-spawn with
   the folder as its only argument, never through a shell. Proof: `test/context/editor-ide.test.tsx`,
