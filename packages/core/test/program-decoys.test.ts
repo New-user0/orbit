@@ -195,7 +195,7 @@ describe.skipIf(process.platform !== "win32")("a program started by name, with d
             (directory) =>
               Effect.gen(function* () {
                 const service = yield* Shell.Service
-                const started = yield* service.create({ shell, command: name, timeout: 0 })
+                const started = yield* service.create({ shell: ShellSelect.resolve({ priority: "compat" }, shell), command: name, timeout: 0 })
                 return yield* service.wait(started.id)
               }).pipe(Effect.scoped, Effect.provide(harness(directory))),
           ),
