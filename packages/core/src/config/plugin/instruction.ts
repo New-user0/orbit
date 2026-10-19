@@ -427,6 +427,29 @@ export const Plugin = define({
         // inside it passes through gives up its shared file and its rules, which the worktree has its own copy of, and keeps
         // its local file.
         const contributions: Contribution[] = []
+        // A file of the walk that cannot be read (no permission, or another program holds it open) costs only itself, as
+        // a rule does: one warning names it and the next name of its slot in that folder takes its place. Only the
+        // administrator's file fails closed.
+        const readSlot = Effect.fnUntraced(function* (picked: readonly (typeof discovered)[number][], local: boolean) {
+          const tried = picked.flatMap((candidate) => [
+            candidate,
+            ...found.filter(
+              (other) =>
+                other !== candidate &&
+                dirname(other.file) === dirname(candidate.file) &&
+                locals.includes(basename(other.file)) === local &&
+                (discovery.global || !globalFiles.includes(other.real)),
+            ),
+          ])
+          for (const candidate of tried) {
+            const result = yield* read(candidate.real, "project", visited, patterns, local ? "local" : undefined).pipe(
+              Effect.catchCause(() => Effect.succeed(undefined)),
+            )
+            if (result !== undefined) return result
+            yield* Effect.logWarning("instruction file skipped", { path: candidate.file, reason: "could not be read" })
+          }
+          return undefined
+        })
         const walked = ancestorDirectories(start, stop).toReversed()
         const spelled = [...new Set(discovered.map((candidate) => dirname(candidate.file)))].filter(
           (folder) => !walked.includes(folder),
@@ -434,11 +457,8 @@ export const Plugin = define({
         for (const folder of [...spelled, ...walked]) {
           const inside = discovered.filter((candidate) => dirname(candidate.file) === folder)
           const slot = (local: boolean) => inside.filter((candidate) => locals.includes(basename(candidate.file)) === local)
-          for (const candidate of slot(false)) {
-            const result = yield* read(candidate.real, "project", visited, patterns)
-            if (result === undefined) return Instructions.unavailable
-            contributions.push(result)
-          }
+          const shared = yield* readSlot(slot(false), false)
+          if (shared !== undefined) contributions.push(shared)
           if (!inherited(folder)) {
             const folderRules = yield* rules({
               origin: "project",
@@ -467,11 +487,8 @@ export const Plugin = define({
             if (!available(folderRules)) return Instructions.unavailable
             contributions.push(folderRules)
           }
-          for (const candidate of slot(true)) {
-            const result = yield* read(candidate.real, "project", visited, patterns, "local")
-            if (result === undefined) return Instructions.unavailable
-            contributions.push(result)
-          }
+          const local = yield* readSlot(slot(true), true)
+          if (local !== undefined) contributions.push(local)
         }
         return merge(contributions)
       })

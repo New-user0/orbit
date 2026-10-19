@@ -742,7 +742,7 @@ describe("ConfigInstructionPlugin.Plugin", () => {
     )
   })
 
-  it.effect("marks a discovered file that disappears before read as unavailable", () => {
+  it.effect("skips a discovered file that disappears before read, and drops what it held", () => {
     const discovered = AbsolutePath.make("/repo/AGENTS.md")
     const racingFS = Layer.effect(
       FSUtil.Service,
@@ -763,7 +763,7 @@ describe("ConfigInstructionPlugin.Plugin", () => {
           yield* discovery.load(),
           state({ "core/instructions": [{ path: discovered, content: "old" }] }),
         )).changed,
-      ).toBe(false)
+      ).toBe(true)
     }).pipe(
       Effect.provide(
         instructionLayer({
@@ -2182,6 +2182,56 @@ describe("ConfigInstructionPlugin.Plugin lets an unreadable rule cost only itsel
           }).pipe(Effect.provide(layerFor(where, { filesystemLayer: unreadable })))
         }),
       )
+
+  // The same for the files of the walk (class 7): one that cannot be read costs only itself, with one warning that names it,
+  // and the next name of its slot takes its place. Rows: how the read goes wrong, which slot the file is in, the project's
+  // trust, and a readable control that sends everything.
+  for (const mode of ["answers nothing", "fails", "reads"] as const)
+    for (const slot of ["shared", "local", "shared with a second name"] as const)
+      for (const trusted of [false, true])
+        it.live(`a ${slot} instruction file that ${mode} ${mode === "reads" ? "is sent" : "is left out and costs only itself"}, project ${trusted ? "trusted" : "not trusted"}`, () =>
+          Effect.gen(function* () {
+            const where = yield* folders
+            const locked = path.join(where.repo, slot === "local" ? "ORBIT.local.md" : "ORBIT.md")
+            yield* write(locked, "LOCKED FILE MARKER")
+            if (slot === "local") yield* write(path.join(where.repo, "ORBIT.md"), "SHARED BESIDE MARKER")
+            if (slot === "shared with a second name") yield* write(path.join(where.repo, "AGENTS.md"), "SECOND NAME MARKER")
+            yield* write(path.join(where.repo, ".orbit", "rules", "control.md"), "CONTROL RULE MARKER")
+            const logged: string[] = []
+            const logger = Logger.make<unknown, void>((entry) => {
+              if (Array.isArray(entry.message) && entry.message[0] === "instruction file skipped")
+                logged.push(JSON.stringify(entry.message[1]))
+            })
+            const unreadable = Layer.effect(
+              FSUtil.Service,
+              FSUtil.Service.pipe(
+                Effect.map((real) =>
+                  FSUtil.Service.of({
+                    ...real,
+                    readFileStringSafe: (target) =>
+                      path.resolve(target) !== path.resolve(locked) || mode === "reads"
+                        ? real.readFileStringSafe(target)
+                        : mode === "fails"
+                          ? Effect.die("EBUSY")
+                          : Effect.succeed(undefined),
+                  }),
+                ),
+              ),
+            ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+            yield* Effect.gen(function* () {
+              const discovery = yield* start()
+              const text = (yield* readBody(yield* discovery.load())).text
+              expect(text).toContain("CONTROL RULE MARKER")
+              expect(text.includes("LOCKED FILE MARKER")).toBe(mode === "reads")
+              if (slot === "local") expect(text).toContain("SHARED BESIDE MARKER")
+              if (slot === "shared with a second name") expect(text.includes("SECOND NAME MARKER")).toBe(mode !== "reads")
+              expect(logged.filter((entry) => entry.includes(path.basename(locked)))).toHaveLength(mode === "reads" ? 0 : 1)
+            }).pipe(
+              Effect.provide(layerFor(where, { trusted, filesystemLayer: unreadable })),
+              Effect.provide(Logger.layer([logger])),
+            )
+          }),
+        )
 
   // The administrator's rules fail closed: one that cannot be read makes the source unavailable, so policy text that was
   // admitted is kept and not dropped for a failed read. The control is the same rule, readable, which does change it.

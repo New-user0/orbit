@@ -453,7 +453,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   A project or personal rule that cannot be read costs only itself, with one warning that names it; the administrator's rules
   fail closed (proof: the "a managed rule that answers nothing keeps the admitted instructions" and "a managed rule that fails keeps
   the admitted instructions" rows of `test/instruction-discovery.test.ts`, with a readable control; mutation: dropping the
-  managed check in `rules()` fails both). One scan lists at most 256 rule files and compiled globs are kept. One read of a
+  managed check in `rules()` fails both). The same holds for a project's or a local instruction file of the walk
+  (`AGENTS.md`, `ORBIT.local.md`, the other product's names): one that answers nothing or fails to read is left out with one
+  warning that names it, and the next name of its slot in that folder takes its place (proof: the "a shared instruction
+  file that answers nothing" rows and their siblings, which are shared, local and shared with a second name, untrusted and
+  trusted, with a readable control, in `test/instruction-discovery.test.ts`; mutation: returning the source as unavailable
+  from `readSlot` again fails 12 of them). The administrator's file still fails closed. One scan lists at most 256 rule files and compiled globs are kept. One read of a
   file looks at no more than 256 rule files over all the folders it passes through, with one warning (proof: 'looks at no
   more rule files in one read than the budget, over all the folders it passes through' in `test/session-instructions.test.ts`;
   mutation: raising `MAX_RULES_PER_READ` fails it), and the rules of one read share one set of handled files, so a file that
