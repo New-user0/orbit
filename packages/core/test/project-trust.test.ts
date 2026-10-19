@@ -211,6 +211,29 @@ describe("ProjectTrust.status", () => {
     }),
   )
 
+  // The agents plugin holds this text back from an agent that exists and keeps it for a new one; status takes the
+  // stricter answer for both, so that a client asks.
+  const agentText: [string, unknown][] = [
+    ["system", { agents: { build: { system: "TEAM PROMPT" } } }],
+    ["description", { agents: { build: { description: "TEAM DESC" } } }],
+    ["initial_prompt", { agents: { build: { initial_prompt: "TEAM FIRST" } } }],
+    ["disallowed_tools", { agents: { build: { disallowed_tools: ["edit"] } } }],
+    ["a new agent", { agents: { fresh: { system: "TEAM PROMPT" } } }],
+  ]
+  for (const [name, config] of agentText) {
+    it.live(`lists orbit.json for agent ${name} in an untrusted project, and nothing once it is trusted`, () =>
+      Effect.gen(function* () {
+        const folders = yield* bare
+        yield* Effect.promise(() => write(path.join(folders.repo, "orbit.json"), config))
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          expect<unknown>(held(folders.repo, yield* project.status())).toEqual([["orbit.json", ["permissions"]]])
+          expect((yield* project.grant({ persist: false, via: "test" })).withheld).toEqual([])
+        }).pipe(Effect.provide(loader(folders)))
+      }),
+    )
+  }
+
   it.live("lists every file under agents/ as held back, whatever it names", () =>
     Effect.gen(function* () {
       const folders = yield* bare
