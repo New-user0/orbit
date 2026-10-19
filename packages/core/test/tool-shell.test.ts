@@ -294,6 +294,8 @@ const withScanner = <A, E, R>(
   portable: boolean,
   body: (registry: Tool.Interface, fixture: { active: string; outside: string }) => Effect.Effect<A, E, R>,
   shell = "sh",
+  // A later document of the same project (orbit.local.json), for a test of what a later block hides.
+  local?: object,
 ) =>
   Effect.acquireUseRelease(
     Effect.promise(() => tmpdir()),
@@ -307,6 +309,10 @@ const withScanner = <A, E, R>(
             JSON.stringify({ experimental: { portable_shell_scanner: portable } }),
           ),
         )
+        if (local)
+          yield* Effect.promise(() =>
+            Bun.write(path.join(fixture.active, "orbit.local.json"), JSON.stringify(local)),
+          )
         return yield* withSession(fixture.active, (registry) =>
           Effect.gen(function* () {
             const selection = yield* ShellSelect.Service
@@ -385,6 +391,32 @@ const runCovered = (registry: Tool.Interface, command: string, shell: string, ma
     }
     return result
   })
+
+// A block of a later document hides only the keys it sets. The condition is read differently by the two scanners (the
+// portable one also lists the test), so the patterns the request offers to save tell which one the call went through.
+describe("ShellTool scanner choice", () => {
+  const test = isWindows || !Bun.which("sh") ? permissionIt.live.skip : permissionIt.live
+  for (const [name, local, saves] of [
+    ["is kept past a later block about another key", { experimental: { allow_local_fetch: false } }, ["[ *", "cat *", "echo *"]],
+    ["is replaced by a later block that sets it", { experimental: { portable_shell_scanner: false } }, ["cat *", "echo *"]],
+  ] as const) {
+    test(`the person's portable scanner ${name}`, () =>
+      withScanner(
+        true,
+        (registry) =>
+          Effect.gen(function* () {
+            const settled = yield* executeTool(
+              registry,
+              call({ command: "if [ -f x ]; then cat x; else echo no; fi" }, "call-scanner-choice"),
+            )
+            expect(settled.status).toBe("completed")
+            expect(assertions.map((item) => item.save)).toEqual([saves])
+          }),
+        "sh",
+        local,
+      ), { timeout: 30_000 })
+  }
+})
 
 // Directory cases still document inherited limitations; fixed scanner cases require matching behavior.
 describe("ShellTool scanner permissions", () => {

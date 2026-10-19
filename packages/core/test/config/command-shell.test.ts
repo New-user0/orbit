@@ -311,6 +311,34 @@ describe("command template shell spans", () => {
     }),
   )
 
+  // A block of a later document hides only the keys it sets: the person's choice of scanner stands past a project block
+  // about something else, and a project that cannot set it (untrusted) leaves it alone. The condition below is read
+  // differently by the two scanners, so the saved patterns tell which one the span went through.
+  for (const [name, later, trusted] of [
+    ["a later block that sets another key", { allow_local_fetch: false }, true],
+    ["a later block that turns it off, from an untrusted project", { portable_shell_scanner: false }, false],
+  ] as const) {
+    it.live(`reads the scanner choice past ${name}`, () =>
+      Effect.gen(function* () {
+        const entry = (info: Record<string, unknown>, scope: Document["scope"]) =>
+          new Document({ type: "document", scope, info: decode(info) })
+        const project = entry({ experimental: later }, "project")
+        const probe = yield* installEntries([
+          entry(
+            {
+              commands: { probe: { template: "!`if [ -f x ]; then cat x; else echo no; fi`" } },
+              experimental: { portable_shell_scanner: true },
+            },
+            "user",
+          ),
+          trusted ? project : ConfigTrust.stamp(project, { roots: [process.cwd()], directory: process.cwd() }),
+        ])
+        yield* probe.execute("")
+        expect(asserted.map((input) => input.save)).toEqual([["[ *", "cat *", "echo *"]])
+      }),
+    )
+  }
+
   it.live("authorizes every span before running any, so one denial runs nothing", () =>
     Effect.gen(function* () {
       denied.add("rm -rf build")

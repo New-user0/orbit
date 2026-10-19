@@ -423,7 +423,12 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.live("allows nested subagents up to the configured depth", () =>
+  // A block of a later document hides only the keys it sets: the depth stands past a block about another key.
+  for (const [name, local] of [
+    ["allows nested subagents up to the configured depth", undefined],
+    ["keeps the configured depth past a later block about another key", { experimental: { allow_local_fetch: false } }],
+  ] as const)
+  it.live(name, () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -433,6 +438,8 @@ describe("SubagentTool", () => {
           yield* Effect.promise(() =>
             Bun.write(path.join(dir.path, "orbit.json"), JSON.stringify({ experimental: { subagent_depth: 2 } })),
           )
+          if (local)
+            yield* Effect.promise(() => Bun.write(path.join(dir.path, "orbit.local.json"), JSON.stringify(local)))
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
           const sessions = yield* Session.Service
           const root = yield* sessions.create({ location })
