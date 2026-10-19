@@ -1,7 +1,7 @@
 export * as InstructionTriggers from "./instruction-triggers.js"
 
 import { dirname, join } from "path"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Clock, Context, Effect, Layer } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { CompatInstructions } from "@orbit/compat/instructions"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -15,6 +15,12 @@ import { ProjectTrust } from "./project-trust.js"
 import { AbsolutePath } from "./schema.js"
 import { SessionInstructions } from "./session/instructions.js"
 import { SessionSchema } from "./session/schema.js"
+
+/** The most rule files one read looks at, over all the folders it passes through. */
+export const MAX_RULES_PER_READ = ConfigInstructionRules.MAX_FILES
+
+/** How long what a folder held stays good when no rescan came: the next read after that looks at the folder again. */
+export const CACHE_MILLIS = 30_000
 
 export interface Target {
   readonly path: string
@@ -47,6 +53,35 @@ const layer = Layer.effect(
     const instructions = yield* SessionInstructions.Service
     const trust = yield* ProjectTrust.Service
 
+    // What the folders held at a recent read, so that the next read does not walk them again. It is cleared by a rescan, it
+    // is keyed by the trust decision, and it ages out, so an edit to a rule shows up within `CACHE_MILLIS`. A load that failed
+    // is never kept.
+    const scans = new Map<string, { readonly at: number; readonly value: readonly ConfigInstructionRules.Found[] }>()
+    const loads = new Map<
+      string,
+      { readonly at: number; readonly value: Effect.Success<ReturnType<typeof ConfigInstructionFile.load>> }
+    >()
+    yield* discovery.addRescan(
+      Effect.sync(() => {
+        scans.clear()
+        loads.clear()
+      }),
+    )
+    const remembered = <V, E>(
+      store: Map<string, { readonly at: number; readonly value: V }>,
+      key: string,
+      make: Effect.Effect<V, E>,
+    ) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const hit = store.get(key)
+        if (hit !== undefined && now - hit.at < CACHE_MILLIS) return hit.value
+        const value = yield* make
+        if (store.size >= 4096) store.clear()
+        store.set(key, { at: now, value })
+        return value
+      })
+
     // Whether a rule that waits for a read is about this file. Both the folder the patterns are matched from and the file are
     // real paths (class 4), and a rule the file is not inside the folder of does not apply to it.
     const applies = (rule: InstructionDiscovery.ConditionalRule, real: string) =>
@@ -59,32 +94,64 @@ const layer = Layer.effect(
       readonly folder: string
       readonly compat: boolean
       readonly patterns: readonly string[]
-      readonly visited: Set<string>
       readonly real: string
       readonly listing: boolean
+      /** The rule files this read may still look at, shared by all its folders. */
+      readonly budget: { spent: number; warned: boolean }
+      readonly open: boolean
     }) {
       const allow = (real: string) => trust.importable(real, real)
+      const remaining = MAX_RULES_PER_READ - input.budget.spent
+      if (remaining <= 0) {
+        if (!input.budget.warned)
+          yield* Effect.logWarning("instruction rules skipped", {
+            path: input.folder,
+            reason: `more than ${MAX_RULES_PER_READ} rule files for one read`,
+          })
+        input.budget.warned = true
+        return []
+      }
       const directories = [
         ...CompatInstructions.ruleDirectories(input.compat).map((directory) => join(input.folder, directory)),
         join(input.folder, ".orbit", "rules"),
       ]
-      const found = (yield* Effect.forEach(directories, (directory) =>
-        ConfigInstructionRules.scan({ directory, fs, leads: trust.leads, allow }),
-      ))
-        .flat()
-        .filter((item) => !ConfigInstructionFile.excluded(input.patterns, [item.file, item.real]))
+      const scanned = (yield* Effect.forEach(directories, (directory) =>
+        remembered(scans, `${input.open}|${directory}`, ConfigInstructionRules.scan({ directory, fs, leads: trust.leads, allow })),
+      )).flat()
+      const eligible = scanned.filter((item) => !ConfigInstructionFile.excluded(input.patterns, [item.file, item.real]))
+      const found = eligible.slice(0, remaining)
+      input.budget.spent += found.length
+      if (eligible.length > found.length && !input.budget.warned) {
+        input.budget.warned = true
+        yield* Effect.logWarning("instruction rules skipped", {
+          path: input.folder,
+          reason: `more than ${MAX_RULES_PER_READ} rule files for one read`,
+        })
+      }
+      // One bad rule costs only itself, as it does at the start of the session. Each rule is loaded with a set of its own, so
+      // that what it brings does not depend on the rules before it; a file two rules import is handed over once below.
       const loaded = yield* Effect.forEach(found, (item) =>
-        ConfigInstructionFile.load({
-          path: item.real,
-          scope: "project",
-          visited: input.visited,
-          patterns: input.patterns,
-          home: global.home,
-          fs,
-          rules: true,
-          leads: trust.leads,
-          allow: (real, spelling) => trust.importable(spelling, real),
-        }),
+        remembered(
+          loads,
+          `${input.open}|${input.compat}|${input.patterns.join("\n")}|${item.real}`,
+          ConfigInstructionFile.load({
+            path: item.real,
+            scope: "project",
+            visited: new Set<string>(),
+            patterns: input.patterns,
+            home: global.home,
+            fs,
+            rules: true,
+            leads: trust.leads,
+            allow: (real, spelling) => trust.importable(spelling, real),
+          }),
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("instruction rule not loaded", { path: item.real, cause }).pipe(Effect.as(undefined)),
+          ),
+        ),
       )
       const groups = loaded.flatMap((item) => (item === undefined ? [] : [item.files]))
       const always: SessionInstructions.Entry[] = groups.flatMap((files) =>
@@ -171,8 +238,9 @@ const layer = Layer.effect(
       const picked = ConfigInstructionFile.pick(candidates, { compat, file: (item) => item.file }).filter(
         (item) => item.real !== real,
       )
-      // One set of handled files for the read, so that a file two rules import is handed over once.
-      const visited = new Set<string>()
+      // The rule files are counted over all the folders of the read, not folder by folder.
+      const budget = { spent: 0, warned: false }
+      const open = yield* trust.trusted()
       const nested = yield* Effect.forEach(
         [...folders].toReversed(),
         (folder) =>
@@ -182,7 +250,7 @@ const layer = Layer.effect(
               .map((item) => ({ path: item.real, scope: "project" as const }))
             return [
               ...own,
-              ...(yield* nestedRules({ folder, compat, patterns, visited, real, listing: target.listing === true })),
+              ...(yield* nestedRules({ folder, compat, patterns, real, listing: target.listing === true, budget, open })),
             ]
           }),
       )

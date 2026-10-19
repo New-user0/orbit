@@ -23,7 +23,7 @@ export interface Found {
  *
  * Nothing the folder holds costs more than itself: a missing or unreadable folder, a dangling link, a pipe, a folder where
  * a file was expected, and anything `allow` refuses are skipped. A network path, or a link that leads to one, is never
- * opened (class 6). `allow` is asked of every real path, the folder and each file, just before it is listed or returned, and
+ * opened (class 6). `allow` is asked of every real folder and of every file reached through a link, just before it is listed, and
  * is where a caller keeps a repository's link out of the project from supplying a file (class 4).
  */
 export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
@@ -34,7 +34,10 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
   /** `spelling` is the path as the walk built it, given for a file so that a caller can tell a link from the file itself. */
   readonly allow: (real: string, spelling?: string) => Effect.Effect<boolean>
   readonly platform?: NodeJS.Platform
+  /** Fewer files than `MAX_FILES`, for a caller that spends one budget over several scans. */
+  readonly max?: number
 }) {
+  const limit = Math.min(input.max ?? MAX_FILES, MAX_FILES)
   const nocase = (input.platform ?? process.platform) !== "linux"
   const key = (value: string) => (nocase ? value.toLowerCase() : value)
   const folders = new Set<string>()
@@ -70,11 +73,13 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
           continue
         }
         if (type !== "file" || !ConfigInstructionFile.isRuleName(entry.name) || files.has(key(target))) continue
-        if (!(yield* input.allow(target, child))) continue
+        // A plain file in a folder that `allow` accepted is as acceptable as the folder: no link is in its path, so only a link
+        // entry needs the check, and asking it of every file made a scan cost more the deeper the folder was.
+        if (entry.type === "symlink" && !(yield* input.allow(target, child))) continue
         files.add(key(target))
         // A repository chooses how many rule files it holds, and every read walks them again: the rest are not listed.
-        if (found.length >= MAX_FILES) {
-          if (!capped) yield* Effect.logWarning("instruction rules skipped", { path: input.directory, reason: `more than ${MAX_FILES} rule files` })
+        if (found.length >= limit) {
+          if (!capped) yield* Effect.logWarning("instruction rules skipped", { path: input.directory, reason: `more than ${limit} rule files` })
           capped = true
           return
         }
