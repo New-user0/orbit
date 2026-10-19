@@ -26,7 +26,8 @@ const KEY = /^ses_[A-Za-z0-9_]{1,96}$/
 
 /**
  * The name of the scratchpad folder that a session uses: the ID of the session its lineage goes back to, so a subagent
- * and a fork share the folder of the session they came from (`SessionAffinity`). Undefined when that ID cannot name a
+ * of a session shares its folder, and so does a fork of it (`SessionAffinity`, one level only: the subagents of a fork or
+ * of a subagent use that session's own folder). Undefined when that ID cannot name a
  * folder, and such a session has no scratchpad.
  */
 export const key = (session: Lineage): string | undefined => {
@@ -125,7 +126,7 @@ const layer = Layer.effect(
           codec: Schema.toCodecJson(Schema.String),
           read: Effect.sync(() => folder(session) ?? Instructions.removed),
           render: {
-            initial: section,
+            initial: (directory) => section(directory, session),
             changed: (_previous, directory) =>
               [
                 "Your scratchpad moved. Keep temporary files in the new folder from now on:",
@@ -142,7 +143,11 @@ const layer = Layer.effect(
 export const node = makeLocationNode({ service: Service, layer, deps: [Bus.node, Database.node, Global.node] })
 
 // Written for the model: where temporary files go, what the folder is for and whose it is. It makes no claim about approval, because Plan mode refuses edits.
-function section(directory: string) {
+function section(directory: string, session: Lineage) {
+  // Affinity goes back one level: a subagent uses the folder named by its parent's own ID. So the folder is shared with
+  // the subagents of a session only when that session is the one its lineage goes back to, and a fork or a subagent
+  // says nothing about it. FU-M4-r3-scratch tracks resolving the whole lineage.
+  const shared = session.parentID === undefined && session.fork === undefined
   return [
     "# Scratchpad",
     "",
@@ -150,6 +155,8 @@ function section(directory: string) {
     "",
     `\`${directory}\``,
     "",
-    "Temporary files belong there instead of in the system temp folder, unless the user says otherwise. Subagents of this session share the folder, and it is not part of the user's project.",
+    "Temporary files belong there instead of in the system temp folder, unless the user says otherwise. " +
+      (shared ? "Subagents of this session share the folder, and it " : "It ") +
+      "is not part of the user's project.",
   ].join("\n")
 }

@@ -47,6 +47,7 @@ const ids = {
   fork: "ses_scratch_fork",
   grandchild: "ses_scratch_grandchild",
   forkOfChild: "ses_scratch_forkchild",
+  forkAgent: "ses_scratch_forkagent",
 } as const
 
 const layout = Effect.gen(function* () {
@@ -115,6 +116,7 @@ const seed = (l: Layout, extra: Permission.Ruleset = []) =>
     yield* insertSession({ id: ids.fork, directory: l.project, fork: ids.main, agent: probe })
     yield* insertSession({ id: ids.grandchild, directory: l.project, parentID: ids.child, agent: probe })
     yield* insertSession({ id: ids.forkOfChild, directory: l.project, fork: ids.child, agent: probe })
+    yield* insertSession({ id: ids.forkAgent, directory: l.project, parentID: ids.fork, agent: probe })
     yield* withoutAllowAll(yield* Agent.Service, probe, extra)
   })
 
@@ -255,6 +257,21 @@ describe("the allow for the scratchpad of the session that asks", () => {
       session: ids.forkOfChild,
       file: (l) => path.join(l.scratch(ids.child), "a.txt"),
       effect: "allow",
+      stage: "Edit",
+    },
+    // The key goes back one level: a fork's subagent uses the fork's own folder, not the one the fork uses.
+    {
+      name: "a subagent of a fork in the fork's own folder",
+      session: ids.forkAgent,
+      file: (l) => path.join(l.scratch(ids.fork), "a.txt"),
+      effect: "allow",
+      stage: "Edit",
+    },
+    {
+      name: "a subagent of a fork in the folder its fork uses",
+      session: ids.forkAgent,
+      file: (l) => path.join(l.scratch(ids.main), "a.txt"),
+      effect: "ask",
       stage: "Edit",
     },
     {

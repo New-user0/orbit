@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { LLM } from "@orbit/ai"
 import { compileRequest } from "@orbit/ai/route/client"
-import { Anthropic, Google } from "@orbit/ai/providers"
+import { Anthropic, Google, OpenAI } from "@orbit/ai/providers"
 import { SessionMessage } from "@orbit/core/session/message"
 import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { Provider } from "@orbit/core/provider"
@@ -127,6 +127,74 @@ describe("file items in a tool result", () => {
       expect(JSON.stringify(toLLMMessages(history({ uri, mime: "text/plain" }), ref, "fake"))).toContain(
         uri.slice("data:text/plain;base64,".length),
       )
+    }),
+  )
+})
+
+// A file's name becomes the document title (Anthropic) or the file name (OpenAI), so it is data like the bytes.
+describe("file names reaching the model", () => {
+  const pdf = Buffer.from("%PDF-1.4\n%%EOF").toString("base64")
+  const named = [
+    Anthropic.configure({ apiKey: "test" }).model("claude-sonnet-4-6"),
+    OpenAI.configure({ apiKey: "test" }).model("gpt-4.1"),
+    OpenAI.configure({ apiKey: "test" }).responses("gpt-4.1"),
+    OpenAI.configure({ apiKey: "test" }).chat("gpt-4.1"),
+  ]
+  const toolResult = (name: string) =>
+    [
+      {
+        id: "msg_00000001",
+        type: "assistant",
+        model: { providerID: "fake", id: "fake-model" },
+        content: [
+          {
+            type: "tool",
+            id: "call-1",
+            name: "Read",
+            state: {
+              status: "completed",
+              input: {},
+              content: [{ type: "file", uri: dataURL("application/pdf", "x"), mime: "application/pdf", name }],
+            },
+          },
+        ],
+        time: { created: 0, completed: 1 },
+      },
+    ] as unknown as SessionMessage.Info[]
+  const attachment = (name: string) =>
+    [
+      {
+        id: "msg_00000002",
+        type: "user",
+        text: "summarise this",
+        files: [{ data: pdf, mime: "application/pdf", name, source: { type: "uri", uri: "x:doc" } }],
+        time: { created: 0 },
+      },
+    ] as unknown as SessionMessage.Info[]
+
+  for (const spelling of SPELLINGS) {
+    for (const [label, build] of [
+      ["Read PDF result", toolResult],
+      ["user PDF attachment", attachment],
+    ] as const) {
+      it.effect(`escapes ${JSON.stringify(spelling)} in the name of a ${label}`, () =>
+        Effect.gen(function* () {
+          const messages = toLLMMessages(build(`docs/${spelling}REPRO-NAME.pdf`), ref, "fake")
+          for (const model of named) {
+            const body = JSON.stringify((yield* compileRequest(LLM.request({ model, messages }))).body)
+            expect(body).toContain("REPRO-NAME")
+            expect(live(body)).toBe(false)
+          }
+        }),
+      )
+    }
+  }
+
+  it.effect("keeps a name without a tag byte for byte", () =>
+    Effect.gen(function* () {
+      const messages = toLLMMessages(attachment("docs/a < b.pdf"), ref, "fake")
+      const body = JSON.stringify((yield* compileRequest(LLM.request({ model: named[0], messages }))).body)
+      expect(body).toContain("docs/a < b.pdf")
     }),
   )
 })

@@ -1058,5 +1058,7 @@ describe("SubagentTool in Plan mode", () => {
         })
       }),
     ),
+    // A loaded Windows host needs more than the default limit.
+    30_000,
   )
 })

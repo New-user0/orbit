@@ -305,6 +305,8 @@ describe("LspPlugin", () => {
         expect(opened).not.toContain("orbit-n3-home")
       }),
     ),
+    // It drives 17 path spellings; a loaded Windows host needs more than the default limit.
+    60_000,
   )
   // The server is told the path the tool wrote (its output), and that path is decided twice: by the spelling and by
   // where the file really is, and the stricter answer wins. Each row takes its target from the real FileAccess.resolve,

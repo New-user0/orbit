@@ -22,7 +22,8 @@ const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"
 const media = (file: FileAttachment): ContentPart => ({
   type: "media",
   media: Media.base64(file.data, file.mime),
-  filename: file.name,
+  // The name reaches the model as a document title or file name, so it is data too.
+  filename: file.name && ReminderText.oneLine(file.name),
   metadata: file.description === undefined ? undefined : { description: file.description },
 })
 
@@ -152,7 +153,7 @@ const neutralizeContent = <T extends { readonly type: string }>(content: Readonl
     item.type === "text"
       ? { ...item, text: escaped[texts.indexOf(index)] }
       : item.type === "file"
-        ? neutralizeFile(item as unknown as { uri: string; mime?: string })
+        ? neutralizeFile(item as unknown as { uri: string; mime?: string; name?: string })
         : item,
   ) as unknown as typeof content
 }
@@ -161,7 +162,9 @@ const neutralizeContent = <T extends { readonly type: string }>(content: Readonl
 // too. Images, PDFs and every other type stay byte for byte.
 const TEXT_DATA_URL = /^data:((?:text\/[^;,]+|application\/json)(?:;[^;,]+)*);base64,(.*)$/is
 
-const neutralizeFile = <F extends { uri: string; mime?: string }>(item: F): F => {
+const neutralizeFile = <F extends { uri: string; mime?: string; name?: string }>(file: F): F => {
+  // A file's name reaches the model as a document title or file name, whatever the bytes are.
+  const item = file.name === undefined ? file : { ...file, name: ReminderText.oneLine(file.name) }
   const match = TEXT_DATA_URL.exec(item.uri)
   if (!match) return item
   const text = Buffer.from(match[2], "base64").toString("utf8")
