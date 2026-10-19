@@ -3921,6 +3921,63 @@ describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
     }),
   )
 
+  // Class 6: a rules folder of the project, Orbit's own or the other product's, that is a link to a network share is never
+  // statted, listed, read or watched, trusted or not: each would connect to a host the repository named. The file system
+  // below answers a network path itself, so a regression fails here and contacts no host. Only Windows has shares, and the
+  // link needs the right to make one; a plain rules folder in the started folder is the control.
+  const sharing = (asked: string[]) =>
+    Layer.effect(
+      FSUtil.Service,
+      FSUtil.Service.pipe(
+        Effect.map((fs) =>
+          FSUtil.Service.of({
+            ...fs,
+            isDir: (target) => (network(target) ? Effect.sync(() => (asked.push(`isDir ${target}`), false)) : fs.isDir(target)),
+            isFile: (target) => (network(target) ? Effect.sync(() => (asked.push(`isFile ${target}`), false)) : fs.isFile(target)),
+            readDirectoryEntries: (target) =>
+              network(target) ? Effect.sync(() => (asked.push(`list ${target}`), [])) : fs.readDirectoryEntries(target),
+            readFileStringSafe: (target) =>
+              network(target) ? Effect.sync(() => (asked.push(`read ${target}`), undefined)) : fs.readFileStringSafe(target),
+          }),
+        ),
+      ),
+    ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+  for (const trusted of [true, false])
+    (process.platform === "win32" && canLinkFile ? it.live : it.live.skip)(
+      `never stats, lists or watches a share that a rules folder of the project links to (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.gen(function* () {
+          const where = yield* folders
+          const share = "\\\\decoy-host.invalid\\share\\rules"
+          const linked = [rulesOf(where.repo), path.join(where.repo, CompatNames.vendor.directory, CompatNames.vendor.rules)]
+          yield* write(where.rootFile, "project")
+          yield* write(path.join(rulesOf(where.directory), "kept.md"), "KEPT RULE")
+          for (const folder of linked)
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.dirname(folder), { recursive: true })
+              await fs.symlink(share, folder, "dir")
+            })
+          const asked: string[] = []
+          yield* Effect.gen(function* () {
+            const { text } = yield* baseline()
+            const watcher = yield* Watcher.Test
+            const watched = (yield* watcher.subscriptions()).map((item) => item.path)
+            expect(text).toContain("KEPT RULE")
+            expect(asked).toEqual([])
+            expect(watched.filter(network)).toEqual([])
+            expect(watched).toContain(rulesOf(where.directory))
+          }).pipe(
+            Effect.provide(
+              layerFor(where, {
+                trusted,
+                filesystemLayer: sharing(asked),
+                configLayer: Config.testLayer([], { enabled: true, roots: [vendorRoot(where.repo, "project")] }),
+              }),
+            ),
+          )
+        }),
+    )
+
   // A repository chooses every link in its rules folder. Until the folder is trusted, a rule is what is inside the project.
   describe("in a project that is not trusted", () => {
     const outside = (where: Folders) => path.join(path.dirname(where.home), "secret-rules")
@@ -3994,6 +4051,49 @@ describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
         expect(open.text).toContain("ABOVE RULE")
         expect(open.waiting).toEqual(["waits.md"])
       }),
+    )
+
+    // Class 15 on a bound of time: one pass spends one allowance of import tokens over every file it loads, the walk's
+    // instruction files and the rule files of every level alike, so a clone that spreads its tokens over many files gets
+    // no more walks than one file would. Each token here names a missing file, which costs one look; the pass looks up
+    // `MAX_IMPORTS` of them in all and warns once.
+    it.live("looks up no more import tokens in one pass than the cap, spread over the walk's files and rule files", () =>
+      Effect.gen(function* () {
+        const where = yield* folders
+        const tokens = (name: string) =>
+          `${name}\n\n${Array.from({ length: ConfigInstructionFile.MAX_IMPORTS }, (_, n) => `@./no-such/${name}-${n}.md`).join("\n")}\n`
+        yield* write(where.rootFile, tokens("root"))
+        for (const name of ["a", "b", "c"]) yield* write(path.join(rulesOf(where.repo), `${name}.md`), tokens(name))
+        yield* write(path.join(rulesOf(where.directory), "deep.md"), tokens("deep"))
+        const looked: string[] = []
+        const counting = Layer.effect(
+          FSUtil.Service,
+          FSUtil.Service.pipe(
+            Effect.map((fs) =>
+              FSUtil.Service.of({
+                ...fs,
+                isFile: (target) => (target.includes("no-such") && looked.push(target), fs.isFile(target)),
+              }),
+            ),
+          ),
+        ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+        const warnings: unknown[] = []
+        const logger = Logger.make((entry) => {
+          const message = Array.isArray(entry.message) ? entry.message[0] : entry.message
+          if (message === "instruction imports skipped") warnings.push(entry.message)
+        })
+        yield* Effect.gen(function* () {
+          const { text } = yield* baseline()
+          // Every file still loads; only what they import is cut.
+          for (const name of ["root", "a", "b", "c", "deep"]) expect(text).toContain(name)
+        }).pipe(
+          Effect.provide(layerFor(where, { trusted: false, filesystemLayer: counting })),
+          Effect.provide(Logger.layer([logger])),
+        )
+        expect(looked).toHaveLength(ConfigInstructionFile.MAX_IMPORTS)
+        expect(warnings).toHaveLength(1)
+      }),
+      60_000,
     )
 
     it.live("still loads the person's rules and the administrator's", () =>

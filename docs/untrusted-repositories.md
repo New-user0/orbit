@@ -98,7 +98,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   through the repository's own `info/exclude` only, and only for a Location whose project is a git one, asked at the project
   root the Location resolved and never by walking up (a Mercurial project nested in a repository gets no step, and no git
   process starts for it): `GitLayout.locate` must report `verified` (the nine forged layouts of `git-forged.ts` get no line
-  and at most one log line), `info` and `exclude` must not be links, the exclude file's folder must
+  and at most one log line), `info` and `exclude` must not be links (an `exclude` that links to a file outside the git
+  directory, or dangles, gets no line and one warning, trusted or not, with a plain file as the control: the "when
+  info/exclude is" rows; mutation: dropping the `exclude` term of the link check fails the four link rows), the exclude file's folder must
   stay inside the verified common directory, and no git process starts while the folder is untrusted (the "already
   ignored" question is asked of git, with fsmonitor off, only once it is trusted). A failure of that step is logged and
   keeps the note. The text is the person's own and is not filtered; an import token in it meets the import gate when the
@@ -369,8 +371,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Agent, command, skill, compat skill and output style files: `ProjectTrust.supplies` for the path, `ConfigMarkdown` for
   the text, `ConfigTrust.sanitize` and `sanitizeCommands` for what they may say. Proof: `project-trust.test.ts`,
   `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`. When the project is the home folder or a filesystem root,
-  `supplies` holds a project's or a local source to its own config folder, the folder the session started in and a folder
-  that can be trusted for good, trusted for the session or not, because everything below home is inside the project
+  `supplies` holds a project's or a local source to its own config folder and the folder the session started in, trusted
+  for the session or not, because everything below home is inside the project
   (class 4): the "holds a config directory below a project at home to its own folder" rows of `project-trust.test.ts`
   (mutation: the pre-fix bound fails both). The config folder's own real path counts only when the folder is not a link out
   of the folder that holds it: the "holds a config folder that is a link out" rows (mutation: admitting the real path of
@@ -433,7 +435,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   and a clone chooses how many a file holds and how many files it imports (class 15 on a bound of time; proof: 'follows no
   more import tokens in one file than the cap' and 'in one pass than the cap, however many files hold them' in
   `test/config/instruction-file.test.ts`, which count the paths asked about, not seconds; mutation: following every token
-  fails the first, 10,002 asked against 256, and the cap per file alone fails the second).
+  fails the first, 10,002 asked against 256, and the cap per file alone fails the second; across the separate loads of a
+  refresh, the "looks up no more import tokens in one pass than the cap, spread over the walk's files and rule files" row
+  of `test/instruction-discovery.test.ts`, which an allowance per load fails).
   Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
   `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
   `test/config/trust.test.ts`.
@@ -454,7 +458,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   another product while compatibility is on, `rules` in the config folder, and `rules` beside the managed file; read by
   `ConfigInstructionRules.scan` and loaded by `ConfigInstructionPlugin` and, for the folders a read passes through, by
   `InstructionTriggers` and `SessionInstructions`; classes 1, 4, 6, 7, 11 and 14). The scan opens nothing before the gate:
-  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), a folder is
+  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), and the loader's
+  own check of whether a rules folder is there to watch skips such a folder before it stats it (proof: the "never stats,
+  lists or watches a share that a rules folder of the project links to" rows of `test/instruction-discovery.test.ts`,
+  Orbit's and the other product's rules folder, trusted and untrusted, Windows with link rights; mutation: dropping the
+  share term of that check fails both), a folder is
   entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
   `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
   a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
@@ -469,7 +477,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   warning that names it, and the next name of its slot in that folder takes its place (proof: the "a shared instruction
   file that answers nothing" rows and their siblings, which are shared, local and shared with a second name, untrusted and
   trusted, with a readable control, in `test/instruction-discovery.test.ts`; mutation: returning the source as unavailable
-  from `readSlot` again fails 12 of them). The administrator's file still fails closed. One scan lists at most 256 rule files and compiled globs are kept. One read of a
+  from `readSlot` again fails 12 of them). The administrator's file still fails closed (proof: the "reports an unavailable
+  source" and "lists no files for an agent" rows of `server/test/session-instructions.test.ts`, with "leaves an unreadable
+  project ORBIT.md out" and "keeps the source available when a rescan cannot read a project file" as the controls;
+  mutation: `managedSource` answering `nothing` for an unreadable file fails the two). No list of `instructions_exclude` drops an administrator's rule, at the start (the "excludes the rules of the person
+  and the project ... and never the administrator's" row of `test/instruction-discovery.test.ts`) or when a read brings in
+  one that waits (the "injects an administrator's waiting rule that a user list excludes" rows and their project siblings
+  in `test/session-instructions.test.ts`, with the person's rule under the same list as the control; mutation: dropping
+  the managed term of the exclusion check in `SessionInstructions.load` fails all four). One scan lists at most 256 rule files and compiled globs are kept. One read of a
   file looks at no more than 256 rule files over all the folders it passes through, with one warning (proof: 'looks at no
   more rule files in one read than the budget, over all the folders it passes through' in `test/session-instructions.test.ts`;
   mutation: raising `MAX_RULES_PER_READ` fails it), and the rules of one read share one set of handled files, so a file that
@@ -479,18 +494,28 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   nested rules folder again on the next read, until a rescan'; mutation: `CACHE_MILLIS = 0` fails it; the ageing out itself has
   no test; the rule files themselves are opened again on every read), and `ConfigInstructionRules.scan` asks the gate of a
   folder and of a file reached through a link, not of a plain file in a folder the gate accepted (proof: the "does not ask
-  it of a plain file" row of `test/config/instruction-rules.test.ts`). What a pass costs is bounded by two more
-  budgets (class 15, FU-M4-r5-pass-budget): one scan of a rules folder enters at most `MAX_FOLDERS` (256) folders, empty ones
-  included, with one warning (proof: the "enters at most MAX_FOLDERS folders" row of `test/config/instruction-rules.test.ts`,
-  counting the `leads`, `isDir` and gate calls over 2,048 empty folders; mutation: the scan without the budget fails it), and
-  one pass follows at most `MAX_IMPORTS` (256) import tokens over every file of it, the root file and what it imports,
-  with one warning, and remembers a missing target and an importer's refused one so that a token written again costs
-  nothing (proof: the "in one pass than the cap, however many files hold them" and "does not walk a missing target again"
-  rows of `test/config/instruction-file.test.ts`, counting the paths asked; mutation: the cap per file alone fails both).
-  A pass is a refresh, a read of the folders on the way, or a request for note targets. What is left unbounded is the
-  number of passes: a watcher, config or trust event, or a read after the 30 seconds a listing is kept, runs one more, each
-  within the two budgets. The reference walks nested rules folders on every read in the same way and has no such cap
-  (they are Orbit's own limits). It costs time only: no code runs and nothing is sent. A rule or
+  it of a plain file" row of `test/config/instruction-rules.test.ts`). Two more budgets bound part of what a pass costs
+  (class 15). The import allowance is the pass's (FU-M4-r5-pass-budget): one pass follows at most `MAX_IMPORTS` (256)
+  import tokens over every file of it, the instruction files of the walk, the rule files of every folder and what they
+  import, with one warning, and remembers a missing target and an importer's refused one so that a token written again
+  costs nothing (proof: the "in one pass than the cap, however many files hold them" and "does not walk a missing target
+  again" rows of `test/config/instruction-file.test.ts`, counting the paths asked in one load; mutation: the cap per file
+  alone fails both; and the "looks up no more import tokens in one pass than the cap, spread over the walk's files and
+  rule files" row of `test/instruction-discovery.test.ts`, which counts the lookups of one untrusted refresh over five
+  files of 256 missing imports each; mutation: a fresh allowance for each `ConfigInstructionFile.load` call fails it, 1,280
+  lookups against 256). The folder budget is a scan's, not the pass's: one scan of a rules folder enters at most
+  `MAX_FOLDERS` (256) folders, empty ones included, with one warning (proof: the "enters at most MAX_FOLDERS folders" row
+  of `test/config/instruction-rules.test.ts`, counting the `leads`, `isDir` and gate calls over 2,048 empty folders;
+  mutation: the scan without the budget fails it), but a refresh scans two rules folders (Orbit's, and the other
+  product's while compatibility is on) in every folder from the one the session started in up to the project root, each
+  with a budget of its own. So a clone that fills each of them with empty subfolders still delays the first request of a
+  session started a few levels down (about 28 s on Windows with 400 empty subfolders in every rules folder of four
+  levels, against 3 s for a plain clone). That is open as FU-M4-r2-rule-scan: it needs a crafted clone, costs time only
+  (no code runs and nothing is sent), and its fix is one folder budget for the pass, shared as `visited` is. A pass is a
+  refresh, a read of the folders on the way, or a request for note targets. What is left unbounded is the number of
+  passes: a watcher, config or trust event, or a read after the 30 seconds a listing is kept, runs one more, each within
+  the import allowance and the folder budget of each scan. The reference walks nested rules folders on every read in the
+  same way and has no such cap (they are Orbit's own limits). A rule or
   instruction file of a read that fails to read for another reason (a file another program holds open) costs only itself,
   with one warning (proof: the "still hands over the other nested files of a read when ... fails to read" rows of
   `test/session-instructions.test.ts`).
