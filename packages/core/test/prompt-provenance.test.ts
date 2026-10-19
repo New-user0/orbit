@@ -166,6 +166,25 @@ describe("retired wording in the upgrade notes", () => {
   })
 })
 
+describe("the prompt notes of the upgrade file", () => {
+  // Main never had these headings or a git section, so a note that names them as "old" describes a prompt nobody ran.
+  const notNames = [/Executing actions with care/, /Output efficiency/, /Using tools/, /Pull requests list/]
+
+  test("neither prompt note names a heading that main never had", async () => {
+    const notes = await Bun.file(path.join(import.meta.dir, "../../../docs/upgrading.md")).text()
+    const rewrite = notes.indexOf("## The prompt text was rewritten in Orbit's own words")
+    const rewritten = notes.slice(rewrite, notes.indexOf("\n## ", rewrite + 5))
+    const first = notes.indexOf("## System prompt")
+    const system = notes.slice(first, notes.indexOf("\n## ", first + 5))
+    expect(rewrite).toBeGreaterThan(-1)
+    expect(first).toBeGreaterThan(-1)
+    for (const text of [rewritten, system]) for (const pattern of notNames) expect(text).not.toMatch(pattern)
+    expect(rewritten.replace(/\s+/g, " ")).toContain(
+      "Harness, Communication, Doing tasks, Code style, Safety and Verification",
+    )
+  })
+})
+
 describe("the new wording stays", () => {
   // The audit changed words, not rules. One anchor per rule that the old text carried and the new text keeps.
   const kept: ReadonlyArray<readonly [string, string]> = [

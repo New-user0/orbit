@@ -562,7 +562,7 @@ the agent still loads. An agent whose `tools` is a map of tool names to booleans
 style: the map and the keys only that style has (`temperature`, `top_p`, `prompt` (in a Markdown file the body stays the prompt and a front matter `prompt` is ignored), `options`, `maxSteps`, `permission`)
 are read as before, while every key Orbit's own schema has, `model`, `steps` and `permissions` included, is read
 natively beside it. A field with a bad value on either side is dropped with a diagnostic (or a log line, in a Markdown
-file) at its own path, and the rest of the agent, its deny rules included, still loads, and so does the rest of a tools map, a `permission` object or a `permissions` list when one entry in it is bad (that entry alone is dropped, named at `tools.<name>`, `permission.<key>` or `permissions.<n>`). A folder that is not trusted adds its `disallowed_tools` to the list that is there instead of replacing it. A `variant` beside a model is
+file) at its own path, and the rest of the agent, its deny rules included, still loads, and so does the rest of a tools map, a `permission` object or a `permissions` list when one entry in it is bad (that entry alone is dropped, named at `tools.<name>`, `permission.<key>` or `permissions.<n>`). A pattern object under `question`, `websearch` or `doom_loop`, which take one action only, is such an entry too, and the same per-entry handling applies to the top-level `agent` and `mode` maps of `orbit.json`, so a tools map there no longer drops the denies of `build`, `plan` or `explore`. A folder that is not trusted adds its `disallowed_tools` to the list that is there instead of replacing it. A `variant` beside a model is
 joined to it, and beside a model tier it becomes the effort, in `orbit.json` and Markdown alike. A `name` key in a file is
 ignored (the path names the agent). The camelCase spellings of these keys (`disallowedTools`, `permissionMode`,
 `mcpServers`, `maxTurns`, `initialPrompt`) are not read in Orbit's own folders; each one is reported once, naming the
@@ -2828,14 +2828,16 @@ put the value in your own config.
 
 The editor context that these clients send with a message used to put the file path and the selected text inside the
 reminder envelope itself, so a selection that held a reminder tag could close the envelope and write a fake one. Now the
-envelope holds only text written by the client, and the path and the selection follow it in a labelled fenced block
-whose fence the text cannot close; a look-alike tag in either is escaped. Text that an ACP editor marks for the
+selected text always follows the envelope in a labelled fenced block whose fence the text cannot close, and a look-alike
+tag in it is escaped. The terminal UI puts the path in that block too. The VS Code chat keeps the file name, its language
+and any problem messages on one line inside the envelope, with every `<` and `>` in them escaped, so no tag can be formed
+there. The terminal UI now cuts a selection at 2,000 characters, as the VS Code chat and the core note already did, and its envelope says how many characters were left out (before, the whole selection up to the editor bridge's 100,000-character cap was sent). Text that an ACP editor marks for the
 assistant is escaped the same way. The reminder tags are written as `&lt;system-reminder>` in what the model sees. The
 rules are shared in `packages/util/src/reminder-text.ts`.
 
 **What to do:** Nothing.
 
-### Text that looks like a reminder is escaped wherever it comes from a file or a tool
+### Text that looks like a reminder is escaped in the listed places that carry a file or a tool's text
 
 Orbit now has a reminder framework: model-facing context that the harness adds beside the conversation, stored as hidden
 `session.synthetic` rows (`metadata.reminder.kind`) or worked out each time a request is built. No built-in reminder is
@@ -2847,7 +2849,7 @@ true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lower
 tool errors (local and MCP, also when a server splits one result into several text parts and a tag is cut across them, and also a text or JSON file that a result carries, such as an MCP resource), attached files (including a file that an ACP editor embeds in a prompt) and folder listings, the Code Mode tool listing (which carries MCP tool descriptions), the output of a shell command you ran or that ran in the
 background, the reply of a background subagent, the summary and recent text of a compaction checkpoint, instruction files
 with their updates (including the ones loaded when a file is read), MCP server instructions, and the git snapshot (branch,
-user, status and commit subjects). The stored row keeps the original
+user, status and commit subjects). Some sinks are not covered yet (skill and reference listings, plugin system parts, direct MCP tool descriptions, a hosted tool's result, image and PDF bytes); `docs/untrusted-repositories.md` lists them under Known gaps and `FU-M4-36` tracks them. The stored row keeps the original
 bytes; only the request changes, and only for text that held such a tag. A prompt you type is not changed.
 
 A compaction no longer reads reminder rows, because the next step collects them again after the checkpoint.
@@ -2938,7 +2940,7 @@ One rules folder now lists at most 256 rule files, in name order, with one warni
 
 ### A reply language setting and the `ultrathink` keyword
 
-The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. The key is allowed in a project's config, because it is only text in the prompt.
+The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. A project's `language` applies only once its folder is trusted (see the note on untrusted folders and reply language above); until then your own value stays in force.
 
 A prompt you send that starts a turn and holds the word `ultrathink` (any case, as a whole word), a shell command you type while the agent is idle that holds it, and a command or skill whose text holds it (a skill activated through the API included) now carry a short note asking for a high level of reasoning effort for that turn. Queued input that starts its own turn gets the note too. No model, variant or request setting changes, and the note stays in the conversation from then on, so the cached prompt prefix is unaffected. Input delivered mid-turn (a steer, a shell command or an activated skill that follows a tool step), the prompt a parent agent gives a subagent, the child prompt of a command that runs as a subagent, and background completions never carry it. `orb run --bare` does not carry the note.
 
@@ -3774,15 +3776,14 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 
 ## The prompt text was rewritten in Orbit's own words
 
-- The base system prompt, the model overlays, the git section, the subagent prompt and its report notes, the plan, todo,
-  task and verification reminders, the scratchpad, environment and git snapshot texts, the notes for messages that
-  arrive mid-task, the agent listing and several tool descriptions and results (the explore agent, the background
-  results of the Agent and shell tools, the question tool, edit, write, glob, web search, web fetch, read and the file
-  ledger refusals) were audited and rewritten from Orbit's requirements, and a second round rewrote the Consent, Evidence and Writing sections, the overlays, the plan reminders and a few tool texts again. A last pass rewrote the General agent description, the edit tool's no-change error, the grep type parameter, the shell tool's background notice and a few short phrases. The rules are the same; the words are new.
-- The base prompt has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool
-  use and Writing to the user. A style without coding instructions drops Scope, Working in code and Evidence. The old
-  names (Doing tasks, Code style, Verification, Executing actions with care, Using tools, Communication and Output
-  efficiency) are gone, and so is the Pull requests list of the git section: it is now one paragraph.
+- The prompt texts that ship with Orbit were written from Orbit's own requirements: the base system prompt, the model
+  overlays, the new git section, the subagent prompt and its report notes, the plan, todo, task and verification
+  reminders, the scratchpad, environment and git snapshot texts, the notes for messages that arrive mid-task, the agent
+  listing and several tool descriptions and results. The sections of the base prompt are listed in the note above.
+- Main's prompt had the sections Harness, Communication, Doing tasks, Code style, Safety and Verification. Those names
+  are gone. The git section is new in this release, so there is no earlier git text to compare with.
+- A style without coding instructions drops Scope, Working in code and Evidence. Consent stays, and in it the rule that
+  only the user can approve a risky action ahead of time, in the default prompt and in every model overlay.
 - The environment block labels the repository line `Git repository`, and the git snapshot labels its fields Branch,
   Pull request target, Configured author, Changes and Latest commits.
 - The built-in Explanatory style marks its notes with `Design note:` instead of `Insight:`, and the Learning style
