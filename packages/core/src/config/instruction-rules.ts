@@ -9,6 +9,12 @@ import { ConfigInstructionFile } from "./instruction-file.js"
 /** The most rule files one scan lists. */
 export const MAX_FILES = 256
 
+/**
+ * The most folders one scan enters, the rules folder itself included. Each one costs a walk of its path and several trust
+ * questions, and a repository chooses how many it holds, empty ones too: the rest are not entered.
+ */
+export const MAX_FOLDERS = 256
+
 /** A rule file the scan found: the path as the walk built it, and where it really is. */
 export interface Found {
   readonly file: string
@@ -44,6 +50,7 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
   const files = new Set<string>()
   const found: Found[] = []
   let capped = false
+  let entered = 0
 
   // A path that names a share or a device, or links that were never followed to their end, is not handed to the file system.
   const unreachable = (path: string) => /^[\\/]{2}/.test(path) || LinkShare.isUnresolved(path)
@@ -51,6 +58,11 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
   const visit = (spelled: string): Effect.Effect<void> =>
     Effect.gen(function* () {
       if (capped || unreachable(spelled)) return
+      if (entered++ >= MAX_FOLDERS) {
+        yield* Effect.logWarning("instruction rules skipped", { path: input.directory, reason: `more than ${MAX_FOLDERS} folders` })
+        capped = true
+        return
+      }
       const real = yield* input.leads(spelled)
       if (unreachable(real) || folders.has(key(real))) return
       folders.add(key(real))

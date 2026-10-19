@@ -965,6 +965,69 @@ describe("ConfigInstructionFile.load", () => {
     }),
   )
 
+  // The allowance is one for the pass, so spreading the tokens over imported files does not bring the walks back: the
+  // files each hold 256 distinct missing tokens, and what is asked is counted over all of them.
+  it.live("follows no more import tokens in one pass than the cap, however many files hold them", () =>
+    Effect.gen(function* () {
+      const fs_ = yield* FSUtil.Service
+      const asked: string[] = []
+      const count = 40
+      const warnings: string[] = []
+      const logger = Logger.map(Logger.formatStructured, (entry) => {
+        if (Array.isArray(entry.message) && entry.message[0] === "instruction imports skipped") warnings.push(JSON.stringify(entry.message[1]))
+      })
+      const spread = yield* tree({
+        "a.md": Array.from({ length: count }, (_, file) => `@./part${file}.md`).join("\n"),
+        ...Object.fromEntries(
+          Array.from({ length: count }, (_, file) => [
+            `part${file}.md`,
+            Array.from({ length: ConfigInstructionFile.MAX_IMPORTS }, (_, number) => `@./missing/f${file}n${number}.md`).join("\n"),
+          ]),
+        ),
+      })
+      const loaded = yield* ConfigInstructionFile.load({
+        path: path.join(spread, "a.md"),
+        scope: "user",
+        visited: new Set(),
+        patterns: [],
+        home: path.join(spread, "home"),
+        fs: fs_,
+        leads: (spelling) => (asked.push(spelling), fs_.resolve(spelling)),
+        allow: pass,
+      }).pipe(Effect.provide(Logger.layer([logger])))
+      expect(asked.length).toBeLessThanOrEqual(ConfigInstructionFile.MAX_IMPORTS)
+      expect(names(spread, loaded).length).toBeLessThan(count)
+      expect(warnings).toHaveLength(1)
+    }),
+  )
+
+  // A target that is not there is remembered for the pass: the same token written in other files is not walked again.
+  it.live("does not walk a missing target again in the same pass", () =>
+    Effect.gen(function* () {
+      const fs_ = yield* FSUtil.Service
+      const asked: string[] = []
+      const dead = Array.from({ length: 50 }, (_, number) => `@./missing/n${number}.md`).join("\n")
+      const root = yield* tree({
+        "a.md": "@./b.md\n@./c.md\n@./d.md",
+        "b.md": dead,
+        "c.md": dead,
+        "d.md": dead,
+      })
+      yield* ConfigInstructionFile.load({
+        path: path.join(root, "a.md"),
+        scope: "user",
+        visited: new Set(),
+        patterns: [],
+        home: path.join(root, "home"),
+        fs: fs_,
+        leads: (spelling) => (asked.push(spelling), fs_.resolve(spelling)),
+        allow: pass,
+      })
+      // Three files and the 50 targets once, not 150 targets.
+      expect(asked.length).toBe(3 + 50)
+    }),
+  )
+
   it.live("treats an address as a name that is not there, asked about only as a local spelling", () =>
     Effect.gen(function* () {
       const root = yield* tree({ "a.md": "@https://example.invalid/x.md" })

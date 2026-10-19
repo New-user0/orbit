@@ -545,8 +545,23 @@ function startsBlock(rest: string, indent: number) {
 /** The most files in one chain of imports: the file itself and four levels below it. A deeper file is left out, silently. */
 export const DEPTH = 5
 
-/** The most import tokens one file has followed; the rest are left out with one warning. */
+/**
+ * The most import tokens one pass follows, over every file of it: the rest are left out with one warning. A repository
+ * chooses how many files and tokens it holds, and each token costs a walk of its path, so the cost of a pass is bounded
+ * however the tokens are spread. The reference has no such limit; this one is Orbit's own.
+ */
 export const MAX_IMPORTS = 256
+
+// What is left of a pass's token allowance, kept with the pass's `visited` set so that every file of the pass spends from
+// the one budget and a new set starts a new one.
+const budgets = new WeakMap<Set<string>, { left: number; warned: boolean }>()
+const budgetOf = (visited: Set<string>) => {
+  const known = budgets.get(visited)
+  if (known !== undefined) return known
+  const created = { left: MAX_IMPORTS, warned: false }
+  budgets.set(visited, created)
+  return created
+}
 
 /**
  * The import tokens that a processed instruction file holds, cleaned up and in the order they are written, each once.
@@ -863,7 +878,11 @@ type LoadInput = {
   readonly path: string
   /** Where the file comes from: a user-level file may import anything that is not a network path, a project file only what `allow` accepts. */
   readonly scope: "user" | "project"
-  /** The files this pass has handled. Share one set across every file of a pass, and pass a new one to start another. */
+  /**
+   * The files this pass has handled, and the import targets it found missing or refused, which are not walked again. Share
+   * one set across every file of a pass, and pass a new one to start another: the set also carries the pass's allowance
+   * of `MAX_IMPORTS` import tokens.
+   */
   readonly visited: Set<string>
   readonly patterns: readonly string[]
   readonly home: string
@@ -906,17 +925,33 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
   const key = (value: string) =>
     platform === "win32" ? win32.normalize(value).replaceAll("/", "\\").toLowerCase() : posix.normalize(value)
 
+  // Targets that are missing, or that an importer was refused, are remembered for the pass under a key that no path can
+  // have, so a token written again (in this file or another) costs nothing. A refusal is the importer's: another importer
+  // may be held by a folder that is trusted.
+  const dead = (spelling: string, importer?: string) =>
+    `dead\u0000${importer === undefined ? "" : key(importer)}\u0000${key(spelling)}`
+
   // False only when the file at depth 0 cannot be read.
   const handle = (spelling: string, importer: string | undefined, depth: number): Effect.Effect<boolean, FSUtil.Error> =>
     Effect.gen(function* () {
       if (depth >= DEPTH) return true
       if (importer === undefined && input.visited.has(key(input.path))) return true
       if (importer !== undefined) {
-        if (/^[\\/]{2}/.test(spelling) || input.visited.has(key(spelling))) return true
+        if (
+          /^[\\/]{2}/.test(spelling) ||
+          input.visited.has(key(spelling)) ||
+          input.visited.has(dead(spelling)) ||
+          input.visited.has(dead(spelling, importer))
+        )
+          return true
         if (excluded(input.patterns, [spelling])) {
           yield* Effect.logDebug("instruction import excluded", { path: spelling })
           return true
         }
+        // Each token that gets as far as a walk of its path spends from the pass's allowance.
+        const budget = budgetOf(input.visited)
+        if (budget.left <= 0) return true
+        budget.left--
       }
       // Windows does not tell drive letters apart, and the file system may hand either back.
       const led = importer === undefined ? input.path : yield* input.leads(spelling)
@@ -932,13 +967,17 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
           return true
         }
         // Not there, or not a file (a folder, a pipe, a device): skipped without a word, as prose such as `@team` is common.
-        if (!(yield* input.fs.isFile(real))) return true
+        if (!(yield* input.fs.isFile(real))) {
+          input.visited.add(dead(spelling))
+          return true
+        }
         if (input.scope === "project" && !(yield* input.allow(real, spelling))) {
           // The holder of the importing file decides, not the file that was imported: a chain does not inherit.
           const known = outward.get(importer) ?? (input.outward ? yield* input.outward(importer) : { open: false })
           outward.set(importer, known)
           if (!known.open) {
             // One warning for each importer and target, however many ways the importer spells it.
+            input.visited.add(dead(spelling, importer))
             if (!skipped.some((item) => item.importer === importer && key(item.target) === key(real)))
               skipped.push(
                 known.directory === undefined ? { importer, target: real } : { importer, target: real, directory: known.directory },
@@ -989,10 +1028,15 @@ export const load = Effect.fn("ConfigInstructionFile.load")(function* (input: Lo
       })
       if (input.imports === false) return true
       const tokens = imports(processed.content)
-      // A repository chooses how many tokens a file holds, and each one costs a walk of its path: the rest are not followed.
-      if (tokens.length > MAX_IMPORTS)
-        yield* Effect.logWarning("instruction imports skipped", { path: real, reason: `more than ${MAX_IMPORTS} imports in one file` })
-      for (const token of tokens.slice(0, MAX_IMPORTS)) {
+      const budget = budgetOf(input.visited)
+      for (const token of tokens) {
+        if (budget.left <= 0) {
+          // One warning for the pass, however many files hold tokens after the allowance is spent.
+          if (!budget.warned)
+            yield* Effect.logWarning("instruction imports skipped", { path: real, reason: `more than ${MAX_IMPORTS} imports in one pass` })
+          budget.warned = true
+          break
+        }
         const target = resolveToken(token, dirname(real), input.home, platform)
         if (target !== undefined) yield* handle(target, real, depth + 1)
       }

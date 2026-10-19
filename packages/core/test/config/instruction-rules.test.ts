@@ -270,6 +270,32 @@ describe("ConfigInstructionRules.scan", () => {
     }),
   )
 
+  // A repository chooses how many folders it holds, empty ones too, and each one costs a walk of its path and the gate's
+  // questions. The cost is counted in the calls made, which does not depend on how fast the host is.
+  it.live("enters at most MAX_FOLDERS folders, however many empty ones a rules folder holds", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const fsUtil = yield* FSUtil.Service
+      const total = 8 * ConfigInstructionRules.MAX_FOLDERS
+      yield* Effect.promise(() =>
+        Promise.all(Array.from({ length: total }, (_, index) => fs.mkdir(path.join(tmp.path, `r${String(index).padStart(5, "0")}`), { recursive: true }))),
+      )
+      yield* write(path.join(tmp.path, "zz", "late.md"))
+      const asked = { leads: 0, isDir: 0, allow: 0 }
+      const found = yield* ConfigInstructionRules.scan({
+        directory: tmp.path,
+        fs: { ...fsUtil, isDir: (target) => (asked.isDir++, fsUtil.isDir(target)) },
+        leads: (spelling) => (asked.leads++, fsUtil.resolve(spelling)),
+        allow: () => Effect.sync(() => (asked.allow++, true)),
+      })
+      expect(asked.leads).toBeLessThanOrEqual(ConfigInstructionRules.MAX_FOLDERS)
+      expect(asked.isDir).toBeLessThanOrEqual(ConfigInstructionRules.MAX_FOLDERS)
+      expect(asked.allow).toBeLessThanOrEqual(ConfigInstructionRules.MAX_FOLDERS)
+      // The folders past the cap are not entered, so the rule file in the last one is not listed.
+      expect(found).toHaveLength(0)
+    }),
+  )
+
   test("compiles a pattern once, and a pattern that is refused stays refused", () => {
     expect(ConfigInstructionFile.compileRulePattern("src/*.ts")).toBe(ConfigInstructionFile.compileRulePattern("src/*.ts"))
     expect(ConfigInstructionFile.compileRulePattern("/")).toBeUndefined()
