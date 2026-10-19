@@ -127,3 +127,34 @@ it.live("more than a hundred paths are refused", () =>
     expect(response.status).toBe(400)
   }),
 )
+
+it.live("a report rebuilds the agents and leaves a question waiting in a session open", () =>
+  Effect.gen(function* () {
+    const { project, agents, call, appears } = yield* setup
+    yield* appears("base")
+    const json = (response: Response) => Effect.promise(() => response.json() as Promise<any>)
+    const created = yield* call("/api/session", {
+      location: { directory: project },
+      permissions: [{ action: "probe-action", resource: "*", effect: "ask" }],
+    })
+    expect(created.status).toBe(200)
+    const sessionID = (yield* json(created)).data.id as string
+    const asked = yield* call(`/api/session/${sessionID}/permission`, { action: "probe-action", resources: ["probe"] })
+    expect(asked.status).toBe(200)
+    const askedBody = yield* json(asked)
+    const requestID = askedBody.data.id as string
+    const waiting = () => call(`/api/session/${sessionID}/permission`).pipe(Effect.flatMap(json))
+    expect((yield* waiting()).data.map((item: { id: string }) => item.id)).toEqual([requestID])
+
+    const file = path.join(agents, "x.md")
+    yield* Effect.promise(() => fs.writeFile(file, agent("x things")))
+    expect((yield* call("/api/experimental/config/sources/changed", { paths: [file] })).status).toBe(204)
+    yield* appears("x")
+
+    // A reload of the location would have declined the question by now.
+    expect((yield* waiting()).data.map((item: { id: string }) => item.id)).toEqual([requestID])
+    const reply = yield* call(`/api/session/${sessionID}/permission/${requestID}/reply`, { decision: "once" })
+    expect(reply.status).toBe(204)
+    expect((yield* waiting()).data).toEqual([])
+  }),
+)
