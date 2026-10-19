@@ -147,11 +147,19 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     and by the folder's path when there is none (a trusted folder uses its first commit). The provider answers an empty
     branch, status, diff and review base, and reloads on `Trust.Event.Updated`. The watcher finds `HEAD` from the same
     files.
-  - Snapshot (git in Orbit's own git directory, plus one ignore check in the project's repository) and the read-only
-    calls of the `Git` service (`discover`, `remote`, `history`, `worktree.list`) still run in an untrusted folder with its
-    config in effect, and reach no key of the table (`test/snapshot-trust.test.ts`, `test/git.test.ts`). The ignore check
-    passes `-c core.fsmonitor=false` as well. `Worktree.create` and `Worktree.remove` run `git worktree add` and `remove`
-    when a person or the model asks, which runs hooks and filters of the folder (task `agents-extensibility-28`).
+  - Snapshot: an untrusted folder's snapshot runs git only in Orbit's own git directory, with the folder as the work tree
+    (`test/snapshot-untrusted-git.test.ts`, which traces every git process and finds none outside it). A directory of the
+    folder that is a repository itself is a gitlink there, so the comparisons (`diff-files`, `diff`) pass
+    `--ignore-submodules=all` and the restore passes `--no-recurse-submodules`; without them git starts a status inside the
+    nested repository with the config that repository ships. The same file has a row for `core.fsmonitor`,
+    `core.hooksPath` and `.git/hooks` in a nested repository, each with a plain-git control. A nested `.git` file that
+    points into the clone's `.git/modules` has no row of its own; the same flags apply to it.
+  - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
+    `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
+    folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
+    and `gpg.program` when `log.showSignature` is set, as the Gates paragraph says. `Worktree.create` and `Worktree.remove`
+    run `git worktree add` and `remove` when a person or the model asks, which runs hooks and filters of the folder (task
+    `agents-extensibility-28`).
   - Proof: `test/project-git-trust.test.ts` (one row for each of eleven keys, a linked worktree, and every layout of
     `test/fixture/git-forged.ts`), `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts` ("finds the git
     directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts` and `test/git.test.ts`. Each row
