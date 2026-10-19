@@ -319,7 +319,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   project's styles and skills should reach the prompt before the folder is trusted is the owner's open question. Proof:
   `test/plugin/output-style.test.ts` (six places a style can come from, three spellings of the key, before a grant, after
   one and after a revoke, the clone's claim of approval as the body), `test/project-trust.test.ts` (`trustedSource`),
-  `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval).
+  `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval), and
+  `test/plugin/output-style-overlays.test.ts` (the default prompt and each model overlay, under a style with no
+  `keep-coding-instructions` key and one that sets it false: the approval sentence comes before the style's heading).
 - A folder's `attribution` text (class 8, prompt form): `ConfigTrust` withholds it whole (kind `settings`) from an
   untrusted project or local document, because a project's field outranks the person's, `""` included; once the folder
   is trusted `resolveAttribution` ranks the scopes as before. Proof: the attribution rows of

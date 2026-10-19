@@ -3762,15 +3762,14 @@ treat `limit.tokens-unknown` as a refusal to count (for example, use a provider 
 
 ## The prompt text was rewritten in Orbit's own words
 
-- The base system prompt, the model overlays, the git section, the subagent prompt and its report notes, the plan, todo,
-  task and verification reminders, the scratchpad, environment and git snapshot texts, the notes for messages that
-  arrive mid-task, the agent listing and several tool descriptions and results (the explore agent, the background
-  results of the Agent and shell tools, the question tool, edit, write, glob, web search, web fetch, read and the file
-  ledger refusals) were audited and rewritten from Orbit's requirements, and a second round rewrote the Consent, Evidence and Writing sections, the overlays, the plan reminders and a few tool texts again. A last pass rewrote the General agent description, the edit tool's no-change error, the grep type parameter, the shell tool's background notice and a few short phrases. The rules are the same; the words are new.
-- The base prompt has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool
-  use and Writing to the user. A style without coding instructions drops Scope, Working in code and Evidence. The old
-  names (Doing tasks, Code style, Verification, Executing actions with care, Using tools, Communication and Output
-  efficiency) are gone, and so is the Pull requests list of the git section: it is now one paragraph.
+- The prompt texts that ship with Orbit were written from Orbit's own requirements: the base system prompt, the model
+  overlays, the new git section, the subagent prompt and its report notes, the plan, todo, task and verification
+  reminders, the scratchpad, environment and git snapshot texts, the notes for messages that arrive mid-task, the agent
+  listing and several tool descriptions and results. The sections of the base prompt are listed in the note above.
+- Main's prompt had the sections Harness, Communication, Doing tasks, Code style, Safety and Verification. Those names
+  are gone. The git section is new in this release, so there is no earlier git text to compare with.
+- A style without coding instructions drops Scope, Working in code and Evidence. Consent stays, and in it the rule that
+  only the user can approve a risky action ahead of time, in the default prompt and in every model overlay.
 - The environment block labels the repository line `Git repository`, and the git snapshot labels its fields Branch,
   Pull request target, Configured author, Changes and Latest commits.
 - The built-in Explanatory style marks its notes with `Design note:` instead of `Insight:`, and the Learning style
