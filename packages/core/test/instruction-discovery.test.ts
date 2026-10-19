@@ -2061,7 +2061,7 @@ describe("ConfigInstructionPlugin.Plugin keeps a link in a wide project from lea
                   const text = (yield* readBody(yield* discovery.load())).text
                   expect(text).not.toContain(secret.marker)
                   expect(text).toContain("PLAIN RULE MARKER")
-                  expect(placesOf(yield* discovery.list()).map(slashed)).not.toContain(slashed(target))
+                  expect(JSON.stringify(placesOf(yield* discovery.list())).replaceAll("\\\\", "/")).not.toContain(slashed(target))
                 }).pipe(scoped(where, false))
               }),
           )
@@ -2103,7 +2103,7 @@ describe("ConfigInstructionPlugin.Plugin lets an unreadable rule cost only itsel
                     path.basename(target) !== "zz-locked.md"
                       ? real.readFileStringSafe(target)
                       : mode === "fails"
-                        ? Effect.fail(new Error("EPERM"))
+                        ? Effect.die("EPERM")
                         : Effect.succeed(undefined),
                 }),
               ),

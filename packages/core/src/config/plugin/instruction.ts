@@ -79,7 +79,13 @@ export const Plugin = define({
       // trust decision is (the same bound that an import has, `ProjectTrust.importable`).
       const wide = [root, canonical].some((folder) => relative(home, folder) === "" || dirname(folder) === folder)
       const leadsOut = (spelling: string, real: string) =>
-        wide && relative(spelling, real) !== "" ? trust.importable(spelling, real).pipe(Effect.map((ok) => !ok)) : Effect.succeed(false)
+        wide && relative(spelling, real) !== ""
+          ? Effect.gen(function* () {
+              if (yield* trust.importable(spelling, real)) return false
+              // A folder the person has trusted, beyond the project, may still be linked to.
+              return !(yield* trust.outward(real)).open
+            })
+          : Effect.succeed(false)
       const nested = relative(canonical, root) !== "" && FSUtil.contains(canonical, root)
       const inherited = (directory: string) => nested && FSUtil.contains(canonical, directory) && !FSUtil.contains(root, directory)
       // The one folder the managed settings were read from, so that the instruction file and the settings never disagree.
