@@ -89,9 +89,9 @@ export interface EditorFile {
 
 /**
  * The hidden message that tells the model what the person has open in the editor. It informs and asks for nothing.
- * Returns undefined when there is nothing to say, so an empty message is never admitted. The envelope holds only text
- * the extension wrote, with file names, languages and problems on one line and no character that can spell a reminder
- * tag. The selected text comes from the repository, so it follows the envelope as a fenced block of its own that it
+ * Returns undefined when there is nothing to say, so an empty message is never admitted. The envelope holds the text
+ * the extension wrote plus the file name, language and problem messages, each on one line with `<` and `>` escaped so
+ * no reminder tag can be formed. The selected text comes from the repository, so it follows the envelope as a fenced block of its own that it
  * cannot close and in which look-alike tags are escaped.
  */
 export function editorContext(input: {

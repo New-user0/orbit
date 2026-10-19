@@ -319,7 +319,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   project's styles and skills should reach the prompt before the folder is trusted is the owner's open question. Proof:
   `test/plugin/output-style.test.ts` (six places a style can come from, three spellings of the key, before a grant, after
   one and after a revoke, the clone's claim of approval as the body), `test/project-trust.test.ts` (`trustedSource`),
-  `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval).
+  `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval), and
+  `test/plugin/output-style-overlays.test.ts` (the default prompt and each model overlay, under a style with no
+  `keep-coding-instructions` key and one that sets it false: the approval sentence comes before the style's heading).
 - A folder's `attribution` text (class 8, prompt form): `ConfigTrust` withholds it whole (kind `settings`) from an
   untrusted project or local document, because a project's field outranks the person's, `""` included; once the folder
   is trusted `resolveAttribution` ranks the scopes as before. Proof: the attribution rows of
@@ -2365,8 +2367,8 @@ The program-wide register of every follow-up, these gaps included, with each one
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
   `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
   (branch, user, status and commit subjects), and a checkpoint's summary and recent text. The clients that send editor context as a hidden message escape it before
-  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat and the terminal UI write the path and
-  the selection into a fenced block after their envelope, and ACP escapes the assistant-audience text it submits.
+  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat writes the selected text, and the terminal UI the path and the selection,
+  into a fenced block after their envelope (VS Code keeps its escaped one-line file name, language and problem messages inside it), and ACP escapes the assistant-audience text it submits.
   Synthetic messages are
   recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
   Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`
