@@ -254,7 +254,8 @@ describe("OutputStylePlugin", () => {
   )
 
   // The opening line says what the agent is for, which the style has changed. It is swapped only where it stands, so an
-  // overlay or an agent with a prompt of its own keeps the first line that its author wrote.
+  // agent with a prompt of its own keeps the first line that its author wrote (the shipped model overlays open with the
+  // default line and are covered in output-style-overlays.test.ts).
   it.live("replaces the opening line while a style applies, and only a prompt that opens with it", () =>
     Effect.gen(function* () {
       const directory = (yield* tmpdirScoped()).path
@@ -283,7 +284,7 @@ describe("OutputStylePlugin", () => {
       const appended = `${base}\n\n# Code comments\nAppended.`
       expect(yield* requestWith(entries("keeps"), appended)).toStartWith(styledBase)
 
-      // A replacement overlay and an agent's own prompt open with their own lines.
+      // A prompt that opens with a line of its own keeps it.
       const overlay = "You are an overlay.\n\n# Harness\n- Overlay rule.\n\n# Scope\n- Overlay task."
       expect(yield* requestWith(entries("keeps"), overlay)).toBe(
         `${overlay}${OutputStylePlugin.STYLE_HEADING}keeps\nKeeps.`,

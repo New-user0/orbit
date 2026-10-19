@@ -3602,8 +3602,8 @@ Evidence) unless its front matter said `keep-coding-instructions: false`. It now
 matter sets `keep-coding-instructions` to `true`, as a boolean or as the string `"true"`. A missing key, `false` and any
 other value drop them. The built-in Explanatory and Learning styles keep them. While a style applies, the opening line
 of the default prompt is replaced by one that says the agent helps the way the output style at the end of the prompt
-describes. A prompt that does not open with the default line, such as a model's own prompt or an agent's system prompt,
-keeps its first line. So does a prompt whose style comes from a folder that is not trusted yet: Orbit still reads that
+describes. A prompt that does not open with the default line, such as an agent's own system prompt or a `system_prompt` replacement,
+keeps its first line. The model-family prompts open with the default line, so the style replaces it for them too. A prompt whose style comes from a folder that is not trusted yet keeps it too: Orbit still reads that
 style and puts its text last in the prompt, but the clone's style does not get to say what the agent is for until you
 trust the folder. No style removes the rules about approval, which stay in the sections that every style keeps. The
 style also applies to the requests that compact a conversation and to the background generate requests (such as cache
@@ -3638,7 +3638,7 @@ Every request that offers the shell tool now has a "Git and pull requests" secti
 agent, whichever model prompt applies. It follows the model prompt and comes before any output style. It says that commits, pushes and pull requests wait for your
 request, that published history, git configuration, hooks and signing are left alone, that a commit holds only the
 task's changes staged by path, and that a pull request description covers every commit on the branch and says how the
-change was verified. Your own instructions about commits take precedence. It also asks the agent to end each commit
+change was verified. Instructions about the form of commits and pull requests (message format, trailers, branch names, templates) from you or the project take precedence, but only you can lift the ask-first rule and the steps that need your explicit request; a project's file cannot. It also asks the agent to end each commit
 message with `Assisted-by: Orbit` and each pull request description with `Created with Orbit`. The first request of a
 session after the upgrade misses the prompt cache once, because the system prompt changed.
 
