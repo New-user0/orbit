@@ -392,7 +392,8 @@ cd D:\Project\flow-demo
 orb flow watch                   # the newest run, redrawn every second until it stops
 ```
 
-Replay re-runs a finished run from its recording: no model calls, no worktrees, no merges, no server. It is fast
+Replay re-runs a finished run from its recording: no model calls, no worktrees, no merges. It asks the server only
+whether the folder is trusted, because it reads the folder's run store, so run it in a folder you trusted. It is fast
 and free, so it is the way to check changes to a workflow's own logic:
 
 ```powershell
