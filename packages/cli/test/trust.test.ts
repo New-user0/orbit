@@ -1202,7 +1202,7 @@ test("a YAML workflow that names an agent is not run in an untrusted folder that
   expect(toolAnswers.slice(granted).join("")).not.toContain("does not approve actions that need permission")
   expect(await Bun.file(written).exists()).toBe(true)
 
-  // A resumed run loads the file that the repository's run store names, so it is held to the same trust.
+  // A resumed run goes on from the repository's run store, so the untrusted folder stops it before the file is read.
   await fs.rm(written)
   const recorded: Array<{ id: string; workflow: string }> = JSON.parse(
     (await orb(repository, ["flow", "ls", "--format", "json"])).stdout,
@@ -1213,11 +1213,10 @@ test("a YAML workflow that names an agent is not run in an untrusted folder that
   const resumed = await orb(repository, ["flow", "resume", "--standalone", String(id)], user)
   expect(resumed.code).toBe(1)
   expect(resumed.stderr).toContain(`${repository} is not trusted`)
-  expect(resumed.stderr).toContain("  work  agent: autopilot")
-  // A replay answers every node from the recording and opens no session, so no agent runs under rules that the file chose:
-  // it needs no trust, and it connects to no server, which nothing listens at that address would show. (It exits with 1
-  // all the same, because an agent's replayed result is marked as reused and so differs from what was recorded.)
-  const replayed = await orb(repository, ["flow", "replay", String(id), "--server", "http://127.0.0.1:9"], user)
+  // A replay answers every node from the recording and opens no session, so even in a trusted folder no agent runs under
+  // rules that the file chose. (It exits with 1 all the same, because an agent's replayed result is marked as reused and
+  // so differs from what was recorded.)
+  const replayed = await orb(repository, ["flow", "replay", "--trust", "--standalone", String(id)], user)
   expect(replayed.stderr).toContain("= work (replayed)")
   expect(replayed.stderr).not.toContain("is not trusted")
   expect(runs).toBe(settled)
@@ -1384,7 +1383,7 @@ test("a suite whose task has a judge that names an agent is not run in an untrus
   expect([...askedAs]).toEqual(["reviewer"])
   expect(runs).toBeGreaterThan(before)
 
-  // A resumed eval loads the same suite, so it is held to the same trust.
+  // A resumed eval goes on from the run store, so the untrusted folder stops it before the suite is read.
   const recorded: Array<{ id: string; workflow: string }> = JSON.parse(
     (await orb(repository, ["flow", "ls", "--format", "json"])).stdout,
   )
@@ -1392,7 +1391,8 @@ test("a suite whose task has a judge that names an agent is not run in an untrus
   expect(evalRun).toBeString()
   const resumed = await orb(repository, ["eval", suiteFile, "--resume", String(evalRun), "--standalone"], user)
   expect(resumed.code).toBe(1)
-  expect(resumed.stderr).toContain("  reviewed/judge  agent: reviewer")
+  expect(resumed.stderr).toContain(`${repository} is not trusted`)
+  expect(resumed.stderr).toContain("goes on from a run that the folder's run store")
 }, 480_000)
 
 test("a YAML workflow or a suite whose checks are empty defines no command, so it keeps the check that orb run has", async () => {
@@ -3005,22 +3005,26 @@ test.each([
     ["eval", "suite.json", "--trust", "--resume", absent, "--standalone"],
   ],
   ["flow replay", ["flow", "replay", "--standalone", absent], ["flow", "replay", "--trust", "--standalone", absent]],
-] as const)("%s refuses an untrusted folder before it opens the run store", async (door, refusedArgs, trustedArgs) => {
-  const folder = await bare(`store-unopened-${door.replace(/\W+/g, "-")}`)
-  await Bun.write(path.join(folder, "suite.json"), JSON.stringify({ name: "s", tasks: [] }))
-  const store = path.join(folder, ".orbit", "runs.db")
+] as const)(
+  "%s refuses an untrusted folder before it opens the run store",
+  async (door, refusedArgs, trustedArgs) => {
+    const folder = await bare(`store-unopened-${door.replace(/\W+/g, "-")}`)
+    await Bun.write(path.join(folder, "suite.json"), JSON.stringify({ name: "s", tasks: [] }))
+    const store = path.join(folder, ".orbit", "runs.db")
 
-  const refused = await orb(folder, [...refusedArgs])
+    const refused = await orb(folder, [...refusedArgs])
 
-  expect({ door, code: refused.code, created: await Bun.file(store).exists() }).toEqual({
-    door,
-    code: 1,
-    created: false,
-  })
-  expect(refused.stderr).toContain(`${folder} is not trusted`)
+    expect({ door, code: refused.code, created: await Bun.file(store).exists() }).toEqual({
+      door,
+      code: 1,
+      created: false,
+    })
+    expect(refused.stderr).toContain(`${folder} is not trusted`)
 
-  const trusted = await orb(folder, [...trustedArgs])
+    const trusted = await orb(folder, [...trustedArgs])
 
-  expect(trusted.stderr).toContain(`No run ${absent} in this repository`)
-  expect(await Bun.file(store).exists()).toBe(true)
-}, 240_000)
+    expect(trusted.stderr).toContain(`No run ${absent} in this repository`)
+    expect(await Bun.file(store).exists()).toBe(true)
+  },
+  240_000,
+)
