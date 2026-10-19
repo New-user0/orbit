@@ -77,7 +77,7 @@ async function mount(
     animations: false,
     cursor: { style: input.style ?? "line", blinking: false },
     prompt: { vim: input.vim ?? true },
-    // On Linux ctrl+z would otherwise suspend the test process itself; here it must mean undo on every platform.
+    // ctrl+z must never suspend the test process. Without the suspend binding it is unbound on Linux and means undo on Windows.
     keybinds: { "terminal.suspend": "none" },
   }
   const setup = await createAppFixture({

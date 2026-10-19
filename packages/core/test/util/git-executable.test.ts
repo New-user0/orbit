@@ -48,7 +48,7 @@ describe("Git executable", () => {
       [process.execPath, "-e", `import { gitExecutable } from "${module}"\nconsole.log(gitExecutable)`],
       {
         cwd: here,
-        env: { ...process.env, PATH: bin },
+        env: { ...hostEnv(), PATH: bin },
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -92,9 +92,17 @@ const folder = async () => {
   return directory
 }
 
+// A parent that spells the variable `Path` (PowerShell) gives a Node child both keys when a copy sets `PATH` too, and the
+// child then sees the host's. Every spelling goes before the one the test sets.
+const hostEnv = () => {
+  const env: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(process.env)) if (key.toLowerCase() !== "path") env[key] = value
+  return env
+}
+
 /** The environment of a host that has no git on PATH: the folder of the program that runs the host, and on Windows System32. */
 const without = (extra: string[] = []) => {
-  const env: Record<string, string | undefined> = { ...process.env }
+  const env = hostEnv()
   // The shell that runs the tests may set it, and the spawner sets it again, which hides what a decoy can do before.
   delete env.NoDefaultCurrentDirectoryInExePath
   env.PATH = [
@@ -163,6 +171,8 @@ describe.skipIf(!windows)("the git that Windows falls back to, with a program na
           const result = await start(host, directory, env)
 
           expect(await ran()).toEqual([])
+          // The fallback file, which is not there. A row that ran the machine's own git would not name it.
+          expect(path.basename(result.gitExecutable)).toBe("git-is-not-on-path")
           expect(result).toMatchObject({ code: 0, found: false })
         },
         60_000,

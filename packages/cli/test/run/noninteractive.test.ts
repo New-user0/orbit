@@ -435,7 +435,14 @@ async function run(input: {
   // The turn options the fake server records instead of the ones it was sent.
   admitTurn?: SessionTurnOptions
 }) {
-  const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+  // A call that no stub covers fails at once and offline. It used to reach DNS for orbit.test, which cost seconds per call and
+  // made the file time out whenever the resolver was slow.
+  const sdk = Orbit.make({
+    baseUrl: "https://orbit.test",
+    fetch: (async (request: RequestInfo | URL) => {
+      throw new Error(`unstubbed request: ${request instanceof Request ? request.url : String(request)}`)
+    }) as unknown as typeof fetch,
+  })
   const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {} }]
   let wake: (() => void) | undefined
   let queued = false
@@ -460,6 +467,7 @@ async function run(input: {
     }
   })()
   spyOn(sdk.event, "subscribe").mockImplementation(() => stream)
+  spyOn(sdk.shell, "list").mockImplementation(() => ok({ data: [] }) as never)
   spyOn(sdk.permission, "list").mockImplementation(() => ok([]) as never)
   spyOn(sdk.permission, "reply").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.session, "interrupt").mockImplementation(() => ok(undefined) as never)
