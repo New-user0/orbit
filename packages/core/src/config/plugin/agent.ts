@@ -109,15 +109,14 @@ export const Plugin = define({
           if (replaces) editor.remove(agentID)
           const exists = editor.get(agentID) !== undefined
           const held = document.trusted === false && exists
-          if (held)
+          const skipped = held
+            ? (["system", "description", "initial_prompt"] as const).filter(
+                (field) => item[field] !== undefined && item[field].trim() !== "",
+              )
+            : []
+          if (skipped.length > 0)
             Effect.runSync(
-              Effect.logInfo("untrusted agent entry text held back", {
-                agent: id,
-                path: document.path,
-                fields: (["system", "description", "initial_prompt"] as const).filter(
-                  (field) => item[field] !== undefined && item[field].trim() !== "",
-                ),
-              }),
+              Effect.logInfo("untrusted agent entry text held back", { agent: id, path: document.path, fields: skipped }),
             )
           editor.update(agentID, (agent) => {
             if (!exists) agent.permissions.push(...permissions)
