@@ -34,7 +34,8 @@ export interface RunOptions {
   /**
    * Whether the folder is trusted. The VCS applies the config a repository ships (`core.fsmonitor`, clean filters, hooks)
    * to the commands it runs there, so in a folder that is not trusted the run starts no such process and works as it does
-   * outside a repository: no worktrees, commits, merges, base commit or dirty check. The run store is found from the files.
+   * outside a repository: no worktrees, commits, merges, base commit (a base kept in the run store is ignored too, so no
+   * review diff) or dirty check. The run store is found from the files.
    */
   readonly trusted: boolean
   readonly input?: Readonly<Record<string, unknown>>
@@ -105,13 +106,14 @@ export async function run(options: RunOptions): Promise<RunResult> {
   const input = previous?.input ?? source?.input ?? options.input ?? {}
   // Worktrees branch from the commit the run started at, so a resumed node starts from the same code.
   // A replay creates no worktrees, so it has no base.
-  const base = source
-    ? undefined
-    : previous
-      ? (store.events(id).find((event) => event.type === "run.started")?.data.base as string | undefined)
-      : repository
-        ? await Git.head(repository)
-        : undefined
+  // A stored base is used only where git may run: the store is a file that a clone ships, and the review diff would
+  // start git in the folder the store names.
+  const base =
+    source || !repository
+      ? undefined
+      : previous
+        ? (store.events(id).find((event) => event.type === "run.started")?.data.base as string | undefined)
+        : await Git.head(repository)
   // A resume keeps the budget and default model the run was started (or last resumed) with unless it sets new ones.
   const setting = (key: "budget" | "model") =>
     store

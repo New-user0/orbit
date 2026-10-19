@@ -634,7 +634,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - The flow runner's git (`run` and `evaluate` in `packages/flow`: root, exclude, head, dirty check, worktrees, commits,
   merges, review diff), which reads the index and applies `core.fsmonitor`, clean filters and hooks of the clone: class 1,
   gated on `trusted`, which `orb flow run`, `resume` and `orb eval` take from the server after `requireTrust` and `replay`
-  sets to false (class 12). Proof: `packages/cli/test/trust.test.ts`, rows per key and door, with a trusted control.
+  sets to false (class 12). The base commit is taken from the store of a resumed run only where git may run, because
+  the store is a file that a clone ships and the review diff would start git in the folder it names. Proof:
+  `packages/cli/test/trust.test.ts`, rows per key and door, and the rows for `flow resume` and `eval --resume` of a store
+  the clone ships (a recorded attempt whose worktree is the clone), each with a trusted control; the refusals that say
+  "in a trusted folder": `packages/flow/test/runner-untrusted.test.ts`.
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
