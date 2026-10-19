@@ -858,3 +858,33 @@ describe("InstructionNotes.format", () => {
     expect(InstructionNotes.format("x", "a\nb")).toBe("\n- a\n  b\n")
   })
 })
+
+// Class 14: the note target is the file the loader reads, also where two names stand for one slot. At the home folder, a
+// started folder below it is bounded, so an ORBIT.md that links to a file elsewhere is not what loads: AGENTS.md is, and that
+// is where a note goes. Without the link filter in the choice of target, the note would go to the file that is never read.
+describe("InstructionNotes.target in a project at the home folder, with two names for one slot", () => {
+  for (const trusted of [true, false])
+    (canLinkFile ? it.live : it.live.skip)(`the note goes to the plain file the loader reads, ${trusted ? "trusted" : "not trusted"}`, () =>
+      Effect.gen(function* () {
+        const where = yield* scratch
+        const home = path.join(where.base, "home")
+        const directory = path.join(home, "Downloads", "x")
+        const target = path.join(home, "dotfiles", "ORBIT.md")
+        yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+        yield* Effect.promise(() => fs.mkdir(path.dirname(target), { recursive: true }))
+        yield* write(target, "DOTFILES MARKER")
+        yield* Effect.promise(() => fs.symlink(target, path.join(home, "ORBIT.md"), "file"))
+        yield* write(path.join(home, "AGENTS.md"), "PLAIN MARKER")
+        yield* Effect.gen(function* () {
+          const { notes, discovery } = yield* start
+          yield* discovery.rescan()
+          const loadedText = yield* contents(discovery)
+          expect(loadedText).toContain("PLAIN MARKER")
+          expect(loadedText).not.toContain("DOTFILES MARKER")
+          expect(yield* outcome(notes.add({ scope: "project", text: "n" }))).toBe("ok")
+          expect(yield* read(target)).toBe("DOTFILES MARKER")
+          expect(yield* read(path.join(home, "AGENTS.md"))).toContain("- n")
+        }).pipe(Effect.provide(layerFor({ ...where, root: home, directory, trusted })))
+      }),
+    )
+})
