@@ -996,7 +996,7 @@ describe("ConfigInstructionFile.load", () => {
         allow: pass,
       }).pipe(Effect.provide(Logger.layer([logger])))
       expect(asked.length).toBeLessThanOrEqual(ConfigInstructionFile.MAX_IMPORTS)
-      expect(names(spread, loaded).length).toBeLessThan(count)
+      expect(names(spread, loaded)?.length).toBeLessThan(count)
       expect(warnings).toHaveLength(1)
     }),
   )
