@@ -2,6 +2,7 @@ export * as Orbit from "./orbit"
 
 import { Orbit, type OrbitClient } from "@orbit/client/effect"
 import type { Session } from "@orbit/core/session"
+import { SessionNotFoundError } from "@orbit/protocol/errors"
 import type { Workspace } from "@orbit/core/workspace"
 import { Context, Effect, Layer } from "effect"
 import type { Config, Scope } from "effect"
@@ -19,7 +20,8 @@ export type InstanceConfiguration = SdkInstances.Configuration
 export type Interface = Omit<OrbitClient, "plugin" | "workspace"> & {
   readonly sessions: Omit<OrbitClient["session"], "create" | "get" | "move"> & {
     readonly create: Session.Interface["create"]
-    readonly get: (input: { readonly sessionID: Session.ID }) => ReturnType<Session.Interface["get"]>
+    // The protocol's error, as the HTTP client gives it: an unknown session reads the same through either transport.
+    readonly get: (input: { readonly sessionID: Session.ID }) => Effect.Effect<Session.Info, SessionNotFoundError>
     readonly move: Session.Interface["move"]
   }
   readonly events: OrbitClient["event"]
@@ -54,7 +56,12 @@ export const create: <R = never>(
     sessions: {
       ...client.session,
       create: host.sessions.create,
-      get: (input: { readonly sessionID: Session.ID }) => host.sessions.get(input.sessionID),
+      get: (input: { readonly sessionID: Session.ID }) =>
+        host.sessions.get(input.sessionID).pipe(
+          Effect.catchTag("Session.NotFoundError", (error) =>
+            Effect.fail(new SessionNotFoundError({ sessionID: error.sessionID, message: `Session not found: ${error.sessionID}` })),
+          ),
+        ),
       move: host.sessions.move,
     },
     events: client.event,
