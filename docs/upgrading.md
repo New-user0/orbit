@@ -3221,17 +3221,15 @@ It now sends each request itself:
 - The timeout (30 seconds by default, at most 120) applies to each request and to the read of the body, not to the whole
   call and never to a question put to you, which can wait as long as you take. A chain of redirects can therefore take
   longer than the timeout in all, and the limit of 10 redirects bounds it. (Tests: `WebFetchTool timeout`.)
-- The name of a site is now resolved on this machine, and a name that does not resolve there is refused. Through a proxy
-  the name used to be resolved by the proxy. A configured proxy now sees the address that was checked, not the name, so a
-  `NO_PROXY` entry written by name no longer matches. Whether a proxy should be given the name instead is an open question
-  for the owner, kept under Known gaps in `docs/untrusted-repositories.md`.
+- The name of a site is now resolved on this machine, and a name that does not resolve there is refused. The exception
+  is a request that goes through a configured proxy, which is sent the name and resolves it, as the note "`WebFetch`
+  sends the host name to a configured proxy" below says.
 
 **Affects:** people and scripts that fetch a local server or a private address with `WebFetch`, pages that redirect to
 another host, and anyone with `WebFetch` rules written for `http:` URLs, which now match the `https:` URL.
 
 **What to do:** To fetch local servers, set `experimental.allow_local_fetch` to `true` in your own configuration. Write
-rules for the `https:` form of a URL. Behind a proxy that resolves names this machine cannot, or one that is picked by
-`NO_PROXY` entries written by name, `WebFetch` does not work yet. When a note reports a redirect, call `WebFetch` again with the target it names.
+rules for the `https:` form of a URL. When a note reports a redirect, call `WebFetch` again with the target it names.
 
 ### Edit keeps a file's curly quotes and removes the line break of a deleted line
 
@@ -3517,16 +3515,22 @@ wording of those notes, and models that sent a one-character query or both domai
 
 ### `WebFetch` sends the host name to a configured proxy
 
-When `HTTPS_PROXY` (for an `https:` page) or `HTTP_PROXY` (for `http:`) is set to an `http:` or `https:` address and
-`NO_PROXY` does not name the host, `WebFetch` now sends the request to the proxy for the host name. Before, it resolved
-the name itself, checked the address and sent the address, so a proxy that filters by name saw an address. The proxy
+When a proxy is configured, `WebFetch` now sends the request to it for the host name. One proxy serves both schemes: it
+is the first of `https_proxy`, `HTTPS_PROXY`, `http_proxy` and `HTTP_PROXY` that is set to an `http:` or `https:` address, so
+a page with `https:` goes to a proxy that only `HTTP_PROXY` names, and the other way round. Before, Orbit resolved the
+name itself, checked the address and sent the address, so a proxy that filters by name saw an address. The proxy
 resolves the name and connects, so Orbit's own address check does not run for that request; the permission check for
-each hop still does. A literal address and `localhost` are never sent that way, and a host that `NO_PROXY` names is
-checked and connected to as before. This is the owner's exception of 2026-10-19 to connecting to the checked address.
+each hop still does. A literal address, `localhost` and the names under `.localhost` are never sent that way. This is the
+owner's exception of 2026-10-19 to connecting to the checked address.
+
+A host that `NO_PROXY` names is not sent for its name: Orbit resolves it, checks the address and pins the request to
+that address. The runtime still applies its own proxy variables to a request for an address, so the request goes through
+the proxy as that address, unless `NO_PROXY` lists the address too. It does not connect directly, as the reference does
+for such a host; that difference is on the follow-up list (FU-M4-r3-no-proxy).
 
 **Affects:** people who run Orbit behind a proxy and fetch pages with `WebFetch`.
 
-**What to do:** Nothing. To keep a host out of the proxy, list it in `NO_PROXY`.
+**What to do:** Nothing. To keep a host out of the proxy, list its name and its addresses in `NO_PROXY`.
 
 ## System prompt
 

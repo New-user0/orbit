@@ -2237,15 +2237,20 @@ The program-wide register of every follow-up, these gaps included, with each one
   say so in the note.
 - **The `webfetch` tool and a proxy (the owner's exception, 2026-10-19, FU-M1-008).** `webfetch` asks per hop and, for a
   request that goes direct, passes `AddressGuard.check` and connects to the checked address, as Code Mode `fetch` does.
-  When `HTTPS_PROXY` (for `https:`) or `HTTP_PROXY` (for `http:`) holds an `http:` or `https:` address and `NO_PROXY` does
-  not name the host, the request is sent to the proxy for the host name, as the reference does, and Orbit resolves and
-  checks nothing: the proxy decides where it connects, so a cloud metadata address named by a host is the proxy's to
-  refuse. A literal address and a loopback name never take the exception. When `NO_PROXY` names the host, Orbit pins as
-  before; the runtime applies its own proxy variables to the pinned address, so a `NO_PROXY` list of names only does not
-  stop it from sending that address to the proxy. Code Mode `fetch` keeps the rule without the exception. Proof:
-  `test/tool-webfetch.test.ts` (the name reaches a recorded proxy target and no lookup runs; six `NO_PROXY` and proxy
-  spellings connect to the checked address; a metadata name without a proxy, and a literal address and `localhost` with
-  one, are still refused).
+  The proxy is the first of `https_proxy`, `HTTPS_PROXY`, `http_proxy` and `HTTP_PROXY` that holds an `http:` or `https:`
+  address, for a URL of either scheme (the reference's selection). When `NO_PROXY` does not name the host, the request is
+  sent to the proxy for the host name, as the reference does, and Orbit resolves and checks nothing: the proxy decides
+  where it connects, so a cloud metadata address named by a host is the proxy's to refuse. A literal address, `localhost`
+  and a name under `.localhost` never take the exception; other names that resolve to a loopback address (such as
+  `ip6-localhost`) do, so a proxy on the same machine could reach the person's loopback for them, as the reference's
+  would. When `NO_PROXY` names the host, Orbit pins the request to the checked address and the runtime applies its own
+  proxy variables to that address: the request still goes through the proxy, as the address, unless `NO_PROXY` lists the
+  address too. It is not a direct connection, which the reference makes (FU-M4-r3-no-proxy). Code Mode `fetch` keeps the
+  rule without the exception. Proof: `test/tool-webfetch.test.ts` (the name reaches a recorded proxy target and no
+  lookup runs; five rows pin that the request is handed to `fetch` for the checked address with no `proxy` option in
+  the `NO_PROXY` and malformed-proxy spellings, which a mock cannot show connecting directly; the order of the four
+  variables and the same proxy for both schemes in `proxyFor`; a metadata name without a proxy, and a literal address
+  and `localhost` with one, are still refused).
 - **A terminal UI plugin that first appears above the folder** while the UI runs is imported with no `config.updated` or
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
