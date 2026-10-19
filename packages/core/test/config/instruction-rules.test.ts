@@ -257,6 +257,25 @@ describe("ConfigInstructionRules.scan", () => {
       await fs.writeFile(file, text)
     })
 
+  it.live("lists at most MAX_FILES rule files, the first by name, whether they sit in one folder or are spread over subfolders", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const total = ConfigInstructionRules.MAX_FILES + 40
+      const name = (index: number) => String(index).padStart(4, "0")
+      for (let index = 0; index < total; index++)
+        yield* write(path.join(tmp.path, index % 2 === 0 ? `${name(index)}.md` : `sub${index % 7}/${name(index)}.md`))
+      const listed = yield* scan(tmp.path)
+      expect(listed).toHaveLength(ConfigInstructionRules.MAX_FILES)
+      expect(listed[0]).toBe("0000.md")
+    }),
+  )
+
+  test("compiles a pattern once, and a pattern that is refused stays refused", () => {
+    expect(ConfigInstructionFile.compileRulePattern("src/*.ts")).toBe(ConfigInstructionFile.compileRulePattern("src/*.ts"))
+    expect(ConfigInstructionFile.compileRulePattern("/")).toBeUndefined()
+    expect(ConfigInstructionFile.ruleMatches(["src/*.ts"], path.resolve("/x"), path.resolve("/x/src/a.ts"))).toBe(true)
+  })
+
   it.live("lists rule files by name in code-unit order, depth first, and takes dot names", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()

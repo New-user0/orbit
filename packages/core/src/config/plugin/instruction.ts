@@ -74,6 +74,12 @@ export const Plugin = define({
       // A worktree inside its main checkout: the walk passes through the main checkout's folders above the worktree, whose
       // shared files the worktree has its own copy of. Its local files are not checked in, so only the main checkout has them.
       const canonical = yield* fs.resolve(location.project.canonical)
+      // A project that is the home directory or a filesystem root contains everything below it, so being inside it says
+      // nothing about a link: such a file or rule may not lead out of the folder the session started in, whatever the
+      // trust decision is (the same bound that an import has, `ProjectTrust.importable`).
+      const wide = [root, canonical].some((folder) => relative(home, folder) === "" || dirname(folder) === folder)
+      const leadsOut = (spelling: string, real: string) =>
+        wide && relative(spelling, real) !== "" ? trust.importable(spelling, real).pipe(Effect.map((ok) => !ok)) : Effect.succeed(false)
       const nested = relative(canonical, root) !== "" && FSUtil.contains(canonical, root)
       const inherited = (directory: string) => nested && FSUtil.contains(canonical, directory) && !FSUtil.contains(root, directory)
       // The one folder the managed settings were read from, so that the instruction file and the settings never disagree.
@@ -304,7 +310,7 @@ export const Plugin = define({
         readonly origin: "managed" | "user" | "project"
         readonly base: string
         readonly directories: readonly string[]
-        readonly allow: (real: string) => Effect.Effect<boolean>
+        readonly allow: (real: string, spelling?: string) => Effect.Effect<boolean>
         readonly patterns: readonly string[]
         readonly visited: Set<string>
       }) {
@@ -328,10 +334,22 @@ export const Plugin = define({
           read(item.real, input.origin === "user" ? "user" : "project", input.visited, input.patterns, "rule", {
             origin: input.origin,
             base: input.base,
-          }),
+          }).pipe(
+            // A rule that cannot be read costs only itself, and the warning names it. Only the administrator's rules
+            // fail closed, so that policy text already admitted is not dropped for a read that failed.
+            // A read that fails (Windows answers a locked file so) is the same as one that finds nothing.
+            Effect.catchCause((cause) =>
+              input.origin === "managed" ? Effect.failCause(cause) : Effect.succeed(undefined),
+            ),
+            Effect.tap((result) =>
+              result === undefined && input.origin !== "managed"
+                ? Effect.logWarning("instruction rule skipped", { path: item.real, reason: "could not be read" })
+                : Effect.void,
+            ),
+          ),
         )
         const contributions = results.filter((item): item is Contribution => item !== undefined)
-        if (contributions.length < results.length && input.origin !== "user") return Instructions.unavailable
+        if (contributions.length < results.length && input.origin === "managed") return Instructions.unavailable
         return merge(contributions)
       })
 
@@ -383,7 +401,8 @@ export const Plugin = define({
         // not the repository's to vouch for. A file that is left out is as good as absent, so the next name in its
         // directory takes its place.
         const found = yield* Effect.filter(wanted, (candidate) =>
-          trust.reachable(candidate.file).pipe(
+          Effect.all([trust.reachable(candidate.file), leadsOut(candidate.file, candidate.real)]).pipe(
+            Effect.map(([reachable, out]) => reachable && !out),
             Effect.tap((reachable) =>
               reachable
                 ? Effect.void
@@ -432,13 +451,14 @@ export const Plugin = define({
               // Until the folder is trusted its rules are only what is inside it, as for every file of the project.
               // A folder above the project is not the repository's to vouch for, so what it holds also waits for the project
               // to be trusted, as the instruction file in that folder does: the stricter answer wins.
-              allow: (real) =>
+              allow: (real, spelling) =>
                 trust.reachable(real).pipe(
                   Effect.flatMap((reachable) =>
                     reachable
                       ? trust.supplies({ path: join(folder, ".orbit"), scope: "project", trusted: false }, real)
                       : Effect.succeed(false),
                   ),
+                  Effect.flatMap((ok) => (ok && spelling !== undefined ? Effect.map(leadsOut(spelling, real), (out) => !out) : Effect.succeed(ok))),
                 ),
               patterns,
               visited,

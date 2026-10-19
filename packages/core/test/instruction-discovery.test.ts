@@ -2018,6 +2018,108 @@ describe("ConfigInstructionPlugin.Plugin keeps a project at the home folder from
   }
 })
 
+describe("ConfigInstructionPlugin.Plugin keeps a link in a wide project from leading out of the started folder", () => {
+  // A project at the home folder or at a filesystem root holds everything below it, so being inside it proves nothing
+  // about a link: a file or a rule there may not lead out of the folder the session started in, whatever is granted.
+  const wide = [
+    { name: "home", repo: (home: string) => home },
+    { name: "filesystem root", repo: (home: string) => path.parse(home).root },
+  ] as const
+  const links = [
+    { name: "AGENTS.md", at: ".", file: "AGENTS.md" },
+    { name: "ORBIT.local.md", at: ".", file: "ORBIT.local.md" },
+    { name: "a rule of .orbit/rules", at: ".orbit/rules", file: "key.md" },
+    { name: "a rule of a subfolder of .orbit/rules", at: ".orbit/rules/team", file: "key.md" },
+  ] as const
+  const secrets = [
+    { name: "an ssh key", file: [".ssh", "id_rsa"], marker: "PRIVATE KEY MARKER" },
+    { name: "a credentials file", file: [".aws", "credentials"], marker: "AWS CREDENTIALS MARKER" },
+  ] as const
+  const linked = canLinkFile ? it.live : it.live.skip
+
+  for (const place of wide)
+    for (const granted of [false, true])
+      for (const link of links)
+        for (const secret of secrets)
+          linked(
+            `${place.name} project, ${granted ? "trusted for the session" : "not trusted"}: ${link.name} that links to ${secret.name} sends nothing, and a plain rule is sent`,
+            () =>
+              Effect.gen(function* () {
+                const base = yield* folders
+                const directory = path.join(base.home, "Downloads", "x")
+                const where = { ...base, repo: place.repo(base.home), directory }
+                const target = path.join(base.home, ...secret.file)
+                yield* write(target, secret.marker)
+                yield* write(path.join(directory, ".orbit", "rules", "plain.md"), "PLAIN RULE MARKER")
+                const at = path.join(directory, link.at)
+                yield* Effect.promise(() => fs.mkdir(at, { recursive: true }))
+                yield* Effect.promise(() => fs.symlink(target, path.join(at, link.file), "file"))
+                yield* Effect.gen(function* () {
+                  const trust = yield* ProjectTrust.Service
+                  if (granted) yield* trust.grant({ persist: false, via: "test" })
+                  const discovery = yield* start()
+                  const text = (yield* readBody(yield* discovery.load())).text
+                  expect(text).not.toContain(secret.marker)
+                  expect(text).toContain("PLAIN RULE MARKER")
+                  expect(placesOf(yield* discovery.list()).map(slashed)).not.toContain(slashed(target))
+                }).pipe(scoped(where, false))
+              }),
+          )
+
+  // The control: the same names as plain files in the started folder are sent, so the rows above fail only because of the link.
+  for (const link of links)
+    it.live(`home project, not trusted: ${link.name} as a plain file in the started folder is sent`, () =>
+      Effect.gen(function* () {
+        const base = yield* folders
+        const directory = path.join(base.home, "Downloads", "x")
+        const where = { ...base, repo: base.home, directory }
+        yield* write(path.join(directory, link.at, link.file), "PLAIN CONTROL MARKER")
+        yield* Effect.gen(function* () {
+          const discovery = yield* start()
+          expect((yield* readBody(yield* discovery.load())).text).toContain("PLAIN CONTROL MARKER")
+        }).pipe(scoped(where, false))
+      }),
+    )
+})
+
+describe("ConfigInstructionPlugin.Plugin lets an unreadable rule cost only itself", () => {
+  // `readFileStringSafe` answers nothing on one system (a file with no read bit) and fails on another (a locked file).
+  for (const mode of ["answers nothing", "fails"] as const)
+    for (const origin of ["project", "user"] as const)
+      it.live(`a rule that ${mode} is left out of the ${origin} source, and the other rules and files are sent`, () =>
+        Effect.gen(function* () {
+          const where = yield* folders
+          const rules = origin === "project" ? path.join(where.repo, ".orbit", "rules") : path.join(where.global, "rules")
+          yield* write(path.join(rules, "zz-locked.md"), "LOCKED RULE MARKER")
+          yield* write(path.join(rules, "control.md"), "CONTROL RULE MARKER")
+          yield* write(where.rootFile, "PLAIN AGENTS MARKER")
+          const unreadable = Layer.effect(
+            FSUtil.Service,
+            FSUtil.Service.pipe(
+              Effect.map((real) =>
+                FSUtil.Service.of({
+                  ...real,
+                  readFileStringSafe: (target) =>
+                    path.basename(target) !== "zz-locked.md"
+                      ? real.readFileStringSafe(target)
+                      : mode === "fails"
+                        ? Effect.fail(new Error("EPERM"))
+                        : Effect.succeed(undefined),
+                }),
+              ),
+            ),
+          ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+          yield* Effect.gen(function* () {
+            const discovery = yield* start()
+            const text = (yield* readBody(yield* discovery.load())).text
+            expect(text).toContain("CONTROL RULE MARKER")
+            expect(text).toContain("PLAIN AGENTS MARKER")
+            expect(text).not.toContain("LOCKED RULE MARKER")
+          }).pipe(Effect.provide(layerFor(where, { filesystemLayer: unreadable })))
+        }),
+      )
+})
+
 // An instruction file may import from outside the project's folders once the folder that holds the importing file is
 // trusted (`ProjectTrust.outward`). These rows build the layers with implicit trust off and grant exactly the folder each
 // row names, since a layer that trusts everything would open every holder and let a positive row pass under the wrong one.

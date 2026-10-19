@@ -521,6 +521,62 @@ describe("InstructionNotes.add", () => {
       }),
     )
 
+    // A place the file system cannot follow is a refusal and not a failure of the request, whichever way it fails: a loop of
+    // links (where the system reports it) or a `resolve` that dies after the link check found no share. The second row
+    // runs everywhere, since the first meets it only where the system reports the loop itself.
+    const names = [
+      { scope: "project", name: "AGENTS.md", index: 1 },
+      { scope: "local", name: "ORBIT.local.md", index: 2 },
+    ] as const
+    for (const item of names)
+      for (const trusted of [false, true]) {
+        const label = `${item.scope} scope, ${trusted ? "trusted" : "untrusted"}`
+        it.live(`${label}: a file whose place cannot be resolved is listed as there and not enabled, and a note is refused as outside`, () =>
+          Effect.gen(function* () {
+            const where = yield* scratch
+            const place = path.join(where.root, item.name)
+            yield* write(place, "x")
+            // Armed once the loader has started, so that the request is what meets the failure.
+            const armed = { on: false }
+            const failing = Layer.effect(
+              FSUtil.Service,
+              FSUtil.Service.pipe(
+                Effect.map((real) =>
+                  FSUtil.Service.of({
+                    ...real,
+                    resolve: (target) => (armed.on && path.relative(place, target) === "" ? Effect.die("cannot follow the link") : real.resolve(target)),
+                  }),
+                ),
+              ),
+            ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+            yield* Effect.gen(function* () {
+              const { notes } = yield* start
+              armed.on = true
+              expect((yield* notes.targets())[item.index]).toMatchObject({ exists: true, enabled: false, loaded: false })
+              // The refusal is "outside" when the note meets the failure itself, and "unavailable" when the rescan it starts does.
+              expect(["outside", "unavailable"]).toContain(yield* outcome(notes.add({ scope: item.scope, text: "n" })))
+              expect(yield* read(place)).toBe("x")
+            }).pipe(Effect.provide(layerFor({ ...where, trusted, filesystem: failing })))
+          }),
+        )
+        ;(canLinkFile && process.platform !== "win32" ? it.live : it.live.skip)(
+          `${label}: a file that links to itself or to a loop of links is listed as not enabled, and a note is refused as outside`,
+          () =>
+            Effect.gen(function* () {
+              const where = yield* scratch
+              const place = path.join(where.root, item.name)
+              const other = path.join(where.root, "other.md")
+              yield* Effect.promise(() => fs.symlink(item.scope === "project" ? place : other, place))
+              yield* Effect.promise(() => fs.symlink(place, other).catch(() => undefined))
+              yield* Effect.gen(function* () {
+                const { notes } = yield* start
+                expect((yield* notes.targets())[item.index]).toMatchObject({ exists: true, enabled: false })
+                expect(yield* outcome(notes.add({ scope: item.scope, text: "n" }))).toBe("outside")
+              }).pipe(Effect.provide(layerFor({ ...where, trusted })))
+            }),
+        )
+      }
+
     it.live("writes a note that holds an import token, and the import gate keeps the imported file out of the list", () =>
       Effect.gen(function* () {
         const where = yield* scratch

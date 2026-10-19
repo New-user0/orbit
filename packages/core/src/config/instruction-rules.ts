@@ -6,6 +6,9 @@ import { Effect } from "effect"
 import { join } from "path"
 import { ConfigInstructionFile } from "./instruction-file.js"
 
+/** The most rule files one scan lists. */
+export const MAX_FILES = 256
+
 /** A rule file the scan found: the path as the walk built it, and where it really is. */
 export interface Found {
   readonly file: string
@@ -28,7 +31,8 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
   readonly fs: Pick<FSUtil.Interface, "isDir" | "isFile" | "readDirectoryEntries">
   /** Where a path really leads, a link to a network share named as the share without being opened (`ProjectTrust.leads`). */
   readonly leads: (spelling: string) => Effect.Effect<string>
-  readonly allow: (real: string) => Effect.Effect<boolean>
+  /** `spelling` is the path as the walk built it, given for a file so that a caller can tell a link from the file itself. */
+  readonly allow: (real: string, spelling?: string) => Effect.Effect<boolean>
   readonly platform?: NodeJS.Platform
 }) {
   const nocase = (input.platform ?? process.platform) !== "linux"
@@ -36,13 +40,14 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
   const folders = new Set<string>()
   const files = new Set<string>()
   const found: Found[] = []
+  let capped = false
 
   // A path that names a share or a device, or links that were never followed to their end, is not handed to the file system.
   const unreachable = (path: string) => /^[\\/]{2}/.test(path) || LinkShare.isUnresolved(path)
 
   const visit = (spelled: string): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (unreachable(spelled)) return
+      if (capped || unreachable(spelled)) return
       const real = yield* input.leads(spelled)
       if (unreachable(real) || folders.has(key(real))) return
       folders.add(key(real))
@@ -65,8 +70,14 @@ export const scan = Effect.fn("ConfigInstructionRules.scan")(function* (input: {
           continue
         }
         if (type !== "file" || !ConfigInstructionFile.isRuleName(entry.name) || files.has(key(target))) continue
-        if (!(yield* input.allow(target))) continue
+        if (!(yield* input.allow(target, child))) continue
         files.add(key(target))
+        // A repository chooses how many rule files it holds, and every read walks them again: the rest are not listed.
+        if (found.length >= MAX_FILES) {
+          if (!capped) yield* Effect.logWarning("instruction rules skipped", { path: input.directory, reason: `more than ${MAX_FILES} rule files` })
+          capped = true
+          return
+        }
         found.push({ file: child, real: target })
       }
     })

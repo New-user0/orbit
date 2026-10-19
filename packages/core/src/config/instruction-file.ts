@@ -1176,6 +1176,19 @@ function matchedAt(compiled: readonly CompiledRulePattern[], at: string, folder:
  * writes the pattern, so a refusal costs that pattern alone. `rulePatterns` uses it to count what it drops.
  */
 export function compileRulePattern(pattern: string): CompiledRulePattern | undefined {
+  if (compiledPatterns.has(pattern)) return compiledPatterns.get(pattern)
+  const compiled = compile(pattern)
+  // Every read matches the same patterns again, so each is compiled once. The table is cleared when it fills, which bounds
+  // what a repository with many patterns can hold.
+  if (compiledPatterns.size >= COMPILED_PATTERNS) compiledPatterns.clear()
+  compiledPatterns.set(pattern, compiled)
+  return compiled
+}
+
+const COMPILED_PATTERNS = 4_096
+const compiledPatterns = new Map<string, CompiledRulePattern | undefined>()
+
+function compile(pattern: string): CompiledRulePattern | undefined {
   const negated = pattern.startsWith("!")
   const body = (negated ? pattern.slice(1) : pattern).toLowerCase()
   const name = body.replace(/\/+$/, "")
