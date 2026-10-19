@@ -114,7 +114,7 @@ repository, with no worktrees, no commits, no merges, no base commit, no check f
 reviewer, so a node that asks for a worktree, or a `merge`, fails and says that the folder is not trusted. Add `--trust`
 (for that run only) to `flow run`, `flow resume` or `eval`, or trust the folder, to get them back. The other `orb flow`
 commands find the repository root from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`,
-`filter.<driver>.clean` and `hooks/post-checkout`). A repository with no remote is named by its path until it is
+`filter.<driver>.clean` and `hooks/post-checkout`; the resume rows for a run store that a clone ships; `packages/flow/test/runner-untrusted.test.ts` for the failures). A repository with no remote is named by its path until it is
 trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
 `project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
 path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
@@ -3731,9 +3731,9 @@ highest-priority of those that sets a replacement decides, and an empty string c
 
 ## Turn cost, token and step limits count every spend and every response
 
-- `--max-cost` and `--max-tokens` now count what side queries (a fetched page's summary, a hook prompt, memory
-  recall, the permission helpers, the away summary) and session generations (`/btw`, warming, plugin and doctor calls)
-  spend, in the session and in its subagents. They used to count only responses, compaction and titles.
+- `--max-cost` and `--max-tokens` now count what side queries spend (today the summary of a fetched page; a side query
+  added later is recorded the same way) and what session generations spend (`/btw`, warming, plugin and doctor calls),
+  in the session and in its subagents. They used to count only responses, compaction and titles.
 - A response that the provider cut off before it reported usage (a stream that failed part way, a side query that
   timed out after it was sent, a title or compaction call that failed) is counted by an estimate priced with the model's
   own rates, so recovery after it (continuing the reply, retrying, the fallback model) runs under a cost limit
