@@ -10,6 +10,7 @@ import { Config } from "../config.js"
 import { ConfigMarkdown } from "../config/markdown.js"
 import { ProjectTrust } from "../project-trust.js"
 import { SessionSystemPrompt } from "../session/system-prompt.js"
+import { PromptConfigPlugin } from "./prompt-config.js"
 import { SubagentPromptPlugin } from "./subagent-prompt.js"
 import type { PluginInternal } from "./internal.js"
 
@@ -111,6 +112,8 @@ export const Plugin = define({
 
     const hook = (event: SessionHooks["context"]) =>
       Effect.gen(function* () {
+        // A side query keeps the text its caller wrote.
+        if (PromptConfigPlugin.sideQuery(event)) return
         const name = Config.latest(yield* config.entries(), "output_style")
         if (!name || name === "default") return
         // A style is for the conversation with the person; a subagent reports to another agent.
@@ -143,7 +146,10 @@ export const Plugin = define({
         event.system[0] = { ...system, text: `${base}${STYLE_HEADING}${style.name}\n${style.body}` }
       }).pipe(Effect.catch(() => Effect.void))
 
+    // Compaction and generate requests carry the same system[0] as the main request, so they reuse its cached prefix.
     yield* ctx.session.hook("context", hook)
+    yield* ctx.session.hook("compaction", hook)
+    yield* ctx.session.hook("generate", hook)
   }),
 } satisfies PluginInternal.InternalPlugin)
 

@@ -85,6 +85,28 @@ const styledPrompt = (name: string, compat: Config.Compat) =>
   })
 
 describe("OutputStylePlugin", () => {
+  // Compaction and generate requests carry the main request's system[0], style included, so they reuse its cached prefix.
+  it.live("gives compaction and generate the same system prompt as the context request", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      const directory = (yield* tmpdirScoped()).path
+      yield* writeStyle(directory, "terse", "Answer in one line.", "keep-coding-instructions: false\n")
+      yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      for (const name of ["explanatory", "terse"]) {
+        yield* config.setEntries([new Directory({ type: "directory", path: AbsolutePath.make(directory) }), styled(name)])
+        const main = context()
+        yield* hooks.trigger("session", "context", main)
+        expect([name, main.system[0]?.text.includes("# Output style: ")]).toEqual([name, true])
+        for (const hook of ["compaction", "generate"] as const) {
+          const event = context()
+          yield* hooks.trigger("session", hook, event as never)
+          expect([name, hook, event.system[0]?.text]).toEqual([name, hook, main.system[0]?.text])
+        }
+      }
+    }),
+  )
+
   it.live("reads styles from the reference vendor's roots while compatibility is enabled", () =>
     Effect.gen(function* () {
       const vendor = (yield* tmpdirScoped()).path
