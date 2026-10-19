@@ -147,7 +147,7 @@ export function normalize(input: unknown): Result {
       diagnostics,
       (schema, value, at, found) => decodeFields(schema, value, at, found),
     ),
-    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value)),
+    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value as ConfigAgentV1.Info)),
   )
   const legacySmallModel = own(input, "small_model")
     ? decodeValue(Schema.String, input.small_model, ["small_model"], diagnostics)
@@ -174,7 +174,7 @@ export function normalize(input: unknown): Result {
       diagnostics,
       (schema, value, at, found) => decodeFields(schema, value, at, found),
     ),
-    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
+    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...(value as ConfigAgentV1.Info), mode: "primary" })),
   )
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
   // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style: its legacy fields migrate
