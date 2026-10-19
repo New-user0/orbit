@@ -2758,7 +2758,7 @@ and nothing is fetched to find it. A model that the catalog has no cutoff for ge
 optional `knowledge` field (`YYYY-MM`), so the generated client changed too.
 
 Each session has a scratchpad: the folder `sessions/<ID of the session its lineage goes back to>` in Orbit's temporary
-folder, which a subagent and a fork share with the session they came from. The baseline names it and tells the model to
+folder. The name goes back one level only: a subagent and a fork use the folder of the session they came from, but a subagent that a fork or another subagent starts uses the folder named by that session's own ID, so only a session with no parent and no fork source tells the model that its subagents share the folder (`FU-M4-r3-scratch` tracks resolving the whole lineage). The baseline names it and tells the model to
 keep its temporary files there instead of in the system temp folder. Orbit makes it when a run starts. Every agent that
 may edit files (not Plan, whose mode denies `Edit *`, so its writes there still ask until permissions-7) may edit in the folder of the session that asks without a question, and only where the real place of the
 file is in that folder (a link inside it that leads elsewhere is decided by where it leads), and your own rules for the
@@ -2850,10 +2850,10 @@ anything it quotes from a file or a tool follows in a labelled fenced block outs
 
 The base prompt has always said that a `<system-reminder>` or `<system-update>` block comes only from Orbit. To make that
 true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lowers text that is data: tool results and
-tool errors (local and MCP, also when a server splits one result into several text parts and a tag is cut across them, and also a text or JSON file that a result carries, such as an MCP resource), attached files (including a file that an ACP editor embeds in a prompt) and folder listings, the Code Mode tool listing (which carries MCP tool descriptions), the output of a shell command you ran or that ran in the
+tool errors (local and MCP, also when a server splits one result into several text parts and a tag is cut across them, and also a text or JSON file that a result carries, such as an MCP resource), attached files (including a file that an ACP editor embeds in a prompt) and folder listings, the names of files that reach a model as a document title or file name (a Read result, an attachment, a Code Mode copy), the Code Mode tool listing (which carries MCP tool descriptions), the agent and skill listings (ids and descriptions), the output of a shell command you ran or that ran in the
 background, the reply of a background subagent, the summary and recent text of a compaction checkpoint, instruction files
 with their updates (including the ones loaded when a file is read), MCP server instructions, and the git snapshot (branch,
-user, status and commit subjects). Some sinks are not covered yet (skill and reference listings, plugin system parts, direct MCP tool descriptions, a hosted tool's result, image and PDF bytes); `docs/untrusted-repositories.md` lists them under Known gaps and `FU-M4-36` tracks them. The stored row keeps the original
+user, status and commit subjects). Some sinks are not covered yet (the reference listing, plugin system parts, direct MCP tool descriptions, a hosted tool's result, image and PDF bytes, which cannot be escaped); `docs/untrusted-repositories.md` lists them under Known gaps and `FU-M4-36` tracks them. The stored row keeps the original
 bytes; only the request changes, and only for text that held such a tag. A prompt you type is not changed.
 
 A compaction no longer reads reminder rows, because the next step collects them again after the checkpoint.
