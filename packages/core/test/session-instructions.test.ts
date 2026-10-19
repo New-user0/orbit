@@ -1327,21 +1327,28 @@ describe("SessionInstructions keeps a project at the home folder from opening th
 
 // The files that a read brings are found by `InstructionTriggers`: the folders below the folder the session started in,
 // outermost first, and only for what the read returned.
-describe("InstructionTriggers", () => {
-  const bare = testEffect(sessionLayer(Config.testLayer(), true, undefined, undefined, true))
-  const placed = (directory: (home: string) => string, trusted = true) =>
-    testEffect(
-      Layer.unwrap(
-        Effect.acquireRelease(
-          Effect.promise(() => tmpdir()),
-          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-        ).pipe(
-          Effect.map((tmp) =>
-            sessionLayer(Config.testLayer(), trusted, undefined, { home: tmp.path, directory: directory(tmp.path) }),
-          ),
+// A session in a temporary home folder, started in the folder `directory` names below it. The project is the home folder,
+// or the folder `project` names.
+const placed = (directory: (home: string) => string, trusted = true, project?: (home: string) => string) =>
+  testEffect(
+    Layer.unwrap(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.map((tmp) =>
+          sessionLayer(Config.testLayer(), trusted, undefined, {
+            home: tmp.path,
+            directory: directory(tmp.path),
+            ...(project ? { project: project(tmp.path) } : {}),
+          }),
         ),
       ),
-    )
+    ),
+  )
+
+describe("InstructionTriggers", () => {
+  const bare = testEffect(sessionLayer(Config.testLayer(), true, undefined, undefined, true))
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
     "base64",
@@ -1845,6 +1852,38 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
           ],
         },
       })
+    }),
+  )
+
+  // Only a read below the folder the session started in brings rules, as it brings nested files. A session started in
+  // packages/a gets no rule of the project root on a read of the sibling packages/b, though the rule's patterns match the
+  // file there; a read below packages/a is the control.
+  const startedBelow = placed(
+    (home) => path.join(home, "repo", "packages", "a"),
+    true,
+    (home) => path.join(home, "repo"),
+  )
+  startedBelow.live("injects no rule on a read in the project outside the folder the session started in", () =>
+    Effect.gen(function* () {
+      const location = yield* Location.Service
+      const dir = location.directory
+      const repo = location.project.directory
+      const sibling = path.resolve(repo, "packages", "b")
+      const rule = path.resolve(repo, ".orbit", "rules", "ts.md")
+      yield* mkdir(path.dirname(rule))
+      yield* mkdir(sibling)
+      yield* mkdir(dir)
+      yield* writeAgents(rule, "---\npaths: '*.ts'\n---\nTS RULE MARKER")
+      yield* writeAgents(path.resolve(sibling, "x.ts"), "x")
+      yield* writeAgents(path.resolve(dir, "y.ts"), "y")
+      yield* found(waiting(rule, ["*.ts"], repo))
+      const sessionID = yield* sessionIn(dir)
+      yield* read(sessionID, path.resolve(sibling, "x.ts"))
+      expect(yield* texts(sessionID)).toEqual([])
+      yield* read(sessionID, "y.ts")
+      const injected = yield* synthetics(sessionID)
+      expect(injected.map((message) => message.metadata)).toEqual([{ instruction: { paths: [rule] } }])
+      expect(injected[0]!.text).toContain("TS RULE MARKER")
     }),
   )
 
