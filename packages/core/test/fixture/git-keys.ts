@@ -150,7 +150,7 @@ export const keys: readonly Key[] = [
  * A plain git command, as a person types it. The environment keeps the system and global config out, so that the config of
  * the repository is the only one that names a program, and git never waits at a prompt.
  */
-const plain = async (cwd: string, args: readonly string[], input?: string) => {
+export const plain = async (cwd: string, args: readonly string[], input?: string) => {
   const child = Bun.spawn(["git", ...args], {
     cwd,
     env: {

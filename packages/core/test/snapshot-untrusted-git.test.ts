@@ -4,11 +4,11 @@ import path from "path"
 import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Location } from "@orbit/core/location"
-import { AbsolutePath } from "@orbit/core/schema"
+import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Snapshot } from "@orbit/core/snapshot"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Global } from "@orbit/util/global"
-import { keys, planted } from "./fixture/git-keys"
+import { keys, live, plain, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -90,4 +90,53 @@ describe("Snapshot starts no git in the folder's own repository while it is not 
       }),
     SLOW,
   )
+})
+
+// Class 1 (round 2): a directory of the folder that is a repository itself is a gitlink in the snapshot index, and git
+// starts a status inside it, with the config that repository ships, whenever it compares the index with the work tree.
+// Each row plants a key into a nested repository `sub`, and the plain command of the row is the live control.
+describe("Snapshot starts no git program of a repository nested in an untrusted folder", () => {
+  const rows = ["core.fsmonitor", "core.hooksPath", ".git/hooks"].map((name) => keys.find((key) => key.name === name)!)
+
+  for (const key of rows) {
+    it.live(
+      `${key.name} in a nested repository`,
+      () =>
+        Effect.gen(function* () {
+          expect((yield* live(key)).length).toBeGreaterThan(0)
+
+          const outer = yield* planted(keys.find((item) => item.name === "core.pager")!)
+          const nested = yield* planted(key)
+          yield* Effect.promise(async () => {
+            await fs.cp(nested.root, path.join(outer.root, "sub"), { recursive: true })
+          })
+          const data = (yield* tmpdirScoped()).path
+          const layer = AppNodeBuilder.build(Snapshot.node, [
+            WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+            Location.node.replace(Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(outer.root) }))),
+            Global.node.replace(Global.layerWith({ data, config: path.join(data, "config") })),
+          ])
+          const { git } = yield* traced(
+            Effect.gen(function* () {
+              const snapshot = yield* Snapshot.Service
+              const first = yield* snapshot.capture()
+              yield* Effect.promise(() => fs.writeFile(path.join(outer.root, "a.txt"), "three\n"))
+              const second = yield* snapshot.capture()
+              yield* snapshot.capture()
+              if (!first || !second) return expect.unreachable("capture is disabled")
+              yield* snapshot.files({ from: first, to: second })
+              yield* snapshot.diff({ from: first, to: second })
+              yield* snapshot.restore({ files: new Map([[RelativePath.make("a.txt"), first]]) })
+            }).pipe(Effect.provide(layer)),
+          )
+
+          expect(git.filter((command) => !own(command))).toEqual([])
+          expect(yield* nested.ran()).toEqual([])
+          // Control: the same program does run when the nested repository is used as a repository.
+          yield* Effect.promise(() => plain(path.join(outer.root, "sub"), key.trigger!, key.input))
+          expect((yield* nested.ran()).length).toBeGreaterThan(0)
+        }),
+      SLOW,
+    )
+  }
 })

@@ -475,7 +475,8 @@ const layer = Layer.effect(
         repositoryOperation("refresh", input.repository, args).pipe(Effect.map((result) => nuls(result.text)))
       const [tracked, untracked] = yield* Effect.all(
         [
-          list(["diff-files", "--name-only", "-z", "--", input.scope]),
+          // A nested repository is a gitlink here; git would start a status inside it, with the config that clone ships.
+          list(["diff-files", "--ignore-submodules=all", "--name-only", "-z", "--", input.scope]),
           list(["ls-files", "--others", "--exclude-standard", "-z", "--", input.scope]),
         ],
         { concurrency: 2 },
@@ -595,6 +596,7 @@ const layer = Layer.effect(
       return nuls(
         (yield* repositoryOperation("list_files", input.repository, [
           "diff",
+          "--ignore-submodules=all",
           "--name-only",
           "--no-renames",
           "-z",
@@ -617,7 +619,7 @@ const layer = Layer.effect(
       paths?: readonly RelativePath[]
     }) {
       if (input.paths?.length === 0) return []
-      const args = ["--no-renames", input.from, input.to, "--", ...(input.paths ?? [])]
+      const args = ["--ignore-submodules=all", "--no-renames", input.from, input.to, "--", ...(input.paths ?? [])]
       // Patch headers have no -z form: unquoted paths keep chunksByFile matching non-ASCII names.
       const [names, numbers, patch] = yield* Effect.all(
         [
@@ -696,7 +698,7 @@ const layer = Layer.effect(
             ([file, tree]) =>
               Effect.gen(function* () {
                 if (yield* hasEntry(input.repository, tree, file)) {
-                  yield* repositoryOperation("restore", input.repository, ["checkout", tree, "--", file])
+                  yield* repositoryOperation("restore", input.repository, ["checkout", "--no-recurse-submodules", tree, "--", file])
                   return
                 }
                 yield* fs.remove(path.join(input.repository.worktree, file), { recursive: true, force: true }).pipe(
