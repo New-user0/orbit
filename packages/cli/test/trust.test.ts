@@ -2784,3 +2784,80 @@ for (const key of programKeys) {
     expect(await Bun.file(marker).exists()).toBe(true)
   }, 600_000)
 }
+
+// Class 1: a run store is a file that a clone ships, so a resume must not take a base commit or a worktree from it and
+// start git there for the diff a reviewer reads. The store below records a finished attempt whose worktree is the clone,
+// with a base of HEAD, and the clone's config names a file system monitor that leaves a marker when git runs.
+// The key of the recorded node is the one the runner computes for it, so the node is reused and goes on to the review.
+const resumeDoors = [
+  {
+    door: "flow resume",
+    workflow: "review",
+    node: "v",
+    file: "review.yaml",
+    text: "name: review\nnodes:\n  - id: v\n    type: verify\n    prompt: x\n    judge: true\n",
+    key: { prompt: "x", worktree: false, within: { worktree: "v" } },
+    args: (id: string, trust: string[]) => ["flow", "resume", ...trust, "--standalone", id],
+  },
+  {
+    door: "eval --resume",
+    workflow: "eval:reviewed",
+    node: `${model}.task`,
+    file: "suite.json",
+    text: JSON.stringify({ name: "reviewed", tasks: [{ id: "task", prompt: "x", checks: [], judge: true }] }),
+    key: { prompt: "x", model, worktree: false, within: { worktree: `${model}.task` } },
+    args: (id: string, trust: string[]) => ["eval", "suite.json", ...trust, "--resume", id, "--standalone"],
+  },
+] as const
+
+for (const door of resumeDoors)
+  for (const trust of [false, true])
+    test(`${door.door} of a run store that the clone ships ${trust ? "runs the review diff with --trust (control)" : "starts no git for the review diff in an untrusted clone"}`, async () => {
+      const { createHash } = await import("node:crypto")
+      const { Store } = await import("@orbit/flow")
+      const name = `resume-${door.door.replace(/\W+/g, "-")}-${trust}`
+      const repository = await bare(name)
+      const vcs = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: repository }).exitCode
+      expect(vcs("init", "--quiet", "-b", "main")).toBe(0)
+      expect(vcs("config", "user.email", "t@orbit.test")).toBe(0)
+      expect(vcs("config", "user.name", "T")).toBe(0)
+      expect(vcs("config", "commit.gpgsign", "false")).toBe(0)
+      await Bun.write(path.join(repository, "a.txt"), "one\n")
+      expect(vcs("add", "a.txt")).toBe(0)
+      expect(vcs("commit", "-q", "-m", "one")).toBe(0)
+      const marker = path.join(root, `${name}.marker`)
+      const script = path.join(root, `${name}.sh`)
+      await Bun.write(script, `#!/bin/sh\necho ran >> "${unix(marker)}"\n`)
+      await fs.chmod(script, 0o755)
+      expect(vcs("config", "core.fsmonitor", unix(script))).toBe(0)
+      await Bun.write(path.join(repository, "a.txt"), "two\n")
+      const file = path.join(repository, door.file)
+      await Bun.write(file, door.text)
+
+      const id = "run_20260101000000_abcdef"
+      const key = createHash("sha256").update(JSON.stringify(door.key)).digest("hex").slice(0, 16)
+      const store = Store.at(repository)
+      store.create(
+        { id, workflow: door.workflow, file, directory: repository, input: { models: [model] } },
+        { base: "HEAD" },
+      )
+      store.append(id, `${door.node}#1`, "node.started", { key })
+      store.append(id, `${door.node}#1`, "node.succeeded", {
+        key,
+        result: {
+          id: `${door.node}#1`,
+          status: "succeeded",
+          text: "done",
+          worktree: repository,
+          sessions: [],
+          attempts: 1,
+          usage: {},
+        },
+      })
+      store.status(id, "waiting")
+      store.close()
+
+      const result = await orb(repository, door.args(id, trust ? ["--trust"] : []))
+      expect(result.stderr).not.toContain("is not trusted")
+      expect(await Bun.file(marker).exists()).toBe(trust)
+    }, 600_000)
