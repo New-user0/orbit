@@ -193,3 +193,23 @@ test("the question about the folder the terminal UI started in is not answered f
   await setup.waitForFrame((frame) => !frame.includes(title))
   expect(grants).toEqual([{ directory: elsewhere, trust: true, persist: true }])
 })
+
+// An orbit.json that only rewrites the text of an agent that exists is reported with the kind `permissions` (core
+// `ProjectTrust.status`), and that is enough for the question to open: before, the status listed nothing for it.
+test("Home asks about a folder whose only held-back config is agent text", async () => {
+  await using state = await tmpdir()
+  await using setup = await createAppFixture({
+    state: state.path,
+    fetch: async (url, request) => {
+      if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+      return json({
+        directory: "/tmp/orbit",
+        trusted: false,
+        persistent: true,
+        changed: [],
+        withheld: [{ path: "/tmp/orbit/orbit.json", kinds: ["permissions"] }],
+      } satisfies TrustStatus)
+    },
+  })
+  await setup.waitForFrame((frame) => asksAbout(frame, "/tmp/orbit"))
+})

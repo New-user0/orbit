@@ -520,12 +520,12 @@ describe("the reasoning boost note on a typed shell command's notice", () => {
       metadata: made.metadata,
       time: { created },
     })
-  const notice = (value: string, command: string) =>
+  const notice = (value: string, command: string, output = "x") =>
     synthetic(
       value,
       ShellResult.userNotification({
         info: { id: "shl_1", command, status: "exited", exit: 0 },
-        capture: { output: "x", truncated: false },
+        capture: { output, truncated: false },
       } as unknown as ShellResult.Result),
     )
   const boosted = (out: ReturnType<typeof toLLMMessages>, value: string) =>
@@ -550,6 +550,12 @@ describe("the reasoning boost note on a typed shell command's notice", () => {
   test("is added only when the typed command holds the keyword", () => {
     expect(boosted(toLLMMessages([notice("n", "echo plain")], model), "n")).toHaveLength(0)
     expect(boosted(toLLMMessages([notice("n", "echo ultrathink")], model), "n")).toHaveLength(1)
+  })
+
+  test("looks for the keyword in the typed command only, not in what the command printed", () => {
+    const printed = notice("n", "cat NOTES.md", "Remember: ultrathink before every change.")
+    expect(boosted(toLLMMessages([printed], model), "n")).toHaveLength(0)
+    expect(boosted(toLLMMessages([notice("c", "echo ultrathink", "done")], model), "c")).toHaveLength(1)
   })
 
   test("is not added to an agent's background job whose command holds the keyword", () => {

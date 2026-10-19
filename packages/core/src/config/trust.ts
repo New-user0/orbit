@@ -170,9 +170,12 @@ function toolExecution(value: ConfigToolExecution.Info): Outcome<ConfigToolExecu
   return { value: undefined, withheld: ["settings"] }
 }
 
-// A slash command in the text would run a command that nobody typed.
+// A slash command in the text would run a command that nobody typed. Plain text is kept for an agent the folder defines
+// and held back from one that exists, which status cannot tell apart, so it is reported as well.
 function initialPrompt(value: string): Outcome<string> {
-  return value.trimStart().startsWith("/") ? { value: undefined, withheld: ["commands"] } : { value, withheld: [] }
+  return value.trimStart().startsWith("/")
+    ? { value: undefined, withheld: ["commands"] }
+    : { value, withheld: value.trim() === "" ? [] : ["permissions"] }
 }
 
 // `instructions` is left out in either direction: `false` would hide the person's own files from the agent, and `true`
@@ -315,8 +318,10 @@ export const classification = {
     model: withhold("providers"),
     // Extra headers and body fields reach the provider, whose tools and endpoints they can change.
     request: withhold("providers"),
-    system: inert,
-    description: inert,
+    // The agents plugin keeps this text only for an agent the folder defines itself and holds it back from one that exists,
+    // and trust status cannot tell which it is, so it reports the stricter answer, as it does for the files under agents/.
+    system: flag("permissions", () => true),
+    description: flag("permissions", () => true),
     // What an agent may be used for decides which rules apply to the work: a primary agent is out of the model's reach
     // as a subagent, and a repository that changed this for an agent of the user's would put it there.
     mode: withhold("permissions"),
@@ -333,8 +338,9 @@ export const classification = {
     // The allow list chooses the tools and, through the one that starts agents, other agents.
     tools: withhold("permissions"),
     // It only removes tools, as a deny rule does. The agents plugin adds an untrusted list to the existing one instead
-    // of replacing it, so it cannot clear the person's own denies.
-    disallowed_tools: inert,
+    // of replacing it, so it cannot clear the person's own denies. Trusting turns the merge into a replacement, so it is
+    // reported.
+    disallowed_tools: flag("permissions", () => true),
     permission_mode: withhold("permissions"),
     // An MCP server is a program to start or a server of the person to reach.
     mcp_servers: withhold("mcp"),
