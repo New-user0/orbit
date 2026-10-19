@@ -141,11 +141,11 @@ export function normalize(input: unknown): Result {
 
   const legacyAgents = mapValues(
     decodeMap(
-      preparedEntries(plainNames(input.agent, ["agent"], diagnostics), ["agent"], diagnostics),
+      preparedEntries(plainNames(input.agent, ["agent"], diagnostics), ["agent"], diagnostics, true),
       ConfigAgentV1.Info,
       ["agent"],
       diagnostics,
-      decodeValue,
+      (schema, value, at, found) => decodeFields(schema, value, at, found),
     ),
     (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value)),
   )
@@ -168,11 +168,11 @@ export function normalize(input: unknown): Result {
     }
   const modeAgents = mapValues(
     decodeMap(
-      preparedEntries(plainNames(input.mode, ["mode"], diagnostics), ["mode"], diagnostics),
+      preparedEntries(plainNames(input.mode, ["mode"], diagnostics), ["mode"], diagnostics, true),
       ConfigAgentV1.Info,
       ["mode"],
       diagnostics,
-      decodeValue,
+      (schema, value, at, found) => decodeFields(schema, value, at, found),
     ),
     (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
   )
@@ -752,15 +752,26 @@ function diagnoseProviderUnsupported(value: unknown, path: string[], diagnostics
 // only itself.
 // Each entry of a legacy `agent` or `mode` map goes through the same preparation as the entries of `agents`, so a bad
 // tools or permission entry costs only itself and the denies beside it hold.
-function preparedEntries(value: unknown, path: string[], diagnostics: Diagnostic[]) {
+// Entries of the legacy agent and mode maps go to the V1 decoder, which reads a model and its variant itself: the variant
+// stays a field beside the model instead of being joined into the model string, and a tier (which holds no variant)
+// loses it rather than turning it into a request option.
+function preparedEntries(value: unknown, path: string[], diagnostics: Diagnostic[], legacy = false) {
   if (!isRecord(value)) return value
   return Object.fromEntries(
     Object.entries(value).map(([id, entry]) => {
       if (!isRecord(entry)) return [id, entry]
-      const prepared = LegacyAgent.prepare(entry)
+      const { variant, ...bare } = entry
+      const prepared = LegacyAgent.prepare(legacy ? bare : entry)
       prepared.notes.forEach((note) =>
         diagnostics.push({ kind: "unsupported", path: [...path, id, note.key], message: note.message }),
       )
+      if (!legacy || !("variant" in entry)) return [id, prepared.entry]
+      if (!LegacyAgent.isTier(entry.model)) return [id, { ...prepared.entry, variant }]
+      diagnostics.push({
+        kind: "unsupported",
+        path: [...path, id, "variant"],
+        message: "a model tier takes no variant; ignored it",
+      })
       return [id, prepared.entry]
     }),
   )
