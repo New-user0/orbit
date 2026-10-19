@@ -881,6 +881,40 @@ describe("ProjectTrust.supplies", () => {
     }),
   )
 
+  // Class 4: a project that is the home folder contains everything below it, so a link in a config directory of a folder
+  // below it may not carry a file of the user's out of that folder, whatever the decision for the project. Each row is a
+  // way a repository can lead a definition (an agent, a command, a skill, an output style) to a file elsewhere under home.
+  for (const granted of [false, true])
+    it.live(`holds a config directory below a project at home to its own folder, ${granted ? "trusted for the session" : "not trusted"}`, () =>
+      Effect.gen(function* () {
+        const bareFolders = yield* bare
+        const folders = { ...bareFolders, repo: bareFolders.home }
+        const started = path.join(folders.home, "Downloads", "x")
+        const orbit = path.join(started, ".orbit")
+        const notes = path.join(folders.home, "Documents", "notes")
+        yield* Effect.promise(async () => {
+          await write(path.join(orbit, "skills", "own", "SKILL.md"), "own")
+          await write(path.join(notes, "diary.md"), "private")
+          await write(path.join(folders.home, ".aws", "credentials"), "secret")
+          await fs.symlink(notes, path.join(orbit, "agents"), "junction")
+          await fs.symlink(notes, path.join(orbit, "skills", "linked"), "junction")
+          await fs.symlink(path.join(folders.home, ".aws"), path.join(orbit, "commands"), "junction")
+        })
+        const rows = [
+          ["a plain file of the folder", path.join(orbit, "skills", "own", "SKILL.md"), true],
+          ["a file under a linked config folder", path.join(orbit, "agents", "diary.md"), false],
+          ["a file under a linked skill folder", path.join(orbit, "skills", "linked", "diary.md"), false],
+          ["a credentials file under a linked commands folder", path.join(orbit, "commands", "credentials"), false],
+        ] as const
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          if (granted) yield* project.grant({ persist: false, via: "test" })
+          const source = { path: orbit, scope: "project", trusted: false } as const
+          expect(yield* Effect.forEach(rows, ([, file]) => project.supplies(source, file))).toEqual([true, false, false, false])
+        }).pipe(Effect.provide(loader(folders, undefined, started)))
+      }),
+    )
+
   it.live("holds a folder above the project to that folder, and to its own decision rather than the project's", () =>
     Effect.gen(function* () {
       const folders = yield* bare
