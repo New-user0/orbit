@@ -888,13 +888,7 @@ export function createPromptState(input: PromptInput): PromptState {
         // A paste's own text edits must not cancel a submit waiting on that paste.
         applyingPaste = true
         try {
-          files?.forEach((file) => {
-            if (file.type === "file") {
-              pasteAttachment(file)
-              return
-            }
-            target.insertText(file.content)
-          })
+          files?.forEach(pasteAttachment)
           if (!files) target.insertText(normalized)
         } finally {
           applyingPaste = false
