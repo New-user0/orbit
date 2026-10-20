@@ -627,7 +627,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   over-long and short-part values; counting kept patterns only, as before, took from about a second to tens of seconds
   for each; and the "spend the work allowance" rows of `test/instruction-discovery.test.ts`, the instruction pass of a
   project trusted and not, and of `test/session-instructions.test.ts`, a read below a nested rules folder, where a rule of
-  aliased empty spellings waits instead of applying). Compiling a pattern strips its trailing slashes in one pass from the
+  aliased empty spellings waits instead of applying; that each step of the expansion pays too, and not the split alone,
+  is pinned by the "charges each step of brace expansion" row of `test/config/instruction-rules.test.ts`, where two
+  parts of 340 empty groups spend the allowance before a later pattern is read and one part does not, and deleting the
+  charge in `expandBraces` reads the later pattern in both). Compiling a pattern strips its trailing slashes in one pass from the
   end: an expression such as `/\/+$/` is tried again at each slash of a run that another character follows, and 64 rule
   files whose spellings ended that way held each read below their folder for 17 to 29 seconds on Windows (proof: the
   "strips the run that ends a pattern or an import token" row of `test/config/instruction-rules.test.ts`, a child

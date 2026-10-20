@@ -131,6 +131,20 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     })
   })
 
+  // A part of 340 empty brace groups costs about a thousand in its comma split and most of the allowance in its expansion,
+  // so a second such part spends the rest before `c` is read.
+  test("charges each step of brace expansion to the allowance that the comma split draws on", () => {
+    const empty = `"${"{,}".repeat(340)}"`
+    // Mutation: deleting `work.left -= pattern.length + RULE_STEP` from `expandBraces` leaves the split alone to pay, `c`
+    // is read after two such parts as after one, and the second row keeps `a` and `c` with nothing dropped.
+    const rows: ReadonlyArray<readonly [string, readonly string[], number]> = [
+      [`paths: [a, ${empty}, c]`, ["a", "c"], 0],
+      [`paths: [a, ${empty}, ${empty}, c]`, ["a"], 1],
+    ]
+    for (const [written, patterns, dropped] of rows)
+      expect(ConfigInstructionFile.rulePatterns(front(written))).toEqual({ patterns, malformed: false, dropped })
+  })
+
   // An expression such as `/\/+$/` is tried again at each character of a run that something else follows, which costs the
   // square of the run's length. Each row is a reader that strips such a run from what a repository writes, over a run of
   // slashes or underscores and then a letter, and over a control of letters as long. The work is synchronous, so it runs
