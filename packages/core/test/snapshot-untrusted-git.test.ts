@@ -578,6 +578,59 @@ describe("Snapshot reaches no share, and starts no git, in an untrusted folder t
     )
 })
 
+// The first capture of a trusted folder starts from a copy of the folder's index, which tells git which tracked files are
+// unchanged. Git believes a file whose size and time match its entry only when the entry is older than the index file;
+// an entry from the second the index was written is read again. Each row rewrites a tracked file to the same size and
+// sets the times of the file and of the folder's index: an entry and an index of the same second (a write that came
+// within the second git last wrote the index), and a rewrite a second later (control). Undo must give back the
+// rewritten text. Times are set rather than waited for, so the row is the same on every platform; outside Windows git
+// also compares the change time to the second, so the setup is repeated until the rewrite keeps the recorded one.
+// Mutations: giving the copy the current time fails the first row on Windows and on Linux; leaving the copy's time to
+// the copy fails it on Linux, where a copy is new, but not on Windows, where the copy keeps the time of the file it
+// copies. The control passes either way.
+describe("Snapshot captures a tracked file rewritten in the second its folder's index was written", () => {
+  for (const [name, later] of [
+    ["in that second", 0],
+    ["a second later (control)", 1],
+  ] as const)
+    it.live(
+      `restores the rewritten text of a file whose new time is ${name}`,
+      () =>
+        Effect.gen(function* () {
+          const root = path.join((yield* tmpdirScoped()).path, "clone")
+          yield* repository(root)
+          const file = path.join(root, "a.txt")
+          // A whole second in the past, which nothing the test writes shares.
+          const second = new Date((Math.floor(Date.now() / 1000) - 60) * 1000)
+          const rewritten = new Date(second.getTime() + later * 1000)
+          yield* Effect.promise(async () => {
+            for (let attempt = 0; attempt < 20; attempt++) {
+              await fs.writeFile(file, "one\n")
+              await fs.utimes(file, second, second)
+              const recorded = (await fs.stat(file)).ctimeMs
+              await git(root, "add", "a.txt")
+              await fs.utimes(path.join(root, ".git", "index"), second, second)
+              await fs.writeFile(file, "two\n")
+              await fs.utimes(file, rewritten, rewritten)
+              if (Math.floor(recorded / 1000) === Math.floor((await fs.stat(file)).ctimeMs / 1000)) return
+            }
+          })
+          const data = (yield* tmpdirScoped()).path
+          yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const first = yield* snapshot.capture()
+            yield* Effect.promise(() => fs.writeFile(file, "three\n"))
+            const next = yield* snapshot.capture()
+            if (!first || !next) return expect.unreachable("capture is disabled")
+            yield* snapshot.restore({ files: new Map([[RelativePath.make("a.txt"), first]]) })
+          }).pipe(Effect.provide(layerFor(root, data, true)))
+
+          expect(yield* read(file)).toBe("two\n")
+        }),
+      SLOW,
+    )
+})
+
 // Every trusted folder: git reads a path as a pattern unless it is told otherwise, and a file or folder can be named like
 // one. Each row puts such a name beside a file or folder `sub` that the pattern matches.
 // Mutations: `--literal-pathspecs` removed from the restore's `checkout` fails the restore rows, from the comparison's
@@ -711,6 +764,70 @@ describe("Snapshot reads a file name that git would take for a pattern as a name
       SLOW,
     )
   }
+
+  // A leading `:` is pathspec magic: `:memo` and `:(top)memo` stand for `memo`, and `:(icase)memo` and `:!memo` change how
+  // git matches. Only the restore's lookup of a file in the snapshot (`ls-tree`) and the question of which paths are
+  // ignored (`check-ignore`) can tell; every other command already reads names. Windows allows no `:` in a file name, so
+  // the last row asks `check-ignore` there directly, with paths alone.
+  // Mutations (Linux): `--literal-pathspecs` removed from the restore's `ls-tree` fails all six rows (the restore does
+  // not find the file and deletes it, or stops). `ignored` handing the paths to `check-ignore` without `./` fails the
+  // rows with an ignore rule (the file is left out as if ignored), the `:(icase)memo` and `:!memo` rows (the capture
+  // stops), and the direct rows of the four spellings, which fail on Windows as well.
+  const colons = [
+    [":memo", false],
+    [":(top)memo", false],
+    [":(icase)memo", false],
+    [":!memo", false],
+    [":memo", true],
+    [":(top)memo", true],
+  ] as const
+  for (const [name, ignoring] of colons)
+    (windows ? it.live.skip : it.live)(
+      `captures, lists and restores the file named ${name}${ignoring ? " when memo is ignored" : ""}, with no file memo`,
+      () =>
+        Effect.gen(function* () {
+          const folder = yield* trustedFolder({ [name]: "one\n", ...(ignoring ? { ".gitignore": "memo\n" } : {}) })
+          const files = yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            const first = yield* snapshot.capture()
+            yield* Effect.promise(() => fs.writeFile(path.join(folder.root, name), "two\n"))
+            const second = yield* snapshot.capture()
+            if (!first || !second) return expect.unreachable("capture is disabled")
+            const changed = (yield* snapshot.files({ from: first, to: second })).map(String)
+            yield* snapshot.restore({ files: new Map([[RelativePath.make(name), first]]) })
+            return changed
+          }).pipe(Effect.provide(folder.layer))
+
+          expect(files).toEqual([name])
+          expect(yield* read(path.join(folder.root, name))).toBe("one\n")
+        }),
+      SLOW,
+    )
+
+  // The plain names are the controls: the same call does report an ignored path.
+  const asked = [
+    [":memo", false],
+    [":(top)memo", false],
+    [":(icase)memo", false],
+    [":!memo", false],
+    ["memo", true],
+    ["deep/a.log", true],
+    ["kept.txt", false],
+  ] as const
+  for (const [name, expected] of asked)
+    it.live(`asks check-ignore whether ${name} itself is ignored`, () =>
+      Effect.gen(function* () {
+        const root = path.join((yield* tmpdirScoped()).path, "clone")
+        yield* repository(root)
+        yield* Effect.promise(() => fs.writeFile(path.join(root, ".gitignore"), "memo\n*.log\n"))
+        const git = yield* Git.Service.pipe(Effect.provide(AppNodeBuilder.build(Git.node)))
+        const found = yield* git.repo.discover(AbsolutePath.make(root))
+        if (!found) return expect.unreachable("no repository")
+        const ignored = yield* git.index.ignored({ repository: found, paths: [RelativePath.make(name)] })
+
+        expect([...ignored].map(String)).toEqual(expected ? [name] : [])
+      }),
+    )
 
   // Windows allows only `[s]ub` of these names, and that pattern stands for no file inside `sub`, so the row above records
   // the same either way there. Git still walks into a folder that the pattern matches, to see whether it is a repository

@@ -634,8 +634,8 @@ An agent name must be plain: segments separated by `/`, each starting with a let
 digits, `.`, `_` and `-`, not ending with `.`, and not a Windows device name such as `nul` or `con`. A file or an
 `agents`, `agent` or `mode` key with another name defines no agent and is reported.
 
-In a folder that is not trusted, a file under `agent/` or `agents/` no longer changes an agent that exists: it is
-held back whole, and the folder is listed as holding back permissions for every such file, because which names exist depends on the entries before it, the person's own agents included.
+In a folder that is not trusted, a file under `agent/` or `agents/` no longer changes an agent that exists, or one that
+a trusted config names in any scope, a flag or managed one included: it is held back whole, and the folder is listed as holding back permissions for every such file, because which names exist depends on the entries before it, the person's own agents included.
 Trusting the folder applies it. The file may still define a new agent, cut down to the keys that are safe: `context`,
 `background`, `disallowed_tools`, `system`, `description`, `color` and an `initial_prompt` that is plain text. The keys
 that choose a model, a budget, tools, a mode, a memory scope, servers, hooks, skills or isolation, and an
@@ -2840,7 +2840,26 @@ Windows a folder named `s*` also took in the files of a folder `sub` beside it, 
 for a repository of its own (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for a
 pattern as a name").
 
+A name that starts with `:`, which only systems other than Windows allow, is a name too. Git read `:memo` and
+`:(top)memo` as `memo`, so undoing a change to such a file deleted it when there was no `memo`, and a folder that
+ignored `memo` left the file out of its snapshots. A capture or comparison that met a file named `:(icase)memo` or
+`:!memo` failed.
+
 **Affects:** folders that hold files or folders whose names git would read as a pattern.
+
+**What to do:** Nothing.
+
+### Undo keeps an edit made in the second git last wrote the folder's index
+
+Orbit's first snapshot of a folder starts from a copy of the folder's own git index. On Linux the copy used to be newer
+than every entry in it, so git took a tracked file that was rewritten to the same size within the second its index was
+last written as unchanged: the snapshot held the committed text, and undoing the next step put that text back instead
+of the edit. The copy now has the time of the index it came from, and git reads such a file again
+(`snapshot-untrusted-git.test.ts`, "Snapshot captures a tracked file rewritten in the second its folder's index was
+written").
+
+**Affects:** people on Linux who edit a tracked file within a second of a git command in a folder that Orbit has not
+taken a snapshot of before.
 
 **What to do:** Nothing.
 
@@ -3952,9 +3971,9 @@ the provider's prompt cache is cold for it).
 
 ## An untrusted folder cannot change the prompt of an agent that exists
 
-A project or local config in a folder that is not trusted can no longer set `agents.<id>.system`, `description` or `initial_prompt` for an agent that is already there (Orbit's own, or yours). Before, that text became the agent's prompt and your `system_prompt` was skipped for it. An agent the folder defines itself keeps its prompt, and a trusted folder is unchanged. Trust status now lists such an `orbit.json` entry (`system`, `description`, `initial_prompt` or `disallowed_tools`) as holding back `permissions`, so the trust question opens for the folder, and Orbit logs a line for each entry it holds back.
+A project or local config in a folder that is not trusted can no longer set `agents.<id>.system`, `description` or `initial_prompt` for an agent that is not the folder's alone: one Orbit ships, or one that your own trusted config names, whatever its scope. That includes an agent defined only in a scope that ranks above the project, the flag scope (filled by `--agents`, `--settings`, `ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT`) or managed settings, which does not exist yet when the project's config is read. Before, that text became the agent's prompt and your `system_prompt` was skipped for it, and for an agent defined only above the project the repository's file was recorded as the agent's source. A file under `agents/` in such a folder is skipped whole for the same agents. An agent that only the folder defines keeps its prompt, and a trusted folder is unchanged. Trust status now lists such an `orbit.json` entry (`system`, `description`, `initial_prompt` or `disallowed_tools`) as holding back `permissions`, so the trust question opens for the folder, and Orbit logs a line for each entry it holds back.
 
-**Affects:** people who open a repository that sets a prompt on a built-in agent before trusting it.
+**Affects:** people who open a repository that sets a prompt on a built-in agent, or on an agent they pass with `--agents` or keep in managed settings, before trusting it.
 
 **What to do:** Trust the folder if you want its prompt to apply.
 
