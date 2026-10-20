@@ -169,6 +169,12 @@ test("a run is cleaned up with its branch when git lists its worktree under a li
     { name: "linked-gone", link: true, gone: true },
   ]
 
+  // Git lists the long name of each folder, in the case it has on disk, whatever spelling of the temporary folder `root`
+  // holds (on GitHub's Windows runner an 8.3 short name), so the control looks for that spelling.
+  const longRoot = await fs.realpath(root)
+  const fold = (file: string) =>
+    process.platform === "win32" ? file.replaceAll("\\", "/").toLowerCase() : file.replaceAll("\\", "/")
+
   const results = await Promise.all(
     rows.map(async (row, index) => {
       const added = await repository(`moved-${row.name}`)
@@ -188,7 +194,7 @@ test("a run is cleaned up with its branch when git lists its worktree under a li
         .split("\n")
         .filter((line) => line.startsWith("worktree ")).length
       // The control: git lists the worktree under the path it was added at, not under the repository's real path.
-      const control = before.includes(`${added.replaceAll("\\", "/")}/.orbit/`)
+      const control = fold(before).includes(fold(`${path.join(longRoot, `moved-${row.name}`)}/.orbit/`))
       return { name: row.name, control, cleaned, left, listed }
     }),
   )
