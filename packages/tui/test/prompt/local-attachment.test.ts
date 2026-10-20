@@ -25,10 +25,12 @@ describe("prompt local attachments", () => {
     const png = path.join(tmp.path, "shot.png")
     const other = path.join(tmp.path, "other.png")
     const spaced = path.join(tmp.path, "my logo.svg")
+    const upper = path.join(tmp.path, "upper.PNG")
     await Promise.all([
       Bun.write(png, new Uint8Array([1, 2, 3])),
       Bun.write(other, new Uint8Array([1, 2, 3])),
       Bun.write(spaced, "<svg />"),
+      Bun.write(upper, new Uint8Array([1, 2, 3])),
     ])
     const rows: [string, string, { files: ReturnType<typeof part>[]; rest: string } | undefined][] = [
       // An image path inside prose is part of a piece that does not end in an image extension.
@@ -48,6 +50,15 @@ describe("prompt local attachments", () => {
       ["an image line first", `${png}\nsecond line`, { files: [part("shot.png")], rest: "second line" }],
       ["an image line last, with CRLF", `first line\r\n${png}`, { files: [part("shot.png")], rest: "first line" }],
       ["prose lines with nothing to attach", "first line\nsecond line", undefined],
+      // Blank space at either end of a line, or of the whole paste, is not part of a piece.
+      [
+        "an image line with trailing spaces",
+        `first line\n${png}  \nthird line`,
+        { files: [part("shot.png")], rest: "first line\nthird line" },
+      ],
+      ["line breaks around the whole paste", `\nsee ${png}\n`, { files: [part("shot.png")], rest: "see" }],
+      ["an upper-case extension", upper, { files: [part("upper.PNG")], rest: "" }],
+      ["quotes that do not match are part of the piece", `'${png}"`, undefined],
       // A kept path comes back byte for byte, its quotes and backslashes included.
       ["a kept escaped path", `${png} /a/My\\ Docs/b.svg`, { files: [part("shot.png")], rest: "/a/My\\ Docs/b.svg" }],
       ["a kept single-quoted path", `${png} '${spaced}'`, { files: [part("shot.png")], rest: `'${spaced}'` }],
@@ -137,6 +148,31 @@ describe("prompt local attachments", () => {
         ?.files,
     ).toHaveLength(32)
     expect(await resolvePastedAttachments(Array(33).fill(file).join("\n"), process.platform)).toBeUndefined()
+    // An absolute path that is not an image does not count toward the bound either.
+    const pdf = path.join(tmp.path, "doc.pdf")
+    expect(await resolvePastedAttachments(`${Array(32).fill(file).join(" ")} ${pdf}`, process.platform)).toEqual({
+      files: Array(32).fill(part("image.png", "data:image/png;base64,AQ==")),
+      rest: pdf,
+    })
+  })
+
+  test("the platform picks the absolute-path rule, so a drive spelling is not read outside Windows", async () => {
+    await using tmp = await tmpdir()
+    const before = process.cwd()
+    process.chdir(tmp.path)
+    try {
+      // On Windows the drive spelling names a real file; elsewhere it names a file under ./C: in the working folder.
+      const spelling =
+        process.platform === "win32" ? path.join(tmp.path, "shot.png").replaceAll("\\", "/") : "C:/shot.png"
+      await Bun.write(
+        path.join(tmp.path, process.platform === "win32" ? "" : "C:", "shot.png"),
+        new Uint8Array([1, 2, 3]),
+      )
+      expect(await resolvePastedAttachments(spelling, "linux")).toBeUndefined()
+      expect(await resolvePastedAttachments(spelling, "win32")).toEqual({ files: [part("shot.png")], rest: "" })
+    } finally {
+      process.chdir(before)
+    }
   })
 
   test("does not attach an SVG or AVIF path", async () => {
