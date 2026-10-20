@@ -1075,6 +1075,18 @@ export const RULE_PATTERNS = 256
 /** The longest pattern a rule keeps, in characters. A longer one is dropped. */
 const RULE_PATTERN_LENGTH = 1024
 
+/**
+ * The work one rule's `paths` may cost, in units of about a character. The comma split pays one for each character it reads,
+ * and each step of brace expansion pays the length of its pattern plus `RULE_STEP`, whether what it makes is kept, empty or
+ * refused. The bound is on the work and not on the file or on what is kept, because a YAML alias costs a file a few bytes
+ * and repeats a value of any length. A list of 256 patterns of 480 characters fits.
+ */
+const RULE_WORK = RULE_PATTERNS * RULE_PATTERN_LENGTH
+
+// What a step of brace expansion costs beyond the characters of its pattern: the lists it builds and the spelling it hands
+// back, which the caller cleans up and compiles.
+const RULE_STEP = 32
+
 /** Whether a name in a rules folder is a rule file. The test is on the name as it is written, in lower case on every platform. */
 export function isRuleName(name: string) {
   return name.endsWith(".md")
@@ -1087,12 +1099,14 @@ export function isRuleName(name: string) {
  * (`src/*.{ts,tsx}` is two patterns) because the matcher has none, and a trailing `/**` goes because a folder pattern already
  * covers what is below it. The block is parsed by `ConfigMarkdown.parseOption` and nothing else, so no front matter language
  * is evaluated. `malformed` is set when the block does not parse, which also makes the rule apply from the start: the text is
- * the folder's own, and the only thing lost is the condition.
+ * the folder's own, and the only thing lost is the condition. Reading the key stops once `RULE_WORK` is spent, whatever the
+ * file repeats through aliases or spells out through braces: what was kept by then is the rule's list, and a rule that had
+ * kept nothing waits and matches nothing.
  */
 export function rulePatterns(frontmatter: string | undefined): {
   readonly patterns: readonly string[] | undefined
   readonly malformed: boolean
-  /** How many patterns were left out for a cap or because the matcher does not take them. */
+  /** How many patterns were left out for a cap or because the matcher does not take them. What the work allowance left unread counts as one. */
   readonly dropped: number
 } {
   if (frontmatter === undefined) return { patterns: undefined, malformed: false, dropped: 0 }
@@ -1108,11 +1122,13 @@ export function rulePatterns(frontmatter: string | undefined): {
       : Array.isArray(value)
         ? value.filter((item): item is string => typeof item === "string")
         : []
-  // Parts are taken one at a time and the work stops once the cap is kept, so what a file spells out past it costs nothing.
+  // Parts are taken one at a time, and the work stops once the cap is kept or the allowance is spent. Aliases that repeat one
+  // value, and parts whose spellings are all empty or refused, keep nothing, so only the allowance stops them.
+  const work = { left: RULE_WORK }
   const patterns: string[] = []
   let dropped = 0
   for (const text of strings) {
-    for (const part of splitCommas(text)) {
+    for (const part of splitCommas(text, work)) {
       if (patterns.length >= RULE_PATTERNS) {
         dropped++
         break
@@ -1122,7 +1138,7 @@ export function rulePatterns(frontmatter: string | undefined): {
         dropped++
         continue
       }
-      for (const spelling of expandBraces(part)) {
+      for (const spelling of expandBraces(part, work)) {
         const pattern = spelling.replace(/\/\*\*$/, "").trim()
         if (pattern === "") continue
         if (pattern.length > RULE_PATTERN_LENGTH || compileRulePattern(pattern) === undefined) dropped++
@@ -1130,8 +1146,9 @@ export function rulePatterns(frontmatter: string | undefined): {
         if (patterns.length >= RULE_PATTERNS) break
       }
     }
-    if (patterns.length >= RULE_PATTERNS) break
+    if (patterns.length >= RULE_PATTERNS || work.left < 0) break
   }
+  if (work.left < 0) dropped++
   // A rule whose patterns were all dropped still waits, and matches nothing.
   if (patterns.length === 0 && dropped > 0) return { patterns, malformed: false, dropped }
   if (patterns.every((pattern) => pattern === "**")) return { patterns: undefined, malformed: false, dropped }
@@ -1139,11 +1156,13 @@ export function rulePatterns(frontmatter: string | undefined): {
 }
 
 // The parts of a string between the commas that are outside braces, trimmed, without the empty ones. A closing brace with
-// no opener takes the depth below zero, and then no later comma splits.
-function* splitCommas(value: string) {
+// no opener takes the depth below zero, and then no later comma splits. The split stops where the allowance runs out, even
+// in the middle of a part, which is then never handed on.
+function* splitCommas(value: string, work: { left: number }) {
   let depth = 0
   let from = 0
   for (let at = 0; at <= value.length; at++) {
+    if (--work.left < 0) return
     const char = value[at]
     if (at < value.length && char === "{") depth++
     else if (at < value.length && char === "}") depth--
@@ -1156,8 +1175,11 @@ function* splitCommas(value: string) {
 }
 
 // Every spelling of a pattern once its first brace group is replaced by each alternative, then the next, depth first. A
-// group with no closing brace is left as written. The list stops growing at `RULE_PATTERNS`.
-function expandBraces(pattern: string): string[] {
+// group with no closing brace is left as written. The list stops growing at `RULE_PATTERNS`, and the expansion stops where
+// the allowance runs out.
+function expandBraces(pattern: string, work: { left: number }): string[] {
+  work.left -= pattern.length + RULE_STEP
+  if (work.left < 0) return []
   const open = pattern.indexOf("{")
   if (open === -1) return [pattern]
   let depth = 0
@@ -1176,7 +1198,8 @@ function expandBraces(pattern: string): string[] {
   const alternatives = edges.slice(0, -1).map((edge, index) => pattern.slice(edge + 1, edges[index + 1]).trim())
   const result: string[] = []
   for (const alternative of alternatives) {
-    for (const spelling of expandBraces(pattern.slice(0, open) + alternative + pattern.slice(close + 1))) {
+    if (work.left < 0) return result
+    for (const spelling of expandBraces(pattern.slice(0, open) + alternative + pattern.slice(close + 1), work)) {
       result.push(spelling)
       if (result.length >= RULE_PATTERNS) return result
     }
