@@ -192,7 +192,9 @@ describe.skipIf(!windows)("the git that Windows falls back to, with a program na
 
         expect(path.normalize(result.gitExecutable).toLowerCase()).toBe(path.join(bin, "git.exe").toLowerCase())
         // The program of PATH ran as git, with the arguments of the Git service, which shows that a decoy of this kind runs.
-        expect((await onPath()).map((line) => line.split(" ").slice(0, 2).join(" "))).toEqual(["git.exe rev-parse"])
+        expect((await onPath()).map((line) => line.split(" ").slice(0, 4).join(" "))).toEqual([
+          "git.exe -c diff.ignoreSubmodules=all rev-parse",
+        ])
         expect(await inFolder()).toEqual([])
       },
       60_000,

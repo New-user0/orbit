@@ -78,7 +78,9 @@ describe("the queries of the git snapshot", () => {
       // A change at the root, seen from a subfolder, carries the `../` that git prints, and the untracked folder itself collapses to `./`.
       expect(run.value.split("\n").toSorted()).toEqual(["?? ../top.txt", "?? ./"])
       expect(run.git.filter((line) => line.includes("status"))).toHaveLength(1)
-      expect(run.git.find((line) => line.includes("status"))).toMatch(/--no-optional-locks status --short/)
+      expect(run.git.find((line) => line.includes("status"))).toMatch(
+        /--no-optional-locks status --ignore-submodules=all --short/,
+      )
     }),
   )
 
