@@ -1,7 +1,7 @@
 export * as Git from "./git.js"
 
 import { existsSync, statSync } from "node:fs"
-import { appendFile, readdir, readFile, realpath, rm } from "node:fs/promises"
+import { appendFile, lstat, readdir, readFile, realpath, rm } from "node:fs/promises"
 import path from "node:path"
 import { GitSubmodules } from "@orbit/util/git-submodules"
 
@@ -275,12 +275,21 @@ function within(folder: string, candidate: string) {
   return path.relative(folder, candidate) === "" || inside(folder, candidate)
 }
 
-/** Remove a run's worktrees and branches; returns how many of each went. */
+/**
+ * Remove a run's worktrees and branches; returns how many of each went. When `.orbit`, `.orbit/worktrees` or the run's
+ * folder is a link, it removes nothing and returns that path as `refused`.
+ */
 export async function clean(repository: string, run: string) {
-  const prefix = runFolder(repository, run)
   // Git lists a worktree under the long name of each folder in the case it has on disk, and `repository` may spell a
-  // folder with other case or by its 8.3 short name (class 4), so both sides are compared as real paths.
-  const folder = await real(prefix)
+  // folder with other case or by its 8.3 short name, so the repository is taken by its real path and each listed worktree
+  // too (class 4). The run's folder is then named under the repository and never resolved: a clone can ship any of the
+  // three folders as a link, which would make a folder outside .orbit/worktrees, and a person's own worktrees in it, the
+  // run's to remove by force.
+  const folder = runFolder(await real(repository), run)
+  const parts = [path.dirname(path.dirname(folder)), path.dirname(folder), folder]
+  const links = await Promise.all(parts.map((part) => lstat(part).then((stat) => stat.isSymbolicLink(), () => false)))
+  const refused = parts.find((_, index) => links[index])
+  if (refused !== undefined) return { worktrees: 0, branches: 0, refused }
   const listed = (
     await Promise.all(
       (await ok(repository, ["worktree", "list", "--porcelain"]))
@@ -291,8 +300,8 @@ export async function clean(repository: string, run: string) {
   ).flatMap((entry) => (entry.inside ? [entry.directory] : []))
   for (const directory of listed) await ok(repository, ["worktree", "remove", "--force", directory])
   await ok(repository, ["worktree", "prune"])
-  await rm(prefix, { recursive: true, force: true })
-  const parent = path.dirname(prefix)
+  await rm(folder, { recursive: true, force: true })
+  const parent = path.dirname(folder)
   if ((await readdir(parent).catch(() => [])).length === 0) await rm(parent, { recursive: true, force: true })
   const branches = (await ok(repository, ["for-each-ref", "--format=%(refname:short)", `refs/heads/orbit/${run}/`]))
     .split("\n")

@@ -1437,6 +1437,13 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 - Compare with `FSUtil.contains(parent, child)`, which uses `path.relative` and so ignores case on win32, only on two
   paths that are already real: a path that `fs.resolve` returned for something that exists, or a folder that you
   resolved first. Never `===`, `startsWith` or `!==` on two paths.
+- Removing a folder that Orbit made inside the repository is the reverse case: resolve the repository, name the folder
+  under its real path, and refuse when any part below the repository is a link (`lstat`), rather than resolving the
+  folder itself. A clone can ship `.orbit/worktrees/<run>` as a link, and the real path of the run's folder is then
+  wherever the link leads, so the worktrees found "inside" it, and the folder that `rm` takes, are the person's.
+  `Git.clean` does this for `.orbit`, `.orbit/worktrees` and the run's folder and removes nothing, branches included,
+  when one is a link (`packages/flow/test/git.test.ts`, "a run whose folder is reached through a link is left alone
+  with everything it leads to", and the `orb flow clean` row in `packages/cli/test/flow.test.ts`).
 - A name that becomes a file name is one plain name (the output style rule in
   `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
   `packages/core/src/tool/plugin/memory.ts`).
@@ -1506,11 +1513,8 @@ the store.
 - `Git.clean` and `Git.worktree` refuse anything that is not one plain name (`PLAIN_NAME`, `runFolder`) before
   `git worktree remove` or `add`, `rm` or `branch -D`, and `Git.worktree` refuses a node named `.`, `..` or empty
   (`packages/flow/src/git.ts`). A `*` in an ID would otherwise become a ref pattern that matches other runs' branches.
-  Take the shape check as the model and not the rest of `Git.clean`, which keeps the entries of `git worktree list` with
-  `directory.startsWith(prefix + path.sep)`, the string comparison that class 4 forbids. It compares paths that git
-  printed with a folder that `runFolder` has already made safe, so it is harmless today, but do not copy it.
-  `@orbit/flow` does not depend on `@orbit/util`, so its follow-up is a `path.relative` check, not `FSUtil.contains`
-  (Known gaps).
+  `Git.clean` then keeps the entries of `git worktree list` whose real path is inside the run's folder, compared with
+  `path.relative`, and leaves the run alone when that folder is reached through a link (class 4).
 - For every identifier in a change, say where it comes from: the runner, the person, or a file that a clone can ship.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust
@@ -2625,10 +2629,6 @@ The program-wide register of every follow-up, these gaps included, with each one
   terminals) is not exercised by any test or by a recorded manual run. The logic behind it is in `Controller`,
   `trust.ts` and `program.ts`, which are tested. That includes the refetch of the model list when the trust check starts
   to answer after a restart of an old service. No task yet.
-- **A string comparison in `Git.clean`.** It keeps the entries of `git worktree list` with
-  `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
-  that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
-  check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
 - **Resuming a run in a folder that is not trusted** (M4 round 6, register row FU-M4-r6-resume-store). `orb flow
   resume`, `orb eval --resume` and `orb flow replay` refuse such a folder before they open its run store, because a store
   that a clone ships decides where a resumed run's reviewer and checks work and which sessions its team continues
