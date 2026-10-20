@@ -178,6 +178,40 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     expect(report.filter((item) => item.hostile.ms >= item.control.ms * 4 + 250).map((item) => item.name)).toEqual([])
   }, 90_000)
 
+  // A front matter line whose value starts after a long run of spaces or tabs and holds a lone CR, U+2028, U+2029 or
+  // U+0085, and a block with a long run of empty lines, each against a control of letters as long that takes the same
+  // path. The work is synchronous, so it runs in a child process with a deadline.
+  test("reads a front matter line or block in time that grows with its length, whatever separator it holds", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "front-matter-line-stress.ts")],
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 60_000)
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    const report = JSON.parse(out) as { readonly name: string; readonly hostile: number; readonly control: number }[]
+    // Mutation: dropping the `s` flag of the line match in `ConfigMarkdown.sanitize`, which a rule's `paths` runs twice
+    // when its YAML does not parse, takes the lone CR, U+2028 and U+2029 line rows from a few milliseconds to seconds
+    // each, and the child's deadline kills the run. Reading through gray-matter's own reader again takes the rows of
+    // empty lines from a few milliseconds to seconds each.
+    const rows = report.filter((item) => item.name.startsWith("rulePatterns"))
+    expect(rows).toHaveLength(17)
+    expect(rows.filter((item) => item.hostile >= item.control * 4 + 250)).toEqual([])
+  }, 90_000)
+
+  test("reads the paths of a line that ends in U+2028 or U+2029", () => {
+    // Mutation: dropping the `s` flag of the line match in `ConfigMarkdown.sanitize` leaves the line as it was written,
+    // the YAML does not parse, and the rule applies from the start.
+    for (const separator of ["\u2028", "\u2029"])
+      expect(ConfigInstructionFile.rulePatterns(front(`paths: **/*.ts${separator}`))).toEqual({
+        patterns: ["**/*.ts"],
+        malformed: false,
+        dropped: 0,
+      })
+  })
+
   test("keeps a list of 256 patterns of 480 characters whole, within the work allowance", () => {
     const list = Array.from({ length: 256 }, (_, index) => `src/${String(index).padStart(3, "0")}${"a".repeat(473)}`)
     const result = ConfigInstructionFile.rulePatterns(front(`paths:\n${list.map((item) => `  - ${item}`).join("\n")}`))

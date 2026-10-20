@@ -5,30 +5,73 @@ import matter from "gray-matter"
 // gray-matter evaluates front matter that opens with `---js` or `---javascript` as code, and every Markdown file Orbit
 // reads comes through here: the commands, agents, skills and output styles that a cloned repository keeps in its
 // `.orbit` directory would run themselves as soon as they were read, before anyone is asked about the folder. Only YAML
-// and JSON front matter is read. Passing options also bypasses gray-matter's cache, which is keyed by content and keeps
-// a parse that failed as if it had worked, so a file that needed `sanitize` read back empty the second time.
-const options = {
-  engines: {
-    javascript: () => {
-      throw new Error("JavaScript front matter is not supported")
-    },
-  },
-}
+// and JSON front matter is read.
+//
+// `read` finds the block where gray-matter 4 finds it and hands it to gray-matter's YAML engine (js-yaml with its safe
+// schema) or to `JSON.parse`, and to nothing else. It does not call gray-matter's own reader, which first asks whether
+// the block is only comments with an expression that reads from each line start in a run of blank lines to the end of
+// the run, so that a block of 100 KB of empty lines held each read for seconds. gray-matter also keeps a parse by content
+// when it is given no options, a parse that failed included; `read` keeps nothing.
+const yaml = (matter as unknown as { readonly engines: { readonly yaml: { readonly parse: (text: string) => unknown } } })
+  .engines.yaml.parse
 
 // `indicators` adds a last retry that also reads a value holding a YAML indicator as text. It comes after the first, so a
 // file that already parsed through `sanitize` parses as it did, and only a reader that asks for it (the `paths` of a rule)
 // accepts what the others still refuse.
 export function parse(content: string, indicators = false) {
   try {
-    return matter(content, options)
+    return read(content)
   } catch {
-    if (!indicators) return matter(sanitize(content), options)
+    if (!indicators) return read(sanitize(content))
     try {
-      return matter(sanitize(content), options)
+      return read(sanitize(content))
     } catch {
-      return matter(sanitize(content, true), options)
+      return read(sanitize(content, true))
     }
   }
+}
+
+// The front matter of a file and the text after it, as gray-matter 4 reads them: an opening line of three dashes and
+// then a language or nothing (a fourth dash makes it no opener), and a block that runs to the first LF followed by three
+// dashes, or to the end. A block that a YAML scalar or list fills comes back as that value, as it did through gray-matter.
+function read(input: string): { readonly data: Readonly<Record<string, unknown>>; readonly content: string } {
+  const text = input.startsWith("\uFEFF") ? input.slice(1) : input
+  if (!text.startsWith("---") || text[3] === "-") return { data: {}, content: text }
+  const after = text.slice(3)
+  // gray-matter cuts the opening line one character short when the file has no line break.
+  const opening = after.slice(0, after.search(/\r?\n/))
+  const language = opening.trim()
+  const rest = language === "" ? after : after.slice(opening.length)
+  const close = rest.indexOf("\n---")
+  const block = close === -1 ? rest : rest.slice(0, close)
+  const data = onlyComments(block) ? undefined : engine(language)(block)
+  return {
+    data: (data ?? {}) as Readonly<Record<string, unknown>>,
+    content: close === -1 ? "" : rest.slice(close + 4).replace(/^\r?\n?/, ""),
+  }
+}
+
+function engine(language: string): (block: string) => unknown {
+  const name = language.toLowerCase()
+  if (language === "" || name === "yaml" || name === "yml") return yaml
+  if (language === "json") return (block) => JSON.parse(block)
+  if (name === "js" || name === "javascript") throw new Error("JavaScript front matter is not supported")
+  throw new Error(`Front matter in ${language} is not supported`)
+}
+
+// Whether gray-matter would take the block for empty: nothing but whitespace once each comment is gone. A comment is a
+// `#` that only whitespace and earlier comments come before, with a character after it that is not LF, and it runs to
+// the next LF, over a CR, U+2028 or U+2029. The block is read once.
+function onlyComments(block: string) {
+  let comment = false
+  for (let at = 0; at < block.length; at++) {
+    const char = block[at]!
+    if (char === "\n") comment = false
+    else if (comment || /\s/.test(char)) continue
+    else if (char === "#" && at + 1 < block.length && block[at + 1] !== "\n") comment = true
+    else return false
+  }
+  return true
 }
 
 export function parseOption(content: string, indicators = false) {
@@ -80,7 +123,11 @@ export function sanitize(content: string, indicators = false) {
   const frontmatter = match[1]
   const result = frontmatter.split(/\r?\n/).flatMap((line) => {
     if (line.trim().startsWith("#") || line.trim() === "" || /^\s+/.test(line)) return [line]
-    const entry = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/)
+    // The block is split at LF and CRLF, so a line can still hold a lone CR, U+2028 or U+2029, which a plain `.` does not
+    // take. With the `s` flag the value runs to the end of the line, whatever it holds. Without it `$` fails at such a
+    // character, and the engine starts the value again after each shorter run of the spaces that follow the colon, which
+    // costs the square of the run's length (`front-matter-line-stress.ts`).
+    const entry = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/s)
     if (!entry) return [line]
     const value = entry[2].trim()
     if (value === "" || value === ">" || value === "|" || value.startsWith('"') || value.startsWith("'")) return [line]

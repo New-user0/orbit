@@ -559,11 +559,57 @@ describe("ConfigInstructionFile.parse on hostile input", () => {
     const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
     clearTimeout(timer)
     expect(code).toBe(0)
-    const report = JSON.parse(out) as { readonly name: string; readonly ms: number }[]
+    const report = JSON.parse(out) as Report
     expect(report.length).toBeGreaterThan(20)
     // A case that takes seconds is one that is not linear: the slowest that ran was a few tens of milliseconds.
     expect(report.filter((item) => item.ms > 5_000)).toEqual([])
+    // Lines of 64 KB that open a fence, a quoted fence, a fence in a list item or a list item and hold U+2028, U+2029, a
+    // lone CR or U+0085, each read by `parse`, `sections` and `imports` against a control of letters as long. Mutation:
+    // dropping the `s` flag of `fenceOpening` or of `listItem` takes the U+2028 and U+2029 rows of its lines from a few
+    // milliseconds to seconds for each reader, and the child's deadline kills the run.
+    expect(slowerThanControl(report, ["parse", "sections", "imports"])).toEqual([])
   }, 90_000)
+})
+
+type Report = {
+  readonly name: string
+  readonly ms: number
+  readonly readers?: Record<string, { readonly hostile: number; readonly control: number }>
+}[]
+
+// The line separator rows of the stress script, with the readers of each that took much longer than its control.
+function slowerThanControl(report: Report, readers: readonly string[]) {
+  const rows = report.filter((item) => item.readers !== undefined)
+  expect(rows.map((item) => item.name)).toEqual(
+    ["backtickFence", "tildeFence", "quotedFence", "bullet", "orderedTabs", "fenceInItem"].flatMap((shape) =>
+      ["U+2028", "U+2029", "lone CR", "U+0085"].map((spelling) => `${shape} ${spelling}`),
+    ),
+  )
+  return rows.flatMap((item) =>
+    readers
+      .filter((reader) => item.readers![reader]!.hostile >= item.readers![reader]!.control * 4 + 250)
+      .map((reader) => `${item.name} ${reader}`),
+  )
+}
+
+// A line ends at LF, CR or CRLF only, so U+2028, U+2029 and U+0085 are characters of the line that holds them, and a line
+// that opens a fence or a list item with one of them in it opens it all the same. The U+0085 rows are controls: a plain
+// `.` always took that character.
+describe("ConfigInstructionFile reads U+2028, U+2029 and U+0085 as characters of a line", () => {
+  const separators = { "U+2028": "\u2028", "U+2029": "\u2029", "U+0085": "\u0085" }
+  for (const [spelling, separator] of Object.entries(separators))
+    test(`opens a fence or a list item from a line that holds ${spelling}`, () => {
+      // Mutation: dropping the `s` flag of `fenceOpening` reads the fence lines of the U+2028 and U+2029 rows as text, so
+      // the comment goes, the heading opens and the token is found; dropping it from `listItem` makes the item a
+      // paragraph, and the comment after the blank line goes.
+      const fence = `\`\`\`\`js${separator}x\n<!-- c -->\n\`\`\`\`\n`
+      expect(parse(fence)).toEqual({ content: fence, stripped: false })
+      const item = `- a${separator}b\n\n  <!-- c -->\n`
+      expect(parse(item)).toEqual({ content: item, stripped: false })
+      expect(ConfigInstructionFile.sections(`~~~${separator}\n# a\n~~~\n# b\nx`)).toEqual([{ heading: "b", depth: 1, body: "x" }])
+      expect(ConfigInstructionFile.imports(`\`\`\`${separator}\n@./a.md\n\`\`\`\n`)).toEqual([])
+      expect(ConfigInstructionFile.imports(`1.${separator}\n@./a.md\n`)).toEqual(["./a.md"])
+    })
 })
 
 describe("ConfigInstructionFile.imports", () => {
@@ -1234,8 +1280,10 @@ describe("ConfigInstructionFile.sections on hostile input", () => {
     const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
     clearTimeout(timer)
     expect(code).toBe(0)
-    const report = JSON.parse(out) as { readonly name: string; readonly ms: number }[]
+    const report = JSON.parse(out) as Report
     for (const wanted of ["headings", "backtickRun", "alternatingFences", "oneMegabyteLine", "headingLadder", "blankThenText"])
       expect(report.find((item) => item.name === wanted)?.ms ?? Infinity).toBeLessThan(5_000)
+    // The line separator rows, read by `sections`. Mutation: as for `parse` above.
+    expect(slowerThanControl(report, ["sections"])).toEqual([])
   }, 90_000)
 })

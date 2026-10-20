@@ -537,6 +537,18 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   opener is not front matter and its text is kept as written, and a bare block is removed whatever it holds. Its comment
   blocks are found by a scanner that reads the file once, line by line, because the block lexer of a Markdown library
   takes seconds on a list item of a few thousand lines, and a clone chooses the file before anyone has trusted it.
+  U+2028 and U+2029 do not end a line there, and the expressions that read a fence opener or a list item to the end of
+  its line take them like any other character; so does the retry of `ConfigMarkdown.sanitize` with a lone CR, U+2028 or
+  U+2029 in a front matter line. `ConfigMarkdown` also no longer calls gray-matter's own reader, whose test for a block
+  of comments started again from each line start in a run of empty lines (class 7). Before, one such line of 100 KB
+  after a run of fence markers or spaces, in an `AGENTS.md` or in a rule's front matter, held the instruction pass of a
+  project that is not trusted for tens of seconds, and 100 KB of empty lines in a rule's front matter for seconds.
+  Proof: the line separator rows of the two "on hostile input" tests of `test/config/instruction-file.test.ts` and the
+  "front matter line or block" rows of `test/config/instruction-rules.test.ts` and `test/config/markdown.test.ts` (child
+  processes with a deadline, against controls of letters), and the "long run of markers, spaces or empty lines" rows of
+  `test/instruction-discovery.test.ts` (the pass of a project that is not trusted, against a control). Dropping the `s`
+  flag of `fenceOpening`, of `listItem` or of the line match in `sanitize`, or reading through gray-matter's reader
+  again, fails them.
   `ConfigInstructionPlugin` also asks `ProjectTrust.importable` of a walk file and a rule file whose real path is not the
   file itself while the project is home or a filesystem root (which contain everything below them), trusted or not: a link may
   lead out of the folder the session started in only to a folder the person has trusted, and only when the session started at
@@ -2167,9 +2179,13 @@ gray-matter's default engines, or a marker test per reader written with the spec
 
 **How to comply:**
 
-- `ConfigMarkdown.parse` and `ConfigMarkdown.parseOption` (`packages/core/src/config/markdown.ts`) are the only callers
-  of gray-matter. Its `engines.javascript` throws "JavaScript front matter is not supported", and `parseOption` returns
-  `undefined` so that the reader skips the file:
+- `ConfigMarkdown.parse` and `ConfigMarkdown.parseOption` (`packages/core/src/config/markdown.ts`) are the only readers
+  of front matter. They find the block where gray-matter 4 finds it and hand it only to gray-matter's YAML engine
+  (js-yaml with its safe schema) or to `JSON.parse`, never to gray-matter's own reader or its engine table. A `js` or
+  `javascript` opener, in any case, throws "JavaScript front matter is not supported", any other language is refused
+  too, and `parseOption` returns `undefined` so that the reader skips the file (proof, besides the marker rows below:
+  the "reads every file as gray-matter does" row of `test/config/markdown.test.ts`, which compares data, text and
+  refusals with gray-matter's reader on generated files):
 
   ```ts
   const markdown = ConfigMarkdown.parseOption(content)

@@ -4025,3 +4025,16 @@ Dropping or pasting the path of an `.svg` file used to read the file and put its
 **Affects:** people who drop SVG or PDF files into the prompt to send their contents.
 
 **What to do:** Ask the agent to read the file, or paste the markup.
+
+## U+2028 and U+2029 are text inside a line of an instruction file or of front matter
+
+A long line that held U+2028 or U+2029 after a run of fence markers or spaces cost time that grew with the square of the line: one such line of 100 KB in a cloned repository's `AGENTS.md`, or in the front matter of one of its rules, held the reading of the instruction files at the start of a session for tens of seconds, before anyone had trusted the folder. A lone CR inside a front matter line did the same, and so did a long run of empty lines anywhere in a front matter block: 100 KB of them in a rule held that reading for seconds. Such a line or run now takes time in proportion to its length. Front matter is still read as before, by the same YAML and JSON readers, with JavaScript refused; only the step that looked for a block of nothing but comments is Orbit's own now.
+
+The characters are read as part of their line, as a Markdown line ends only at LF, CR or CRLF:
+
+- In an instruction file or a rule, a line that opens a fence or a list item and holds U+2028 or U+2029 opens it. Before, it was read as plain text, so a comment block in the fence or under the item was removed, a heading in the fence opened a section, and an `@` token in the fence was followed.
+- In front matter, a value that holds a lone CR, U+2028 or U+2029 gets the same retry as any other value with an unquoted colon or a YAML indicator. A `description: Use when: it fits` line that ends in a stray CR before its CRLF now reads, and a rule whose `paths` line ends in U+2028 or U+2029 keeps its patterns; before, that front matter did not parse, and such a rule applied from the start.
+
+**Affects:** repositories whose instruction, rule or Markdown config files hold U+2028, U+2029 or a stray CR.
+
+**What to do:** Nothing.

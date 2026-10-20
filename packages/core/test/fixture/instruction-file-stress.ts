@@ -1,7 +1,8 @@
 /**
  * Runs `ConfigInstructionFile.parse` over inputs that a cloned repository could ship, and prints how long each took as
- * JSON. It is a script of its own because the work is synchronous: a loop that never ends cannot be cut short from the
- * process that runs it, so the test starts this one with a deadline. It exits with an error when `parse` throws.
+ * JSON; the line separator rows at the end also carry the time of each reader and of its control. It is a script of its
+ * own because the work is synchronous: a loop that never ends cannot be cut short from the process that runs it, so the
+ * test starts this one with a deadline. It exits with an error when `parse` throws.
  */
 import { ConfigInstructionFile } from "@orbit/core/config/instruction-file"
 
@@ -71,6 +72,7 @@ const pieces = [
   "-", "1. item", "2) item", "> quote", ">", ">> x", "<div>", "</div>", "<pre>", "</pre>", "<script>", "<?php", "<!DOCTYPE html>",
   "<![CDATA[", "<custom-tag>", "<br>", "<!-- comment -->", "<!--", "-->", "<!-- a --> tail", "text <!-- c --> text", "`<!-- c -->`",
   "<!-->", "<!--->", "\u0000", "\ud800", " ", "\r", "é", "\u{1F600}", "<", "<!", "<!-", "--", "[a]: b", "|a|b|", "\\",
+  "\u2029", "\u0085", "```` \u2028x", "~~~\u2029", "-   \u2028x", "1.\t\u2029x",
 ]
 
 function garbage() {
@@ -86,7 +88,7 @@ const cases: [string, string][] = [
   ...Array.from({ length: 3_000 }, (_, index): [string, string] => [`garbage ${index}`, garbage()]),
 ]
 
-const report: { name: string; ms: number }[] = []
+const report: { name: string; ms: number; readers?: Record<string, { readonly hostile: number; readonly control: number }> }[] = []
 let randomMs = 0
 for (const [name, text] of cases) {
   const start = performance.now()
@@ -105,4 +107,41 @@ for (const [name, text] of cases) {
   else report.push({ name, ms: Math.round(ms) })
 }
 report.push({ name: "3,000 random documents", ms: Math.round(randomMs) })
+
+// A line of 64 KB that starts the way a fence or a list item does, with a long run of markers or of spaces, and then holds
+// a character that the scanners do not split lines at: U+2028 and U+2029, which a plain `.` stops at, and U+0085, which it
+// takes. A lone CR is split at, so its rows are controls of the split. Each reader is timed over the row and over a
+// control of the same length in letters, in files that also hold comments, so that `parse` walks the comment blocks.
+const separators: Record<string, string> = { "U+2028": "\u2028", "U+2029": "\u2029", "lone CR": "\r", "U+0085": "\u0085" }
+const lines: Record<string, (separator: string) => string> = {
+  backtickFence: (separator) => `${"`".repeat(32_000)}${"a".repeat(32_000)}${separator}z`,
+  tildeFence: (separator) => `${"~".repeat(32_000)}${"a".repeat(32_000)}${separator}z`,
+  quotedFence: (separator) => `> ${"`".repeat(32_000)}${"a".repeat(32_000)}${separator}z`,
+  bullet: (separator) => `- ${" ".repeat(64_000)}a${separator}z`,
+  orderedTabs: (separator) => `1.${"\t".repeat(64_000)}a${separator}z`,
+  fenceInItem: (separator) => `- ${"~".repeat(32_000)}${"a".repeat(32_000)}${separator}z`,
+}
+const readers: Record<string, (text: string) => unknown> = {
+  parse: (text) => ConfigInstructionFile.parse(text, { frontmatter: true }),
+  sections: (text) => ConfigInstructionFile.sections(text),
+  imports: (text) => ConfigInstructionFile.imports(text),
+}
+const timed = (read: () => unknown) => {
+  const start = performance.now()
+  read()
+  return Math.round(performance.now() - start)
+}
+const withComments = (line: string) => `# a\n<!-- c -->\n${line}\n<!-- d -->\n`
+for (const [shape, make] of Object.entries(lines))
+  for (const [spelling, separator] of Object.entries(separators)) {
+    const line = make(separator)
+    const times = Object.fromEntries(
+      Object.entries(readers).map(([name, read]) => [
+        name,
+        { hostile: timed(() => read(withComments(line))), control: timed(() => read(withComments("a".repeat(line.length)))) },
+      ]),
+    )
+    const ms = Object.values(times).reduce((sum, item) => sum + item.hostile, 0)
+    report.push({ name: `${shape} ${spelling}`, ms, readers: times })
+  }
 console.log(JSON.stringify(report))

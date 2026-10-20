@@ -247,12 +247,14 @@ const realForm = Effect.fnUntraced(function* (
 // Comment blocks
 //
 // An HTML comment is taken off only when it is a block of its own at the top level of the document, the way the block
-// block lexer splits it: it starts a line that is indented by at most three columns, outside fenced
+// lexer splits it: it starts a line that is indented by at most three columns, outside fenced
 // code, outside another HTML block, and outside the list item, quote or paragraph that it could belong to. The
 // document is read once, line by line, and every kind of block that can hold a comment line without being one is
-// followed just far enough to tell where it ends, so the time is linear in the size of the file, whatever it holds
-// (`test/config/instruction-file.test.ts` runs hostile files under a deadline). The block lexer of a Markdown library is
-// not: it is far from linear on a long list item, and a clone chooses these files before anyone has trusted it.
+// followed just far enough to tell where it ends. The time grows with the size of the file for each kind of hostile file
+// that `test/fixture/instruction-file-stress.ts` writes, long lines that hold U+2028 or U+2029 after a run of fence
+// markers or spaces among them: `test/config/instruction-file.test.ts` runs them in a child process with a deadline.
+// The block lexer of a Markdown library is far from linear on a long list item, and a clone chooses these files before
+// anyone has trusted it.
 //
 // Where that lexer reads a construct other than the CommonMark rules say, this follows the lexer:
 // a comment indented under a paragraph line is more of the paragraph, and a line that opens with a tag
@@ -437,8 +439,12 @@ function width(whitespace: string, from: number) {
   return column - from
 }
 
+// A line ends at LF, CR or CRLF only, so U+2028 and U+2029 are characters of the line, but a plain `.` does not take them.
+// The two expressions that read a line to its end (here and in `listItem`) use the `s` flag. Without it `$` fails at such
+// a character, and the engine tries again after each shorter run of markers or spaces, which costs the square of the
+// line's length.
 function fenceOpening(rest: string): Fence | undefined {
-  const match = /^(`{3,}|~{3,})(.*)$/.exec(rest)
+  const match = /^(`{3,}|~{3,})(.*)$/s.exec(rest)
   if (!match || (match[1]!.startsWith("`") && match[2]!.includes("`"))) return undefined
   return { char: match[1]![0]!, length: match[1]!.length }
 }
@@ -481,7 +487,7 @@ function htmlBlock(rest: string, indent: number, paragraph: boolean): End | unde
 // must reach to belong to the item, which is where its text starts: after the marker and the spaces that follow it, or
 // one column after the marker when the item is empty or opens with code.
 function listItem(rest: string, indent: number) {
-  const match = /^([-+*]|(\d{1,9})[.)])(?:([ \t]+)(.*))?$/.exec(rest)
+  const match = /^([-+*]|(\d{1,9})[.)])(?:([ \t]+)(.*))?$/s.exec(rest)
   if (!match) return undefined
   const content = match[4] ?? ""
   const gap = width(match[3] ?? "", indent + match[1]!.length)
