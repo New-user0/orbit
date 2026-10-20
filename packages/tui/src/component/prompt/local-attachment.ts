@@ -22,31 +22,48 @@ export function readLocalAttachment(file: string, maxBytes = MAX_LOCAL_ATTACHMEN
   )
 }
 
-// Attaches every png, jpeg, gif or webp path in a paste or drop that reads as an image. Every other path (pdf, svg,
-// a missing or oversized file, a relative path) stays as typed text and is never read. Returns undefined when
-// nothing attaches, so the caller inserts the paste unchanged.
+// A paste or a drop is cut into lines, and a line is cut again only where a space is followed by the start of an
+// absolute path. One quote may sit between that space and the path, because Windows Terminal wraps each dropped
+// path in double quotes. A piece attaches only when it names an absolute png, jpeg, gif or webp file that reads as
+// an image. Every other piece (prose, a relative path, an svg, a pdf, a missing or oversized file) is never read and
+// stays in `rest` exactly as typed, with the separator that came before it. Returns undefined when nothing attaches,
+// so the caller inserts the paste unchanged.
 export async function resolvePastedAttachments(text: string, platform: string) {
-  const pastedContent = text.trim()
-  const whole = normalizePastedFilepath(pastedContent, platform)
-  if (/^(https?):\/\//.test(whole)) return undefined
-
-  const single = await readLocalAttachment(whole)
-  if (single) return { files: [toFilePart(whole, single)], rest: "" }
+  // Even indexes hold the pieces, odd indexes the line break or space that came between two of them.
+  const parts = text.trim().split(/(\r?\n| (?=['"]?(?:\/|[A-Za-z]:\\)))/)
+  const candidates = parts.flatMap((part, index) => {
+    const file = index % 2 === 0 ? imagePath(part, platform) : undefined
+    return file ? [{ index, file }] : []
+  })
+  if (candidates.length === 0 || candidates.length > MAX_PASTED_FILEPATHS) return undefined
 
   const files: ReturnType<typeof toFilePart>[] = []
-  const rest: string[] = []
+  const attached = new Set<number>()
   let remaining = MAX_LOCAL_ATTACHMENT_BYTES
-  for (const token of parsePastedFilepaths(pastedContent, platform)) {
-    const attachment = path.isAbsolute(token) ? await readLocalAttachment(token, remaining) : undefined
-    if (!attachment) {
-      rest.push(/\s/.test(token) ? `"${token}"` : token)
-      continue
-    }
+  for (const candidate of candidates) {
+    const attachment = await readLocalAttachment(candidate.file, remaining)
+    if (!attachment) continue
     remaining -= attachment.content.byteLength
-    files.push(toFilePart(token, attachment))
+    attached.add(candidate.index)
+    files.push(toFilePart(candidate.file, attachment))
   }
   if (files.length === 0) return undefined
-  return { files, rest: rest.join(" ") }
+  const rest = parts
+    .flatMap((part, index) => (index % 2 === 0 && !attached.has(index) ? [{ separator: parts[index - 1], part }] : []))
+    .map((kept, order) => (order === 0 ? kept.part : kept.separator + kept.part))
+    .join("")
+  return { files, rest }
+}
+
+// The file a piece names when it is an absolute path to one of the attachable image types, read after one pair of
+// outer quotes and, outside Windows, its backslash escapes are removed. A file URL counts as the path it names.
+function imagePath(piece: string, platform: string) {
+  const value = piece.trim()
+  const unquoted = /^(['"]).+\1$/.test(value) ? value.slice(1, -1) : value
+  const file = decodeFileURL(unquoted, platform) ?? (platform === "win32" ? unquoted : unquoted.replace(/\\(.)/g, "$1"))
+  if (!(platform === "win32" ? path.win32 : path.posix).isAbsolute(file)) return undefined
+  if (!mimeTypes[path.extname(file).toLowerCase()]) return undefined
+  return file
 }
 
 function toFilePart(filepath: string, attachment: LocalAttachment) {
@@ -75,14 +92,6 @@ async function readFileBounded(file: string, maxBytes: number) {
   return content
 }
 
-export function normalizePastedFilepath(value: string, platform: string) {
-  const raw = value.replace(/^['"]+|['"]+$/g, "")
-  const url = decodeFileURL(raw, platform)
-  if (url) return url
-  if (platform === "win32") return raw
-  return raw.replace(/\\(.)/g, "$1")
-}
-
 function decodeFileURL(value: string, platform: string): string | undefined {
   if (!value.startsWith("file://")) return undefined
   try {
@@ -99,59 +108,6 @@ function decodeFileURL(value: string, platform: string): string | undefined {
   } catch {
     return undefined
   }
-}
-
-export function parsePastedFilepaths(value: string, platform: string) {
-  const result: string[] = []
-  let current = ""
-  let quote = ""
-
-  function push() {
-    if (!current) return
-    result.push(decodeFileURL(current, platform) ?? current)
-    current = ""
-  }
-
-  const input = value.includes("file://")
-    ? value
-        .split(/\r?\n/)
-        .filter((line) => !line.trimStart().startsWith("#"))
-        .join("\n")
-    : value
-  for (let index = 0; index < input.length; index++) {
-    const character = input[index]
-    if (quote) {
-      if (character === quote) {
-        quote = ""
-        continue
-      }
-      if (character === "\\" && platform !== "win32" && quote === '"' && index + 1 < input.length) {
-        current += input[++index]
-        continue
-      }
-      current += character
-      continue
-    }
-    if (character === "'" || character === '"') {
-      quote = character
-      continue
-    }
-    if (character === "\\" && platform !== "win32" && index + 1 < input.length) {
-      current += input[++index]
-      continue
-    }
-    if (/\s/.test(character)) {
-      push()
-      if (result.length > MAX_PASTED_FILEPATHS) return []
-      continue
-    }
-    current += character
-  }
-
-  if (quote) return []
-  push()
-  if (result.length > MAX_PASTED_FILEPATHS) return []
-  return result
 }
 
 export async function readLocalAttachmentWith(

@@ -962,3 +962,56 @@ test("a pasted SVG path stays as typed and the file is not read, while a png pat
   expect(bodies[0]).toContain("data:image/png;base64,AQID")
   expect(bodies[0]).not.toContain("system-reminder")
 })
+
+test("a paste attaches only absolute image paths that stand alone, and the rest is sent as typed", async () => {
+  await using tmp = await tmpdir()
+  const png = `${tmp.path}/shot.png`
+  const other = `${tmp.path}/other.png`
+  await Promise.all([
+    Bun.write(png, new Uint8Array([1, 2, 3])),
+    Bun.write(other, new Uint8Array([1, 2, 3])),
+    Bun.write(`${tmp.path}/assets/logo.png`, new Uint8Array([1, 2, 3])),
+  ])
+  const bodies: string[] = []
+  await using app = await mount({
+    fetch: async (url, request) => {
+      if (url.pathname === `/api/session/${sessionID}/prompt`) {
+        bodies.push(await request.text())
+        return json({ data: { id: "msg_x" } })
+      }
+      return server(url, request)
+    },
+  })
+  // [what is pasted, the text that is sent, how many images are sent]
+  const rows: [string, string, number][] = [
+    [`compare ${png} with the mockup`, `compare ${png} with the mockup`, 0],
+    [`first line\n${png}\nthird line`, "[Image 1] first line\nthird line", 1],
+    // shot.png and assets/logo.png exist in the working folder, yet a relative path is never read.
+    ["shot.png", "shot.png", 0],
+    ["assets/logo.png", "assets/logo.png", 0],
+    ["/a/My\\ Docs/b.svg", "/a/My\\ Docs/b.svg", 0],
+    [`${png} /a/My\\ Docs/b.svg`, "[Image 1] /a/My\\ Docs/b.svg", 1],
+    [`"${png}" "${other}"`, "[Image 1] [Image 2]", 2],
+  ]
+  const before = process.cwd()
+  process.chdir(tmp.path)
+  try {
+    for (const [pasted, text, images] of rows) {
+      app.textarea().setText("")
+      await app.setup.mockInput.pasteBracketedText(pasted)
+      await Bun.sleep(150)
+      await app.setup.renderOnce()
+      app.setup.mockInput.pressEnter()
+      await Bun.sleep(300)
+      const body = JSON.parse(bodies.at(-1) ?? "{}") as { text?: string; files?: { uri?: string }[] }
+      expect({ pasted, sent: bodies.length, text: body.text?.trim(), images: body.files?.length ?? 0 }).toEqual({
+        pasted,
+        sent: rows.findIndex((row) => row[0] === pasted) + 1,
+        text,
+        images,
+      })
+    }
+  } finally {
+    process.chdir(before)
+  }
+})
