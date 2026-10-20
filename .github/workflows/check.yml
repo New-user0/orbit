@@ -96,6 +96,12 @@ jobs:
       # The tests compare file contents byte for byte, so checkouts keep the line endings agents wrote.
       - name: Configure git
         run: git config --global core.autocrlf false
+      # The Windows image has no ripgrep, and the Grep and Glob rows of the cli step search with it. Chocolatey puts a
+      # shim in its bin folder, which is already on PATH. Printing the version fails the step when the shim is missing.
+      - name: Install ripgrep
+        run: |
+          choco install ripgrep --yes --no-progress
+          rg --version
       - name: Flow package
         working-directory: packages/flow
         run: bun test
