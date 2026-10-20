@@ -1,7 +1,7 @@
 export * as Git from "./git.js"
 
 import path from "path"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath, RelativePath } from "./schema.js"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -472,16 +472,33 @@ const layer = Layer.effect(
           path.join(input.seed.commonDirectory, "objects") + "\n",
         )
         .pipe(Effect.mapError(operationError("Failed to configure shared Git objects")))
-      yield* fs
-        .copyFile(path.join(input.seed.gitDirectory, "index"), path.join(input.gitDirectory, "index"))
-        .pipe(Effect.ignore)
+      // The folder's index spares the first capture from reading every tracked file again. Git takes an entry whose size
+      // and time match the file as unchanged only when the entry is older than the index file. A copy outside Windows is
+      // newer than every entry, so a file rewritten to the same size within the second the folder's index was written
+      // would be recorded with its committed text. The copy is given the time of the index it came from, cut to the whole
+      // second, so git still reads such a file. That time is read before the copy, so that a later write to the folder's
+      // index can only make the copy look older. Without the time, there is no copy: the first capture reads every file.
+      const seedIndex = path.join(input.seed.gitDirectory, "index")
+      const index = path.join(input.gitDirectory, "index")
+      yield* Effect.gen(function* () {
+        const written = Option.getOrUndefined((yield* fs.stat(seedIndex)).mtime)
+        if (written === undefined) return
+        yield* fs.copyFile(seedIndex, index)
+        const second = new Date(Math.floor(written.getTime() / 1000) * 1000)
+        yield* fs.utimes(index, second, second)
+      }).pipe(
+        Effect.catch(() => fs.remove(index, { force: true })),
+        Effect.ignore,
+      )
       return repository
     })
 
-    // The snapshot commands that take paths (the refresh, the comparison and the restore) read them as names, through
-    // `--literal-pathspecs`. Git reads a path as a pattern by default, so a file named `[s]ub`, `*` or `:!x` would also stand
-    // for every path the pattern matches: restoring that one file would overwrite them, leaving it out of a capture would
-    // drop them from the index, adding it would add them, and git would walk folders that nobody listed.
+    // Every snapshot command that takes paths (in the refresh, the comparison and the restore) reads them as names: each
+    // passes `--literal-pathspecs`, except `check-ignore`, which refuses it and is handed each path behind `./` instead
+    // (see `ignored`). Git reads a path as a pattern by default, so a file named `[s]ub`, `*`, `:memo` or `:!x` would also
+    // stand for every path the pattern matches, or for none: restoring that one file would overwrite them or delete it,
+    // leaving it out of a capture would drop them from the index, adding it would add them, and git would walk folders
+    // that nobody listed.
     const refresh = Effect.fn("Git.index.refresh")(function* (input: {
       repository: Repository
       scope: RelativePath
@@ -578,7 +595,10 @@ const layer = Layer.effect(
               extendEnv: true,
             },
           ),
-          { stdin: input.paths.join("\0") + "\0" },
+          // `check-ignore` refuses `--literal-pathspecs`, and reads a leading `:` as pathspec magic: `:memo` would answer
+          // for `memo`, and `:!x` or `:(icase)x` would stop the command and with it the capture or comparison that asked.
+          // Behind `./` the name keeps its colon, and it is given back with the same `./` in front.
+          { stdin: input.paths.map((file) => `./${file}\0`).join("") },
         )
         .pipe(
           Effect.mapError(
@@ -597,7 +617,9 @@ const layer = Layer.effect(
           directory: input.repository.worktree,
           message: result.stderr.toString("utf8").trim() || "Failed to check ignored paths",
         })
-      return new Set(nuls(result.stdout.toString("utf8")).map((file) => RelativePath.make(file)))
+      return new Set(
+        nuls(result.stdout.toString("utf8")).map((file) => RelativePath.make(file.startsWith("./") ? file.slice(2) : file)),
+      )
     })
 
     const writeTree = Effect.fn("Git.tree.write")(function* (repository: Repository) {
@@ -720,6 +742,7 @@ const layer = Layer.effect(
 
     const hasEntry = Effect.fnUntraced(function* (repository: Repository, tree: TreeID, file: RelativePath) {
       const text = (yield* repositoryOperation("restore", repository, [
+        "--literal-pathspecs",
         "ls-tree",
         "-z",
         tree,

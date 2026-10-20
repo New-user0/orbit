@@ -2818,7 +2818,26 @@ Windows a folder named `s*` also took in the files of a folder `sub` beside it, 
 for a repository of its own (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for a
 pattern as a name").
 
+A name that starts with `:`, which only systems other than Windows allow, is a name too. Git read `:memo` and
+`:(top)memo` as `memo`, so undoing a change to such a file deleted it when there was no `memo`, and a folder that
+ignored `memo` left the file out of its snapshots. A capture or comparison that met a file named `:(icase)memo` or
+`:!memo` failed.
+
 **Affects:** folders that hold files or folders whose names git would read as a pattern.
+
+**What to do:** Nothing.
+
+### Undo keeps an edit made in the second git last wrote the folder's index
+
+Orbit's first snapshot of a folder starts from a copy of the folder's own git index. On Linux the copy used to be newer
+than every entry in it, so git took a tracked file that was rewritten to the same size within the second its index was
+last written as unchanged: the snapshot held the committed text, and undoing the next step put that text back instead
+of the edit. The copy now has the time of the index it came from, and git reads such a file again
+(`snapshot-untrusted-git.test.ts`, "Snapshot captures a tracked file rewritten in the second its folder's index was
+written").
+
+**Affects:** people on Linux who edit a tracked file within a second of a git command in a folder that Orbit has not
+taken a snapshot of before.
 
 **What to do:** Nothing.
 

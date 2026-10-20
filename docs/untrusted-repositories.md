@@ -218,16 +218,31 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     repository with the config that repository ships. The nested-repository and submodule rows also run the Git service
     by itself over the folder, whose first capture records the gitlink, and find nothing started inside it. Mutation:
     removing `--ignore-submodules=all` from the `diff-files` of `Git.index.refresh` fails those four rows.
-    The refresh (`diff-files`, `ls-files`, `rm`, `add`), the comparison and the restore pass `--literal-pathspecs`, so in
-    every folder a name that git would read as a pattern stands for that one file or folder: the rows of "Snapshot
-    reads a file name that git would take for a pattern as a name" put such a name (`[s]ub`, and `*` and `s*` outside
-    Windows) beside a file or folder `sub` that it matches. Restoring and comparing the file leave `sub` alone, a capture
-    records no large `sub` beside it, a capture that leaves it out because it is large keeps a recorded `sub`, and a
-    session started in a folder of that name records and restores only that folder's files. On Windows, where `[s]ub`
-    stands for no file inside `sub`, a session started in `[s]ub` does not walk a folder `sub` whose `.git` names a
-    share (DNS cache). Mutations: the flag removed from the restore's `checkout`, from the comparison's `diff`, from the
-    `add` or from the `rm` fails the matching rows, and removed from the `ls-files` it fails the walk row on Windows and
-    the session rows for `*` and `s*` on Linux.
+    The refresh (`diff-files`, `ls-files`, `rm`, `add`), the comparison (`diff`) and the restore (`ls-tree`,
+    `checkout`) pass `--literal-pathspecs`. `check-ignore`, which the refresh and the comparison ask to leave out what
+    the folder ignores, refuses that flag, so it is handed each path behind `./`, which keeps a leading `:` part of the
+    name. So in every folder a name that git would read as a pattern stands for that one file or folder: the rows of
+    "Snapshot reads a file name that git would take for a pattern as a name" put such a name (`[s]ub`, and `*` and `s*`
+    outside Windows) beside a file or folder `sub` that it matches. Restoring and comparing the file leave `sub` alone, a
+    capture records no large `sub` beside it, a capture that leaves it out because it is large keeps a recorded `sub`,
+    and a session started in a folder of that name records and restores only that folder's files. On Windows, where
+    `[s]ub` stands for no file inside `sub`, a session started in `[s]ub` does not walk a folder `sub` whose `.git` names
+    a share (DNS cache). Outside Windows a file named `:memo`, `:(top)memo`, `:(icase)memo` or `:!memo`, with no `memo`
+    beside it, is captured, listed and restored, and so are the first two when the folder ignores `memo`; on every
+    platform `check-ignore` answers for each of those four spellings as a name. Mutations: the flag removed from the
+    restore's `checkout`, from the comparison's `diff`, from the `add` or from the `rm` fails the matching rows, and
+    removed from the `ls-files` it fails the walk row on Windows and the session rows for `*` and `s*` on Linux; removed
+    from the restore's `ls-tree` it fails the `:memo`, `:(top)memo` and `:(icase)memo` rows; paths handed to
+    `check-ignore` without `./` fail the rows with an ignore rule, the `:(icase)memo` and `:!memo` rows and the four
+    direct rows.
+    The first capture of a trusted folder starts from a copy of the folder's own index, which tells git which tracked
+    files have not changed. Git reads a file again when its entry is from the second the index was written or later, so
+    the copy is given the time of that index, cut to the whole second; a copy that is newer than every entry would let a
+    file rewritten to the same size in that second be recorded, and restored, with its committed text. Proof: "Snapshot
+    captures a tracked file rewritten in the second its folder's index was written" (times set on the file and the
+    index, so the row runs on every platform; a rewrite a second later is the control). Mutations: giving the copy the
+    current time fails the row; a plain copy fails it on Linux, where the copy is new, and not on Windows, where it keeps
+    the time of the index it copies.
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
