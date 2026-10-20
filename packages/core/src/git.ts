@@ -473,9 +473,9 @@ const layer = Layer.effect(
         )
         .pipe(Effect.mapError(operationError("Failed to configure shared Git objects")))
       // The folder's index spares the first capture from reading every tracked file again. Git takes an entry whose size
-      // and time match the file as unchanged only when the entry is older than the index file. A copy outside Windows is
-      // newer than every entry, so a file rewritten to the same size within the second the folder's index was written
-      // would be recorded with its committed text. The copy is given the time of the index it came from, cut to the whole
+      // and time match the file as unchanged only when the entry is older than the index file. A copy can be newer than
+      // every entry (on Linux it is), so a file rewritten to the same size within the second the folder's index was
+      // written would be recorded with its committed text. The copy is given the time of the index it came from, cut to the whole
       // second, so git still reads such a file. That time is read before the copy, so that a later write to the folder's
       // index can only make the copy look older. Without the time, there is no copy: the first capture reads every file.
       const seedIndex = path.join(input.seed.gitDirectory, "index")
