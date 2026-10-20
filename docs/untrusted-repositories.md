@@ -285,7 +285,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     folder has no repository for Orbit's git, and a log line, `git not used for this folder`, names the folder to trust.
     `ProjectTrust.git` asks it for a Location before the git snapshot, the provider, `Lsp.ignored` and the undo snapshot
     (its capture and comparison) start git; it keeps git's answer until trust changes, reads the trust of each
-    folder at every call, and logs a refusal once. `Project.resolve` and `WorktreeGit` (a list or a new worktree) ask
+    folder at every call, and logs a refusal once (`test/git-trust-change.test.ts`: for the provider and `Lsp.ignored`,
+    a revoke of the folder after a call that ran git, and a revoke of the repository above a granted folder whose `.git`
+    leads there, start no further git; a trust event makes git be asked again and the refusal be logged again, and
+    until one the kept answer stands. Mutations: answering yes for a folder for good once it has fails the four revoke
+    rows; a `trust.updated` subscription that no longer clears the kept answers and refusals fails the last row).
+    `Project.resolve` and `WorktreeGit` (a list or a new worktree) ask
     `GitAccess.check` themselves, and a trusted folder that it refuses keeps the project that its files name, as before
     the grant. The flow runner asks in `Git.root` of `packages/flow`, more strictly: the three must lie in the run's
     folder or the project's folders as the server resolved them, which `orb flow run`, `orb eval` and `orb flow clean`
