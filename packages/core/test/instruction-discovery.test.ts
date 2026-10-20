@@ -1082,7 +1082,7 @@ describe("ConfigInstructionPlugin.Plugin processes the files it loads", () => {
   it.live("removes the front matter of a file that an editor saved with a byte order mark", () =>
     Effect.gen(function* () {
       const where = yield* folders
-      yield* write(where.rootFile, "﻿---\ntitle: x\n---\n<!-- note -->\nRules.\n")
+      yield* write(where.rootFile, "\uFEFF---\ntitle: x\n---\n<!-- note -->\nRules.\n")
       yield* Effect.gen(function* () {
         const discovery = yield* start()
         expect(yield* discovery.list()).toEqual([file(where.rootFile, "Rules.\n")])
@@ -1191,6 +1191,77 @@ describe("ConfigInstructionPlugin.Plugin processes the files it loads", () => {
       }).pipe(Effect.provide(layerFor(where)))
     }),
   )
+})
+
+// A clone chooses its instruction files and rules before anyone has trusted it, and the pass reads them when a session
+// starts (class 7). Each row is about 100 KB in one file of a project that is not trusted: a line with a long run of fence
+// markers or spaces and then U+2028 or U+2029, in its AGENTS.md or in the front matter of one of its rules, or a run of
+// empty lines in that front matter. The control is the same file with those characters as letters, and the row's pass
+// may take a few times the control's.
+describe("ConfigInstructionPlugin.Plugin reads a long run of markers, spaces or empty lines in time that grows with it", () => {
+  const rule = (where: Folders) => path.join(where.repo, ".orbit", "rules", "long.md")
+  const agents = (line: string) => `AGENTS MARKER\n<!-- c -->\n${line}\n`
+  const front = (line: string) => `---\n${line}\n---\nRULE MARKER\n`
+  const rows: ReadonlyArray<readonly [string, (where: Folders) => string, string, string, string]> = [
+    [
+      "a fence line of AGENTS.md",
+      (where) => where.rootFile,
+      agents(`${"`".repeat(50_000)}${"a".repeat(50_000)}\u2028z`),
+      agents("a".repeat(100_002)),
+      "AGENTS MARKER",
+    ],
+    [
+      "a list item of AGENTS.md",
+      (where) => where.rootFile,
+      agents(`- ${" ".repeat(100_000)}a\u2029z`),
+      agents("a".repeat(100_004)),
+      "AGENTS MARKER",
+    ],
+    [
+      "a front matter line of a rule",
+      rule,
+      front(`description:${" ".repeat(100_000)}b: x\u2028c`),
+      front(`description: ${"a".repeat(100_000)}b: xac`),
+      "RULE MARKER",
+    ],
+    [
+      "a run of empty lines in the front matter of a rule",
+      rule,
+      front(`a: b\n${"\n".repeat(100_000)}c: d`),
+      front(`a: b\nk: ${"x".repeat(100_000)}\nc: d`),
+      "RULE MARKER",
+    ],
+  ]
+  for (const [name, target, hostile, control, marker] of rows)
+    it.live(
+      `${name}, in a project that is not trusted`,
+      () =>
+        Effect.gen(function* () {
+          const pass = (text: string) =>
+            Effect.gen(function* () {
+              const where = yield* folders
+              yield* write(target(where), text)
+              // Processor time: the pass waits on the disk, and the wall clock also counts the other test processes.
+              const processor = process.cpuUsage()
+              const sent = yield* Effect.gen(function* () {
+                const discovery = yield* start()
+                return (yield* readBody(yield* discovery.load())).text
+              }).pipe(Effect.provide(layerFor(where, { trusted: false })))
+              const used = process.cpuUsage(processor)
+              return { ms: (used.user + used.system) / 1_000, sent }
+            })
+          const letters = yield* pass(control)
+          const separated = yield* pass(hostile)
+          expect(letters.sent).toContain(marker)
+          expect(separated.sent).toContain(marker)
+          // Mutation: dropping the `s` flag of `fenceOpening`, of `listItem` or of the line match in
+          // `ConfigMarkdown.sanitize` takes its row from a few hundred milliseconds of processor time to more than 20
+          // seconds, and reading front matter through gray-matter's own reader again takes the row of empty lines to
+          // about 5 seconds.
+          expect(separated.ms).toBeLessThan(letters.ms * 4 + 1_000)
+        }),
+      120_000,
+    )
 })
 
 describe("ConfigInstructionPlugin.Plugin applies instructions_exclude", () => {

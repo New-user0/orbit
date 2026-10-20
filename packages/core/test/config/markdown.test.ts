@@ -1,4 +1,5 @@
 import path from "path"
+import matter from "gray-matter"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { ConfigMarkdown } from "@orbit/core/config/markdown"
@@ -50,6 +51,101 @@ describe("ConfigMarkdown", () => {
   test("skips a file whose front matter cannot be read, every time", () => {
     const content = "---\nmetadata: [\n---\nBody."
     expect(Array.from({ length: 2 }, () => ConfigMarkdown.parseOption(content))).toEqual([undefined, undefined])
+  })
+
+  // The lines of the block are split at LF and CRLF, so a line can hold a lone CR, U+2028 or U+2029, and its value is read
+  // to the end of the line like any other. The U+0085 row is a control: a plain `.` always took that character. Mutation:
+  // dropping the `s` flag of the line match in `sanitize` leaves those lines as they were written, and the first three
+  // rows read nothing.
+  const separated: ReadonlyArray<readonly [string, string, string]> = [
+    ["U+2028", "---\ndescription: Use when: a\u2028b\n---\nBody.", "Use when: a\u2028b"],
+    ["U+2029", "---\ndescription: Use when: a\u2029b\n---\nBody.", "Use when: a\u2029b"],
+    ["a CR before the CRLF", "---\r\ndescription: Use when: it fits\r\r\n---\r\nBody.", "Use when: it fits"],
+    ["U+0085", "---\ndescription: Use when: a\u0085b\n---\nBody.", "Use when: a\u0085b"],
+  ]
+  for (const [spelling, content, description] of separated)
+    test(`quotes the colons of a value that holds ${spelling}`, () => {
+      expect(ConfigMarkdown.parseOption(content)?.data).toEqual({ description })
+    })
+
+  // A run of spaces or tabs before a value that holds a separator, and a block with a long run of empty lines, each
+  // against a control of letters as long. The work is synchronous, so it runs in a child process with a deadline.
+  test("reads a front matter line or block in time that grows with its length, whatever separator it holds", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "front-matter-line-stress.ts")],
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 60_000)
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    const report = JSON.parse(out) as { readonly name: string; readonly hostile: number; readonly control: number }[]
+    // Mutation: dropping the `s` flag of the line match in `sanitize` takes the lone CR, U+2028 and U+2029 line rows from
+    // about a millisecond to seconds each, and the child's deadline kills the run. Reading through gray-matter's own
+    // reader again (`matter(content, options)` in `read`) takes the rows of empty lines from a few milliseconds to
+    // seconds each.
+    const rows = report.filter((item) => item.name.startsWith("parseOption"))
+    expect(rows).toHaveLength(17)
+    expect(rows.filter((item) => item.hostile >= item.control * 4 + 250)).toEqual([])
+  }, 90_000)
+
+  // `read` finds and reads the block as gray-matter 4 did with the JavaScript engine refused, so every reader keeps the
+  // data and the text it had. Each generated file is read both ways, with and without the indicator retry.
+  test("reads every file as gray-matter does, data, text and refusals", () => {
+    const options = {
+      engines: {
+        javascript: () => {
+          throw new Error("JavaScript front matter is not supported")
+        },
+      },
+    }
+    // The reader that `parse` had before, with the same retries.
+    const before = (content: string, indicators: boolean) => {
+      const attempt = (text: string) => {
+        const file = matter(text, options)
+        return { data: file.data, content: file.content }
+      }
+      try {
+        return attempt(content)
+      } catch {
+        try {
+          return attempt(ConfigMarkdown.sanitize(content))
+        } catch {
+          if (!indicators) return undefined
+          try {
+            return attempt(ConfigMarkdown.sanitize(content, true))
+          } catch {
+            return undefined
+          }
+        }
+      }
+    }
+    let seed = 7
+    const pick = <T>(items: readonly T[]) => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      return items[Math.floor((seed / 4294967296) * items.length)]!
+    }
+    const openers = ["---", "---\n", "---\r\n", "---yaml\n", "--- yaml \n", "---YML\n", "---json\n", "---JSON\n", "---js\n",
+      "--- js\n", "---coffee\n", "----\n", "\uFEFF---\n", "", "x\n---\n", "---  \n", "---yaml", "---json", "--- \n"]
+    const lines = ["a: b", "a: b: c", "# c", "#", "  # c", "\t# c", "#c", "", " ", "-", "- a", "[", "{", '{"a": 1}', "'a'",
+      "|", "  x", "key: |", "  line", "!!js/function >", "&a 1", "*a", "paths: **/*.ts", "description: Use when: x",
+      "\u2028", "\u00a0# c", "\u2028# c", "\r", "---", "--- x", "x: 1\r", "\u0085", "@a", "? a", "1", "null", "[1, 2]"]
+    const breaks = ["\n", "\n", "\r\n", "\r", "\u2028"]
+    const closers = ["\n---\n", "\n---", "\r\n---\r\n", "\n--- x\n", "\n----\n", "", "\n---\nbody\n", "\n---\n\n\nbody"]
+    const differences = Array.from({ length: 4_000 }, () => {
+      const block = Array.from({ length: pick([0, 1, 2, 3, 4, 5, 6, 7]) }, () => pick(lines)).join(pick(breaks))
+      return pick(openers) + block + pick(closers) + pick(["", "Body.", "\r\nBody", "x\n---\ny"])
+    }).flatMap((content) =>
+      [false, true].flatMap((indicators) => {
+        const after = ConfigMarkdown.parseOption(content, indicators)
+        const found = after && { data: after.data, content: after.content }
+        return Bun.deepEquals(found, before(content, indicators)) ? [] : [{ content, indicators }]
+      }),
+    )
+    // Mutation: `read` taking a `#` with nothing after it on its line for a comment, a CR or U+2028 for the end of a
+    // comment, an unknown language for YAML, or a JSON block with only comments for JSON, gives rows here.
+    expect(differences).toEqual([])
   })
 })
 
