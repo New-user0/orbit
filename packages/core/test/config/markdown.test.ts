@@ -39,6 +39,26 @@ describe("ConfigMarkdown", () => {
     })
   }
 
+  // gray-matter's YAML engine is js-yaml's safe schema, which has no `!!js/` types. js-yaml's full schema builds a function
+  // with `new Function` from `!!js/function` (js-yaml 3 brings esprima, which it needs for that), a RegExp from
+  // `!!js/regexp` and `undefined` from `!!js/undefined`, out of a file that a clone ships.
+  const tagged: ReadonlyArray<readonly [string, string]> = [
+    ["!!js/function, quoted", "key: !!js/function 'function () { return 1 }'"],
+    ["!!js/function, folded", "key: !!js/function >\n  function () { return 1 }"],
+    ["!!js/regexp", "key: !!js/regexp /a/"],
+    ["!!js/undefined", "key: !!js/undefined ''"],
+  ]
+  for (const [tag, line] of tagged)
+    test(`refuses the JavaScript type ${tag} of YAML, and reads it as text only when asked`, () => {
+      // Mutation: reading the block with js-yaml's `load` (its full schema) in place of gray-matter's YAML engine reads
+      // every row, the two `!!js/function` rows as functions.
+      const content = `---\n${line}\n---\nBody.`
+      expect(ConfigMarkdown.parseOption(content)).toBeUndefined()
+      // The control: the indicator retry quotes the value, so the same block reads as text.
+      const values = Object.values(ConfigMarkdown.parseOption(content, true)?.data ?? {})
+      expect(values.map((value) => typeof value)).toEqual(["string"])
+    })
+
   // gray-matter keeps what it parsed by content, and keeps a parse that failed as if it had worked.
   test("reads a file that needs its colons quoted the same way every time", () => {
     const content = "---\ndescription: Use when: it fits\n---\nBody."
@@ -127,7 +147,8 @@ describe("ConfigMarkdown", () => {
       return items[Math.floor((seed / 4294967296) * items.length)]!
     }
     const openers = ["---", "---\n", "---\r\n", "---yaml\n", "--- yaml \n", "---YML\n", "---json\n", "---JSON\n", "---js\n",
-      "--- js\n", "---coffee\n", "----\n", "\uFEFF---\n", "", "x\n---\n", "---  \n", "---yaml", "---json", "--- \n"]
+      "--- js\n", "---coffee\n", "----\n", "\uFEFF---\n", "", "x\n---\n", "---  \n", "---yaml", "---json", "--- \n",
+      "---\u00A0\n", "---\u2028\n", "---\u000b\n"]
     const lines = ["a: b", "a: b: c", "# c", "#", "  # c", "\t# c", "#c", "", " ", "-", "- a", "[", "{", '{"a": 1}', "'a'",
       "|", "  x", "key: |", "  line", "!!js/function >", "&a 1", "*a", "paths: **/*.ts", "description: Use when: x",
       "\u2028", "\u00a0# c", "\u2028# c", "\r", "---", "--- x", "x: 1\r", "\u0085", "@a", "? a", "1", "null", "[1, 2]"]
@@ -144,7 +165,9 @@ describe("ConfigMarkdown", () => {
       }),
     )
     // Mutation: `read` taking a `#` with nothing after it on its line for a comment, a CR or U+2028 for the end of a
-    // comment, an unknown language for YAML, or a JSON block with only comments for JSON, gives rows here.
+    // comment, an unknown language for YAML, or a JSON block with only comments for JSON, gives rows here. So does
+    // cutting from the block an opener line of whitespace that YAML does not skip (NBSP, U+2028, VT), which gray-matter
+    // keeps in the block because its language is empty.
     expect(differences).toEqual([])
   })
 })
