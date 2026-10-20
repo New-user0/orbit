@@ -1,3 +1,4 @@
+import { heading, neutralize } from "@orbit/util/reminder-text"
 import type { LocationRef, SessionMessageInfo, SessionStructuredError, SessionTurnOptions } from "@orbit/client/promise"
 import { jsonLine } from "@orbit/flow/plain"
 import { SessionMessage } from "@orbit/schema/session-message"
@@ -70,7 +71,8 @@ export async function prepareFile(file: File) {
   const content = file.url.startsWith("data:")
     ? Buffer.from(file.url.slice(file.url.indexOf(",") + 1), "base64").toString("utf8")
     : await readFile(new URL(file.url), "utf8")
-  return { text: `<file name="${file.filename}">\n${content}\n</file>` }
+  // The text joins the prompt as written by the person, so reminder look-alikes in the file are defused here.
+  return { text: `<file name="${heading(file.filename)}">\n${neutralize(content)}\n</file>` }
 }
 
 // The notice that the runner publishes when it raises the output limit and answers again, with the message it replaces.

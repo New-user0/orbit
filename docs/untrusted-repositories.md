@@ -2628,7 +2628,7 @@ The program-wide register of every follow-up, these gaps included, with each one
 - **Envelope look-alikes are escaped at the sinks `reminder-text.ts` is called from, and at no others.** While a request
   is lowered, `ReminderText.neutralize` escapes the opening bracket of a `<system-reminder>` or `<system-update>` tag in
   tool results and tool errors (local and MCP, including a wrapped error's response body, and a text or JSON file in a result, such as an MCP resource: its base64 data URL is decoded, escaped and encoded again, while images and PDFs stay byte for byte), text and directory
-  attachments (an ACP editor's embedded text resource is sent as one) and an attached file's location, the Code Mode
+  attachments (an ACP editor's embedded text resource is sent as one; a text file from `orb run -f`, stream-json `files` or Mini's initial files is escaped inline) and an attached file's location, the Code Mode
   tool listing (MCP tool descriptions; baseline and updates), a tool result's text parts together (an adapter joins them
   with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
