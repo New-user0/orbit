@@ -210,6 +210,83 @@ test("a run is cleaned up with its branch when git lists its worktree under a li
   )
 })
 
+// A clone can ship .orbit, .orbit/worktrees or a run's folder as a link (or, on Windows, a person can find a junction
+// there), and the run store names the run. Each row links one of them to a folder beside the repository that holds a
+// person's own worktree, with work not committed, where the run's folder would be under the link. Clean removes nothing
+// then: not the person's worktree, not the folder the link leads to, not the run's branch. The control row has no link
+// and the run's own worktree in the same place, and clean removes it with its branch.
+test("a run whose folder is reached through a link is left alone with everything it leads to", async () => {
+  const run = "run_20260101000040_0a1b2c"
+  const rows = [
+    { name: "orbit", link: ".orbit" },
+    { name: "worktrees", link: path.join(".orbit", "worktrees") },
+    { name: "run", link: path.join(".orbit", "worktrees", run) },
+    { name: "control", link: undefined },
+  ]
+
+  const results = await Promise.all(
+    rows.map(async (row) => {
+      const directory = await repository(path.join(`linked-${row.name}`, "repo"))
+      const side = path.join(path.dirname(directory), "side")
+      const branch = `orbit/${run}/build`
+      const kept = (await Git.git(directory, ["branch", branch])).code
+      if (row.link === undefined) {
+        await Git.worktree(directory, run, "mine", await Git.head(directory))
+        await Bun.write(path.join(directory, ".orbit", "worktrees", run, "mine", "uncommitted.txt"), "precious\n")
+      }
+      // Where the person's worktree is: under the folder the link leads to, at the path the run's folder has below it.
+      const mine =
+        row.link === undefined
+          ? path.join(directory, ".orbit", "worktrees", run, "mine")
+          : path.join(side, path.relative(path.join(directory, row.link), path.join(directory, ".orbit", "worktrees", run)), "mine")
+      if (row.link !== undefined) {
+        await Git.git(directory, ["worktree", "add", "-q", "-b", "mine", mine])
+        await Bun.write(path.join(mine, "uncommitted.txt"), "precious\n")
+        await fs.mkdir(path.dirname(path.join(directory, row.link)), { recursive: true })
+        await fs.symlink(side, path.join(directory, row.link), process.platform === "win32" ? "junction" : "dir")
+      }
+
+      const cleaned = await Git.clean(directory, run)
+
+      const branches = (await Git.git(directory, ["for-each-ref", "--format=%(refname:short)", `refs/heads/orbit/${run}/`]))
+        .stdout.split("\n")
+        .filter(Boolean)
+      const listed = (await Git.git(directory, ["worktree", "list", "--porcelain"])).stdout
+        .split("\n")
+        .filter((line) => line.startsWith("worktree ")).length
+      return {
+        name: row.name,
+        kept,
+        cleaned,
+        file: await fs.exists(path.join(mine, "uncommitted.txt")),
+        side: await fs.exists(side),
+        branches: branches.length,
+        listed,
+      }
+    }),
+  )
+
+  // `refused` is the link as clean names it: under the repository's real path.
+  const real = async (name: string, link: string) => path.join(await fs.realpath(path.join(root, `linked-${name}`, "repo")), link)
+  expect(results).toEqual(
+    await Promise.all(
+      rows.map(async (row) =>
+        row.link === undefined
+          ? { name: row.name, kept: 0, cleaned: { worktrees: 1, branches: 2 }, file: false, side: false, branches: 0, listed: 1 }
+          : {
+              name: row.name,
+              kept: 0,
+              cleaned: { worktrees: 0, branches: 0, refused: await real(row.name, row.link) },
+              file: true,
+              side: true,
+              branches: 1,
+              listed: 2,
+            },
+      ),
+    ),
+  )
+})
+
 // A worktree can sit on a drive that is no longer there (a removed disk, or a `subst` drive that went away), and git
 // lists it until it is pruned. Its path has no folder up to its drive that exists.
 test.skipIf(process.platform !== "win32")("a worktree listed on a drive that is gone leaves a run's clean working", async () => {

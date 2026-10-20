@@ -45,6 +45,8 @@ export default Runtime.handler(
       const total = { worktrees: 0, branches: 0 }
       for (const run of selected) {
         const item = await Git.clean(repository, run.id)
+        if (item.refused !== undefined)
+          process.stderr.write(`Left run ${plain(run.id)} alone: ${plain(item.refused)} is a link, not a folder${EOL}`)
         total.worktrees += item.worktrees
         total.branches += item.branches
       }

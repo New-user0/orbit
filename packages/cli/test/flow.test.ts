@@ -717,6 +717,37 @@ test("orb flow clean in a clone whose run store names runs like paths leaves eve
   expect(await Bun.file(path.join(repository, ".orbit", "runs.db")).exists()).toBe(true)
 }, 120_000)
 
+// A clone can ship a run's folder under .orbit/worktrees as a link to a folder outside it. `orb flow clean` leaves that
+// run alone, with its branch and the folder the link leads to, says so in one line, and still cleans the other run.
+test("orb flow clean leaves a run whose folder is a link alone, says so, and cleans the others", async () => {
+  const repository = await repo("linked-clean")
+  const side = path.join(root, "linked-clean-side")
+  await Bun.write(path.join(side, "precious.txt"), "keep\n")
+  const linked = "run_20260101000041_0a1b2c"
+  const plainRun = "run_20260101000042_0a1b2c"
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  for (const id of [linked, plainRun]) {
+    store.create({ id, workflow: "w", file: "w.ts", directory: repository, input: {} })
+    store.status(id, "succeeded")
+    await Bun.spawn(["git", "branch", `orbit/${id}/build`], { cwd: repository, stdout: "ignore", stderr: "ignore" }).exited
+  }
+  store.close()
+  await fs.mkdir(path.join(repository, ".orbit", "worktrees"), { recursive: true })
+  await fs.symlink(side, path.join(repository, ".orbit", "worktrees", linked), process.platform === "win32" ? "junction" : "dir")
+
+  const cleaned = await orb(repository, ["flow", "clean", "--standalone", "--trust"])
+
+  expect(cleaned.code).toBe(0)
+  expect(cleaned.stdout).toContain("Removed 0 worktree(s) and 1 branch(es) from 2 run(s)")
+  expect(cleaned.stderr.split(/\r?\n/).filter((line) => line.startsWith("Left run"))).toEqual([
+    `Left run ${linked} alone: ${path.join(await fs.realpath(repository), ".orbit", "worktrees", linked)} is a link, not a folder`,
+  ])
+  const branches = Bun.spawnSync(["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/orbit/"], { cwd: repository })
+  expect(branches.stdout.toString().trim()).toBe(`orbit/${linked}/build`)
+  expect(await Bun.file(path.join(side, "precious.txt")).text()).toBe("keep\n")
+}, 120_000)
+
 test("orb flow prints what a run store says without the characters that act on a terminal", async () => {
   const repository = await repo("hostile-text")
   const id = "run_20260101000006_0a1b2c"

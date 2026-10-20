@@ -418,10 +418,6 @@ managed `agents.<name>.permissions` gives an agent now apply to that agent too; 
   cannot say whether bypass is allowed gets the same treatment: the mode is ignored, with a notice. (An earlier build
   stopped these commands with an error; the rows of `test/managed-bypass.test.ts` pin the new behaviour.)
 - `GET /api/config/effective` also reports `permissions: { bypass, always }`, so clients can read these switches.
-- `orb flow clean` now compares a worktree's folder with the run's folder by the real path of each, so a run's
-  worktrees and branches are removed when the repository path is spelled with other case or, on Windows, with the 8.3
-  short name of one of its folders (as a temporary folder under `C:\Users\RUNNER~1` is). Before, the worktree was
-  left in place and deleting its branch failed.
 
 Bypass is refused by the clients until a durable permission mode in the server reads the managed settings itself.
 
@@ -1751,6 +1747,21 @@ The status line command's `vim_mode` is now also `visual` and `visual_line`.
 **Affects:** people who set `prompt.vim` to `true`, and status line commands that read `vim_mode`.
 
 **What to do:** Nothing. A status line script that expects only `insert` and `normal` should accept the two new values.
+
+### `orb flow clean` finds a run by the repository's real path and leaves a linked run folder alone
+
+`orb flow clean` used to match the worktrees that git lists against the run's folder as you spelled the repository's
+path, so on Windows a path with other case, or with the 8.3 short name of one of its folders (a temporary folder under
+`C:\Users\RUNNER~1`, say), found nothing: the run's worktree stayed and deleting its branch failed. It now takes the
+repository by its real path. The run's folder is named under that path and is not itself resolved, and when
+`.orbit`, `.orbit/worktrees` or the run's folder is a link or a junction, the command removes nothing for that run, not
+even its branches, and prints one line naming the link. Before, such a link could lead clean to a folder outside
+`.orbit/worktrees` and have it remove a worktree of yours there, with work you had not committed.
+
+**Affects:** people who run `orb flow clean` from a path spelled with other case or a short name, and repositories in
+which one of those folders is a link.
+
+**What to do:** nothing. If clean names a link, remove the link and run it again.
 
 ## Permissions
 
