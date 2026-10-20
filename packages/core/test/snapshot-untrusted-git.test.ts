@@ -769,11 +769,10 @@ describe("Snapshot reads a file name that git would take for a pattern as a name
   // git matches. Only the restore's lookup of a file in the snapshot (`ls-tree`) and the question of which paths are
   // ignored (`check-ignore`) can tell; every other command already reads names. Windows allows no `:` in a file name, so
   // the last row asks `check-ignore` there directly, with paths alone.
-  // Mutations: `--literal-pathspecs` removed from the restore's `ls-tree` fails the `:memo` and `:(top)memo` rows (the
-  // restore deletes the file) and the `:(icase)memo` row (the restore stops); `:!memo` there stands for every other
-  // entry, so the file is still found. `ignored` handing the paths to `check-ignore` without `./` fails the rows with an
-  // ignore rule (the file is left out as if ignored), the `:(icase)memo` and `:!memo` rows (the capture stops), and the
-  // direct rows of the four spellings, on Windows as well.
+  // Mutations (Linux): `--literal-pathspecs` removed from the restore's `ls-tree` fails all six rows (the restore does
+  // not find the file and deletes it, or stops). `ignored` handing the paths to `check-ignore` without `./` fails the
+  // rows with an ignore rule (the file is left out as if ignored), the `:(icase)memo` and `:!memo` rows (the capture
+  // stops), and the direct rows of the four spellings, which fail on Windows as well.
   const colons = [
     [":memo", false],
     [":(top)memo", false],

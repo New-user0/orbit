@@ -232,9 +232,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     platform `check-ignore` answers for each of those four spellings as a name. Mutations: the flag removed from the
     restore's `checkout`, from the comparison's `diff`, from the `add` or from the `rm` fails the matching rows, and
     removed from the `ls-files` it fails the walk row on Windows and the session rows for `*` and `s*` on Linux; removed
-    from the restore's `ls-tree` it fails the `:memo`, `:(top)memo` and `:(icase)memo` rows; paths handed to
-    `check-ignore` without `./` fail the rows with an ignore rule, the `:(icase)memo` and `:!memo` rows and the four
-    direct rows.
+    from the restore's `ls-tree` it fails all six leading-colon rows on Linux; paths handed to `check-ignore` without
+    `./` fail the rows with an ignore rule, the `:(icase)memo` and `:!memo` rows and the four direct rows.
     The first capture of a trusted folder starts from a copy of the folder's own index, which tells git which tracked
     files have not changed. Git reads a file again when its entry is from the second the index was written or later, so
     the copy is given the time of that index, cut to the whole second; a copy that is newer than every entry would let a
