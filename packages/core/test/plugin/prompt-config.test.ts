@@ -189,7 +189,7 @@ describe("PromptConfigPlugin", () => {
         "Output style: reviewer",
       ])
       // The secrets rule of the git section outlasts the dropped coding sections.
-      expect(text.indexOf("likely to be a secret or credential")).toBeGreaterThan(
+      expect(text.indexOf("looks like it holds a key, a token or a password")).toBeGreaterThan(
         text.indexOf(SessionSystemPrompt.GIT_HEADING),
       )
     }),

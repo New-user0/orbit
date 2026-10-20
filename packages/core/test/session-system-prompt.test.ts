@@ -75,7 +75,8 @@ describe("the git and pull request section", () => {
       "force push",
       "one aimed at the default branch gets a warning",
       "amend a commit",
-      "likely to be a secret or credential",
+      "looks like it holds a key, a token or a password stays unstaged",
+      "told the user what it seems to contain and they still want it",
       "message convention visible in the repository's recent history",
       "record the motivation",
       "`gh` CLI",
@@ -360,10 +361,10 @@ describe("the base system prompt", () => {
         [
           "examples",
           [
-            "an action that loses something",
-            "that others rely on",
-            "that leaves the machine",
-            "posting, commenting, messaging, pushing, sending content to an online service",
+            "Three kinds of action wait for a yes even when they look routine",
+            "can destroy work beyond recovery",
+            "changes what other people build on",
+            "sends anything off this machine",
           ],
         ],
         [
@@ -397,11 +398,14 @@ describe("the base system prompt", () => {
     test("Scope, Working in code and Evidence carry the rules on judgment, comments and honest results", () => {
       const prompt = SessionSystemPrompt.make([])
       const scope = section(prompt, "Scope")
-      expect(scope).toContain("whether it is too big is the user's call")
-      expect(scope).toContain("rests on a mistaken assumption")
+      expect(scope).toContain("Size alone is no reason to decline: the user decides how much to take on")
+      expect(scope).toContain("any premise of the request that the code contradicts")
+      expect(scope).toContain("any bug you come across that the task does not cover")
+      expect(scope).toContain("When the task cannot be done as asked, set out the options")
+      expect(scope).toContain("Nothing that is provably unused survives in the diff")
       expect(scope).toContain("Follow the user's and the project's instruction files, which appear later in this prompt")
       expect(scope).toContain("The diff holds what was asked and nothing else")
-      expect(scope).toContain("vague or generic is still software work on the code in the working folder")
+      expect(scope).toContain("The code in this folder is what every request is about, however loosely it is worded")
       expect(scope).toContain("validate where outside data comes in, not again behind it")
       expect(scope).toContain("Finish what you start, or report it as unfinished")
       const work = section(prompt, "Working in code")
@@ -412,7 +416,12 @@ describe("the base system prompt", () => {
       expect(work).toContain("a reader of the code could not recover alone")
       expect(work).toContain("Task history never goes into a comment")
       // An old comment is kept as a possible record of a constraint or a bug, not taken for proof that something went wrong.
-      expect(work).toContain("Existing comments stay unless their code goes or they are shown to be wrong")
+      expect(work).toContain("Keep the comments that are already there")
+      expect(work).toContain("Removing the code a comment explains takes the comment with it")
+      expect(work).toContain("a comment the code proves false is fixed or dropped")
+      expect(work).toContain("a guide, a summary or any other docs file waits for the user to ask")
+      expect(work).toContain("outside values are escaped or parameterized before anything interprets them")
+      expect(work).toContain("A security hole of your own making is repaired before you move on")
       expect(work).toContain("Code outside your change is left exactly as found")
       const evidence = section(prompt, "Evidence")
       expect(evidence).toContain("Say only what you observed")

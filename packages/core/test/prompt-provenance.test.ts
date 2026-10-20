@@ -136,6 +136,16 @@ describe("retired wording", () => {
     ["the worktree capitals", /STAY IN IT|NEVER cd/],
     ["the scratchpad capitals", /ALL temporary files/],
     ["the simple-question frame", /question gets (a|one)/i],
+    // Round 12 of the M4 verification: the passages that kept a reference sentence's slots or its example lists.
+    ["the risky-action examples", /uncommitted changes, files|shared infrastructure|online service|forced pushes|hard resets|uploads to online/i],
+    ["the subagent care heading", /with care/i],
+    ["the false-premise and nearby-bug line", /mistaken assumption|next to the code|defect beside|defect sits/i],
+    ["the loose-request line", /vague or generic|ambitious|too big/i],
+    ["the kept-comments rule", /Existing comments stay unless/],
+    ["the docs-file clause", /documentation or README files/],
+    ["the secure-code line", /safe by default|safe against injection|common weaknesses|similar weaknesses|as soon as you see it/i],
+    ["the unused-code line", /dead is deleted outright/],
+    ["the commit secrets step", /likely to be a secret|warn them first/i],
   ]
 
   test.each(retiredWording.flatMap(([cell, pattern]) => rows(everyText).map(([name, text]) => [`${cell}: ${name}`, pattern, text] as const)))(
@@ -220,7 +230,8 @@ describe("the new wording stays", () => {
     ["unrun work is unverified", "Until you have run the work and read the output, it is unverified"],
     ["a clean run is stated once", "A clean run is stated once, in a plain sentence"],
     ["clarity over brevity", "Clarity beats brevity, but do not pad or inflate a small result"],
-    ["vague requests are code work", "A request that is vague or generic is still software work on the code in the working folder"],
+    ["loose requests are code work", "The code in this folder is what every request is about, however loosely it is worded"],
+    ["size is the user's call", "Size alone is no reason to decline: the user decides how much to take on"],
     ["checks sit where outside data enters", "validate where outside data comes in, not again behind it"],
     ["word anchors", "in about 25 words"],
   ]

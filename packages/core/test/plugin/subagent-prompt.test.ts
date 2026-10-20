@@ -268,8 +268,12 @@ describe("SubagentPromptPlugin", () => {
       "What a hook reports or decides is the user's word",
       "A declined call is not sent again in the same form",
       "Read the code before changing it",
-      "(posts, comments, messages, pushes, commits, pull requests, uploads to online services)",
-      "unless the brief explicitly asks for it, do not take an action that loses something",
+      "# Left to the caller",
+      "three kinds of action stay undone unless the brief names them",
+      "can destroy work beyond recovery",
+      "changes what other people build on",
+      "sends anything off this machine",
+      "Commits, pushes and pull requests wait for the brief too",
     ])
       expect([anchor, SUBAGENT.includes(anchor)]).toEqual([anchor, true])
     expect(SessionSystemPrompt.SUBAGENT_REPORT).toContain("no emojis")
