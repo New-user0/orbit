@@ -5,7 +5,7 @@ import type { Entry } from "@orbit/schema/config"
 import { Glob } from "@orbit/util/glob"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import { basename, dirname, extname, posix, relative, win32 } from "path"
 import { ConfigMarkdown } from "./markdown.js"
 
@@ -1112,25 +1112,32 @@ export function isRuleName(name: string) {
  * rule has none and so applies from the start: no front matter, no key, a key that is not a string or a list of strings,
  * nothing left once the patterns are cleaned up, or only patterns that match everything. Braces are expanded
  * (`src/*.{ts,tsx}` is two patterns) because the matcher has none, and a trailing `/**` goes because a folder pattern already
- * covers what is below it. The block is parsed by `ConfigMarkdown.parseOption` and nothing else, so no front matter language
+ * covers what is below it. The block is parsed by `ConfigMarkdown.parse` and nothing else, so no front matter language
  * is evaluated. `malformed` is set when the block does not parse, which also makes the rule apply from the start: the text is
- * the folder's own, and the only thing lost is the condition. Reading the key stops once `RULE_WORK` is spent, whatever the
- * file repeats through aliases or spells out through braces: what was kept by then is the rule's list, and a rule that had
- * kept nothing waits and matches nothing.
+ * the folder's own, and the only thing lost is the condition. A block whose aliases come to more than its text
+ * (`ConfigMarkdown.Oversized`) is refused before the key is read, and the rule waits and matches nothing. Reading the key
+ * stops once `RULE_WORK` is spent, whatever the file spells out through braces or repeats through the aliases its text
+ * allows: what was kept by then is the rule's list, and a rule that had kept nothing waits and matches nothing.
  */
 export function rulePatterns(frontmatter: string | undefined): {
   readonly patterns: readonly string[] | undefined
   readonly malformed: boolean
-  /** How many patterns were left out for a cap or because the matcher does not take them. What the work allowance left unread counts as one. */
+  /**
+   * How many patterns were left out for a cap or because the matcher does not take them. What the work allowance left
+   * unread counts as one, and so does a block refused for its aliases.
+   */
   readonly dropped: number
 } {
   if (frontmatter === undefined) return { patterns: undefined, malformed: false, dropped: 0 }
   // The block is read with plain delimiters, whatever spaces followed the dashes on the file's own lines.
   const lines = frontmatter.replaceAll("\r\n", "\n").split("\n")
   const end = lines.findLastIndex((line) => /^---[ \t]*$/.test(line))
-  const parsed = ConfigMarkdown.parseOption(`---\n${lines.slice(1, end).join("\n")}\n---\n`, true)
-  if (parsed === undefined) return { patterns: undefined, malformed: true, dropped: 0 }
-  const value: unknown = parsed.data["paths"]
+  const parsed = Result.try(() => ConfigMarkdown.parse(`---\n${lines.slice(1, end).join("\n")}\n---\n`, true))
+  if (Result.isFailure(parsed))
+    return parsed.failure instanceof ConfigMarkdown.Oversized
+      ? { patterns: [], malformed: false, dropped: 1 }
+      : { patterns: undefined, malformed: true, dropped: 0 }
+  const value: unknown = parsed.success.data["paths"]
   const strings =
     typeof value === "string"
       ? [value]

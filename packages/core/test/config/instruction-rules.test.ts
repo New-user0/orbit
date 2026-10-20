@@ -85,10 +85,12 @@ describe("ConfigInstructionFile.rulePatterns", () => {
       readonly kept: number
       readonly dropped: number
     }[]
-    // Each row is a value and whether it reaches the cap of kept patterns. The rows that keep nothing are stopped by the
-    // allowance alone, and each costs a few milliseconds of processor time with it. Mutation: counting only kept patterns,
-    // as before (no allowance in the split or the expansion), takes from about a second (droppedList) to tens of seconds
-    // (aliasedCommas) for each of those rows, and the child's deadline kills the run.
+    // Each row is a value and whether it reaches the cap of kept patterns. The aliased rows come to more than their text,
+    // so their block is refused before `paths` is read (`ConfigMarkdown.Oversized`) and they keep nothing whatever the
+    // allowance does. The other rows that keep nothing are stopped by the allowance alone, and each costs a few
+    // milliseconds of processor time with it. Mutation: counting only kept patterns, as before (no allowance in the split
+    // or the expansion), takes 0.6 to 0.9 seconds of processor time for droppedList and emptyList, and emptyList drops
+    // nothing. Deleting the refusal in `ConfigMarkdown.read` hands the aliased rows back to the allowance, which stops them.
     const rows: ReadonlyArray<readonly [string, boolean]> = [
       ["commaString", true],
       ["commaList", true],
@@ -116,19 +118,20 @@ describe("ConfigInstructionFile.rulePatterns", () => {
 
   test("keeps what it had kept when the work allowance runs out, and waits when that is nothing", () => {
     const anchor = `s: &s "${"{,}".repeat(340)}"\n`
-    const aliases = Array(2_000).fill("*s").join(", ")
-    // Mutation: without the allowance every alias is expanded, `c` is reached, and the rule of empty spellings alone keeps
-    // only `c` (and would apply from the start without it).
-    expect(ConfigInstructionFile.rulePatterns(front(`${anchor}paths: [a, b, ${aliases}, c]`))).toEqual({
+    // Two aliases come to less than the text allows, and each spends most of the allowance on its empty spellings.
+    // Mutation: without the allowance every alias is expanded, `c` is reached, and the rule keeps `a`, `b` and `c`.
+    expect(ConfigInstructionFile.rulePatterns(front(`${anchor}paths: [a, b, *s, *s, c]`))).toEqual({
       patterns: ["a", "b"],
       malformed: false,
       dropped: 1,
     })
-    expect(ConfigInstructionFile.rulePatterns(front(`${anchor}paths: [${aliases}, c]`))).toEqual({
-      patterns: [],
-      malformed: false,
-      dropped: 1,
-    })
+    // Two thousand aliases come to two megabytes of text from three kilobytes, so the block is refused before `paths` is
+    // read (`ConfigMarkdown.Oversized`) and the rule waits, whatever it would have kept first. Mutations: deleting the
+    // check in `ConfigMarkdown.read` keeps `a` and `b` in the first row; reading the refusal as a block that does not
+    // parse makes both rows apply from the start; letting `parse` retry it reads `paths` as the text `[a, b, *s, ...]`.
+    const aliases = Array(2_000).fill("*s").join(", ")
+    for (const written of [`${anchor}paths: [a, b, ${aliases}, c]`, `${anchor}paths: [${aliases}, c]`])
+      expect(ConfigInstructionFile.rulePatterns(front(written))).toEqual({ patterns: [], malformed: false, dropped: 1 })
   })
 
   // A part of 340 empty brace groups costs about a thousand in its comma split and most of the allowance in its expansion,

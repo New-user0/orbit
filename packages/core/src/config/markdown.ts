@@ -1,6 +1,7 @@
 export * as ConfigMarkdown from "./markdown.js"
 
 import matter from "gray-matter"
+import { ParsedSize } from "@orbit/util/parsed-size"
 
 // gray-matter evaluates front matter that opens with `---js` or `---javascript` as code, and every Markdown file Orbit
 // reads comes through here: the commands, agents, skills and output styles that a cloned repository keeps in its
@@ -17,17 +18,21 @@ const yaml = (matter as unknown as { readonly engines: { readonly yaml: { readon
 
 // `indicators` adds a last retry that also reads a value holding a YAML indicator as text. It comes after the first, so a
 // file that already parsed through `sanitize` parses as it did, and only a reader that asks for it (the `paths` of a rule)
-// accepts what the others still refuse.
+// accepts what the others still refuse. The retries are for a block that YAML refuses: one that YAML reads and that comes
+// to more than its text (`Oversized`) is refused as it stands, because read again as text its aliases would become
+// values that nobody wrote.
 export function parse(content: string, indicators = false) {
   try {
     return read(content)
-  } catch {
-    if (!indicators) return read(sanitize(content))
-    try {
-      return read(sanitize(content))
-    } catch {
-      return read(sanitize(content, true))
-    }
+  } catch (error) {
+    if (error instanceof Oversized) throw error
+  }
+  if (!indicators) return read(sanitize(content))
+  try {
+    return read(sanitize(content))
+  } catch (error) {
+    if (error instanceof Oversized) throw error
+    return read(sanitize(content, true))
   }
 }
 
@@ -45,9 +50,21 @@ function read(input: string): { readonly data: Readonly<Record<string, unknown>>
   const close = rest.indexOf("\n---")
   const block = close === -1 ? rest : rest.slice(0, close)
   const data = onlyComments(block) ? undefined : engine(language)(block)
+  // The readers copy, check and serialize what they are handed, and an alias makes them pay again for what its anchor
+  // names, so a block whose value comes to more than its text spells is refused here, once, for all of them.
+  if (!ParsedSize.within(data, block.length + ParsedSize.MARGIN)) throw new Oversized()
   return {
     data: (data ?? {}) as Readonly<Record<string, unknown>>,
     content: close === -1 ? "" : rest.slice(close + 4).replace(/^\r?\n?/, ""),
+  }
+}
+
+/** What `parse` throws for a block whose value comes to more than its text once its aliases are followed (`ParsedSize`). */
+export class Oversized extends Error {
+  constructor() {
+    super(
+      `Front matter that comes to more than its text once its aliases are followed, or that nests more than ${ParsedSize.DEPTH} levels deep, is not read`,
+    )
   }
 }
 

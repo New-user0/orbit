@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url"
 import { LinkShare } from "@orbit/util/link-share"
+import { ParsedSize } from "@orbit/util/parsed-size"
 import type { EvalSuite } from "./eval.js"
 import type { Workflow } from "./workflow.js"
 import { compile, validate, type NodeSpec, type Spec } from "./yaml.js"
@@ -238,7 +239,18 @@ async function read(file: string, kind: string): Promise<unknown> {
   if (share !== undefined) throw new Error(`${kind} ${JSON.stringify(file)} leads to a network share, so it is not read`)
   const handle = Bun.file(file)
   if (!(await handle.exists())) throw new Error(`${kind} not found: ${file}`)
-  if (isYaml(file)) return Bun.YAML.parse(await handle.text())
+  if (isYaml(file)) {
+    const text = await handle.text()
+    const value = Bun.YAML.parse(text)
+    // An alias is one more reference to what its anchor names, and `validate` writes out every node to find what it refers
+    // to, once for each reference, as the listers above do with the values they show, so a file whose value comes to more
+    // than its text spells is refused before any of them sees it.
+    if (!ParsedSize.within(value, text.length + ParsedSize.MARGIN))
+      throw new Error(
+        `${kind} ${JSON.stringify(file)} comes to more than its text once its aliases are followed, or nests more than ${ParsedSize.DEPTH} levels deep, so it is not read`,
+      )
+    return value
+  }
   if (isJson(file)) return handle.json()
   return (await import(pathToFileURL(file).href)).default
 }

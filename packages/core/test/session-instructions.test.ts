@@ -1807,22 +1807,28 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
   )
 
   // The read path parses each rule of a nested folder again on every read, so the work allowance of `paths` bounds every
-  // read below the folder too. The time bound itself is pinned by the stress rows of `test/config/instruction-rules.test.ts`.
-  it.live("injects no nested rule whose paths spend the work allowance on empty spellings, on any read below it", () =>
+  // read below the folder too, and so does the refusal of a block whose aliases come to more than its text
+  // (`ConfigMarkdown.Oversized`). The time bounds are pinned by the stress rows of `test/config/instruction-rules.test.ts`
+  // and `test/config/front-matter-aliases.test.ts`.
+  it.live("injects no nested rule whose paths keep nothing, written out or through aliases, on any read below it", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory
       const rules = path.resolve(dir, "sub", ".orbit", "rules")
       yield* mkdir(rules)
+      const empty = `"${"{,}".repeat(340)}"`
       const aliases = Array(1_000).fill("*s").join(", ")
-      yield* writeAgents(path.resolve(rules, "aliases.md"), `---\ns: &s "${"{,}".repeat(340)}"\npaths: [${aliases}]\n---\nALIASED MARKER`)
+      yield* writeAgents(path.resolve(rules, "written.md"), `---\npaths: [${empty}, ${empty}]\n---\nWRITTEN MARKER`)
+      yield* writeAgents(path.resolve(rules, "aliases.md"), `---\ns: &s ${empty}\npaths: [${aliases}]\n---\nALIASED MARKER`)
       yield* writeAgents(path.resolve(rules, "always.md"), "ALWAYS MARKER")
       yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "a.ts"), "a"))
       const sessionID = yield* sessionIn(dir)
       yield* read(sessionID, "sub/a.ts")
       const all = (yield* texts(sessionID)).join("\n")
       expect(all).toContain("ALWAYS MARKER")
-      // Mutation: without the allowance every alias is expanded on the read (about a second here), nothing is kept, and
-      // the rule applies to every read below its folder, so its text is injected.
+      // Mutations: without the allowance the written-out parts keep nothing and drop nothing, and that rule applies to
+      // every read below its folder, so its text is injected; reading the refusal of the aliased block as a block that
+      // does not parse does the same to the other rule.
+      expect(all).not.toContain("WRITTEN MARKER")
       expect(all).not.toContain("ALIASED MARKER")
     }),
   )

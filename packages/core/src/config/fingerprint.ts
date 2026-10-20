@@ -1,11 +1,12 @@
 export * as Fingerprint from "./fingerprint.js"
 
 import path from "path"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import type { Info } from "@orbit/schema/config"
 import type { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Hash } from "@orbit/util/hash"
+import { ParsedSize } from "@orbit/util/parsed-size"
 import { PluginSourceDirectory } from "../plugin/source-directory.js"
 import { WorkspaceTrust } from "../workspace-trust.js"
 import { LinkShare } from "@orbit/util/link-share"
@@ -53,10 +54,18 @@ const agentFolders = [
   { name: "modes", pattern: "*.md" },
 ]
 
-/** The value with object keys sorted at every level and arrays in order, so that formatting and key order do not show. */
-export function canonical(value: unknown): string {
+/**
+ * The value with object keys sorted at every level and arrays in order, so that formatting and key order do not show, or
+ * `undefined` when it comes to more than `ALLOWANCE` or nests too deep (`ParsedSize.within`): a value that holds one node
+ * in several places is written out once for each, and one that holds itself never ends.
+ */
+export function canonical(value: unknown): string | undefined {
+  if (!ParsedSize.within(value, ALLOWANCE)) return undefined
   return JSON.stringify(sorted(value))
 }
+
+// More than any config that a person writes, and little enough to copy and hash at once.
+const ALLOWANCE = 4_000_000
 
 function sorted(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sorted)
@@ -71,7 +80,16 @@ function sorted(value: unknown): unknown {
 
 const unreadable: "unreadable" = WorkspaceTrust.unreadable
 
-const digest = (value: unknown) => Hash.sha256(canonical(value))
+// The digest of one kind of one source, or `unreadable`, once in the log, when `canonical` cannot write the value out.
+const digest = (source: string, kind: Trust.Kind, value: unknown) => {
+  const text = canonical(value)
+  if (text !== undefined) return Effect.succeed(Hash.sha256(text))
+  return Effect.logWarning("config fingerprint unreadable", {
+    path: source,
+    kind,
+    reason: "the value comes to more than the allowance or nests too deep",
+  }).pipe(Effect.as(unreadable))
+}
 
 /**
  * The digests of a project or local document, one for each kind it sets. `skills` also covers the front matter hooks of
@@ -86,17 +104,6 @@ export const document = Effect.fn("Fingerprint.document")(function* (
   skillRoots: readonly string[],
   within: readonly string[],
 ) {
-  const fields = {
-    hooks: info.hooks,
-    mcp: info.mcp,
-    plugins: info.plugins,
-    providers: info.providers,
-    shell: info.shell,
-    formatter: info.formatter,
-    lsp: info.lsp,
-    env: info.env,
-    sandbox: info.sandbox,
-  }
   const skills =
     info.skills === undefined
       ? undefined
@@ -110,12 +117,13 @@ export const document = Effect.fn("Fingerprint.document")(function* (
               skillRoots.map((root) => ({ root, patterns: [skillPattern] })),
             )
             const found = yield* collect(bound, source, listed)
-            return digest({ skills: info.skills, hooks: found.hooks, ...leaving(found.outside) })
+            return yield* digest(source, "skills", { skills: info.skills, hooks: found.hooks, ...leaving(found.outside) })
           }),
         )
+  const present = kinds.filter((kind) => kind !== "skills" && info[kind] !== undefined)
   return {
     ...Object.fromEntries(
-      Object.entries(fields).flatMap(([kind, value]) => (value === undefined ? [] : [[kind, digest(value)] as const])),
+      yield* Effect.forEach(present, (kind) => digest(source, kind, info[kind]).pipe(Effect.map((value) => [kind, value]))),
     ),
     ...(skills === undefined ? {} : { skills }),
   } satisfies Digests
@@ -152,8 +160,8 @@ export const directory = Effect.fn("Fingerprint.directory")(function* (
       : {
           ...(definitions.hooks.length === 0 && definitions.outside.length === 0
             ? {}
-            : { hooks: digest({ hooks: definitions.hooks, ...leaving(definitions.outside) }) }),
-          ...(definitions.mcp.length === 0 ? {} : { mcp: digest(definitions.mcp) }),
+            : { hooks: yield* digest(folder, "hooks", { hooks: definitions.hooks, ...leaving(definitions.outside) }) }),
+          ...(definitions.mcp.length === 0 ? {} : { mcp: yield* digest(folder, "mcp", definitions.mcp) }),
         }),
   } satisfies Digests
 })
@@ -205,7 +213,7 @@ export const pluginsOf = Effect.fn("Fingerprint.plugins")(function* (
     }),
   )
   if (items === undefined || items === unreadable) return items
-  return digest(items)
+  return yield* digest(folder, "plugins", items)
 })
 
 // What may be read: the real paths of the folders that bound it. A file counts when its real path is inside one of
@@ -349,8 +357,9 @@ const walk = Effect.fnUntraced(function* (
 })
 
 // The `hooks` and `mcp_servers` that the front matter of these files carry, with the file each came from. A file whose
-// front matter does not parse carries nothing, as the loaders read it. A file that is not a regular file carries
-// nothing and is named with the ones that lead out.
+// front matter does not parse carries nothing, as the loaders read it, and so does one whose aliases come to more than
+// its text (`ConfigMarkdown.Oversized`), which is said once in the log: this runs on every load, before trust. A file
+// that is not a regular file carries nothing and is named with the ones that lead out.
 const collect = Effect.fnUntraced(function* (bound: Bound, from: string, listed: Listing) {
   const fs = bound.fs
   const hooks: unknown[] = []
@@ -361,10 +370,16 @@ const collect = Effect.fnUntraced(function* (bound: Bound, from: string, listed:
       outside.push(yield* describe(bound, from, file))
       continue
     }
-    const markdown = ConfigMarkdown.parseOption(yield* fs.readFileString(file))
-    if (markdown === undefined) continue
-    if (markdown.data.hooks !== undefined) hooks.push([relative(from, file), markdown.data.hooks])
-    if (markdown.data.mcp_servers !== undefined) mcp.push([relative(from, file), markdown.data.mcp_servers])
+    const text = yield* fs.readFileString(file)
+    const markdown = Result.try(() => ConfigMarkdown.parse(text))
+    if (Result.isFailure(markdown)) {
+      if (markdown.failure instanceof ConfigMarkdown.Oversized)
+        yield* Effect.logWarning("config file skipped", { path: file, reason: markdown.failure.message })
+      continue
+    }
+    const data = markdown.success.data
+    if (data.hooks !== undefined) hooks.push([relative(from, file), data.hooks])
+    if (data.mcp_servers !== undefined) mcp.push([relative(from, file), data.mcp_servers])
   }
   return { hooks, mcp, outside }
 })

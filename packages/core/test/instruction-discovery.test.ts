@@ -3695,33 +3695,44 @@ describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
     }),
   )
 
-  // A part whose every spelling is empty, repeated by 1,000 aliases in 5 KB, spends the work allowance of `paths` before
-  // anything is kept: the rule waits and matches no read, in a project that is not trusted as in one that is. The time
-  // bound itself is pinned by the stress rows of `test/config/instruction-rules.test.ts`.
-  for (const trusted of [false, true])
-    it.live(`keeps a rule whose paths spend the work allowance on empty spellings out of the baseline (trusted: ${trusted})`, () =>
-      Effect.gen(function* () {
-        const where = yield* folders
-        const file = path.join(rulesOf(where.repo), "aliases.md")
-        const aliases = Array(1_000).fill("*s").join(", ")
-        yield* write(file, `---\ns: &s "${"{,}".repeat(340)}"\npaths: [${aliases}]\n---\nAliased rule.`)
-        yield* write(where.rootFile, "project")
-        yield* Effect.gen(function* () {
-          const { discovery, text } = yield* baseline()
-          // Mutation: without the allowance every alias is expanded (about a second here), nothing is kept, and the rule
-          // applies from the start, so its text is in the baseline and no rule waits.
-          expect(heads(text)).toEqual([where.rootFile])
-          expect(yield* discovery.conditionalRules()).toEqual([
-            new InstructionDiscovery.ConditionalRule({
-              path: AbsolutePath.make(file),
-              patterns: [],
-              base: AbsolutePath.make(where.repo),
-              scope: "project",
-            }),
-          ])
-        }).pipe(Effect.provide(layerFor(where, { trusted })))
-      }),
-    )
+  // A rule whose `paths` keeps nothing waits and matches no read, in a project that is not trusted as in one that is.
+  // Written out, two parts whose every spelling is empty spend the work allowance before anything is kept; repeated by
+  // 1,000 aliases in 5 KB, one such part comes to more than the text, and the block is refused before `paths` is read
+  // (`ConfigMarkdown.Oversized`). The time bounds are pinned by the stress rows of `test/config/instruction-rules.test.ts`
+  // and `test/config/front-matter-aliases.test.ts`.
+  const empty = `"${"{,}".repeat(340)}"`
+  const waiting: ReadonlyArray<readonly [string, string]> = [
+    ["spend the work allowance on empty spellings", `paths: [${empty}, ${empty}]`],
+    [
+      "repeat an empty spelling through more aliases than the text holds",
+      `s: &s ${empty}\npaths: [${Array(1_000).fill("*s").join(", ")}]`,
+    ],
+  ]
+  for (const [shape, front] of waiting)
+    for (const trusted of [false, true])
+      it.live(`keeps a rule whose paths ${shape} out of the baseline (trusted: ${trusted})`, () =>
+        Effect.gen(function* () {
+          const where = yield* folders
+          const file = path.join(rulesOf(where.repo), "aliases.md")
+          yield* write(file, `---\n${front}\n---\nAliased rule.`)
+          yield* write(where.rootFile, "project")
+          yield* Effect.gen(function* () {
+            const { discovery, text } = yield* baseline()
+            // Mutations: without the allowance the written-out parts keep nothing and drop nothing, and the rule applies
+            // from the start, so its text is in the baseline and no rule waits; reading the refusal of the aliased block as
+            // a block that does not parse does the same to the other row.
+            expect(heads(text)).toEqual([where.rootFile])
+            expect(yield* discovery.conditionalRules()).toEqual([
+              new InstructionDiscovery.ConditionalRule({
+                path: AbsolutePath.make(file),
+                patterns: [],
+                base: AbsolutePath.make(where.repo),
+                scope: "project",
+              }),
+            ])
+          }).pipe(Effect.provide(layerFor(where, { trusted })))
+        }),
+      )
 
   it.live("matches the rules of the person and the administrator from the folder the session started in", () =>
     Effect.gen(function* () {

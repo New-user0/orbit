@@ -1,9 +1,10 @@
 /**
  * Runs `ConfigInstructionFile.rulePatterns` over `paths` values that a cloned repository could ship, and prints how many
  * patterns each kept, how many it left out and how long it took, as JSON. The first rows reach the cap of kept patterns
- * from about a megabyte. The others keep nothing, so only the work allowance stops them, and a YAML alias lets a file of a
- * few kilobytes repeat one value thousands of times. It is a script of its own because the work is synchronous: the test
- * starts it with a deadline.
+ * from about a megabyte. The others keep nothing. A YAML alias lets a file of a few kilobytes repeat one value thousands of
+ * times, and `ConfigMarkdown` refuses such a block before `paths` is read (`ConfigMarkdown.Oversized`); the work
+ * allowance alone stops the rows that write their values out. It is a script of its own because the work is synchronous:
+ * the test starts it with a deadline.
  */
 import { ConfigInstructionFile } from "@orbit/core/config/instruction-file"
 import { ConfigMarkdown } from "@orbit/core/config/markdown"
