@@ -746,8 +746,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
-  working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
-  `packages/util/test/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
+  working folder. It skips an empty or relative `PATH` entry such as `.`, so the working folder is reached only through
+  an absolute entry that names it (a child handed a relative entry is in Known gaps). Proof:
+  `packages/util/test/which.test.ts`, `test/ripgrep-binary.test.ts` (including a ripgrep that only a `.` entry reaches,
+  which every search reports as not found), `test/util/git-executable.test.ts`.
 - The PowerShell parser host (`packages/core/src/shell/powershell-parse.ts`): Orbit asks PowerShell's own parser what a
   command does and reads a summary of the syntax tree. The host is `pwsh`, then `powershell` on Windows, found with
   `which` (never the working folder; nothing on `PATH` is no host) and started by its full path through
@@ -2067,8 +2069,8 @@ kind in turn.
   from the npm cache with `resolveModule`. A plain file path no longer loads: write a `file:` URL.
 - Find an executable with `which` in `packages/util/src/which.ts` and with nothing else. It feeds `gitExecutable`,
   `RipgrepBinary`, `ShellSelect`, the built-in formatters and language servers, the sandbox tool and the Azure CLI
-  check. It reads `PATH`, then Orbit's own `bin` folder, and never the working folder, unless `PATH` itself names it,
-  for example with a relative entry such as `.`, which resolves against it (Known gaps). It looks at each `PATH` entry
+  check. It reads `PATH`, then Orbit's own `bin` folder, and never the working folder, unless an absolute `PATH` entry
+  names it; a relative entry such as `.` is skipped (a child's own search is in Known gaps). It looks at each `PATH` entry
   by its full name, because the npm `which` package that it wraps searches `process.cwd()` first on Windows and has no
   option to skip it. An empty `PATH` entry, which a shell reads as the current folder, is skipped on every platform, a
   quoted entry is read without its quotes, `PATHEXT` and the executable bit apply as before, and a name that already has
