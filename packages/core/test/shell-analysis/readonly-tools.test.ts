@@ -6,7 +6,7 @@ import { ShellReadOnly } from "../../src/shell/readonly"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import { currentDirectoryOnPath, plant } from "../fixture/decoy"
 import { tmpdir } from "../fixture/tmpdir"
-import { bash, linux, powershell, pwsh, pwshLinux, windows } from "./helper"
+import { bash, linux, powershell, pwsh, pwshLinux, SHELL_START, windows } from "./helper"
 import { toolNotReadOnly as psNotReadOnly, toolPlatform, toolReadOnly as psReadOnly } from "./powershell-cases"
 
 // git, gh, docker and dotnet (shell-safety-5). Every row is pure: no program is started. A false read-only verdict is a
@@ -423,7 +423,7 @@ describe("the working folder cannot supply the program (class 10)", () => {
     const entries = result.stdout.toString().split(":")
     expect(entries.length).toBeGreaterThan(0)
     expect(entries).not.toContain("")
-  })
+  }, SHELL_START)
 
   // The other half of the probe: Windows PowerShell 5.1 does not look in the working folder for an empty entry either, and
   // does for a dot (the control). The decoy is a real program, so a run shows in its record.
@@ -436,15 +436,18 @@ describe("the working folder cannot supply the program (class 10)", () => {
     )
     const system = path.dirname(powershell51!)
     const run = (value: string) =>
-      Bun.spawnSync([powershell51!, "-NoProfile", "-NonInteractive", "-Command", "zzdecoy"], {
+      Bun.spawn([powershell51!, "-NoProfile", "-NonInteractive", "-Command", "zzdecoy"], {
         cwd: tmp.path,
         env: { ...env, Path: `${system};${value}` },
-      })
-    run(";;")
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      }).exited
+    await run(";;")
     expect(await ran()).toEqual([])
-    run(".")
+    await run(".")
     expect(await ran()).toHaveLength(1)
-  })
+  }, SHELL_START)
 
   const onWindows = process.platform === "win32" ? describe : describe.skip
   const inspect = (command: string, ctx: ShellAnalysis.Context) =>

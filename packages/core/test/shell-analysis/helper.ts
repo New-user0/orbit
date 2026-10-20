@@ -49,6 +49,12 @@ export function powershell(text: string, ctx: ShellAnalysis.Context) {
   return ShellAnalysis.analyze(text, ctx, PowerShellParse.interpret(row.code, row.output))
 }
 
+/**
+ * The time limit of a test that starts a real shell (powershell, pwsh, cmd or bash). Windows PowerShell 5.1 alone has
+ * taken more than five seconds to start on a cold GitHub runner, which is longer than the default limit.
+ */
+export const SHELL_START = 60_000
+
 export function pwsh(over: Partial<ShellAnalysis.Context> = {}): ShellAnalysis.Context {
   return windows({ shell: "C:\\Program Files\\PowerShell\\7\\pwsh.exe", ...over })
 }
