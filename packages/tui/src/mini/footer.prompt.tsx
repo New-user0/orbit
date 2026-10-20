@@ -879,8 +879,11 @@ export function createPromptState(input: PromptInput): PromptState {
         }
         if (!image && content.mime !== "text/plain") return
         const normalized = image ? content.data : stripAnsiSequences(content.data).replace(/\r\n?/g, "\n")
-        const files = image
-          ? [{ type: "file" as const, uri: `data:${content.mime};base64,${content.data}`, filename: "clipboard" }]
+        const resolved = image
+          ? {
+              files: [{ type: "file" as const, uri: `data:${content.mime};base64,${content.data}`, filename: "clipboard" }],
+              rest: "",
+            }
           : shell()
             ? undefined
             : await resolvePastedAttachments(normalized, process.platform)
@@ -888,8 +891,9 @@ export function createPromptState(input: PromptInput): PromptState {
         // A paste's own text edits must not cancel a submit waiting on that paste.
         applyingPaste = true
         try {
-          files?.forEach(pasteAttachment)
-          if (!files) target.insertText(normalized)
+          resolved?.files.forEach(pasteAttachment)
+          if (resolved?.rest) target.insertText(resolved.rest)
+          if (!resolved) target.insertText(normalized)
         } finally {
           applyingPaste = false
         }

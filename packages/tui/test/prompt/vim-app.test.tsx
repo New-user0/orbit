@@ -947,4 +947,18 @@ test("a pasted SVG path stays as typed and the file is not read, while a png pat
   await app.setup.renderOnce()
   expect(app.textarea().plainText).toContain("[Image 1]")
   expect(app.setup.captureCharFrame()).not.toContain("system-reminder")
+  // A drop that mixes the png with the svg attaches the png and keeps the svg path as text; submitting sends both.
+  app.textarea().setText("")
+  await app.setup.mockInput.pasteBracketedText(`${tmp.path}/logo.png ${tmp.path}/logo.svg`)
+  await Bun.sleep(150)
+  await app.setup.renderOnce()
+  expect(app.textarea().plainText).toContain("[Image 1]")
+  expect(app.textarea().plainText).toContain(`${tmp.path}/logo.svg`)
+  app.setup.mockInput.pressEnter()
+  await Bun.sleep(300)
+  expect(bodies).toHaveLength(1)
+  const body = JSON.parse(bodies[0]) as { text?: string; files?: unknown[] }
+  expect(body.text).toContain(`${tmp.path}/logo.svg`)
+  expect(bodies[0]).toContain("data:image/png;base64,AQID")
+  expect(bodies[0]).not.toContain("system-reminder")
 })

@@ -1679,7 +1679,8 @@ export function Prompt(props: PromptProps) {
     const attachments = await resolvePastedAttachments(pastedContent, terminalEnvironment.platform)
     if (changed()) return
     if (attachments) {
-      attachments.forEach(pasteAttachment)
+      attachments.files.forEach(pasteAttachment)
+      if (attachments.rest) input.insertText(attachments.rest)
       return
     }
 

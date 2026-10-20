@@ -524,6 +524,29 @@ test("mini keeps a dropped SVG path as typed text and never reads the file", asy
   } finally {
     second.cleanup()
   }
+  // A drop that mixes the png and the svg attaches the png and keeps the svg path as text.
+  const mixed = Promise.withResolvers<RunPrompt>()
+  const third = await renderFooter({
+    onSubmit: (prompt) => {
+      mixed.resolve(prompt)
+      return true
+    },
+  })
+  try {
+    await third.renderOnce()
+    await third.mockInput.pasteBracketedText(`${tmp.path}/logo.png ${tmp.path}/logo.svg`)
+    await Bun.sleep(150)
+    await third.renderOnce()
+    expect(third.renderer.currentFocusedEditor?.plainText).toContain("logo.svg")
+    third.mockInput.pressEnter()
+    const prompt = await mixed.promise
+    expect(prompt.text).toContain("[Image 1]")
+    expect(prompt.text).toContain(`${tmp.path}/logo.svg`)
+    expect(prompt.parts).toHaveLength(1)
+    expect(JSON.stringify(prompt)).not.toContain("system-reminder")
+  } finally {
+    third.cleanup()
+  }
 })
 
 test("mini preserves mentionless images through draft edits and a rejected submission", async () => {
