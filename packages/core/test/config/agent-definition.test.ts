@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, spyOn } from "bun:test"
 import fsp from "fs/promises"
 import path from "path"
 import { Effect, Layer, Logger } from "effect"
@@ -433,6 +433,61 @@ describe("agent definition: an untrusted folder", () => {
       expect(Permission.evaluate("Edit", "x.ts", (yield* get(agents, "explore"))?.permissions ?? []).effect).toBe(
         "deny",
       )
+    }),
+  )
+
+  // Class 8 and 14: the guard at "defines && untrusted && exists" holds a whole definition file back, not only the
+  // text fields the `held` rule also blocks. These keys pass `held`, so only the guard keeps them off a shipped agent.
+  // Mutation: comment out that guard in config/plugin/agent.ts and the first row fails (build gains background, color,
+  // git_status false and an edit deny).
+  const tuning = md(
+    ["background: true", 'color: "#ff0000"', "disallowed_tools: Read", "context:", "  git_status: false", "tools:", "  edit: false"].join("\n"),
+    "",
+  )
+
+  it.live("holds a definition file back whole when it names a shipped agent, whatever keys it carries", () =>
+    Effect.gen(function* () {
+      const { agents, before } = yield* loadWithBaseline(
+        { "agents/build.md": tuning, "agents/explore.md": tuning },
+        (directory) => [untrustedEntry(directory)],
+      )
+      for (const id of ["build", "explore"]) expect(yield* get(agents, id)).toEqual(before.find((agent) => agent.id === id))
+    }),
+  )
+
+  it.live("applies the same file in a trusted folder, as the control", () =>
+    Effect.gen(function* () {
+      const { agents, before } = yield* loadWithBaseline({ "agents/build.md": tuning })
+      const agent = yield* get(agents, "build")
+      expect(agent).not.toEqual(before.find((item) => item.id === "build"))
+      expect(agent).toMatchObject({ background: true, color: "#ff0000" })
+    }),
+  )
+
+  it.live("applies the same keys from modes/, where an untrusted file only tunes", () =>
+    Effect.gen(function* () {
+      const { agents, before } = yield* loadWithBaseline({ "modes/build.md": tuning }, (directory) => [
+        untrustedEntry(directory),
+      ])
+      expect(yield* get(agents, "build")).not.toEqual(before.find((item) => item.id === "build"))
+    }),
+  )
+
+  // Class 7: the line for held-back text goes to the configured logger, once per entry, and not to the console.
+  // Mutation: switch the call back to Effect.runSync and the row sees no line in the logger (and one on the console).
+  it.live("logs one line for held-back entry text to the configured logger", () =>
+    Effect.gen(function* () {
+      const logs: string[] = []
+      const consoleLog = spyOn(console, "log").mockImplementation(() => {})
+      yield* Effect.addFinalizer(() => Effect.sync(() => consoleLog.mockRestore()))
+      yield* loadWithBaseline({}, (directory) => [
+        ConfigTrust.stamp(jsonDocument({ agents: { build: { system: "REPO TEXT", description: "Mine" } } }), {
+          roots: [directory],
+          directory,
+        }),
+      ]).pipe(Effect.provide(logged(logs)))
+      expect(logs.filter((line) => line.includes("held back"))).toHaveLength(1)
+      expect(consoleLog).not.toHaveBeenCalled()
     }),
   )
 

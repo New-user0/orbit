@@ -598,7 +598,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   does not parse makes the rule unconditional, with one debug line), and a pattern only chooses when text the folder
   already supplies is shown: it never names a file to read. Patterns match the path from the base, both real, with
   `FSUtil.contains` on the two real paths deciding containment (`ConfigInstructionFile.ruleMatches`); the number and
-  the length of patterns are capped, and `ruleMatches` (class 7) matches rule paths with Bun's glob matcher, whose time grows with the path and the pattern and cannot blow up, and matches nothing for a path over 1,024 characters or 32 segments, because a repository writes both the pattern and the file name (proof: the "bounded time" row of `test/config/instruction-rules.test.ts`, a child process with a deadline, over a path whose file is named `b` so that no hostile pattern matches early; restoring the old `ignore` matcher fails the rows at seconds each, Bun.Glob passes). The file is looked at again, by where it leads now, when it is injected. Proof: the
+  the length of patterns are capped, and so is the work of reading them (class 7): the comma split and the brace
+  expansion of one rule draw on one allowance, spent on what they read and build whether it is kept, empty or refused, so
+  a YAML alias that repeats a value thousands of times and braces that spell out nothing stop as a list of kept patterns
+  does, and a rule that had kept nothing by then waits and matches no read (proof: the "work allowance" rows of
+  `test/config/instruction-rules.test.ts`, a child process with a deadline over aliased, empty, refused, comma-only,
+  over-long and short-part values; counting kept patterns only, as before, took from about a second to tens of seconds
+  for each; and the "spend the work allowance" rows of `test/instruction-discovery.test.ts`, the instruction pass of a
+  project trusted and not, and of `test/session-instructions.test.ts`, a read below a nested rules folder, where a rule of
+  aliased empty spellings waits instead of applying), and `ruleMatches` (class 7) matches rule paths with Bun's glob matcher, whose time grows with the path and the pattern and cannot blow up, and matches nothing for a path over 1,024 characters or 32 segments, because a repository writes both the pattern and the file name (proof: the "bounded time" row of `test/config/instruction-rules.test.ts`, a child process with a deadline, over a path whose file is named `b` so that no hostile pattern matches early; restoring the old `ignore` matcher fails the rows at seconds each, Bun.Glob passes). The file is looked at again, by where it leads now, when it is injected. Proof: the
   "loads rule files" block of `test/instruction-discovery.test.ts`, `test/config/instruction-rules.test.ts`
   and the "rules that wait for a matching read" block of `test/session-instructions.test.ts` (the swapped-link rows,
   trusted and not, and the network decoy).
@@ -1707,7 +1715,9 @@ runs" is a permission.
   it from a default that allows everything. Therefore an untrusted file of that kind never replaces or tunes an agent
   that exists (its prompt included), and `ProjectTrust.status` lists `permissions` for every such file, not only for
   the ids Orbit ships, because which ids exist depends on entries the status cannot see. A file under `mode/` or
-  `modes/` is not covered by this rule. Proof: `core/test/config/agent-definition.test.ts` ("an untrusted folder") and
+  `modes/` is not covered by this rule. Proof: `core/test/config/agent-definition.test.ts` ("an untrusted folder": "holds a
+  definition file back whole when it names a shipped agent", with keys the text rule does not cover, a trusted control
+  and a `modes/` row; "logs one line for held-back entry text to the configured logger" for the log line) and
   `core/test/project-trust.test.ts` ("lists every file under agents/ as held back").
 
 **How to test:**
@@ -2680,7 +2690,7 @@ The program-wide register of every follow-up, these gaps included, with each one
 - **Envelope look-alikes are escaped at the sinks `reminder-text.ts` is called from, and at no others.** While a request
   is lowered, `ReminderText.neutralize` escapes the opening bracket of a `<system-reminder>` or `<system-update>` tag in
   tool results and tool errors (local and MCP, including a wrapped error's response body, and a text or JSON file in a result, such as an MCP resource: its base64 data URL is decoded, escaped and encoded again, while images and PDFs stay byte for byte), text and directory
-  attachments (an ACP editor's embedded text resource is sent as one) and an attached file's location, the Code Mode
+  attachments (an ACP editor's embedded text resource is sent as one; a text file from `orb run -f`, stream-json `files` or Mini's initial files is escaped inline) and an attached file's location, the Code Mode
   tool listing (MCP tool descriptions; baseline and updates), a tool result's text parts together (an adapter joins them
   with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
