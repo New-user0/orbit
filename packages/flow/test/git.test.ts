@@ -160,6 +160,74 @@ test.skipIf(process.platform !== "win32")(
   },
 )
 
+// Git lists a worktree under the path it was added at. When the repository has since moved and its old path is a link to
+// the new one, that path is not real, and the run's folder may be gone too: git lists such a worktree until it is pruned.
+test("a run is cleaned up with its branch when git lists its worktree under a link or its folder is gone", async () => {
+  const rows = [
+    { name: "linked", link: true, gone: false },
+    { name: "gone", link: false, gone: true },
+    { name: "linked-gone", link: true, gone: true },
+  ]
+
+  const results = await Promise.all(
+    rows.map(async (row, index) => {
+      const added = await repository(`moved-${row.name}`)
+      const run = `run_2026010100002${index}_0a1b2c`
+      await Git.worktree(added, run, "build", await Git.head(added))
+      const directory = row.link ? `${added}-now` : added
+      if (row.link) {
+        await fs.rename(added, directory)
+        await fs.symlink(directory, added, process.platform === "win32" ? "junction" : "dir")
+      }
+      if (row.gone) await fs.rm(path.join(directory, ".orbit", "worktrees", run), { recursive: true, force: true })
+      const before = (await Git.git(directory, ["worktree", "list", "--porcelain"])).stdout
+      const cleaned = await Git.clean(directory, run)
+      const left = (await Git.git(directory, ["for-each-ref", "--format=%(refname:short)", `refs/heads/orbit/${run}/`]))
+        .stdout
+      const listed = (await Git.git(directory, ["worktree", "list", "--porcelain"])).stdout
+        .split("\n")
+        .filter((line) => line.startsWith("worktree ")).length
+      // The control: git lists the worktree under the path it was added at, not under the repository's real path.
+      const control = before.includes(`${added.replaceAll("\\", "/")}/.orbit/`)
+      return { name: row.name, control, cleaned, left, listed }
+    }),
+  )
+
+  expect(results).toEqual(
+    rows.map((row) => ({
+      name: row.name,
+      control: true,
+      cleaned: { worktrees: 1, branches: 1 },
+      left: "",
+      listed: 1,
+    })),
+  )
+})
+
+// A worktree can sit on a drive that is no longer there (a removed disk, or a `subst` drive that went away), and git
+// lists it until it is pruned. Its path has no folder up to its drive that exists.
+test.skipIf(process.platform !== "win32")("a worktree listed on a drive that is gone leaves a run's clean working", async () => {
+  const letters = await Promise.all(
+    [..."QRSTUVWXYZ"].map(async (letter) => ((await fs.stat(`${letter}:\\`).catch(() => undefined)) ? [] : [letter])),
+  )
+  const letter = letters.flat()[0]
+  if (letter === undefined) throw new Error("every drive letter from Q to Z is in use")
+  const directory = await repository("drive-gone")
+  const run = "run_20260101000030_0a1b2c"
+  await Git.worktree(directory, run, "build", await Git.head(directory))
+  const admin = path.join(directory, ".git", "worktrees", "elsewhere")
+  await Bun.write(path.join(admin, "gitdir"), `${letter}:/elsewhere/.git\n`)
+  await Bun.write(path.join(admin, "commondir"), "../..\n")
+  await Bun.write(path.join(admin, "HEAD"), `${await Git.head(directory)}\n`)
+  // The control: git lists the worktree on the missing drive.
+  expect((await Git.git(directory, ["worktree", "list", "--porcelain"])).stdout).toContain(`worktree ${letter}:/elsewhere`)
+
+  expect(await Git.clean(directory, run)).toEqual({ worktrees: 1, branches: 1 })
+  expect((await Git.git(directory, ["for-each-ref", "--format=%(refname:short)", `refs/heads/orbit/${run}/`])).stdout).toBe(
+    "",
+  )
+})
+
 test("a merge that would overwrite untracked files reports them and changes nothing", async () => {
   const directory = await repository("blocked")
   await Git.git(directory, ["checkout", "-q", "-b", "agent"])

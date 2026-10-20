@@ -388,12 +388,18 @@ const owner = await (async () => {
     stdout: "ignore",
     stderr: "ignore",
   })
-  return { folder, env, refused: plain.exitCode !== 0 }
+  // Git reads `GIT_TEST_ASSUME_DIFFERENT_OWNER` from 2.37.1 (and its backports), so a git from then on that accepts the
+  // control was handed config that names the folder safe, and the row runs and fails rather than being skipped.
+  const version = (Bun.spawnSync(["git", "--version"]).stdout.toString().match(/(\d+)\.(\d+)\.(\d+)/) ?? [])
+    .slice(1)
+    .map(Number)
+  const current = version.length === 3 && version[0] * 1_000_000 + version[1] * 1_000 + version[2] >= 2_037_001
+  return { folder, env, refused: plain.exitCode !== 0, runs: plain.exitCode !== 0 || current }
 })()
 afterAll(() => fs.rm(owner.folder, { recursive: true, force: true }))
-// Only a git that takes no notice of `GIT_TEST_ASSUME_DIFFERENT_OWNER`, such as one from before `safe.directory`, accepts
-// the control, and the row is then skipped rather than passed without a refusal to keep the project across.
-if (!owner.refused) console.warn("git accepts a folder that it is told has another owner: the owner row does not run")
+// Only a git from before 2.37.1 that takes no notice of `GIT_TEST_ASSUME_DIFFERENT_OWNER` accepts the control and skips
+// the row, rather than passing it without a refusal to keep the project across.
+if (!owner.runs) console.warn("git accepts a folder that it is told has another owner: the owner row does not run")
 
 // Class 3: the folder that the person is asked about and grants is the one that the next resolve names, and the project
 // keeps its ID, so the sessions made before the grant stay in it. A trusted repository is named from git, which can give
@@ -454,7 +460,7 @@ describe("Project.resolve keeps a folder's project across the grant when git or 
       make: (root) => Effect.runPromise(repository(root, "https://example.test/owner/repo.git")),
       env: owner.env,
       refused: true,
-      runs: owner.refused,
+      runs: owner.runs,
     },
     { name: "a repository with no commit and no remote", make: (root) => git(root, "init", "-q") },
     {
