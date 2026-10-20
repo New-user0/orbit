@@ -248,9 +248,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     Location that names the folder, after a grant of the folder; controls where the folder's own repository is opened and
     where the repository above is opened once it is trusted; and the `Git.ceiling` rows) and its rows in
     `test/instruction-notes.test.ts`. Mutations: `Git.ceiling` answering `{}` fails the rows of the git snapshot, the
-    provider, `Lsp.ignored`, the undo snapshot and `discover`; with the `HEAD`-only check of `GitLayout` restored as well,
-    the `Project.resolve` rows and the `InstructionNotes` rows fail too, all but the `commondir` shape's, whose layout
-    that check leaves unverified, which gets no exclude step.
+    provider, `Lsp.ignored`, the undo snapshot and `discover` (git opens the repository above, if only to say which
+    repository it uses); with the `HEAD`-only check of `GitLayout` restored as well, the rows of `Project.resolve`, of the
+    worktree list and a new worktree, and of `InstructionNotes` fail too, all but the `commondir` shape's, whose layout
+    that check leaves unverified.
   - The ceiling does not help where the folder's `.git` leads git elsewhere, because git follows it without walking up: a
     `.git` file that names another git directory (as a submodule's does), a `.git` directory whose `commondir` names one,
     a `.git` that is a link or junction. Git then applies the config and hooks of the repository it lands in. So before

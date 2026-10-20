@@ -42,9 +42,10 @@ import { host } from "./plugin/host"
 // - Every git that Orbit starts for a Location looks for the repository no further up than the folder the trust decision
 //   covers (`Git.ceiling`, `GIT_CEILING_DIRECTORIES`). Each surface below runs for a Location whose project is `sub`, as
 //   a resolve that took the `.git` for a repository named it, after the person trusted `sub`. Mutation: `Git.ceiling`
-//   answering `{}` fails every row of the first four surfaces (the outer program runs, or git opens the outer
-//   repository). `Project.resolve` names the repository above by itself now, so its rows fail when both mutations are
-//   made together.
+//   answering `{}` fails every row of the git snapshot, the provider, `Lsp.ignored`, the undo snapshot and `discover`
+//   (git opens the outer repository, if only to say which repository it uses). `Project.resolve` and the worktree
+//   strategy read the `.git` with `GitLayout` first, so their rows fail when both mutations are made together, all but
+//   the `commondir` shape's.
 //
 // The oracles are git's trace, which names the work tree of each repository a git process opened, and the outer
 // repository's program, which records its runs. Every row first checks with a plain git that git does pass over the

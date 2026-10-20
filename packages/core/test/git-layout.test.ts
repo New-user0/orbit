@@ -184,7 +184,8 @@ describe("GitLayout.locate, where git makes the layout", () => {
   )
 
   // Git passes over these and looks in the folder above, which here holds no repository (git-passed-over.test.ts has the
-  // rows where it does). Mutation: taking any `.git` directory with a `HEAD` file for a repository fails every row.
+  // rows where it does). Mutation: taking any `.git` directory with a `HEAD` file for a repository fails every row, and
+  // matching `HEAD` as decoded text, which drops a byte order mark, fails the byte order mark row.
   for (const [name, fill] of shapes)
     it.live(`finds no repository for ${name}, as git finds none`, () =>
       Effect.gen(function* () {
