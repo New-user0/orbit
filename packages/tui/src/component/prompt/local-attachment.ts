@@ -22,38 +22,46 @@ export function readLocalAttachment(file: string, maxBytes = MAX_LOCAL_ATTACHMEN
   )
 }
 
+// Attaches every png, jpeg, gif or webp path in a paste or drop that reads as an image. Every other path (pdf, svg,
+// a missing or oversized file, a relative path) stays as typed text and is never read. Returns undefined when
+// nothing attaches, so the caller inserts the paste unchanged.
 export async function resolvePastedAttachments(text: string, platform: string) {
   const pastedContent = text.trim()
-  const filepath = normalizePastedFilepath(pastedContent, platform)
-  if (/^(https?):\/\//.test(filepath)) return undefined
+  const whole = normalizePastedFilepath(pastedContent, platform)
+  if (/^(https?):\/\//.test(whole)) return undefined
 
-  const attachment = await readLocalAttachment(filepath)
-  const attachments = attachment ? [{ filepath, attachment }] : []
-  if (!attachment) {
-    const filepaths = parsePastedFilepaths(pastedContent, platform)
-    if (filepaths.length <= 1) return undefined
-    let remaining = MAX_LOCAL_ATTACHMENT_BYTES
-    for (const candidate of filepaths) {
-      const next = await readLocalAttachment(candidate, remaining)
-      if (!next) return undefined
-      remaining -= next.content.byteLength
-      attachments.push({ filepath: candidate, attachment: next })
+  const single = await readLocalAttachment(whole)
+  if (single) return { files: [toFilePart(whole, single)], rest: "" }
+
+  const files: ReturnType<typeof toFilePart>[] = []
+  const rest: string[] = []
+  let remaining = MAX_LOCAL_ATTACHMENT_BYTES
+  for (const token of parsePastedFilepaths(pastedContent, platform)) {
+    const attachment = path.isAbsolute(token) ? await readLocalAttachment(token, remaining) : undefined
+    if (!attachment) {
+      rest.push(/\s/.test(token) ? `"${token}"` : token)
+      continue
     }
+    remaining -= attachment.content.byteLength
+    files.push(toFilePart(token, attachment))
   }
-
-  return attachments.map((item) => ({
-    type: "file" as const,
-    uri: `data:${item.attachment.mime};base64,${Buffer.from(item.attachment.content).toString("base64")}`,
-    filename: path.basename(item.filepath),
-  }))
+  if (files.length === 0) return undefined
+  return { files, rest: rest.join(" ") }
 }
 
-// Only these types attach. An SVG is text that a person did not type, so its path stays as typed and is never read.
+function toFilePart(filepath: string, attachment: LocalAttachment) {
+  return {
+    type: "file" as const,
+    uri: `data:${attachment.mime};base64,${Buffer.from(attachment.content).toString("base64")}`,
+    filename: path.basename(filepath),
+  }
+}
+
+// Only these types attach. An SVG or a PDF path stays as typed and is never read.
 const mimeTypes: Record<string, string> = {
   ".gif": "image/gif",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
-  ".pdf": "application/pdf",
   ".png": "image/png",
   ".webp": "image/webp",
 }
@@ -153,7 +161,7 @@ export async function readLocalAttachmentWith(
 ): Promise<LocalAttachment | undefined> {
   const mime = await files.mime(path).catch(() => undefined)
   if (!mime) return undefined
-  if (!mime.startsWith("image/") && mime !== "application/pdf") return undefined
+  if (!mime.startsWith("image/")) return undefined
   const content = await files.readBytes(path, maxBytes).catch(() => undefined)
   if (!content || content.byteLength > maxBytes) return undefined
   return { type: "binary", mime, content }

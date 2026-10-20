@@ -65,13 +65,35 @@ describe("prompt local attachments", () => {
     }
   })
 
-  test("reads image and PDF attachments as bytes", async () => {
+  test("reads an image as bytes and never a PDF", async () => {
     const content = new Uint8Array([1, 2, 3])
-    expect(await readLocalAttachmentWith(files({ mime: "application/pdf", bytes: content }), "/tmp/file.pdf")).toEqual({
+    expect(await readLocalAttachmentWith(files({ mime: "image/png", bytes: content }), "/tmp/file.png")).toEqual({
       type: "binary",
-      mime: "application/pdf",
+      mime: "image/png",
       content,
     })
+    expect(await readLocalAttachmentWith(files({ mime: "application/pdf", bytes: content }), "/tmp/file.pdf")).toBeUndefined()
+  })
+
+  test("resolves every image extension through the table and leaves pdf as text", async () => {
+    await using tmp = await tmpdir()
+    const cases = [
+      ["a.png", "image/png"],
+      ["a.jpg", "image/jpeg"],
+      ["a.jpeg", "image/jpeg"],
+      ["a.JPG", "image/jpeg"],
+      ["a.gif", "image/gif"],
+      ["a.webp", "image/webp"],
+    ] as const
+    for (const [name, mime] of cases) {
+      const file = path.join(tmp.path, name)
+      await Bun.write(file, new Uint8Array([1]))
+      expect((await readLocalAttachment(file))?.mime).toBe(mime)
+    }
+    const pdf = path.join(tmp.path, "doc.pdf")
+    await Bun.write(pdf, "%PDF-1.4")
+    expect(await readLocalAttachment(pdf)).toBeUndefined()
+    expect(await resolvePastedAttachments(pdf, process.platform)).toBeUndefined()
   })
 
   test("ignores unsupported and unreadable local files", async () => {
@@ -96,45 +118,80 @@ describe("prompt local attachments", () => {
     await Bun.write(file, new Uint8Array([1, 2, 3]))
 
     for (const input of [file, `'${file}'`, pathToFileURL(file).href]) {
-      expect(await resolvePastedAttachments(input, process.platform)).toEqual([
-        { type: "file", uri: "data:image/png;base64,AQID", filename: "one image.png" },
-      ])
+      expect(await resolvePastedAttachments(input, process.platform)).toEqual({
+        files: [{ type: "file", uri: "data:image/png;base64,AQID", filename: "one image.png" }],
+        rest: "",
+      })
     }
   })
 
   test("resolves quoted paths and URI lists as ordered attachments", async () => {
     await using tmp = await tmpdir()
     const image = path.join(tmp.path, "one image.png")
-    const pdf = path.join(tmp.path, "two file.pdf")
-    await Promise.all([Bun.write(image, new Uint8Array([1, 2, 3])), Bun.write(pdf, new Uint8Array([4, 5, 6]))])
+    const webp = path.join(tmp.path, "two file.webp")
+    await Promise.all([Bun.write(image, new Uint8Array([1, 2, 3])), Bun.write(webp, new Uint8Array([4, 5, 6]))])
 
     for (const input of [
-      `'${image}' "${pdf}"`,
-      `# dropped files\r\n${pathToFileURL(image).href}\r\n${pathToFileURL(pdf).href}`,
+      `'${image}' "${webp}"`,
+      `# dropped files\r\n${pathToFileURL(image).href}\r\n${pathToFileURL(webp).href}`,
     ]) {
-      expect(await resolvePastedAttachments(input, process.platform)).toEqual([
-        { type: "file", uri: "data:image/png;base64,AQID", filename: "one image.png" },
-        { type: "file", uri: "data:application/pdf;base64,BAUG", filename: "two file.pdf" },
-      ])
+      expect(await resolvePastedAttachments(input, process.platform)).toEqual({
+        files: [
+          { type: "file", uri: "data:image/png;base64,AQID", filename: "one image.png" },
+          { type: "file", uri: "data:image/webp;base64,BAUG", filename: "two file.webp" },
+        ],
+        rest: "",
+      })
     }
   })
 
-  test("falls back to plain text for unsupported or incomplete drops", async () => {
+  test("falls back to plain text when nothing in the paste attaches", async () => {
     await using tmp = await tmpdir()
-    const image = path.join(tmp.path, "image.png")
     const text = path.join(tmp.path, "notes.txt")
-    await Promise.all([Bun.write(image, new Uint8Array([1])), Bun.write(text, "notes")])
+    const pdf = path.join(tmp.path, "doc.pdf")
+    await Promise.all([Bun.write(text, "notes"), Bun.write(pdf, "%PDF-1.4")])
 
     for (const input of [
       "",
       "plain\r\ntext",
       "https://example.com/image.png",
       text,
-      `${image} ${text}`,
-      `${image} ${path.join(tmp.path, "missing.png")}`,
+      pdf,
+      `${pdf} ${text}`,
+      path.join(tmp.path, "missing.png"),
+      "relative/shot.png",
     ]) {
       expect(await resolvePastedAttachments(input, process.platform)).toBeUndefined()
     }
+  })
+
+  test("attaches the images of a mixed drop and keeps every other path as text", async () => {
+    await using tmp = await tmpdir()
+    const png = path.join(tmp.path, "shot.png")
+    const second = path.join(tmp.path, "last.png")
+    const svg = path.join(tmp.path, "logo.svg")
+    const pdf = path.join(tmp.path, "doc.pdf")
+    const missing = path.join(tmp.path, "missing.png")
+    await Promise.all([
+      Bun.write(png, new Uint8Array([1, 2, 3])),
+      Bun.write(second, new Uint8Array([1, 2, 3])),
+      Bun.write(svg, "<svg />"),
+      Bun.write(pdf, "%PDF-1.4"),
+    ])
+    const shot = { type: "file" as const, uri: "data:image/png;base64,AQID", filename: "shot.png" }
+    const last = { type: "file" as const, uri: "data:image/png;base64,AQID", filename: "last.png" }
+
+    expect(await resolvePastedAttachments(`${png} ${svg}`, process.platform)).toEqual({ files: [shot], rest: svg })
+    expect(await resolvePastedAttachments(`${png}\n${svg}`, process.platform)).toEqual({ files: [shot], rest: svg })
+    expect(await resolvePastedAttachments(`${svg} ${png}`, process.platform)).toEqual({ files: [shot], rest: svg })
+    expect(await resolvePastedAttachments(`${png} ${svg} ${second}`, process.platform)).toEqual({
+      files: [shot, last],
+      rest: svg,
+    })
+    expect(await resolvePastedAttachments(`${png} ${pdf} ${missing}`, process.platform)).toEqual({
+      files: [shot],
+      rest: `${pdf} ${missing}`,
+    })
   })
 
   test("leaves an SVG path as typed text and never reads the file", async () => {
@@ -145,11 +202,18 @@ describe("prompt local attachments", () => {
     await Promise.all([Bun.write(svg, marker), Bun.write(png, new Uint8Array([1, 2, 3]))])
 
     // The png control still attaches; every spelling of the SVG path falls back to the typed text.
-    expect(await resolvePastedAttachments(png, process.platform)).toEqual([
-      { type: "file", uri: "data:image/png;base64,AQID", filename: "logo.png" },
-    ])
-    for (const input of [svg, `'${svg}'`, pathToFileURL(svg).href, `${png} ${svg}`, `${svg} ${png}`]) {
+    expect(await resolvePastedAttachments(png, process.platform)).toEqual({
+      files: [{ type: "file", uri: "data:image/png;base64,AQID", filename: "logo.png" }],
+      rest: "",
+    })
+    for (const input of [svg, `'${svg}'`, pathToFileURL(svg).href]) {
       expect(await resolvePastedAttachments(input, process.platform)).toBeUndefined()
+    }
+    for (const input of [`${png} ${svg}`, `${svg} ${png}`]) {
+      const resolved = await resolvePastedAttachments(input, process.platform)
+      expect(resolved?.files.map((file) => file.filename)).toEqual(["logo.png"])
+      expect(resolved?.rest).toBe(svg)
+      expect(JSON.stringify(resolved)).not.toContain("system-reminder")
     }
   })
 
@@ -162,9 +226,12 @@ describe("prompt local attachments", () => {
       Bun.write(second, new Uint8Array(1)),
     ])
 
-    expect(await resolvePastedAttachments(`${first} ${second}`, process.platform)).toHaveLength(2)
+    expect((await resolvePastedAttachments(`${first} ${second}`, process.platform))?.files).toHaveLength(2)
     await Bun.write(second, new Uint8Array(2))
-    expect(await resolvePastedAttachments(`${first} ${second}`, process.platform)).toBeUndefined()
+    // The second image no longer fits the shared budget, so it stays as text.
+    const over = await resolvePastedAttachments(`${first} ${second}`, process.platform)
+    expect(over?.files).toHaveLength(1)
+    expect(over?.rest).toBe(second)
 
     await Bun.write(first, new Uint8Array(MAX_LOCAL_ATTACHMENT_BYTES + 1))
     expect(await resolvePastedAttachments(first, process.platform)).toBeUndefined()
@@ -175,7 +242,7 @@ describe("prompt local attachments", () => {
     const file = path.join(tmp.path, "image.png")
     await Bun.write(file, new Uint8Array([1]))
 
-    expect(await resolvePastedAttachments(Array(32).fill(file).join(" "), process.platform)).toHaveLength(32)
+    expect((await resolvePastedAttachments(Array(32).fill(file).join(" "), process.platform))?.files).toHaveLength(32)
     expect(await resolvePastedAttachments(Array(33).fill(file).join(" "), process.platform)).toBeUndefined()
   })
 })

@@ -4020,8 +4020,8 @@ A later settings file that has an `experimental` block no longer hides the keys 
 
 ## A dropped or pasted `.svg` path is no longer read into the prompt
 
-Dropping or pasting the path of an `.svg` file used to read the file and put its text into the prompt as if you had typed it, in the full terminal UI and in Mini. The path now stays as the text you pasted and the file is never opened. Only PNG, JPEG, GIF, WebP and PDF paths attach (AVIF no longer does either). To show a model an SVG, ask it to read the file, or paste the markup yourself.
+Dropping or pasting the path of an `.svg` file used to read the file and put its text into the prompt as if you had typed it, in the full terminal UI and in Mini. The path now stays as the text you pasted and the file is never opened. Only PNG, JPEG, GIF and WebP paths attach: a PDF path and an AVIF path stay as typed text too, and a PDF is no longer read and attached whole. A drop or paste is split into lines and into absolute paths separated by spaces; each path that reads as one of those images attaches, and every other path in the same drop (an SVG, a PDF, a missing or oversized file, a relative path) stays in the prompt as typed text, unread. So `shot.png logo.svg` attaches the PNG and leaves the SVG path in the text, in either order. To show a model an SVG or a PDF, ask it to read the file, or paste the markup yourself.
 
-**Affects:** people who drop SVG files into the prompt to send their markup.
+**Affects:** people who drop SVG or PDF files into the prompt to send their contents.
 
 **What to do:** Ask the agent to read the file, or paste the markup.
