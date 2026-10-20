@@ -64,15 +64,22 @@ test("custom commands commit the captured agent, model and variant before execut
     await setup.waitForFrame((frame) => frame.includes("Build · first model"))
     setup.mockInput.pressKey("F6")
     await setup.waitForFrame((frame) => frame.includes("Plan ·"))
+    // A dialog focuses its filter on a timer after it is first drawn, and keys sent before that reach no input: Enter
+    // then picks the dialog's current entry (Default for the variant). Each step waits for the live filter to hold focus,
+    // types, and waits for the filter to hold the text before it presses Enter.
+    const filter = () => {
+      const focused = setup.renderer.currentFocusedRenderable
+      return focused instanceof InputRenderable && !focused.isDestroyed ? focused : undefined
+    }
     setup.mockInput.pressKey("F8")
-    await setup.waitForFrame(
-      (frame) => frame.includes("Select model") && setup.renderer.currentFocusedRenderable instanceof InputRenderable,
-    )
+    await setup.waitForFrame((frame) => frame.includes("Select model") && filter() !== undefined)
     await setup.mockInput.typeText("second")
+    await setup.waitFor(() => filter()?.value === "second")
     await setup.renderOnce()
     setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("low"))
+    await setup.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("low") && filter() !== undefined)
     await setup.mockInput.typeText("low")
+    await setup.waitFor(() => filter()?.value === "low")
     await setup.renderOnce()
     setup.mockInput.pressEnter()
     await setup.waitForFrame(
