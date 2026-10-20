@@ -445,24 +445,28 @@ describe("agent definition: an untrusted folder", () => {
     "",
   )
 
-  it.live("holds a definition file back whole when it names a shipped agent, whatever keys it carries", () =>
-    Effect.gen(function* () {
-      const { agents, before } = yield* loadWithBaseline(
-        { "agents/build.md": tuning, "agents/explore.md": tuning },
-        (directory) => [untrustedEntry(directory)],
-      )
-      for (const id of ["build", "explore"]) expect(yield* get(agents, id)).toEqual(before.find((agent) => agent.id === id))
-    }),
-  )
+  // Both spellings of the folder are definitions. Mutation: change `AgentFile.defines` to `/^(?:agents)$/` and the agent/
+  // rows fail (build keeps the tuning), while the agents/ rows and the trusted controls still pass.
+  for (const folder of ["agent", "agents"]) {
+    it.live(`holds a definition file in ${folder}/ back whole when it names a shipped agent, whatever keys it carries`, () =>
+      Effect.gen(function* () {
+        const { agents, before } = yield* loadWithBaseline(
+          { [`${folder}/build.md`]: tuning, [`${folder}/explore.md`]: tuning },
+          (directory) => [untrustedEntry(directory)],
+        )
+        for (const id of ["build", "explore"]) expect(yield* get(agents, id)).toEqual(before.find((agent) => agent.id === id))
+      }),
+    )
 
-  it.live("applies the same file in a trusted folder, as the control", () =>
-    Effect.gen(function* () {
-      const { agents, before } = yield* loadWithBaseline({ "agents/build.md": tuning })
-      const agent = yield* get(agents, "build")
-      expect(agent).not.toEqual(before.find((item) => item.id === "build"))
-      expect(agent).toMatchObject({ background: true, color: "#ff0000" })
-    }),
-  )
+    it.live(`applies the same file in ${folder}/ in a trusted folder, as the control`, () =>
+      Effect.gen(function* () {
+        const { agents, before } = yield* loadWithBaseline({ [`${folder}/build.md`]: tuning })
+        const agent = yield* get(agents, "build")
+        expect(agent).not.toEqual(before.find((item) => item.id === "build"))
+        expect(agent).toMatchObject({ background: true, color: "#ff0000" })
+      }),
+    )
+  }
 
   it.live("applies the same keys from modes/, where an untrusted file only tunes", () =>
     Effect.gen(function* () {

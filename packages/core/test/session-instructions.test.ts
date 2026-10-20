@@ -1827,6 +1827,68 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
     }),
   )
 
+  // A read below a nested rules folder reads the patterns of each of its rules and compiles them, and 64 rules of over 200
+  // distinct spellings each are more than the table of compiled patterns holds, so a later read compiles them again. The
+  // read also looks for import tokens in the folder's instruction file. Each row is a folder whose rules end every long
+  // spelling in a run of slashes and then a letter, or whose instruction file holds a token named by a run of underscores
+  // and then a letter. A read below it must cost about what the same read below a folder of letters costs.
+  it.live(
+    "reads below a folder whose rules or instruction file end in a long run in about the time of a folder of letters",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* Location.Service).directory
+        const choices = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").join(",")
+        const letters = "a".repeat(860)
+        const slashes = "/".repeat(860)
+        const words = "a".repeat(200_000)
+        // Each rule is one part of under 1,024 characters, so it is expanded: `a.ts` first, which matches the file read,
+        // then the long spellings, which match nothing and are kept until the work allowance is spent.
+        const folder = (name: string, lead: string, tail: string, run: string) =>
+          Effect.gen(function* () {
+            const rules = path.resolve(dir, name, ".orbit", "rules")
+            yield* mkdir(rules)
+            for (let index = 0; index < 64; index++)
+              yield* writeAgents(
+                path.resolve(rules, `r${index}.md`),
+                `---\npaths: "{a.ts,${lead}${name}${index}{${choices}}{0,1,2,3}${tail}x}"\n---\nRULE ${name} ${index}.`,
+              )
+            yield* writeAgents(path.resolve(dir, name, "AGENTS.md"), `NESTED ${name} _@${run}x`)
+            yield* writeAgents(path.resolve(dir, name, "a.ts"), "a")
+          })
+        yield* folder("letters", "", letters, words)
+        const rows: ReadonlyArray<readonly [string, string, string, string]> = [
+          ["slashes", "", slashes, words],
+          ["negated", "!", slashes, words],
+          ["underscores", "", letters, "_".repeat(200_000)],
+        ]
+        for (const [name, lead, tail, run] of rows) yield* folder(name, lead, tail, run)
+        yield* writeAgents(path.resolve(dir, "top.ts"), "top")
+        const sessionID = yield* sessionIn(dir)
+        const timed = (target: string) =>
+          Effect.gen(function* () {
+            const started = performance.now()
+            yield* read(sessionID, target)
+            return performance.now() - started
+          })
+        // The first read of a session pays for what any read starts, so the control is the second.
+        yield* read(sessionID, "top.ts")
+        const control = yield* timed("letters/a.ts")
+        const took = yield* Effect.forEach(rows, ([name]) => timed(`${name}/a.ts`).pipe(Effect.map((ms) => [name, ms] as const)))
+        // Mutation: putting back `body.replace(/\/+$/, "")` in `compile` takes the reads below `slashes` and `negated` from
+        // about a second to 17 to 29 seconds, and putting back `raw.replace(/_+$/, "")` in `tokens` takes the read below
+        // `underscores` to 39 seconds; the control stays about a second.
+        expect(took.filter(([, ms]) => ms >= control * 4 + 1_000).map(([name]) => name)).toEqual([])
+        // Each read reached its folder and expanded every rule there: the folder's instruction file and all 64 rules were
+        // handed over.
+        const all = (yield* texts(sessionID)).join("\n")
+        for (const name of ["letters", ...rows.map((row) => row[0])]) {
+          expect(all).toContain(`NESTED ${name}`)
+          expect(Array.from({ length: 64 }, (_, index) => all.includes(`RULE ${name} ${index}.`))).toEqual(Array(64).fill(true))
+        }
+      }),
+    120_000,
+  )
+
   it.live("hands over the rules of one read in order: the administrator's, the person's, the folders from the outermost, then the project's", () =>
     Effect.gen(function* () {
       const dir = (yield* Location.Service).directory

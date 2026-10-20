@@ -131,6 +131,53 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     })
   })
 
+  // A part of 340 empty brace groups costs about a thousand in its comma split and most of the allowance in its expansion,
+  // so a second such part spends the rest before `c` is read.
+  test("charges each step of brace expansion to the allowance that the comma split draws on", () => {
+    const empty = `"${"{,}".repeat(340)}"`
+    // Mutation: deleting `work.left -= pattern.length + RULE_STEP` from `expandBraces` leaves the split alone to pay, `c`
+    // is read after two such parts as after one, and the second row keeps `a` and `c` with nothing dropped.
+    const rows: ReadonlyArray<readonly [string, readonly string[], number]> = [
+      [`paths: [a, ${empty}, c]`, ["a", "c"], 0],
+      [`paths: [a, ${empty}, ${empty}, c]`, ["a"], 1],
+    ]
+    for (const [written, patterns, dropped] of rows)
+      expect(ConfigInstructionFile.rulePatterns(front(written))).toEqual({ patterns, malformed: false, dropped })
+  })
+
+  // An expression such as `/\/+$/` is tried again at each character of a run that something else follows, which costs the
+  // square of the run's length. Each row is a reader that strips such a run from what a repository writes, over a run of
+  // slashes or underscores and then a letter, and over a control of letters as long. The work is synchronous, so it runs
+  // in a child process with a deadline.
+  test("strips the run that ends a pattern or an import token in time that grows with its length", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "trailing-run-stress.ts")],
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 60_000)
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    const report = JSON.parse(out) as {
+      readonly name: string
+      readonly control: { readonly ms: number; readonly size: number }
+      readonly hostile: { readonly ms: number; readonly size: number }
+    }[]
+    // Each reader made as much from the run as from its control: the patterns that 20 rules kept, the patterns the matcher
+    // took, the tokens found.
+    expect(report.map((item) => [item.name, item.hostile.size, item.control.size])).toEqual([
+      ["rulePatterns", 4_620, 4_620],
+      ["negatedRulePatterns", 4_610, 4_610],
+      ["ruleMatches", 2_048, 2_048],
+      ["imports", 1, 1],
+    ])
+    // Wall time, because processor time counts the collector's threads as well. Mutation: putting back
+    // `body.replace(/\/+$/, "")` in `compile` takes the three rule rows, and `raw.replace(/_+$/, "")` in `tokens` the
+    // import row, from a few milliseconds to between 1.8 and 6.6 seconds each, while their controls stay at a few.
+    expect(report.filter((item) => item.hostile.ms >= item.control.ms * 4 + 250).map((item) => item.name)).toEqual([])
+  }, 90_000)
+
   test("keeps a list of 256 patterns of 480 characters whole, within the work allowance", () => {
     const list = Array.from({ length: 256 }, (_, index) => `src/${String(index).padStart(3, "0")}${"a".repeat(473)}`)
     const result = ConfigInstructionFile.rulePatterns(front(`paths:\n${list.map((item) => `  - ${item}`).join("\n")}`))

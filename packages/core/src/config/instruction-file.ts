@@ -822,7 +822,7 @@ function tokens(text: string): string[] {
       if (end > at + 1) {
         // Underscores that close an emphasis that opened just before the at sign are not part of the name.
         const raw = text.slice(at + 1, end)
-        const token = clean(text[at - 1] === "_" ? raw.replace(/_+$/, "") : raw)
+        const token = clean(text[at - 1] === "_" ? trimEnd(raw, "_") : raw)
         if (token !== undefined) found.push(token)
       }
       at = end
@@ -842,6 +842,15 @@ function clean(raw: string) {
   const token = (hash === -1 ? raw : raw.slice(0, hash)).replaceAll("\\ ", " ")
   if (token === "" || /[\u0000-\u001f\u007f]/.test(token)) return undefined
   return /^(?:\.\/|~\/|\/.|[A-Za-z0-9._-])/.test(token) ? token : undefined
+}
+
+// The text without the run of `char` it ends with, in one pass from the end. A repository writes the text, and an
+// expression such as `/_+$/` is tried again at each character of a run that something else follows, which costs the
+// square of the run's length.
+function trimEnd(text: string, char: string) {
+  let end = text.length
+  while (end > 0 && text[end - 1] === char) end--
+  return text.slice(0, end)
 }
 
 // Extensions that stand for text. The decision is made on the name as it is written and never on the contents, and a name
@@ -1265,7 +1274,7 @@ const compiledPatterns = new Map<string, CompiledRulePattern | undefined>()
 function compile(pattern: string): CompiledRulePattern | undefined {
   const negated = pattern.startsWith("!")
   const body = (negated ? pattern.slice(1) : pattern).toLowerCase()
-  const name = body.replace(/\/+$/, "")
+  const name = trimEnd(body, "/")
   const rest = name.startsWith("/") ? name.slice(1) : name
   if (rest === "") return undefined
   try {

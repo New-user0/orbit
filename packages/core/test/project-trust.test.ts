@@ -236,25 +236,29 @@ describe("ProjectTrust.status", () => {
     )
   }
 
-  it.live("lists every file under agents/ as held back, whatever it names", () =>
-    Effect.gen(function* () {
-      const folders = yield* bare
-      yield* Effect.promise(() =>
-        Promise.all([
-          write(path.join(folders.repo, ".orbit", "agents", "explore.md"), "---\ndescription: Mine\n---\nMine."),
-          // Whether an id exists depends on the entries before the file, the person's own agents included, so a file for
-          // a name that nothing ships is listed as well; the stricter answer wins.
-          write(path.join(folders.work, ".orbit", "agents", "fresh.md"), "---\ndescription: Mine\n---\nMine."),
-        ]),
-      )
-      yield* Effect.gen(function* () {
-        const project = yield* ProjectTrust.Service
-        const status = held(folders.root, yield* project.status())
-        expect<unknown>(status).toContainEqual([path.join("work", "repo", ".orbit"), ["permissions"]])
-        expect<unknown>(status).toContainEqual([path.join("work", ".orbit"), ["permissions"]])
-      }).pipe(Effect.provide(loader(folders)))
-    }),
-  )
+  // Both spellings of the folder are listed. A definition always sets its prompt, which is held back as well, so the
+  // mutation of `AgentFile.defines` to agents/ only is caught by the agent/ rows in test/config/agent-definition.test.ts.
+  for (const folder of ["agent", "agents"]) {
+    it.live(`lists every file under ${folder}/ as held back, whatever it names`, () =>
+      Effect.gen(function* () {
+        const folders = yield* bare
+        yield* Effect.promise(() =>
+          Promise.all([
+            write(path.join(folders.repo, ".orbit", folder, "explore.md"), "---\nbackground: true\n---\n"),
+            // Whether an id exists depends on the entries before the file, the person's own agents included, so a file for
+            // a name that nothing ships is listed as well; the stricter answer wins.
+            write(path.join(folders.work, ".orbit", folder, "fresh.md"), "---\nbackground: true\n---\n"),
+          ]),
+        )
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          const status = held(folders.root, yield* project.status())
+          expect<unknown>(status).toContainEqual([path.join("work", "repo", ".orbit"), ["permissions"]])
+          expect<unknown>(status).toContainEqual([path.join("work", ".orbit"), ["permissions"]])
+        }).pipe(Effect.provide(loader(folders)))
+      }),
+    )
+  }
 
   it.live("lists a command that names an agent, and an agent that sets its mode, as held back", () =>
     Effect.gen(function* () {
