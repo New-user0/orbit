@@ -418,8 +418,10 @@ managed `agents.<name>.permissions` gives an agent now apply to that agent too; 
   cannot say whether bypass is allowed gets the same treatment: the mode is ignored, with a notice. (An earlier build
   stopped these commands with an error; the rows of `test/managed-bypass.test.ts` pin the new behaviour.)
 - `GET /api/config/effective` also reports `permissions: { bypass, always }`, so clients can read these switches.
-- `orb flow clean` now compares a worktree's folder with the run's folder the way the platform compares paths, so a
-  run is cleaned up when the repository path is spelled with other case on Windows.
+- `orb flow clean` now compares a worktree's folder with the run's folder by the real path of each, so a run's
+  worktrees and branches are removed when the repository path is spelled with other case or, on Windows, with the 8.3
+  short name of one of its folders (as a temporary folder under `C:\Users\RUNNER~1` is). Before, the worktree was
+  left in place and deleting its branch failed.
 
 Bypass is refused by the clients until a durable permission mode in the server reads the managed settings itself.
 

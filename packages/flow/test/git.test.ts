@@ -91,18 +91,72 @@ test("worktrees of parallel nodes are added one at a time", async () => {
   for (const place of places) expect(await fs.stat(place.directory)).toBeTruthy()
 })
 
-// Git lists a worktree under the spelling of the folder as it is on disk, and the caller may spell the drive or a folder
-// name with other case. A string prefix test then leaves the run's worktrees behind.
-test.skipIf(process.platform !== "win32")(
-  "a run is cleaned up whatever case the repository path is spelled with",
-  async () => {
-    const directory = await repository("spelling")
-    const base = await Git.head(directory)
-    const run = "run_20260101000005_0a1b2c"
-    await Git.worktree(directory, run, "build", base)
+// Git lists a worktree under the long name of each folder, in the case it has on disk, and the caller may spell the
+// repository otherwise: a drive or folder name in other case, or the 8.3 short name of a folder (GitHub's Windows runner
+// hands out a temporary folder under `C:\Users\RUNNER~1`). Compared as strings, the run's worktree is not found, it is
+// left in place, and its branch cannot be deleted.
+const LONG = "a folder with a long name"
+// NTFS names the only folder of a fresh folder whose name is LONG this way, unless the volume makes no short names.
+const SHORT = "AFOLDE~1"
+const shortNames =
+  process.platform === "win32" &&
+  (await fs.mkdir(path.join(root, LONG), { recursive: true }).then(async () => {
+    const real = await fs.realpath(path.join(root, LONG))
+    return (await fs.realpath(path.join(root, SHORT)).catch(() => undefined)) === real
+  }))
 
-    const respelled = directory.slice(0, 1).toLowerCase() + directory.slice(1).replace(/spelling$/, "SPELLING")
-    expect(await Git.clean(respelled, run)).toEqual({ worktrees: 1, branches: 1 })
+test.skipIf(process.platform !== "win32")(
+  "a run is cleaned up with its branch whatever case or short name the repository path is spelled with",
+  async () => {
+    const spellings = [
+      {
+        name: "case",
+        folder: path.join(root, "case"),
+        spell: (directory: string) => directory.slice(0, 1).toLowerCase() + directory.slice(1).replace(/case$/, "CASE"),
+      },
+      ...(shortNames
+        ? [
+            {
+              name: "short",
+              folder: path.join(root, LONG, "short"),
+              spell: (directory: string) => directory.replace(LONG, SHORT),
+            },
+            {
+              name: "short-case",
+              folder: path.join(root, LONG, "short-case"),
+              spell: (directory: string) => directory.replace(LONG, SHORT).toUpperCase(),
+            },
+          ]
+        : []),
+    ]
+    // Without short names on this volume, only the case row runs; GitHub's runner covers the short name through `root`.
+    if (!shortNames) console.warn("8.3 short names are off on this volume: the short-name rows do not run")
+
+    const results = await Promise.all(
+      spellings.map(async (spelling, index) => {
+        const directory = await repository(path.relative(root, spelling.folder))
+        const run = `run_2026010100001${index}_0a1b2c`
+        await Git.worktree(directory, run, "build", await Git.head(directory))
+        const respelled = spelling.spell(directory)
+        const cleaned = await Git.clean(respelled, run)
+        const left = (await Git.git(directory, ["for-each-ref", "--format=%(refname:short)", `refs/heads/orbit/${run}/`]))
+          .stdout
+        const listed = (await Git.git(directory, ["worktree", "list", "--porcelain"])).stdout
+          .split("\n")
+          .filter((line) => line.startsWith("worktree ")).length
+        return { name: spelling.name, respelled: respelled !== directory, cleaned, left, listed }
+      }),
+    )
+
+    expect(results).toEqual(
+      spellings.map((spelling) => ({
+        name: spelling.name,
+        respelled: true,
+        cleaned: { worktrees: 1, branches: 1 },
+        left: "",
+        listed: 1,
+      })),
+    )
   },
 )
 

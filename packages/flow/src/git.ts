@@ -278,10 +278,17 @@ function within(folder: string, candidate: string) {
 /** Remove a run's worktrees and branches; returns how many of each went. */
 export async function clean(repository: string, run: string) {
   const prefix = runFolder(repository, run)
-  const listed = (await ok(repository, ["worktree", "list", "--porcelain"]))
-    .split("\n")
-    .flatMap((line) => (line.startsWith("worktree ") ? [path.resolve(line.slice("worktree ".length))] : []))
-    .filter((directory) => inside(prefix, directory))
+  // Git lists a worktree under the long name of each folder in the case it has on disk, and `repository` may spell a
+  // folder with other case or by its 8.3 short name (class 4), so both sides are compared as real paths.
+  const folder = await real(prefix)
+  const listed = (
+    await Promise.all(
+      (await ok(repository, ["worktree", "list", "--porcelain"]))
+        .split("\n")
+        .flatMap((line) => (line.startsWith("worktree ") ? [path.resolve(line.slice("worktree ".length))] : []))
+        .map(async (directory) => ({ directory, inside: inside(folder, await real(directory)) })),
+    )
+  ).flatMap((entry) => (entry.inside ? [entry.directory] : []))
   for (const directory of listed) await ok(repository, ["worktree", "remove", "--force", directory])
   await ok(repository, ["worktree", "prune"])
   await rm(prefix, { recursive: true, force: true })
@@ -292,4 +299,14 @@ export async function clean(repository: string, run: string) {
     .filter(Boolean)
   if (branches.length > 0) await ok(repository, ["branch", "-D", ...branches])
   return { worktrees: listed.length, branches: branches.length }
+}
+
+// The real path of `file`: of the nearest folder up from it that exists, followed by the rest as written. Git keeps
+// listing a worktree whose folder was deleted until it is pruned.
+async function real(file: string): Promise<string> {
+  const found = await realpath(file).catch(() => undefined)
+  if (found !== undefined) return found
+  const parent = path.dirname(file)
+  if (parent === file) return file
+  return path.join(await real(parent), path.basename(file))
 }
