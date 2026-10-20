@@ -627,13 +627,24 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   over-long and short-part values; counting kept patterns only, as before, took from about a second to tens of seconds
   for each; and the "spend the work allowance" rows of `test/instruction-discovery.test.ts`, the instruction pass of a
   project trusted and not, and of `test/session-instructions.test.ts`, a read below a nested rules folder, where a rule of
-  aliased empty spellings waits instead of applying), and `ruleMatches` (class 7) matches rule paths with Bun's glob matcher, whose time grows with the path and the pattern and cannot blow up, and matches nothing for a path over 1,024 characters or 32 segments, because a repository writes both the pattern and the file name (proof: the "bounded time" row of `test/config/instruction-rules.test.ts`, a child process with a deadline, over a path whose file is named `b` so that no hostile pattern matches early; restoring the old `ignore` matcher fails the rows at seconds each, Bun.Glob passes). The file is looked at again, by where it leads now, when it is injected. Proof: the
+  aliased empty spellings waits instead of applying). Compiling a pattern strips its trailing slashes in one pass from the
+  end: an expression such as `/\/+$/` is tried again at each slash of a run that another character follows, and 64 rule
+  files whose spellings ended that way held each read below their folder for 17 to 29 seconds on Windows (proof: the
+  "strips the run that ends a pattern or an import token" row of `test/config/instruction-rules.test.ts`, a child
+  process with a deadline over rules, `!` rules and the matcher of a read against controls of letters, and the "end in a
+  long run" row of `test/session-instructions.test.ts`, reads below such folders against a folder of letters; putting
+  the expression back fails both). `ruleMatches` (class 7) matches rule paths with Bun's glob matcher, whose time grows with the path and the pattern and cannot blow up, and matches nothing for a path over 1,024 characters or 32 segments, because a repository writes both the pattern and the file name (proof: the "bounded time" row of `test/config/instruction-rules.test.ts`, a child process with a deadline, over a path whose file is named `b` so that no hostile pattern matches early; restoring the old `ignore` matcher fails the rows at seconds each, Bun.Glob passes). The file is looked at again, by where it leads now, when it is injected. Proof: the
   "loads rule files" block of `test/instruction-discovery.test.ts`, `test/config/instruction-rules.test.ts`
   and the "rules that wait for a matching read" block of `test/session-instructions.test.ts` (the swapped-link rows,
   trusted and not, and the network decoy).
 - `@path` imports in instruction files (`ConfigInstructionFile.imports` and `load`, called by `ConfigInstructionPlugin`
   and `SessionInstructions`; class 1, 4, 5, 6 and 7). A token is hostile input: it is found by one linear pass over the
-  lines (no Markdown library), and a token with a control character is dropped alone, never joined into a path. For each
+  lines (no Markdown library), the underscores that close an emphasis before it are stripped in one pass from the end
+  (an expression there made an instruction file of 200,000 underscores after `_@` hold a read below it for 39 seconds
+  on Windows; proof: the import row of "strips the run that ends a pattern or an import token" in
+  `test/config/instruction-rules.test.ts` and the `underscores` row of "end in a long run" in
+  `test/session-instructions.test.ts`), and a token with a control character is dropped alone, never joined into a
+  path. For each
   import, before it is statted, resolved, read or watched: a network spelling (`//host/share`, `\\host\share`) is
   refused without any disk access, in every scope; `ProjectTrust.leads` gives the real path, which names a link to a
   share as the share without opening it, and that real path is what is checked and read. A project file's import must
