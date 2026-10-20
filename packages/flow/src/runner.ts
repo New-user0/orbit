@@ -41,6 +41,13 @@ export interface RunOptions {
    * folder anyway; this holds for a caller that does not.
    */
   readonly trusted: boolean
+  /**
+   * The project of `directory` as the server resolved it, whose folders the trust decision covers. In a trusted folder git
+   * looks for the repository no further up than the project's folder, and the run uses it only when its work tree, git
+   * directory and common directory are all inside these folders or `directory` (`Git.root`). Without it git looks only
+   * in `directory` itself.
+   */
+  readonly project?: Git.Project
   readonly input?: Readonly<Record<string, unknown>>
   /** Resume this run: completed nodes whose inputs are unchanged return their recorded result. */
   readonly resume?: string
@@ -92,11 +99,19 @@ const REJECTED =
   "This workflow runs unattended and does not approve actions that need permission. Continue without this action, or explain what you would need."
 
 export async function run(options: RunOptions): Promise<RunResult> {
-  const repository = options.trusted ? await Git.root(options.directory) : undefined
+  const log = options.log ?? (() => {})
+  const found: { readonly root?: string; readonly outside?: string } = options.trusted
+    ? await Git.root(options.directory, options.project)
+    : {}
+  // The repository git would use keeps its config or hooks in a folder that the decision does not cover: the run works as
+  // it does in a folder that is not trusted.
+  if (found.outside !== undefined) log(`! git is not used: ${found.outside} is outside the trusted folder`)
+  const repository = found.root
+  // Whether git may run here: the folder is trusted, and so is every folder of the repository that git uses.
+  const versioned = options.trusted && found.outside === undefined
   const home = repository ?? Git.holder(options.directory) ?? path.resolve(options.directory)
   if (repository) await Git.exclude(repository)
   const store = Store.at(home)
-  const log = options.log ?? (() => {})
   // The title stays in the user's session database and is shown by `orb session list` and the terminal UI, which set it
   // as the title of the window. The workflow's name and the node IDs are text from a file that a clone brings along.
   const title = (node: string) => plain(`${options.workflow.name} · ${node}`)
@@ -230,7 +245,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
     const worktree = within.directory === undefined && (agentOptions.worktree ?? repository !== undefined)
     if (worktree && !source && (!repository || !base))
       throw new Error(
-        `${node}: worktree agents need a git repository with a commit${options.trusted ? "" : " in a trusted folder"}`,
+        `${node}: worktree agents need a git repository with a commit${versioned ? "" : " in a trusted folder"}`,
       )
     const key = hash({
       prompt: agentOptions.prompt,
@@ -533,7 +548,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
     const worktree = teamOptions.worktree ?? repository !== undefined
     if (worktree && !source && (!repository || !base))
       throw new Error(
-        `${node}: a team in a worktree needs a git repository with a commit${options.trusted ? "" : " in a trusted folder"}`,
+        `${node}: a team in a worktree needs a git repository with a commit${versioned ? "" : " in a trusted folder"}`,
       )
     const place = worktree && repository && base && !source ? await Git.worktree(repository, id, node, base) : undefined
     const directory = place?.directory ?? home
@@ -677,7 +692,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
       return replayed.result as unknown as MergeResult
     }
     if (!repository)
-      throw new Error(`${node}: merging needs a git repository${options.trusted ? "" : " in a trusted folder"}`)
+      throw new Error(`${node}: merging needs a git repository${versioned ? "" : " in a trusted folder"}`)
     const branches = results.flatMap((result) =>
       result.status === "succeeded" && result.branch ? [result.branch] : [],
     )

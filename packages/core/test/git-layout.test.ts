@@ -11,7 +11,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { git, repository } from "./fixture/git"
 import { type Found, folders, forgeries } from "./fixture/git-forged"
-import { shapes } from "./fixture/git-passed-over"
+import { searchable, shapes } from "./fixture/git-passed-over"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -195,6 +195,7 @@ describe("GitLayout.locate, where git makes the layout", () => {
           await fs.mkdir(path.join(root, "elsewhere"))
           await fill(path.join(folder, ".git"), path.join(root, "elsewhere"))
         })
+        yield* searchable(path.join(folder, ".git"))
 
         expect(Bun.spawnSync(["git", "rev-parse", "--git-dir"], { cwd: folder, stderr: "ignore" }).exitCode).not.toBe(0)
         expect(yield* locate(folder)).toBeUndefined()

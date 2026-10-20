@@ -1,17 +1,20 @@
 export * as ProjectTrust from "./project-trust.js"
 
 import path from "path"
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Stream } from "effect"
 import type { Entry, Scope } from "@orbit/schema/config"
 import { Trust } from "@orbit/schema/trust"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Bus } from "./bus.js"
 import { Config } from "./config.js"
 import { AgentFile } from "./config/plugin/agent-file.js"
 import { CommandFile } from "./config/plugin/command-file.js"
 import { Fingerprint } from "./config/fingerprint.js"
 import { LinkShare } from "@orbit/util/link-share"
 import { ConfigTrust } from "./config/trust.js"
+import { Git } from "./git.js"
+import { GitAccess } from "./git/access.js"
 import { Location } from "./location.js"
 import { PluginSourceDirectory } from "./plugin/source-directory.js"
 import { Project } from "./project.js"
@@ -133,6 +136,14 @@ export interface Interface {
    * speaks for Orbit or for the person, as the opening line of an output style does.
    */
   readonly trustedSource: (source: Source) => Effect.Effect<boolean>
+  /**
+   * Whether Orbit may run git in `directory` (the Location's folder when not given): this Location's project is trusted,
+   * and git, asked which repository it works in there without looking above the project's folder, names a work tree, a
+   * git directory and a common directory that this decision covers or whose own folder is trusted (`GitAccess.check`).
+   * Ask it before any git command that can run a program the repository's config names. Git's answer is kept until
+   * trust changes, and the trust of each folder is read at every call. A refusal is logged once.
+   */
+  readonly git: (directory?: string) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ProjectTrust") {}
@@ -150,6 +161,36 @@ const layer = Layer.effect(
     const folders = [...new Set([location.directory, location.project.directory, location.project.canonical])]
     // Those folders as the disk has them, for comparing a real path with them however the Location was reached.
     const real = yield* Effect.forEach(folders, fs.resolve)
+
+    // The repository git works in from each folder that Orbit starts it in, as git answered, until trust changes. The
+    // question runs in a fiber of the layer, so a caller that is interrupted leaves no interrupt behind for the next one.
+    const vcs = yield* Git.Service
+    const bus = yield* Bus.Service
+    const scope = yield* Effect.scope
+    const used = new Map<string, Fiber.Fiber<Git.Repository | undefined>>()
+    // The refusals already logged, so that a refusal is logged once.
+    const refused = new Set<string>()
+    // On the live channel, which the bus makes when it starts. The channel of one event is made by its first subscriber,
+    // and two that start at the same moment can each make one, so that one of them hears nothing.
+    yield* bus.subscribe([Trust.Event.Updated]).pipe(
+      Stream.runForEach(() =>
+        Effect.sync(() => {
+          used.clear()
+          refused.clear()
+        }),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    const repositoryOf = (directory: string) =>
+      Effect.suspend(() => {
+        const known = used.get(directory)
+        if (known !== undefined) return Fiber.join(known)
+        return vcs.repo.used(AbsolutePath.make(directory), AbsolutePath.make(location.project.directory)).pipe(
+          Effect.forkIn(scope),
+          Effect.tap((fiber) => Effect.sync(() => used.set(directory, fiber))),
+          Effect.flatMap(Fiber.join),
+        )
+      })
 
     // The folders an instruction file may import from, as the disk has them: each project folder that can be trusted for
     // good, and the folder the session started in when it can be too or is trusted now. The home directory and a
@@ -505,6 +546,15 @@ const layer = Layer.effect(
       }),
       supplies,
       trustedSource,
+      git: Effect.fn("ProjectTrust.git")(function* (directory = location.directory) {
+        const answer = yield* GitAccess.check({ fs, trust }, { decision: root, folders, used: repositoryOf(directory) })
+        if (answer.repository !== undefined) return true
+        const key = `${directory}\0${answer.refused?.reason}`
+        if (answer.refused === undefined || refused.has(key)) return false
+        refused.add(key)
+        yield* GitAccess.log(directory, answer.refused)
+        return false
+      }),
     })
   }),
 )
@@ -512,5 +562,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [WorkspaceTrust.node, Config.node, Location.node, FSUtil.node],
+  deps: [WorkspaceTrust.node, Config.node, Location.node, FSUtil.node, Git.node, Bus.node],
 })

@@ -10,6 +10,7 @@ import { Database } from "./database/database.js"
 import { Worktree } from "@orbit/schema/worktree"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Git } from "./git.js"
+import { GitAccess } from "./git/access.js"
 import { GitLayout } from "./git/layout.js"
 import { AppProcess } from "@orbit/util/process"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
@@ -441,13 +442,20 @@ const layer = Layer.effect(
       // run, and a project is resolved when a client opens the folder, before anyone is asked about it (class 1). So git
       // starts only for a folder that is trusted. The decision is the main checkout's for a linked worktree, as
       // `ProjectTrust` takes it, and the layout says which that is without asking git. Any other folder is read from its
-      // files, and is its own project when they name no remote, as an untrusted Mercurial folder is.
-      const trusted = holder ? (yield* trust.status(layout?.canonical ?? holder)).trusted : false
-      const repo = holder && trusted ? yield* git.repo.discover(holder) : undefined
-      // A trusted folder that git gives no answer for (git on no PATH, a config or an owner that git refuses) is read from
-      // its files as well, as it was before the grant, so that its project, its folders and the decision that covers them
-      // stay what they were (class 3).
-      if (layout && (!trusted || !repo)) {
+      // files, and is its own project when they name no remote, as an untrusted Mercurial folder is. Git follows what the
+      // folder's `.git` names, so once the folder is trusted git is first asked which repository it uses, and is used no
+      // further unless that repository's folders are trusted too (`GitAccess`).
+      const decision = layout?.canonical ?? holder
+      const access: GitAccess.Answer =
+        holder && decision
+          ? yield* GitAccess.check({ fs, trust }, { decision, folders: [holder, decision], used: git.repo.used(holder, holder) })
+          : {}
+      if (holder && access.refused) yield* GitAccess.log(holder, access.refused)
+      const repo = access.repository
+      // A trusted folder that git gives no answer for (git on no PATH, a config or an owner that git refuses), or whose
+      // repository is in a folder that is not trusted, is read from its files as well, as it was before the grant, so that
+      // its project, its folders and the decision that covers them stay what they were (class 3).
+      if (layout && !repo) {
         return yield* persist({
           id:
             remoteID(yield* GitLayout.remote(fs, layout)) ??

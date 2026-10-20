@@ -5,7 +5,7 @@ import { Effect, Option, Schema } from "effect"
 import path from "node:path"
 import { ServerConnection } from "../../../services/server-connection"
 import { bypassDecision, printBypassNotice } from "../../../util/managed-bypass"
-import { folderTrusted, requireTrust } from "../../../util/trust"
+import { requireTrust, trustedProject } from "../../../util/trust"
 
 /** The server a flow command asks about trust and runs its agents on, as `--server`, `--standalone` and `--trust` pick it. */
 export const connect = Effect.fn("cli.flow.connect")(function* (input: {
@@ -42,7 +42,7 @@ export const execute = Effect.fn("cli.flow.execute")(function* (
   // folder of the run. For a resumed run the file is the one the repository's run store names.
   const trust = yield* trustOptions(file, "workflow")
   yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
-  const trusted = yield* folderTrusted(client, directory())
+  const project = yield* trustedProject(client, directory())
   const bypass = yield* bypassDecision(client, directory(), input.auto)
   printBypassNotice(bypass.notice)
   const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
@@ -52,7 +52,8 @@ export const execute = Effect.fn("cli.flow.execute")(function* (
       workflow,
       file,
       directory: directory(),
-      trusted,
+      trusted: project !== undefined,
+      project,
       input: input.input,
       resume: input.resume,
       permissions: bypass.auto ? "auto" : "reject",

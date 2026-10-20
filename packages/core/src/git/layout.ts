@@ -130,10 +130,12 @@ const unverified = (here: AbsolutePath, entry: string): Layout => ({
 // folder above, so a folder whose `.git` git would pass over must not stand for the repository: the person would be asked
 // about this folder while git works in the one above (class 3). Where Orbit cannot match git exactly it is stricter, and
 // the folder it names then lies above the one git uses: a `HEAD` that is a link, a `HEAD` past 4 KiB, and an `objects` or
-// `refs` that is not a directory are passed over.
+// `refs` that is not a directory, or that cannot be searched, are passed over. `HEAD` is matched as bytes, as git reads
+// it, so a byte order mark in front of `ref:` is not skipped the way a text decoder skips it.
 const ordinary = Effect.fnUntraced(function* (files: Files, here: AbsolutePath, entry: string) {
   const head = path.join(entry, "HEAD")
-  if ((yield* files.link(head)) || !HEAD_TEXT.test((yield* files.text(head, POINTER_LIMIT))?.slice(0, 255) ?? ""))
+  const start = (yield* files.bytes(head, POINTER_LIMIT))?.subarray(0, 255)
+  if ((yield* files.link(head)) || !HEAD_TEXT.test(start === undefined ? "" : String.fromCharCode(...start)))
     return undefined
   // `commondir` moves refs, objects and config to another directory. `git worktree add` writes it into an entry under
   // `worktrees` and never into a `.git` directory, so one here is a layout that a clone forged for git to follow. Git
@@ -158,12 +160,14 @@ const ordinary = Effect.fnUntraced(function* (files: Files, here: AbsolutePath, 
 // with a commit ID (40 hex digits, which a 64-digit one starts with too).
 const HEAD_TEXT = /^(?:ref:[ \t\r\n]*refs\/|[0-9a-fA-F]{40})/
 
-// The directories that every git directory needs beside its `HEAD`.
+// The directories that every git directory needs beside its `HEAD`. Git asks that it may search each of them (`access`
+// with `X_OK`), which a folder whose mode is 000 does not allow.
 const shared = Effect.fnUntraced(function* (files: Files, directory: string) {
-  return (
-    (yield* files.stat(path.join(directory, "objects")))?.type === "Directory" &&
-    (yield* files.stat(path.join(directory, "refs")))?.type === "Directory"
-  )
+  for (const name of ["objects", "refs"]) {
+    const folder = path.join(directory, name)
+    if ((yield* files.stat(folder))?.type !== "Directory" || !(yield* files.searchable(folder))) return false
+  }
+  return true
 })
 
 // A `.git` file is a pointer. An invalid one is not a repository, as for git. A valid one is a linked worktree only when its
@@ -225,11 +229,24 @@ function reader(fs: FSUtil.Interface) {
     if (info?.type !== "File" || Number(info.size) > limit) return undefined
     return yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => undefined))
   })
+  const bytes = Effect.fnUntraced(function* (file: string, limit: number) {
+    const info = yield* stat(file)
+    if (info?.type !== "File" || Number(info.size) > limit) return undefined
+    return yield* fs.readFile(file).pipe(Effect.orElseSucceed(() => undefined))
+  })
+  // Whether a name can be looked up in a directory, which is what searching it means: `.` is a name in every directory,
+  // so asking for it looks inside without opening any name that a clone chose. Called only for a directory that `stat`
+  // found, after the share check.
+  const searchable = (directory: string) =>
+    fs.stat(`${directory}${path.sep}.`).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    )
   // The real path, as the trust store spells it, so that two answers about one place agree.
   const real = Effect.fnUntraced(function* (file: string) {
     if (yield* LinkShare.blocked(fs, file, reads)) return undefined
     return yield* fs.realPath(file).pipe(Effect.map(FSUtil.normalizePath), Effect.orElseSucceed(() => undefined))
   })
   const link = (file: string) => fs.readLink(file).pipe(Effect.as(true), Effect.orElseSucceed(() => false))
-  return { stat, text, real, link }
+  return { stat, text, bytes, searchable, real, link }
 }

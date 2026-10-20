@@ -122,12 +122,13 @@ test("a merge that would overwrite untracked files reports them and changes noth
 })
 
 // Review of #118: the run store is found by two lookups, and in a folder with a stray empty `.git` directory they must
-// name the same folder, or `orb flow run` writes one store and `orb flow ls` reads another.
+// name the same folder, or `orb flow run` writes one store and `orb flow ls` reads another. The server names the
+// repository above as the project of such a folder, which is where `root` may look.
 test("holder passes over a .git directory with no HEAD, as root does", async () => {
   const directory = await repository("stray")
   const inner = path.join(directory, "sub")
   await fs.mkdir(path.join(inner, ".git"), { recursive: true })
 
   expect(Git.holder(inner)).toBe(directory)
-  expect(await Git.root(inner)).toBe(directory)
+  expect(await Git.root(inner, { directory, canonical: directory })).toEqual({ root: await fs.realpath(directory) })
 })

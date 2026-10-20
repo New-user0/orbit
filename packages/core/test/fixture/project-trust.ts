@@ -25,6 +25,7 @@ export const trustedProject = Layer.mock(ProjectTrust.Service, {
   leads: (file) => Effect.succeed(file),
   supplies: () => Effect.succeed(true),
   trustedSource: () => Effect.succeed(true),
+  git: () => Effect.succeed(true),
 })
 
 /**

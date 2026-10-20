@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
+import { realpathSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Logger } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
@@ -14,13 +15,16 @@ import { ProjectTrust } from "@orbit/core/project-trust"
 import { VcsGitPlugin } from "@orbit/core/plugin/vcs/git"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionSchema } from "@orbit/core/session/schema"
+import { Snapshot } from "@orbit/core/snapshot"
 import { Vcs } from "@orbit/core/vcs"
 import { VcsInstructions } from "@orbit/core/vcs/instructions"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { WorktreeGit } from "@orbit/core/worktree/git"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { AppProcess } from "@orbit/util/process"
-import { inner, opened, outer, shapes } from "./fixture/git-passed-over"
+import { git } from "./fixture/git"
+import { inner, opened, outer, pointers, shapes } from "./fixture/git-passed-over"
 import { traced } from "./fixture/git-trace"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
@@ -52,56 +56,87 @@ const it = testEffect(Layer.empty)
 const SLOW = 120_000
 const abs = AbsolutePath.make
 
+/** What a person trusted besides the Location's project, and the main checkout of that project when it is not its folder. */
+interface Options {
+  readonly also?: readonly string[]
+  readonly canonical?: string
+}
+
 // A Location whose project is `folder`, a git repository by the Location's account, in a graph where nothing is trusted
 // until the test grants it.
-const named = (folder: string) => [
-  ...untrustedProjectNodes,
-  Location.node.replace(
-    Layer.succeed(
-      Location.Service,
-      Location.Service.of(
-        location({ directory: abs(folder) }, { vcs: { type: "git", store: abs(path.join(folder, ".git")) } }),
+const named = (folder: string, options: Options = {}) => {
+  const found = location({ directory: abs(folder) }, { vcs: { type: "git", store: abs(path.join(folder, ".git")) } })
+  return [
+    ...untrustedProjectNodes,
+    Location.node.replace(
+      Layer.succeed(
+        Location.Service,
+        Location.Service.of({ ...found, project: { ...found.project, canonical: abs(options.canonical ?? folder) } }),
       ),
     ),
-  ),
-]
+  ]
+}
 
-// The person trusts the Location's project, which is the folder the dialog named.
-const grant = Effect.gen(function* () {
-  const trust = yield* ProjectTrust.Service
-  yield* trust.grant({ persist: false, via: "test" })
-})
+// The person trusts the Location's project, which is the folder the dialog named, and the folders of `also`.
+const grant = (options: Options) =>
+  Effect.gen(function* () {
+    const trust = yield* ProjectTrust.Service
+    yield* trust.grant({ persist: false, via: "test" })
+    const store = yield* WorkspaceTrust.Service
+    for (const folder of options.also ?? []) yield* store.grant(folder, { persist: false, via: "test" })
+  })
+
+// The git worktree strategy, run in `folder` once the person has trusted it and the folders of `also`. A refusal is a value.
+const worktrees = <A, E>(
+  folder: string,
+  options: Options,
+  act: (strategy: Effect.Success<typeof WorktreeGit.make>) => Effect.Effect<A, E>,
+) =>
+  Effect.gen(function* () {
+    const trust = yield* WorkspaceTrust.Service
+    for (const item of [folder, ...(options.also ?? [])]) yield* trust.grant(item, { persist: false, via: "test" })
+    return yield* Effect.exit(act(yield* WorktreeGit.make))
+  }).pipe(
+    Effect.provide(AppNodeBuilder.build(LayerNode.group([WorkspaceTrust.node, Git.node, FSUtil.node]), untrustedProjectNodes)),
+  )
 
 interface Surface {
   readonly name: string
   /** Whether a command of the surface runs a program that the planted config names, once its repository is trusted. */
   readonly programs: boolean
+  /** Whether the surface starts git for more than the question which repository git uses, once it may. */
+  readonly beyond: boolean
   /** Runs the surface for a Location whose project is `folder`, once the person has trusted that folder. */
-  readonly run: (folder: string) => Effect.Effect<unknown, unknown>
+  readonly run: (folder: string, options?: Options) => Effect.Effect<unknown, unknown>
 }
 
 const surfaces: readonly Surface[] = [
   {
     name: "the git snapshot of a session (VcsInstructions)",
     programs: true,
-    run: (folder) =>
+    beyond: true,
+    run: (folder, options = {}) =>
       Effect.gen(function* () {
-        yield* grant
+        yield* grant(options)
         const vcs = yield* VcsInstructions.Service
         const read = yield* vcs.source({ id: SessionSchema.ID.make("ses_passed_over") })[0]!.read
         return read === Instructions.removed ? "none" : read
       }).pipe(
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([VcsInstructions.node, ProjectTrust.node, Database.node, Bus.node]), named(folder)),
+          AppNodeBuilder.build(
+            LayerNode.group([VcsInstructions.node, ProjectTrust.node, WorkspaceTrust.node, Database.node, Bus.node]),
+            named(folder, options),
+          ),
         ),
       ),
   },
   {
     name: "the Git provider's info, status, diff and review base (VcsGit)",
     programs: true,
-    run: (folder) =>
+    beyond: true,
+    run: (folder, options = {}) =>
       Effect.gen(function* () {
-        yield* grant
+        yield* grant(options)
         const vcs = yield* Vcs.Service
         const context = host()
         yield* VcsGitPlugin.Plugin.effect({ ...context, vcs: { ...context.vcs, transform: vcs.transform, reload: vcs.reload } })
@@ -116,7 +151,7 @@ const surfaces: readonly Surface[] = [
         Effect.provide(
           AppNodeBuilder.build(
             LayerNode.group([Vcs.node, Bus.node, Location.node, ProjectTrust.node, WorkspaceTrust.node, AppProcess.node, FSUtil.node]),
-            named(folder),
+            named(folder, options),
           ),
         ),
       ),
@@ -124,17 +159,59 @@ const surfaces: readonly Surface[] = [
   {
     name: "the ignore check of language server results (Lsp.ignored)",
     programs: false,
-    run: (folder) =>
+    beyond: true,
+    run: (folder, options = {}) =>
       Effect.gen(function* () {
-        yield* grant
+        yield* grant(options)
         const lsp = yield* Lsp.Service
         return [...(yield* lsp.ignored([path.join(folder, "hidden.txt")]))]
-      }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([Lsp.node, ProjectTrust.node]), named(folder)))),
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Lsp.node, ProjectTrust.node, WorkspaceTrust.node]), named(folder, options)),
+        ),
+      ),
   },
   {
-    // Snapshot, InstructionNotes.keepOut and the git worktree strategy call it with the folder the decision covers.
+    name: "the undo snapshot of a step and its comparison (Snapshot)",
+    programs: false,
+    beyond: true,
+    run: (folder, options = {}) =>
+      Effect.gen(function* () {
+        yield* grant(options)
+        const snapshot = yield* Snapshot.Service
+        const taken = yield* snapshot.capture()
+        // A comparison opens the repository too; with no snapshot taken here, it compares one that a name stands for.
+        const tree = taken ?? Snapshot.ID.make("0000000000000000000000000000000000000000")
+        return { taken, compared: yield* Effect.exit(snapshot.files({ from: tree, to: tree })) }
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Snapshot.node, ProjectTrust.node, WorkspaceTrust.node]), named(folder, options)),
+        ),
+      ),
+  },
+  {
+    name: "the worktree list of the git strategy (WorktreeGit.list)",
+    programs: false,
+    beyond: true,
+    run: (folder, options = {}) => worktrees(folder, options, (strategy) => strategy.list(abs(folder))),
+  },
+  {
+    name: "a new worktree of the git strategy (WorktreeGit.create)",
+    programs: false,
+    beyond: true,
+    run: (folder, options = {}) =>
+      worktrees(folder, options, (strategy) =>
+        strategy.create({
+          sourceDirectory: abs(folder),
+          directory: abs(path.join(path.dirname(folder), `made-${path.basename(folder)}`)),
+        }),
+      ),
+  },
+  {
+    // InstructionNotes.keepOut calls it with the folder the decision covers.
     name: "Git.repo.discover",
     programs: false,
+    beyond: false,
     run: (folder) =>
       Effect.gen(function* () {
         const git = yield* Git.Service
@@ -144,10 +221,11 @@ const surfaces: readonly Surface[] = [
   {
     name: "Project.resolve",
     programs: false,
-    run: (folder) =>
+    beyond: true,
+    run: (folder, options = {}) =>
       Effect.gen(function* () {
         const trust = yield* WorkspaceTrust.Service
-        yield* trust.grant(folder, { persist: false, via: "test" })
+        for (const item of [folder, ...(options.also ?? [])]) yield* trust.grant(item, { persist: false, via: "test" })
         const project = yield* Project.Service
         return yield* project.resolve(abs(folder))
       }).pipe(
@@ -245,6 +323,102 @@ describe("git that Orbit starts for a trusted folder stays out of the untrusted 
 
           expect(opened(result.worktrees, found.root)).toBe(true)
           if (surface.programs) expect((yield* found.ran()).length).toBeGreaterThan(0)
+        }),
+      SLOW,
+    )
+})
+
+// Classes 1 and 3: a `.git` in `sub` that git does take for a repository, and that leads it into the untrusted repository
+// above (`pointers`). The ceiling cannot help, because git follows the pointer and does not walk up. Resolving `sub` names
+// `sub` (it is its own project until it is trusted, and keeps that name), so the person is asked about `sub`, and once
+// they trust it each surface asks git which work tree, git directory and common directory it uses there, finds a
+// directory of the repository above among them, and runs nothing more (`ProjectTrust.git`, `GitAccess`). Every row first
+// checks with a plain git that git does use a directory of the repository above. Mutation: `GitAccess.check` answering
+// with git's repository whatever folders it is in fails the outer program rows of the snapshot and the provider, and the
+// "starts no other git" assertion of every surface but `discover` (which only asks).
+// Controls: once the repository above is trusted as well, each surface goes on and the snapshot and the provider run its
+// program; and a linked worktree that its repository lists goes on once its main checkout is trusted.
+describe("git that Orbit starts for a trusted folder does not follow its .git into an untrusted repository", () => {
+  // The common directory that a plain git in `folder` uses, as a real path.
+  const common = (folder: string) =>
+    Effect.sync(() => {
+      const child = Bun.spawnSync(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], {
+        cwd: folder,
+        stdout: "pipe",
+        stderr: "ignore",
+      })
+      return realpathSync.native(child.stdout.toString().trim())
+    })
+  // The git processes that did more than ask which repository git uses.
+  const further = (lines: readonly string[]) => lines.filter((line) => !/\srev-parse\s/.test(` ${line} `))
+  // Runs `effect` and keeps the folder that each refusal it logged names.
+  const refusals = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const folders: unknown[] = []
+      const logger = Logger.make((entry) => {
+        const [message, fields] = Array.isArray(entry.message) ? entry.message : [entry.message]
+        if (message === "git not used for this folder") folders.push((fields as { folder?: unknown } | undefined)?.folder)
+      })
+      const value = yield* effect.pipe(Effect.provide(Logger.layer([logger])))
+      return { value, folders }
+    })
+
+  for (const surface of surfaces)
+    for (const [name, fill] of pointers) {
+      it.live(
+        `${surface.name}, for ${name}`,
+        () =>
+          Effect.gen(function* () {
+            const found = yield* outer(fill)
+            const used = yield* common(found.sub)
+            expect(FSUtil.contains(path.join(found.root, ".git"), used)).toBe(true)
+
+            const result = yield* traced(refusals(surface.run(found.sub)))
+
+            expect(yield* found.ran()).toEqual([])
+            expect(further(result.git)).toEqual([])
+            // One line, however often the surface asked, names the folder to trust; `discover` asks nothing.
+            expect(result.value.folders).toEqual(surface.beyond ? [found.root] : [])
+            expect((yield* (yield* WorkspaceTrust.Service).status(found.root)).trusted).toBe(false)
+          }).pipe(Effect.provide(AppNodeBuilder.build(WorkspaceTrust.node, untrustedProjectNodes))),
+        SLOW,
+      )
+
+      it.live(
+        `${surface.name}, for ${name}: goes on once the repository above is trusted too (control)`,
+        () =>
+          Effect.gen(function* () {
+            const found = yield* outer(fill)
+
+            const result = yield* traced(surface.run(found.sub, { also: [found.root] }))
+
+            if (surface.beyond) expect(further(result.git).length).toBeGreaterThan(0)
+            if (surface.programs) expect((yield* found.ran()).length).toBeGreaterThan(0)
+          }),
+        SLOW,
+      )
+    }
+
+  for (const surface of surfaces)
+    it.live(
+      `${surface.name}: a linked worktree that its repository lists goes on once its main checkout is trusted (control)`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* outer()
+          const worktree = path.join(found.folder, "linked")
+          yield* Effect.promise(async () => {
+            await git(found.root, "worktree", "add", "-q", "--detach", worktree)
+            // A changed file that the attributes give the planted filter and text conversion.
+            await Bun.write(path.join(worktree, ".gitattributes"), "*.txt filter=marker diff=marker\n")
+            await Bun.write(path.join(worktree, "a.txt"), "three\n")
+          })
+          const linked = realpathSync.native(worktree)
+          const before = (yield* found.ran()).length
+
+          const result = yield* traced(surface.run(linked, { also: [found.root], canonical: found.root }))
+
+          if (surface.beyond) expect(further(result.git).length).toBeGreaterThan(0)
+          if (surface.programs) expect((yield* found.ran()).length).toBeGreaterThan(before)
         }),
       SLOW,
     )

@@ -149,7 +149,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   terminal, and what an include names.
   - `Project.resolve` and the provider start no git for a folder until `WorkspaceTrust` trusts it, and the watcher starts
     none for any folder. The decision is the main checkout's for a linked worktree, as `ProjectTrust` takes it. A trusted
-    folder keeps its git as before.
+    folder gets its git once git says that the repository it uses there lies in trusted folders (the `GitAccess` bullet
+    below).
   - `Project.resolve` reads `.git` and the shared `config` itself (`GitLayout`, `packages/core/src/git/layout.ts`). It
     opens only what git wrote for the folder: its own `.git` directory, or the entry that its repository keeps for a linked
     worktree, which names the folder back. To tell the two apart it reads the pointer and, in the directory the pointer
@@ -157,15 +158,20 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     opens nothing else there until the entry names the folder back
     (`packages/core/test/git-layout.test.ts`, "reads only the pointer and the commondir and gitdir of the entry it names").
     A `.git` that is a link, a submodule or separate git directory, and a layout that names another repository's
-    directories, are named and left alone: their directories are not read further. A `.git` directory names the project
+    directories, make the folder that holds them a project of its own, and the directories they name are not read
+    further. Trusting that folder does not let git follow them: git is asked first where they lead (the `GitAccess`
+    bullet below). A `.git` directory names the project
     only when git would take it for a repository: its `HEAD` names a ref under `refs/` or holds a commit ID, and `objects`
     and `refs` are directories beside it, or in the directory that its `commondir` names, where nothing else is asked
     about and a share is not looked at (`test/git-layout.test.ts`, "never touches a share that a .git directory's
     commondir names"). Git goes on to the repository above any other `.git` directory, and so does `Project.resolve`, so
     the folder the person is asked about is the one git uses (`test/git-passed-over.test.ts`, "Project.resolve names the
-    repository that git uses", five shapes that git passes over; `test/git-layout.test.ts`). Where Orbit cannot tell
-    exactly what git does it passes over more: a `HEAD` that is a link or is over 4 KiB (`test/git-layout.test.ts`, the
-    "passes over" rows). A `.git` file that is no good ends the search. A read that fails,
+    repository that git uses", the shapes that git passes over: seven, six on Windows; `test/git-layout.test.ts`). `HEAD`
+    is matched as the bytes git reads, so a byte order mark in front of `ref:` is not skipped as a text decoder skips it,
+    and `objects` and `refs` must be folders that can be searched, as git asks of both: a `HEAD` that starts with a byte
+    order mark, and an `objects` folder of mode 000 (outside Windows, for an account other than root), are two of those
+    shapes. Where Orbit cannot tell exactly what git does it passes over more: a `HEAD` that is a link or is over 4 KiB
+    (`test/git-layout.test.ts`, the "passes over" rows). A `.git` file that is no good ends the search. A read that fails,
     is blocked (a share), is over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there",
     never an error, and each folder is judged alone (class 7). The project is named by the remote URL in that config as
     written, which `git remote get-url` gives a trusted folder too unless an include or `url.<base>.insteadOf` rewrites it,
@@ -237,13 +243,48 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     Snapshot and `WorktreeGit` give as the folder the decision covers. Without it, a `.git` in that folder that git passes
     over would hand the command to the repository above, with that repository's config. A project whose folder above has
     the list separator in its path (`;` on Windows, `:` elsewhere) cannot be bounded this way and gets no git. Proof:
-    `test/git-passed-over.test.ts` (five shapes that git passes over, each with the snapshot, the provider, `Lsp.ignored`,
-    `discover` and `Project.resolve` run for a Location that names the folder, after a grant of the folder; controls where
-    the folder's own repository is opened and where the repository above is opened once it is trusted; and the `Git.ceiling`
-    rows) and its rows in `test/instruction-notes.test.ts`. Mutations: `Git.ceiling` answering `{}` fails the rows of the
-    snapshot, the provider, `Lsp.ignored` and `discover`; with the `HEAD`-only check of `GitLayout` restored as well, the
-    `Project.resolve` rows and four of the five `InstructionNotes` rows fail too (that check leaves the fifth shape's
-    layout unverified, which gets no exclude step).
+    `test/git-passed-over.test.ts` (the shapes that git passes over, each with the git snapshot, the provider,
+    `Lsp.ignored`, the undo snapshot, the worktree list, a new worktree, `discover` and `Project.resolve` run for a
+    Location that names the folder, after a grant of the folder; controls where the folder's own repository is opened and
+    where the repository above is opened once it is trusted; and the `Git.ceiling` rows) and its rows in
+    `test/instruction-notes.test.ts`. Mutations: `Git.ceiling` answering `{}` fails the rows of the git snapshot, the
+    provider, `Lsp.ignored`, the undo snapshot and `discover`; with the `HEAD`-only check of `GitLayout` restored as well,
+    the `Project.resolve` rows and the `InstructionNotes` rows fail too, all but the `commondir` shape's, whose layout
+    that check leaves unverified, which gets no exclude step.
+  - The ceiling does not help where the folder's `.git` leads git elsewhere, because git follows it without walking up: a
+    `.git` file that names another git directory (as a submodule's does), a `.git` directory whose `commondir` names one,
+    a `.git` that is a link or junction. Git then applies the config and hooks of the repository it lands in. So before
+    Orbit's own git does anything in a trusted folder that can start a program, git is asked which work tree, git
+    directory and common directory it would use there (`Git.repo.used`: `rev-parse` under the ceiling, which starts no
+    program that a config names), and nothing more runs unless each of the three lies in the folders of the Location's
+    decision or in a folder trusted in its own right: the nearest folder at or above it that holds `.git` or `.hg`, or
+    the directory itself (`GitAccess.check`, `packages/core/src/git/access.ts`). A linked worktree that its repository
+    lists goes on once its main checkout is trusted, and a submodule once the repository around it is. Otherwise the
+    folder has no repository for Orbit's git, and a log line, `git not used for this folder`, names the folder to trust.
+    `ProjectTrust.git` asks it for a Location before the git snapshot, the provider, `Lsp.ignored` and the undo snapshot
+    (its capture and comparison) start git; it keeps git's answer until trust changes, reads the trust of each
+    folder at every call, and logs a refusal once. `Project.resolve` and `WorktreeGit` (a list or a new worktree) ask
+    `GitAccess.check` themselves, and a trusted folder that it refuses keeps the project that its files name, as before
+    the grant. The flow runner asks in `Git.root` of `packages/flow`, more strictly: the three must lie in the run's
+    folder or the project's folders as the server resolved them, which `orb flow run`, `orb eval` and `orb flow clean`
+    pass (`trustedProject` in `packages/cli/src/util/trust.ts`), and every git it starts has a ceiling of its own
+    (`Git.git`). Proof: `test/git-passed-over.test.ts`, "git that Orbit starts for a trusted folder does not follow its
+    .git into an untrusted repository" (four shapes: a `.git` file that names the git directory above, a `.git` directory
+    whose `commondir` names it, a `.git` junction or link to it, and a `.git` file that names a submodule's directory in
+    the repository above holding that repository's config; each with the git snapshot, the provider, `Lsp.ignored`, the
+    undo snapshot and a comparison, the worktree list, a new worktree, `discover` and `Project.resolve`, first checked
+    with a plain git that uses the directories above; no planted program runs, no git but `rev-parse` starts, and one log
+    line names the repository above; controls: each surface goes on once the repository above is trusted too, and the
+    snapshot and the provider run its program, and a linked worktree goes on once its main checkout is trusted),
+    `packages/flow/test/git-passed-over.test.ts` (the same four shapes and three that git passes over, with runs in the
+    repository itself and in a linked worktree as controls, and rows for the ceiling of `Git.git`), and
+    `packages/cli/test/flow.test.ts` and `flow-verify.test.ts` (`orb flow clean` stops in a folder whose `.git` leads
+    elsewhere; `orb flow run`, `orb eval` and `orb flow clean` in a folder inside a repository use that repository).
+    Mutations: `GitAccess.check` taking git's answer whatever folders it names fails the rows of every surface that goes
+    past the question (all but `discover`); logging every refusal fails the provider's four; `Git.root` of the flow doing
+    the same fails its four rows; dropping the ceiling of `Git.git` fails its rows; matching `HEAD` as decoded text fails
+    the byte order mark row of `test/git-layout.test.ts` and that shape's row of "Project.resolve names the repository
+    that git uses".
   - Proof: `test/project-git-trust.test.ts` (one row for each of eleven keys, a linked worktree, and every layout of
     `test/fixture/git-forged.ts`), `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts` ("finds the git
     directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts`, `test/worktree-untrusted-git.test.ts` and `test/git.test.ts`. Each row
@@ -254,7 +295,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 --oneline`, `config user.name` and the refs of `origin` run in the session's folder, and git applies that folder's
   config to them (`core.fsmonitor`, `include.path`, `gpg.program` with `log.showSignature`), with no `-c` override. The
   source asks `ProjectTrust.trusted()` first at every read, whatever else it knows, and starts no git for a folder that is
-  not trusted. A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
+  not trusted, and before it captures it asks `ProjectTrust.git` whether the repository git uses there lies in trusted
+  folders (the `GitAccess` bullet above). A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
   once when trust is granted, as a durable update. A repository is told by `Location.vcs`, which `Project.resolve` reads
   from files, never by `Git.repo.discover`, which starts `git rev-parse`. `git_status` is a filter in `ConfigTrust` that keeps
   only `false`, as does the agent `context`: the later document wins, so a folder above a trusted project could
@@ -701,8 +743,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - The flow runner's git (`run` and `evaluate` in `packages/flow`: root, exclude, head, dirty check, worktrees, commits,
   merges, review diff), which reads the index and applies `core.fsmonitor`, clean filters and hooks of the clone: class 1,
   gated on `trusted`, which `orb flow run` and `orb eval` take from the server after `requireTrust` and `replay` sets to
-  false (class 12). Proof: `packages/cli/test/trust.test.ts`, rows per key and door; the refusals that say "in a
-  trusted folder" (a worktree agent, a team in a worktree, a merge): `packages/flow/test/runner-untrusted.test.ts`. The
+  false (class 12). In a trusted folder the runner uses the repository only when git says that its work tree, git
+  directory and common directory lie in the run's folder or the project's folders that the server resolved, and logs
+  one line when they do not (`Git.root`; the `GitAccess` bullet above). Proof: `packages/cli/test/trust.test.ts`, rows
+  per key and door; the refusals that say "in a trusted folder" (a worktree agent, a team in a worktree, a merge):
+  `packages/flow/test/runner-untrusted.test.ts`; `packages/flow/test/git-passed-over.test.ts`. The
   base commit is taken from the store of a resumed run only where git may run. Proof: "a resume in an untrusted folder
   takes no worktree from the run store for the review diff of a verify node" in
   `packages/flow/test/runner-resume-untrusted.test.ts` (the store names a folder outside whose `core.fsmonitor` writes a
@@ -1198,6 +1243,10 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
   now" when another folder comes into view. The plugin gate asks about the folder the UI was started in
   (`TrustProvider directory={cwd}` in `packages/tui/src/app.tsx`), and `trust.startup.above` carries the folders above
   the project that the server holds back.
+- Orbit's own git in a trusted folder follows what the folder's `.git` names, so its repository is decided by asking git
+  which work tree, git directory and common directory it would use, never by a copy of git's rules for finding one:
+  `ProjectTrust.git` for a Location, `GitAccess.check` for `Project.resolve` and `WorktreeGit`, and `Git.root` for the
+  flow runner. Each of the three must lie in a folder whose decision is trusted.
 - When the components disagree, take the stricter answer and log it.
 
 **How to test:**
@@ -2521,7 +2570,10 @@ The program-wide register of every follow-up, these gaps included, with each one
   `packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and `hooks/post-checkout`, each with a
   trusted control; the tasks of an eval still run agents, whose sessions take no undo snapshot while the folder is not trusted); a repository with no config of its own, which shows no
   branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
-  for hooks and stdio MCP servers below); and fingerprints, which do not cover `.git`. A project is still named by the remote URL in the folder's config, which a
+  for hooks and stdio MCP servers below); fingerprints, which do not cover `.git`; and the question that decides whether
+  a trusted folder's git may follow its `.git` elsewhere (`Git.repo.used` and `Git.root` of the flow, which run `rev-parse`):
+  git reads the config of the repository it lands in, includes and all, before Orbit has decided anything about that
+  repository, so it can open a file or a share that an include there names. A project is still named by the remote URL in the folder's config, which a
   clone can write (Shared approvals, above). Mercurial was never part of this gap: neither `Project.resolve` nor the
   Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
   (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does

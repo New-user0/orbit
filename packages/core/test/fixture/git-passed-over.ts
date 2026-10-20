@@ -7,14 +7,20 @@ import { tmpdirScoped } from "./tmpdir"
 
 // A `.git` directory that git does not take for a repository: git passes over it and uses the repository above, with that
 // repository's config (class 1, class 3). Git takes one only when its `HEAD` names a ref under `refs/` or holds a commit
-// ID, and the directory with its shared files has `objects` and `refs` (in the directory that a `commondir` names, when
-// there is one). Each shape fills `entry`, the `.git` of a folder, with one way to miss; `elsewhere` is an empty folder.
+// ID, read as bytes, and the directory with its shared files has `objects` and `refs` that it may search (in the
+// directory that a `commondir` names, when there is one). Each shape fills `entry`, the `.git` of a folder, with one way
+// to miss; `elsewhere` is an empty folder.
 
 export type Shape = readonly [name: string, fill: (entry: string, elsewhere: string) => Promise<void>]
 
-const head = (entry: string, text = "ref: refs/heads/main\n") => fs.writeFile(path.join(entry, "HEAD"), text)
+const head = (entry: string, text: string | Uint8Array = "ref: refs/heads/main\n") =>
+  fs.writeFile(path.join(entry, "HEAD"), text)
 const folders = (entry: string, ...names: string[]) =>
   Promise.all(names.map((name) => fs.mkdir(path.join(entry, name), { recursive: true })))
+
+// A folder that its owner cannot search stops git only where permissions are checked: outside Windows, and for an
+// account other than root, which may search any folder.
+const searchChecked = process.platform !== "win32" && process.getuid?.() !== 0
 
 export const shapes: readonly Shape[] = [
   ["a .git that holds only HEAD", (entry) => head(entry)],
@@ -32,7 +38,34 @@ export const shapes: readonly Shape[] = [
       await fs.writeFile(path.join(entry, "commondir"), `${elsewhere}\n`)
     },
   ],
+  [
+    "a .git whose HEAD starts with a byte order mark",
+    async (entry) => {
+      await folders(entry, "objects", "refs")
+      await head(entry, new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("ref: refs/heads/main\n")]))
+    },
+  ],
+  ...(searchChecked
+    ? ([
+        [
+          "a .git whose objects folder cannot be searched (mode 000)",
+          async (entry) => {
+            await folders(entry, "objects", "refs")
+            await head(entry)
+            await fs.chmod(path.join(entry, "objects"), 0o000)
+          },
+        ],
+      ] satisfies Shape[])
+    : []),
 ]
+
+/** Lets the folders of a `.git` that a shape made unsearchable be searched again, so that the test can remove them. */
+export const searchable = (entry: string) =>
+  Effect.addFinalizer(() =>
+    Effect.promise(() =>
+      Promise.all(["objects", "refs"].map((name) => fs.chmod(path.join(entry, name), 0o755).catch(() => undefined))),
+    ),
+  )
 
 // The keys that the surfaces reach: `status` runs the file system monitor and the clean filter, `diff` the clean filter
 // and the text conversion, and `log` the program that checks a signature. The signed commit is made first, because
@@ -46,6 +79,59 @@ const real = (file: string) => realpathSync.native(file)
 // The keys of the filter and the text conversion each write a `.gitattributes` that selects their own driver; both drivers
 // are selected here.
 const attributes = (root: string) => Bun.write(path.join(root, ".gitattributes"), "*.txt filter=marker diff=marker\n")
+
+/**
+ * A `.git` in `sub` that git takes for a repository, and that leads git into the repository of `outer` above it, whose
+ * config and hooks then apply: a `.git` file that names that repository's git directory, a `.git` directory whose
+ * `commondir` names it, a `.git` that is a junction (Windows) or a link to it, and a `.git` file that names a directory in
+ * it as a submodule's does, which holds a copy of that repository's git directory and so its config. Each also puts a
+ * file and the `.gitattributes` of `outer` into `sub`, so that a filter and a text conversion have a file to work on.
+ */
+export const pointers: readonly Shape[] = [
+  [
+    "a .git file that names the git directory of the repository above",
+    async (entry) => {
+      await fs.rm(entry, { recursive: true, force: true })
+      await fs.writeFile(entry, "gitdir: ../.git\n")
+      await work(entry)
+    },
+  ],
+  [
+    "a .git directory whose commondir names the git directory above, with a copy of its index",
+    async (entry) => {
+      await head(entry)
+      await fs.writeFile(path.join(entry, "commondir"), "../../.git\n")
+      await fs.copyFile(path.join(entry, "..", "..", ".git", "index"), path.join(entry, "index"))
+      await work(entry)
+    },
+  ],
+  [
+    "a .git that is a junction or link to the git directory above",
+    async (entry) => {
+      await fs.rm(entry, { recursive: true, force: true })
+      await fs.symlink(path.join(entry, "..", "..", ".git"), entry, process.platform === "win32" ? "junction" : "dir")
+      await work(entry)
+    },
+  ],
+  [
+    "a .git file that names a submodule's directory in the repository above, with that repository's config",
+    async (entry, elsewhere) => {
+      const outer = path.join(entry, "..", "..", ".git")
+      await fs.cp(outer, path.join(elsewhere, "module"), { recursive: true })
+      await fs.mkdir(path.join(outer, "modules"), { recursive: true })
+      await fs.rename(path.join(elsewhere, "module"), path.join(outer, "modules", "sub"))
+      await fs.rm(entry, { recursive: true, force: true })
+      await fs.writeFile(entry, "gitdir: ../.git/modules/sub\n")
+      await work(entry)
+    },
+  ],
+]
+
+// The file and the `.gitattributes` of the repository above, in the folder of `entry`.
+const work = async (entry: string) => {
+  await Bun.write(path.join(entry, "..", "a.txt"), "two\n")
+  await Bun.write(path.join(entry, "..", ".gitattributes"), "*.txt filter=marker diff=marker\n")
+}
 
 /**
  * A repository `root` whose config makes git run a program for each command that the surfaces start, and a folder `sub`
@@ -71,6 +157,7 @@ export const outer = (fill?: Shape[1]) =>
       else await fs.rm(path.join(sub, ".git"), { recursive: true })
       return recorder
     })
+    yield* searchable(path.join(sub, ".git"))
     return { folder, root: real(root), sub: real(sub), ran: () => Effect.promise(recorder.ran) }
   })
 

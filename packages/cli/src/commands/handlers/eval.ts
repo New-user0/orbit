@@ -6,7 +6,7 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { bypassDecision, printBypassNotice } from "../../util/managed-bypass"
 import { errorMessage } from "../../util/error"
-import { folderTrusted, requireTrust, trustRefusal } from "../../util/trust"
+import { requireTrust, trustedProject, trustRefusal } from "../../util/trust"
 import { connect, directory, trustOptions } from "./flow/execute"
 
 export default Runtime.handler(
@@ -35,7 +35,7 @@ export default Runtime.handler(
     // the folder of the run.
     const trust = yield* trustOptions(file, "suite")
     yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
-    const trusted = yield* folderTrusted(client, directory())
+    const project = yield* trustedProject(client, directory())
     const bypass = yield* bypassDecision(client, directory(), input.auto)
     printBypassNotice(bypass.notice)
     const suite = yield* Effect.tryPromise({ try: () => loadSuite(file), catch: (cause) => cause })
@@ -62,7 +62,8 @@ export default Runtime.handler(
           suite,
           file,
           directory: directory(),
-          trusted,
+          trusted: project !== undefined,
+          project,
           models,
           concurrency: Option.getOrUndefined(input.concurrency),
           permissions: bypass.auto ? "auto" : "reject",

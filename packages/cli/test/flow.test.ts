@@ -169,6 +169,40 @@ test("parallel agents run in separate worktrees and merge into the checkout", as
   ])
 }, 180_000)
 
+// The project of a folder inside a repository is the repository. The runner's git looks for the repository no further
+// up than the project's folder, which the command takes from the server, so the run still gets its worktrees there.
+test("orb flow run in a folder inside a repository runs its agents in worktrees of that repository", async () => {
+  const repository = await repo("inside")
+  const inside = path.join(repository, "docs")
+  await fs.mkdir(inside)
+  requests.length = 0
+  concurrent = 0
+  gather = 2
+
+  const result = await orb(inside, ["flow", "run", "--standalone", workflow])
+
+  expect({ code: result.code, stderr: result.code === 0 ? "" : result.stderr }).toEqual({ code: 0, stderr: "" })
+  expect(JSON.parse(result.stdout)).toMatchObject({ status: "merged", merged: expect.any(Array) })
+  expect(await files(repository)).toEqual(["a.txt", "b.txt", "c.txt", "readme.md"])
+}, 180_000)
+
+// Classes 1 and 3: a folder whose `.git` file names the git directory of the repository around it. Git would apply that
+// repository's config and hooks to the worktree commands of `clean`, and the decision for the folder does not cover that
+// repository, so the command stops and says why. The control is the same command in the repository itself.
+test("orb flow clean stops in a folder whose .git leads into another repository's git directory", async () => {
+  const repository = await repo("pointer-clean")
+  const sub = path.join(repository, "sub")
+  await fs.mkdir(sub)
+  await Bun.write(path.join(sub, ".git"), "gitdir: ../.git\n")
+
+  const refused = await orb(sub, ["flow", "clean", "--standalone", "--trust"])
+
+  expect(refused.code).toBe(1)
+  expect(refused.stderr).toContain("orb flow clean does not use git here")
+  const control = await orb(repository, ["flow", "clean", "--standalone", "--trust"])
+  expect({ code: control.code, stderr: control.code === 0 ? "" : control.stderr }).toEqual({ code: 0, stderr: "" })
+}, 120_000)
+
 test("resume reruns only the node that failed", async () => {
   const repository = await repo("resume")
   requests.length = 0

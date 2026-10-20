@@ -130,6 +130,10 @@ const layer = Layer.effect(
         }
       }
 
+      // Git follows what the folder's `.git` names, and runs the programs of the repository it lands in, so the snapshot
+      // waits until that repository's folders are trusted as well (class 3).
+      if (!(yield* trust.git(directory))) return Instructions.removed
+
       const running =
         memo.get(session.id) ??
         (yield* capture(stored !== undefined).pipe(

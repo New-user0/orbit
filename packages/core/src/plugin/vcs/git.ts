@@ -37,13 +37,17 @@ export const Plugin = define({
     // the folder it opens before anyone has been asked about it, and `status` and `diff` run the filter and text conversion
     // drivers that the config names, and `base` runs the `gpg.program` that it names for a commit with a signature
     // (class 1). Until the folder is trusted no git is started: the branch is unknown, nothing has changed, and there is no
-    // diff. The answer is asked at each call, so a grant or revoke takes effect on the next one.
+    // diff. The answer is asked at each call, so a grant or revoke takes effect on the next one. Git follows what the
+    // folder's `.git` names, so the repository it lands in from each folder the provider runs it in must be trusted too.
     const adapter = guard(
       make(processes, {
         directory: location.directory,
         worktree: location.project.directory,
       }),
-      trust.trusted,
+      () =>
+        trust
+          .git(location.directory)
+          .pipe(Effect.flatMap((allowed) => (allowed ? trust.git(location.project.directory) : Effect.succeed(false)))),
     )
     yield* bus.subscribe(Trust.Event.Updated).pipe(
       Stream.runForEach(() => ctx.vcs.reload()),

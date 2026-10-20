@@ -143,15 +143,14 @@ const layer = Layer.effect(
     // config names programs (`core.fsmonitor`, hooks, attribute drivers) and files or shares to open (`include.path`,
     // alternates, a `.git` file naming a share). Narrower guards each left a spelling open, so no snapshot starts git at
     // all while the folder is not trusted, in the folder or in Orbit's own directory (class 1, class 6): its steps get no
-    // snapshot, as in a folder without git, and comparing or restoring fails until it is trusted.
-    const repository = (operation: Error["operation"]) =>
-      trust
-        .trusted()
-        .pipe(
-          Effect.flatMap((trusted) =>
-            trusted ? opened : Effect.fail(new Error({ operation, message: "The folder is not trusted" })),
-          ),
-        )
+    // snapshot, as in a folder without git, and comparing or restoring fails until it is trusted. Git follows what the
+    // folder's `.git` names, so the repository it lands in has to be in a trusted folder as well (class 3).
+    const repository = Effect.fnUntraced(function* (operation: Error["operation"]) {
+      if (!(yield* trust.trusted())) return yield* new Error({ operation, message: "The folder is not trusted" })
+      if (!(yield* trust.git(location.project.directory)))
+        return yield* new Error({ operation, message: "The repository that git uses here is not in a trusted folder" })
+      return yield* opened
+    })
     // One log line for each Location says why its steps have no snapshot.
     const untrustedNotice = yield* Effect.cached(
       Effect.logInfo("no snapshot while the folder is not trusted: undo is unavailable for these steps"),
@@ -169,6 +168,7 @@ const layer = Layer.effect(
     const capture = Effect.fn("Snapshot.capture")(function* () {
       if (!enabled()) return undefined
       if (!(yield* trust.trusted())) return yield* untrustedNotice.pipe(Effect.as(undefined))
+      if (!(yield* trust.git(location.project.directory))) return undefined
       return yield* Effect.gen(function* () {
         const repo = yield* opened
         return ID.make(

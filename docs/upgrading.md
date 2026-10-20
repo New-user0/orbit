@@ -133,6 +133,28 @@ project's folder. A `.git` directory whose `HEAD` is a link is passed over too. 
 project has `;` (Windows) or `:` (elsewhere) in its path, git cannot be told to stop there, so Orbit starts no git for that
 project (`git-passed-over.test.ts`, `git-layout.test.ts`).
 
+### Orbit's git does not follow a `.git` into a repository you have not trusted
+
+A folder's `.git` can send git to another repository: a `.git` file that names another git directory, as a submodule's
+does, a `.git` directory whose `commondir` names one, or a `.git` that is a link or a junction. Git then applies that
+repository's config and hooks. Orbit used to treat such a folder as a project of its own and, once you trusted it, ran
+git there with the other repository's config, so a program that repository named ran although nobody had trusted it.
+Now, once you trust the folder, Orbit first asks git which work tree, git directory and common directory it would use,
+and runs nothing more unless each of them lies in a folder that is trusted. Until then the folder gets no git snapshot,
+no branch, changes or diff from the Git provider, no undo snapshot, no ignore check of language server results, no
+worktree list and no new worktree, and a line in Orbit's log names the folder to trust. A linked worktree that its
+repository lists works once its main checkout is trusted, and a submodule once the repository around it is. `orb flow
+run` and `orb eval` use no git there, as in a folder outside a repository, and say so once; `orb flow clean` stops and
+says why (`git-passed-over.test.ts`, `packages/flow/test/git-passed-over.test.ts`, `packages/cli/test/flow.test.ts`).
+In a folder inside a repository, the runs of `orb flow run` and `orb eval` still take their worktrees from the repository,
+whose folder the server names as the project. A `.git` directory whose `HEAD` starts with a byte order mark, or whose
+`objects` or `refs` folder cannot be searched, is passed over now, as git passes over it (`git-layout.test.ts`).
+
+**Affects:** people who open a submodule, or a folder whose `.git` leads into another repository, without trusting that
+repository.
+
+**What to do:** Trust the repository that the folder's `.git` leads to as well, or open that repository instead.
+
 ### A repository that git or Mercurial cannot name keeps its project once trusted
 
 Orbit names a project by what git or Mercurial says about it once you trust the folder, and some repositories get no

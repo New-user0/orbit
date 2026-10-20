@@ -79,6 +79,13 @@ export interface Interface {
      * the folder that a trust decision covers, never a folder below it.
      */
     readonly discover: (input: AbsolutePath) => Effect.Effect<Repository | undefined>
+    /**
+     * The repository that a git started in `directory` works in, as git itself finds it, looking no further up than
+     * `top`: its work tree, its git directory and its common directory, each as a real path. None when git finds no
+     * repository or no work tree there. It runs `rev-parse`, which reads the config it finds but starts no program that
+     * a config names (`GitAccess`).
+     */
+    readonly used: (directory: AbsolutePath, top: AbsolutePath) => Effect.Effect<Repository | undefined>
     readonly clone: (input: {
       remote: string
       directory: AbsolutePath
@@ -220,6 +227,27 @@ const layer = Layer.effect(
         gitDirectory: AbsolutePath.make(resolvePath(input, gitDir)),
         commonDirectory: AbsolutePath.make(resolvePath(input, commonDir)),
       })
+    })
+
+    const used = Effect.fn("Git.repo.used")(function* (directory: AbsolutePath, top: AbsolutePath) {
+      const result = yield* run(
+        directory,
+        proc,
+        ["rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
+        top,
+      )
+      // One path a line, in the order asked. A path with a line break in it gives more lines, and is not taken apart.
+      const lines = result.text.replace(/\n$/, "").split("\n")
+      if (result.exitCode !== 0 || lines.length !== 3) return undefined
+      const real = yield* Effect.forEach(lines, (line) =>
+        fs.realPath(FSUtil.windowsPath(process.platform === "win32" ? line.replace(/\r$/, "") : line)).pipe(
+          Effect.map((found) => AbsolutePath.make(FSUtil.normalizePath(found))),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      )
+      const [worktree, gitDirectory, commonDirectory] = real
+      if (!worktree || !gitDirectory || !commonDirectory) return undefined
+      return new Repository({ worktree, gitDirectory, commonDirectory })
     })
 
     const remote = Effect.fn("Git.remote.get")(function* (repository: Repository, name = "origin") {
@@ -844,7 +872,7 @@ const layer = Layer.effect(
     })
 
     return Service.of({
-      repo: { discover, clone, create },
+      repo: { discover, used, clone, create },
       remote: { get: remote },
       history: {
         head,
