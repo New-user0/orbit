@@ -428,7 +428,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     kind of that source is `unreadable`, with one warning (`test/config/front-matter-aliases.test.ts`, the
     `Fingerprint.canonical` rows of its child process and the "Fingerprint answers unreadable" row). A skill or agent file
     whose front matter `ConfigMarkdown` refuses for its aliases carries nothing, and the load logs one "config file
-    skipped" line for it (the "untrusted project whose agent file is aliased" rows of the same file).
+    skipped" line for it (the "untrusted project whose agent and skill files are aliased" rows of the same file).
   - What the digests read is bounded (class 1, 4 and 6) by the folders that `ProjectTrust.supplies` holds the config to:
     the project's own folders (the Location's directory, the project's directory and its canonical root) for a source
     inside the project, and `ConfigTrust.reach` for a source above it. `Config.observe`, `ProjectTrust.allows`,
@@ -678,12 +678,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   stop as a list of kept patterns does, and a rule that had kept nothing by then waits and matches no read (proof: the
   "work allowance" rows of `test/config/instruction-rules.test.ts`, a child process with a deadline over aliased, empty,
   refused, comma-only, over-long and short-part values, where the aliased rows are refused when the block is read;
-  counting kept patterns only, as before, costs the rows written out 0.6 to 0.9 seconds of processor time each; the
-  "keeps what it had kept" row of the same file, where two aliases that the text allows spend the allowance after two
-  patterns are kept and two thousand are refused whole; and the "keeps a rule whose paths" rows of
-  `test/instruction-discovery.test.ts`, the instruction pass of a project trusted and not, and the "injects no nested rule
-  whose paths keep nothing" row of `test/session-instructions.test.ts`, a read below a nested rules folder, where a rule
-  of empty spellings, written out or through aliases, waits instead of applying; that each step of the expansion pays too, and not the split alone,
+  counting kept patterns only, as before, costs each of the two rows written out that keep nothing 0.6 to 0.9 seconds
+  of processor time; the "keeps what it had kept" row of the same file, where two aliases that the text allows spend
+  the allowance after two patterns are kept and two thousand are refused whole; and the "keeps a rule whose paths" rows
+  of `test/instruction-discovery.test.ts`, the instruction pass of a project trusted and not, and the "injects no nested
+  rule whose paths keep nothing" row of `test/session-instructions.test.ts`, a read below a nested rules folder, where a
+  rule of empty spellings, written out or through aliases, waits instead of applying; that each step of the expansion
+  pays too, and not the split alone,
   is pinned by the "charges each step of brace expansion" row of `test/config/instruction-rules.test.ts`, where two
   parts of 340 empty groups spend the allowance before a later pattern is read and one part does not, and deleting the
   charge in `expandBraces` reads the later pattern in both). Compiling a pattern strips its trailing slashes in one pass from the
@@ -1691,16 +1692,16 @@ against a service that was started before the upgrade (#18, #22). The pattern re
 - Bound what a parsed value comes to, not only its text. YAML keeps an alias as one more reference to the node its
   anchor names, so a few hundred bytes can stand for billions of values, or for a value that holds itself, and every
   reader that copies or serializes the value pays for each reference: the round 11 audit measured about 2 GB for a
-  492-byte agent file when the folder of a project that was not trusted was fingerprinted. `ParsedSize.within` (`packages/util/src/parsed-size.ts`)
-  walks a value with every alias followed, counting each value and the characters of each string and key, and stops at
-  the allowance or 1,000 levels deep. `ConfigMarkdown.read` refuses front matter that comes to more than its text and
+  492-byte agent file when the folder of a project that was not trusted was fingerprinted. `ParsedSize.within`
+  (`packages/util/src/parsed-size.ts`) walks a value with every alias followed, counting each value and the characters
+  of each string and key, and stops at the allowance or 1,000 levels deep. `ConfigMarkdown.read` refuses front matter that comes to more than its text and
   10,000 (`ConfigMarkdown.Oversized`), for all its readers at once, and `parse` does not retry such a block as text;
   `read` in `packages/flow/src/load.ts` refuses a YAML workflow or suite the same way, which Bun's parser lets through
   when the alias repeats a long string or a node holds itself; and `Fingerprint.canonical` has an allowance of its own.
   Proof: `packages/core/test/config/front-matter-aliases.test.ts` (a child process with a deadline and a memory bound over
   the agent, skill and command readers, `parseOption`, `Fingerprint.directory` and `Fingerprint.canonical`, at levels 6
   to 8 against an alias-free control; the `ParsedSize.within` and `ConfigMarkdown` rows; an untrusted project whose agent
-  file is aliased), the rule rows named in "Where each surface is gated", and the alias rows of
+  and skill files are aliased), the rule rows named in "Where each surface is gated", and the alias rows of
   `packages/flow/test/load.test.ts`.
 
 **How to test:**

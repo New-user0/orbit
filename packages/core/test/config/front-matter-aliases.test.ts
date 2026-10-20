@@ -165,16 +165,20 @@ describe("Fingerprint answers unreadable for a value too large to write out", ()
   )
 })
 
-describe("an untrusted project whose agent file is aliased", () => {
-  // Level 7 stands for a hundred million values in 492 bytes. Before the fix, the load wrote them out and grew by about
-  // two gigabytes.
-  const project = (front: string) =>
+describe("an untrusted project whose agent and skill files are aliased", () => {
+  // The agent's level 7 stands for a hundred million values in 492 bytes: before the fix, the load wrote them out and grew
+  // by about two gigabytes. The skill's level 6 stands for ten million.
+  const agent = path.join(".orbit", "agents", "x.md")
+  const skill = path.join(".orbit", "skills", "x", "SKILL.md")
+  const project = (fronts: Readonly<Record<string, string>>) =>
     Effect.gen(function* () {
       const root = (yield* tmpdirScoped()).path
       const repo = path.join(root, "repo")
       yield* Effect.promise(async () => {
-        await fs.mkdir(path.join(repo, ".orbit", "agents"), { recursive: true })
-        await fs.writeFile(path.join(repo, ".orbit", "agents", "x.md"), md(front))
+        for (const [file, front] of Object.entries(fronts)) {
+          await fs.mkdir(path.dirname(path.join(repo, file)), { recursive: true })
+          await fs.writeFile(path.join(repo, file), md(front))
+        }
       })
       return { root, repo }
     })
@@ -205,25 +209,27 @@ describe("an untrusted project whose agent file is aliased", () => {
       Effect.provide(logged(logs)),
     )
 
-  it.live("loads in little time, with the file refused in one log line and no hooks digested", () =>
+  it.live("loads in little time, with each file refused in one log line and no hooks digested", () =>
     Effect.gen(function* () {
-      const made = yield* project(aliased(7))
+      const made = yield* project({ [agent]: aliased(7), [skill]: aliased(6) })
       const logs: string[] = []
       const started = performance.now()
       const digests = yield* load(made, logs)
-      // Mutation: deleting the check in `ConfigMarkdown.read` leaves the file to the fingerprint's own allowance, which
-      // answers `unreadable` for its hooks and logs no refusal of the file.
+      // Mutation: deleting the check in `ConfigMarkdown.read` leaves the files to the fingerprint's own allowance, which
+      // answers `unreadable` for their hooks and logs no refusal of either file.
       expect(performance.now() - started).toBeLessThan(5_000)
       expect(digests).toEqual([{}])
+      // The log writes its fields as JSON, where a backslash of a Windows path is doubled.
       const skipped = logs.filter((line) => line.includes("config file skipped"))
-      expect(skipped).toHaveLength(1)
-      expect(skipped[0]).toContain(path.join(".orbit", "agents", "x.md").replaceAll("\\", "\\\\"))
+      expect(skipped).toHaveLength(2)
+      for (const file of [agent, skill])
+        expect(skipped.filter((line) => line.includes(JSON.stringify(file).slice(1, -1)))).toHaveLength(1)
     }),
   )
 
-  it.live("control: the same file written out without aliases is digested and logs nothing", () =>
+  it.live("control: the same files written out without aliases are digested and log nothing", () =>
     Effect.gen(function* () {
-      const made = yield* project("description: plain\nhooks: [x, x]")
+      const made = yield* project({ [agent]: "description: plain\nhooks: [x, x]", [skill]: "name: x\nhooks: [x, x]" })
       const logs: string[] = []
       const digests = yield* load(made, logs)
       expect(digests).toHaveLength(1)
