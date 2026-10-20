@@ -122,11 +122,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   in `test/plugin/prompt-config.test.ts` ("system prompt keys by scope"), `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`. The same text can arrive as `agents.<id>.system`, because an agent with a prompt
   of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system`, `description` (the text of the agent listing) and `initial_prompt` from
-  a document of a folder that is not trusted when the agent already exists; an agent the folder defines itself keeps
+  a document of a folder that is not trusted, and records no `source` from it, when the agent is not the folder's
+  alone: it exists already, or a trusted document or agent file names it. That second test is made before any entry
+  is applied, because the flag scope (`--agents`, `--settings`, `ORBIT_CONFIG`, `ORBIT_CONFIG_CONTENT`) and the managed
+  document rank after the project, so an agent only they define does not exist yet when the project's entry comes up;
+  an agent file of such a folder for one of those names is skipped whole. An agent that only the folder defines keeps
   its prompt. Trust status cannot tell the two apart, so `ConfigTrust` reports `system`, `description`, plain
   `initial_prompt` and `disallowed_tools` of an `orbit.json` agent entry as `permissions` (the stricter answer, as for
   the files under `agents/`), the trust question opens for such a folder, and the plugin logs one line for each entry it
-  holds back. Proof: the "lists orbit.json for agent" rows of `test/project-trust.test.ts`.
+  holds back. Proof: the "lists orbit.json for agent" rows of `test/project-trust.test.ts`; for the scope order, the
+  flag and managed rows (an `orbit.json` entry and an `agents/` file) of `test/config/agent-untrusted-system.test.ts`
+  and "an agent the person defines in a scope above the project" in `test/project-trust.test.ts`, over the real loader.
 - `language` and `output_style` in the config: text that steers every reply (a reply language, a named style whose file
   is looked up by name). The last entry wins, so a project's value would outrank the person's own. `ConfigTrust`
   withholds both (kind `settings`) from an untrusted project or local document, the person's value stays in force, and

@@ -318,8 +318,9 @@ export const classification = {
     model: withhold("providers"),
     // Extra headers and body fields reach the provider, whose tools and endpoints they can change.
     request: withhold("providers"),
-    // The agents plugin keeps this text only for an agent the folder defines itself and holds it back from one that exists,
-    // and trust status cannot tell which it is, so it reports the stricter answer, as it does for the files under agents/.
+    // The agents plugin keeps this text only for an agent that the folder alone defines, and holds it back from one that
+    // exists or that a trusted source names in any scope. Trust status cannot tell which it is, so it reports the
+    // stricter answer, as it does for the files under agents/.
     system: flag("permissions", () => true),
     description: flag("permissions", () => true),
     // What an agent may be used for decides which rules apply to the work: a primary agent is out of the model's reach

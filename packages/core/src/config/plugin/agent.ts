@@ -91,6 +91,22 @@ export const Plugin = define({
         editor.update(current.id, (agent) => agent.permissions.push(...permissions))
       }
 
+      // A project document comes before the flag and managed ones, so an agent that only one of those defines does not
+      // exist yet when the folder's entry is read. Whether the agent is the folder's own is therefore decided up front:
+      // it is not when a trusted source names it anywhere, as an agent that exists now or as an entry of a trusted
+      // document or file that does not switch it off.
+      const named = new Set([
+        ...editor.list().map((agent) => agent.id),
+        ...loaded.documents
+          .filter((document) => document.trusted !== false)
+          .flatMap((document) =>
+            Object.entries(document.info.agents ?? {}).flatMap(([id, item]) => (item.disabled ? [] : [Agent.ID.make(id)])),
+          ),
+      ])
+      // An untrusted entry that is held back still creates the agent when it comes first, without saying where the agent
+      // came from. The first entry after it that is not held back records that, as if it had created the agent.
+      const unowned = new Set<Agent.ID>()
+
       for (const document of loaded.documents) {
         for (const [id, item] of Object.entries(document.info.agents ?? {})) {
           const agentID = Agent.ID.make(id)
@@ -104,13 +120,13 @@ export const Plugin = define({
           // rules that Plan mode puts on it, so a file for it tunes, as a file under mode/ does.
           const defines = definitions.has(document)
           // Replacing starts again from a default that allows everything, so a folder that is not trusted may not do it
-          // to an agent that exists (it could turn the read-only explore agent into one that edits), and it is not
-          // allowed to tune one either. It may still define an agent that is new.
-          if (defines && document.trusted === false && editor.get(agentID) !== undefined) continue
+          // to an agent that exists or that a trusted source names (it could turn the read-only explore agent into one
+          // that edits), and it is not allowed to tune one either. It may still define an agent that is new.
+          if (defines && document.trusted === false && (editor.get(agentID) !== undefined || named.has(agentID))) continue
           const replaces = defines && document.trusted !== false && agentID !== PlanMode.agent
           if (replaces) editor.remove(agentID)
           const exists = editor.get(agentID) !== undefined
-          const held = document.trusted === false && exists
+          const held = document.trusted === false && (exists || named.has(agentID))
           const skipped = held
             ? (["system", "description", "initial_prompt"] as const).filter(
                 (field) => item[field] !== undefined && item[field].trim() !== "",
@@ -120,9 +136,11 @@ export const Plugin = define({
             runSync(
               Effect.logInfo("untrusted agent entry text held back", { agent: id, path: document.path, fields: skipped }),
             )
+          if (held && !exists) unowned.add(agentID)
+          const claims = !held && (unowned.delete(agentID) || !exists)
           editor.update(agentID, (agent) => {
             if (!exists) agent.permissions.push(...permissions)
-            if (!exists) {
+            if (claims) {
               agent.source = {
                 scope: document.scope ?? "user",
                 ...(document.path === undefined ? {} : { path: document.path }),
@@ -177,8 +195,8 @@ export const Plugin = define({
               Object.assign(agent.request.body, item.request.body ?? {})
             }
             // An agent's own prompt makes a session skip the person's `system_prompt`, and its description and first
-            // message are text the model reads, so a folder that is not trusted may write them only for an agent it
-            // defines itself.
+            // message are text the model reads, so a folder that is not trusted may write them only for an agent that
+            // no trusted source names.
             if (item.system !== undefined && !held) agent.system = item.system
             if (item.description !== undefined && !held)
               agent.description = item.description
