@@ -3702,6 +3702,16 @@ for such a host; that difference is on the follow-up list (FU-M4-r3-no-proxy).
 
 **What to do:** Nothing. To keep a host out of the proxy, list its name and its addresses in `NO_PROXY`.
 
+### Grep and Glob say where to put ripgrep when it is missing
+
+Orbit runs the ripgrep it finds on PATH or in its own `bin` folder and never downloads one. When neither has it, a Grep
+or Glob call used to fail with only "ripgrep execution failed". It now fails with a message that ripgrep was not found,
+naming the program and the full path of the `bin` folder copy that would work.
+
+**Affects:** people on a machine without ripgrep, such as a fresh Windows install or a CI image that does not ship it.
+
+**What to do:** Install ripgrep so that it is on PATH, or copy the program into Orbit's `bin` folder.
+
 ## System prompt
 
 ### The base system prompt is rewritten, with a fixed list of sections

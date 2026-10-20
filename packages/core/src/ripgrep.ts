@@ -257,9 +257,11 @@ const layer = Layer.effect(
     }) => {
       const program = Effect.scoped(
         Effect.gen(function* () {
+          // The lookup's message says where ripgrep was looked for and how to provide it, so it is the error shown.
+          const filepath = yield* binary.filepath.pipe(Effect.mapError((cause) => failure(cause.message, cause)))
           // Hosted environments will resolve rg through their driver image; the spawner is the execution seam.
           const handle = yield* environment.spawner.spawn(
-            ChildProcess.make(yield* binary.filepath, input.args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
+            ChildProcess.make(filepath, input.args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
           )
           const stderrFiber = yield* collectStream(handle.stderr, ERROR_BYTES).pipe(
             Effect.map((output) => output.buffer.toString("utf8")),
