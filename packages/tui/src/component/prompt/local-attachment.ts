@@ -5,19 +5,15 @@ const MAX_PASTED_FILEPATHS = 32
 export const MAX_LOCAL_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 export type LocalFiles = Readonly<{
-  readText(path: string, maxBytes: number): Promise<string>
   readBytes(path: string, maxBytes: number): Promise<Uint8Array>
   mime(path: string): Promise<string>
 }>
 
-export type LocalAttachment =
-  | Readonly<{ type: "text"; mime: "image/svg+xml"; content: string }>
-  | Readonly<{ type: "binary"; mime: string; content: Uint8Array }>
+export type LocalAttachment = Readonly<{ type: "binary"; mime: string; content: Uint8Array }>
 
 export function readLocalAttachment(file: string, maxBytes = MAX_LOCAL_ATTACHMENT_BYTES) {
   return readLocalAttachmentWith(
     {
-      readText: async (value, limit) => (await readFileBounded(value, limit)).toString("utf8"),
       readBytes: readFileBounded,
       mime: async (value) => mimeTypes[path.extname(value).toLowerCase()] ?? "application/octet-stream",
     },
@@ -40,32 +36,25 @@ export async function resolvePastedAttachments(text: string, platform: string) {
     for (const candidate of filepaths) {
       const next = await readLocalAttachment(candidate, remaining)
       if (!next) return undefined
-      remaining -= typeof next.content === "string" ? Buffer.byteLength(next.content) : next.content.byteLength
+      remaining -= next.content.byteLength
       attachments.push({ filepath: candidate, attachment: next })
     }
   }
 
-  return attachments.map((item) => {
-    const filename = path.basename(item.filepath)
-    if (item.attachment.type === "text") {
-      return { type: "text" as const, content: item.attachment.content, filename }
-    }
-    return {
-      type: "file" as const,
-      uri: `data:${item.attachment.mime};base64,${Buffer.from(item.attachment.content).toString("base64")}`,
-      filename,
-    }
-  })
+  return attachments.map((item) => ({
+    type: "file" as const,
+    uri: `data:${item.attachment.mime};base64,${Buffer.from(item.attachment.content).toString("base64")}`,
+    filename: path.basename(item.filepath),
+  }))
 }
 
+// Only these types attach. An SVG is text that a person did not type, so its path stays as typed and is never read.
 const mimeTypes: Record<string, string> = {
-  ".avif": "image/avif",
   ".gif": "image/gif",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
   ".pdf": "application/pdf",
   ".png": "image/png",
-  ".svg": "image/svg+xml",
   ".webp": "image/webp",
 }
 
@@ -165,11 +154,6 @@ export async function readLocalAttachmentWith(
   const mime = await files.mime(path).catch(() => undefined)
   if (!mime) return undefined
   if (!mime.startsWith("image/") && mime !== "application/pdf") return undefined
-  if (mime === "image/svg+xml") {
-    const content = await files.readText(path, maxBytes).catch(() => undefined)
-    if (!content || Buffer.byteLength(content) > maxBytes) return undefined
-    return { type: "text", mime, content }
-  }
   const content = await files.readBytes(path, maxBytes).catch(() => undefined)
   if (!content || content.byteLength > maxBytes) return undefined
   return { type: "binary", mime, content }

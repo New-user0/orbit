@@ -1679,13 +1679,7 @@ export function Prompt(props: PromptProps) {
     const attachments = await resolvePastedAttachments(pastedContent, terminalEnvironment.platform)
     if (changed()) return
     if (attachments) {
-      attachments.forEach((attachment) => {
-        if (attachment.type === "text") {
-          pasteText(attachment.content, `[SVG: ${attachment.filename || "image"}]`)
-          return
-        }
-        pasteAttachment(attachment)
-      })
+      attachments.forEach(pasteAttachment)
       return
     }
 
