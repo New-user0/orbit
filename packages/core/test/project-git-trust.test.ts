@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 import { realpathSync } from "fs"
 import fs from "fs/promises"
@@ -364,6 +364,37 @@ describe("Project.resolve names a folder that is not trusted as it names a trust
     )
 })
 
+// Git takes a folder whose owner is not the user for safe when `safe.directory` names it, and reads that key only from
+// the system and global config and the config given on its command line. The host owns those and may name every folder
+// there, so this row hands git empty ones, and its control below shows that git refuses the folder before the row runs.
+const owner = await (async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-owner-"))
+  const empty = path.join(folder, "empty.gitconfig")
+  await fs.writeFile(empty, "")
+  const env = {
+    GIT_TEST_ASSUME_DIFFERENT_OWNER: "1",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: empty,
+    GIT_CONFIG_GLOBAL: empty,
+    GIT_CONFIG_COUNT: "0",
+    GIT_CONFIG_PARAMETERS: "",
+  }
+  const control = path.join(folder, "control")
+  await fs.mkdir(control)
+  await git(control, "init", "-q")
+  const plain = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
+    cwd: control,
+    env: { ...process.env, ...env },
+    stdout: "ignore",
+    stderr: "ignore",
+  })
+  return { folder, env, refused: plain.exitCode !== 0 }
+})()
+afterAll(() => fs.rm(owner.folder, { recursive: true, force: true }))
+// Only a git that takes no notice of `GIT_TEST_ASSUME_DIFFERENT_OWNER`, such as one from before `safe.directory`, accepts
+// the control, and the row is then skipped rather than passed without a refusal to keep the project across.
+if (!owner.refused) console.warn("git accepts a folder that it is told has another owner: the owner row does not run")
+
 // Class 3: the folder that the person is asked about and grants is the one that the next resolve names, and the project
 // keeps its ID, so the sessions made before the grant stay in it. A trusted repository is named from git, which can give
 // no answer (git on no PATH, a config or an owner that git refuses) or no name (no remote and no commit yet), and
@@ -414,13 +445,16 @@ describe("Project.resolve keeps a folder's project across the grant when git or 
     readonly env?: Record<string, string>
     // Whether git refuses the repository, which the row checks first with a plain git.
     readonly refused?: boolean
+    // Whether the row runs on this host.
+    readonly runs?: boolean
   }> = [
     { name: "a config that git refuses", make: written(`${origin}[broken\n`), refused: true },
     {
       name: "a repository whose owner git refuses",
       make: (root) => Effect.runPromise(repository(root, "https://example.test/owner/repo.git")),
-      env: { GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" },
+      env: owner.env,
       refused: true,
+      runs: owner.refused,
     },
     { name: "a repository with no commit and no remote", make: (root) => git(root, "init", "-q") },
     {
@@ -432,7 +466,7 @@ describe("Project.resolve keeps a folder's project across the grant when git or 
   ]
 
   for (const row of rows)
-    stable.live(
+    (row.runs === false ? stable.live.skip : stable.live)(
       `${row.name}: the same project, folders and decision before and after the grant`,
       () =>
         Effect.gen(function* () {
