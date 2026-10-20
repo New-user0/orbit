@@ -1,0 +1,546 @@
+{
+ "version": "7.4.6",
+ "functions": [],
+ "aliases": [
+  {
+   "name": "?",
+   "target": "Where-Object"
+  },
+  {
+   "name": "%",
+   "target": "ForEach-Object"
+  },
+  {
+   "name": "ac",
+   "target": "Add-Content"
+  },
+  {
+   "name": "cat",
+   "target": "Get-Content"
+  },
+  {
+   "name": "cd",
+   "target": "Set-Location"
+  },
+  {
+   "name": "chdir",
+   "target": "Set-Location"
+  },
+  {
+   "name": "clc",
+   "target": "Clear-Content"
+  },
+  {
+   "name": "clear",
+   "target": "Clear-Host"
+  },
+  {
+   "name": "clhy",
+   "target": "Clear-History"
+  },
+  {
+   "name": "cli",
+   "target": "Clear-Item"
+  },
+  {
+   "name": "clp",
+   "target": "Clear-ItemProperty"
+  },
+  {
+   "name": "cls",
+   "target": "Clear-Host"
+  },
+  {
+   "name": "clv",
+   "target": "Clear-Variable"
+  },
+  {
+   "name": "cnsn",
+   "target": "Connect-PSSession"
+  },
+  {
+   "name": "compare",
+   "target": "Compare-Object"
+  },
+  {
+   "name": "copy",
+   "target": "Copy-Item"
+  },
+  {
+   "name": "cp",
+   "target": "Copy-Item"
+  },
+  {
+   "name": "cpi",
+   "target": "Copy-Item"
+  },
+  {
+   "name": "cpp",
+   "target": "Copy-ItemProperty"
+  },
+  {
+   "name": "cvpa",
+   "target": "Convert-Path"
+  },
+  {
+   "name": "dbp",
+   "target": "Disable-PSBreakpoint"
+  },
+  {
+   "name": "del",
+   "target": "Remove-Item"
+  },
+  {
+   "name": "diff",
+   "target": "Compare-Object"
+  },
+  {
+   "name": "dir",
+   "target": "Get-ChildItem"
+  },
+  {
+   "name": "dnsn",
+   "target": "Disconnect-PSSession"
+  },
+  {
+   "name": "ebp",
+   "target": "Enable-PSBreakpoint"
+  },
+  {
+   "name": "echo",
+   "target": "Write-Output"
+  },
+  {
+   "name": "epal",
+   "target": "Export-Alias"
+  },
+  {
+   "name": "epcsv",
+   "target": "Export-Csv"
+  },
+  {
+   "name": "erase",
+   "target": "Remove-Item"
+  },
+  {
+   "name": "etsn",
+   "target": "Enter-PSSession"
+  },
+  {
+   "name": "exsn",
+   "target": "Exit-PSSession"
+  },
+  {
+   "name": "fc",
+   "target": "Format-Custom"
+  },
+  {
+   "name": "fhx",
+   "target": "Format-Hex"
+  },
+  {
+   "name": "fl",
+   "target": "Format-List"
+  },
+  {
+   "name": "foreach",
+   "target": "ForEach-Object"
+  },
+  {
+   "name": "ft",
+   "target": "Format-Table"
+  },
+  {
+   "name": "fw",
+   "target": "Format-Wide"
+  },
+  {
+   "name": "gal",
+   "target": "Get-Alias"
+  },
+  {
+   "name": "gbp",
+   "target": "Get-PSBreakpoint"
+  },
+  {
+   "name": "gc",
+   "target": "Get-Content"
+  },
+  {
+   "name": "gci",
+   "target": "Get-ChildItem"
+  },
+  {
+   "name": "gcm",
+   "target": "Get-Command"
+  },
+  {
+   "name": "gcs",
+   "target": "Get-PSCallStack"
+  },
+  {
+   "name": "gdr",
+   "target": "Get-PSDrive"
+  },
+  {
+   "name": "gerr",
+   "target": "Get-Error"
+  },
+  {
+   "name": "ghy",
+   "target": "Get-History"
+  },
+  {
+   "name": "gi",
+   "target": "Get-Item"
+  },
+  {
+   "name": "gjb",
+   "target": "Get-Job"
+  },
+  {
+   "name": "gl",
+   "target": "Get-Location"
+  },
+  {
+   "name": "gm",
+   "target": "Get-Member"
+  },
+  {
+   "name": "gmo",
+   "target": "Get-Module"
+  },
+  {
+   "name": "gp",
+   "target": "Get-ItemProperty"
+  },
+  {
+   "name": "gps",
+   "target": "Get-Process"
+  },
+  {
+   "name": "gpv",
+   "target": "Get-ItemPropertyValue"
+  },
+  {
+   "name": "group",
+   "target": "Group-Object"
+  },
+  {
+   "name": "gsn",
+   "target": "Get-PSSession"
+  },
+  {
+   "name": "gsv",
+   "target": "Get-Service"
+  },
+  {
+   "name": "gu",
+   "target": "Get-Unique"
+  },
+  {
+   "name": "gv",
+   "target": "Get-Variable"
+  },
+  {
+   "name": "h",
+   "target": "Get-History"
+  },
+  {
+   "name": "history",
+   "target": "Get-History"
+  },
+  {
+   "name": "icm",
+   "target": "Invoke-Command"
+  },
+  {
+   "name": "iex",
+   "target": "Invoke-Expression"
+  },
+  {
+   "name": "ihy",
+   "target": "Invoke-History"
+  },
+  {
+   "name": "ii",
+   "target": "Invoke-Item"
+  },
+  {
+   "name": "ipal",
+   "target": "Import-Alias"
+  },
+  {
+   "name": "ipcsv",
+   "target": "Import-Csv"
+  },
+  {
+   "name": "ipmo",
+   "target": "Import-Module"
+  },
+  {
+   "name": "irm",
+   "target": "Invoke-RestMethod"
+  },
+  {
+   "name": "iwr",
+   "target": "Invoke-WebRequest"
+  },
+  {
+   "name": "kill",
+   "target": "Stop-Process"
+  },
+  {
+   "name": "ls",
+   "target": "Get-ChildItem"
+  },
+  {
+   "name": "man",
+   "target": "help"
+  },
+  {
+   "name": "md",
+   "target": "mkdir"
+  },
+  {
+   "name": "measure",
+   "target": "Measure-Object"
+  },
+  {
+   "name": "mi",
+   "target": "Move-Item"
+  },
+  {
+   "name": "mount",
+   "target": "New-PSDrive"
+  },
+  {
+   "name": "move",
+   "target": "Move-Item"
+  },
+  {
+   "name": "mp",
+   "target": "Move-ItemProperty"
+  },
+  {
+   "name": "mv",
+   "target": "Move-Item"
+  },
+  {
+   "name": "nal",
+   "target": "New-Alias"
+  },
+  {
+   "name": "ndr",
+   "target": "New-PSDrive"
+  },
+  {
+   "name": "ni",
+   "target": "New-Item"
+  },
+  {
+   "name": "nmo",
+   "target": "New-Module"
+  },
+  {
+   "name": "nsn",
+   "target": "New-PSSession"
+  },
+  {
+   "name": "nv",
+   "target": "New-Variable"
+  },
+  {
+   "name": "ogv",
+   "target": "Out-GridView"
+  },
+  {
+   "name": "oh",
+   "target": "Out-Host"
+  },
+  {
+   "name": "popd",
+   "target": "Pop-Location"
+  },
+  {
+   "name": "ps",
+   "target": "Get-Process"
+  },
+  {
+   "name": "pushd",
+   "target": "Push-Location"
+  },
+  {
+   "name": "pwd",
+   "target": "Get-Location"
+  },
+  {
+   "name": "r",
+   "target": "Invoke-History"
+  },
+  {
+   "name": "rbp",
+   "target": "Remove-PSBreakpoint"
+  },
+  {
+   "name": "rcjb",
+   "target": "Receive-Job"
+  },
+  {
+   "name": "rcsn",
+   "target": "Receive-PSSession"
+  },
+  {
+   "name": "rd",
+   "target": "Remove-Item"
+  },
+  {
+   "name": "rdr",
+   "target": "Remove-PSDrive"
+  },
+  {
+   "name": "ren",
+   "target": "Rename-Item"
+  },
+  {
+   "name": "ri",
+   "target": "Remove-Item"
+  },
+  {
+   "name": "rjb",
+   "target": "Remove-Job"
+  },
+  {
+   "name": "rm",
+   "target": "Remove-Item"
+  },
+  {
+   "name": "rmdir",
+   "target": "Remove-Item"
+  },
+  {
+   "name": "rmo",
+   "target": "Remove-Module"
+  },
+  {
+   "name": "rni",
+   "target": "Rename-Item"
+  },
+  {
+   "name": "rnp",
+   "target": "Rename-ItemProperty"
+  },
+  {
+   "name": "rp",
+   "target": "Remove-ItemProperty"
+  },
+  {
+   "name": "rsn",
+   "target": "Remove-PSSession"
+  },
+  {
+   "name": "rv",
+   "target": "Remove-Variable"
+  },
+  {
+   "name": "rvpa",
+   "target": "Resolve-Path"
+  },
+  {
+   "name": "sajb",
+   "target": "Start-Job"
+  },
+  {
+   "name": "sal",
+   "target": "Set-Alias"
+  },
+  {
+   "name": "saps",
+   "target": "Start-Process"
+  },
+  {
+   "name": "sasv",
+   "target": "Start-Service"
+  },
+  {
+   "name": "sbp",
+   "target": "Set-PSBreakpoint"
+  },
+  {
+   "name": "select",
+   "target": "Select-Object"
+  },
+  {
+   "name": "set",
+   "target": "Set-Variable"
+  },
+  {
+   "name": "shcm",
+   "target": "Show-Command"
+  },
+  {
+   "name": "si",
+   "target": "Set-Item"
+  },
+  {
+   "name": "sl",
+   "target": "Set-Location"
+  },
+  {
+   "name": "sleep",
+   "target": "Start-Sleep"
+  },
+  {
+   "name": "sls",
+   "target": "Select-String"
+  },
+  {
+   "name": "sort",
+   "target": "Sort-Object"
+  },
+  {
+   "name": "sp",
+   "target": "Set-ItemProperty"
+  },
+  {
+   "name": "spjb",
+   "target": "Stop-Job"
+  },
+  {
+   "name": "spps",
+   "target": "Stop-Process"
+  },
+  {
+   "name": "spsv",
+   "target": "Stop-Service"
+  },
+  {
+   "name": "start",
+   "target": "Start-Process"
+  },
+  {
+   "name": "sv",
+   "target": "Set-Variable"
+  },
+  {
+   "name": "tee",
+   "target": "Tee-Object"
+  },
+  {
+   "name": "type",
+   "target": "Get-Content"
+  },
+  {
+   "name": "where",
+   "target": "Where-Object"
+  },
+  {
+   "name": "wjb",
+   "target": "Wait-Job"
+  },
+  {
+   "name": "write",
+   "target": "Write-Output"
+  }
+ ]
+}

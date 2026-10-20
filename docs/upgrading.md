@@ -2196,6 +2196,18 @@ When the global config, data or temporary folder is reached through a link, Orbi
 
 **What to do:** Nothing.
 
+### `fhx` is a program under Windows PowerShell 5.1, and so is `lp` under PowerShell 7 on Windows
+
+Orbit used to read `fhx` as `Format-Hex` in every PowerShell, and `lp` as `Out-Printer` in every PowerShell on Windows.
+Some builds of Windows PowerShell 5.1 have no `fhx` (the Windows Server 2025 image of GitHub's runners is one), and
+PowerShell 7 on Windows has no `lp`. A shell without the alias runs whatever program of that name it finds on PATH, so
+Orbit now reads `fhx` as `Format-Hex` only under PowerShell 7 and `lp` as `Out-Printer` only under Windows PowerShell
+5.1. Elsewhere each is an unknown program: `fhx` under 5.1 is no longer read-only and is asked about.
+
+**Affects:** people on Windows PowerShell 5.1 who run `fhx`.
+
+**What to do:** Write `Format-Hex` in full under Windows PowerShell 5.1 to keep it read-only.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
