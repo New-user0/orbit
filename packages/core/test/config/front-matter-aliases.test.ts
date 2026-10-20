@@ -6,6 +6,7 @@ import type { Info } from "@orbit/schema/config"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
 import { Fingerprint } from "@orbit/core/config/fingerprint"
+import { ConfigInstructionFile } from "@orbit/core/config/instruction-file"
 import { ConfigMarkdown } from "@orbit/core/config/markdown"
 import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -87,6 +88,29 @@ describe("ConfigMarkdown refuses front matter that comes to more than its text",
     test(`${refused ? "refuses" : "reads"} ${name}`, () => {
       expect(ConfigMarkdown.parseOption(md(front)) === undefined).toBe(refused)
       if (refused) expect(() => ConfigMarkdown.parse(md(front))).toThrow(ConfigMarkdown.Oversized)
+    })
+
+  // A block is refused as YAML reads it, and never read again with its aliases written as text, whichever retry of
+  // `parse` would take it. The first row puts its aliases on a line that also holds a colon, which the retry of every
+  // reader (`sanitize`) writes as text. The second opens with a line that YAML refuses as written, so the first retry
+  // reads its aliases, and the last retry of a rule's `paths` (`indicators`) would write its anchor and aliases as text.
+  // Mutations: deleting the first check in `parse` reads the first row in both modes; deleting the second reads the
+  // second row's `paths` as the text `[*s, *s, ...]`.
+  const named = `s: &s "${"y".repeat(20_000)}"`
+  const aliases = Array(1_000).fill("*s").join(", ")
+  const retried: ReadonlyArray<readonly [string, string]> = [
+    ["aliases on a line that holds a colon", `${named}\nhooks: [${aliases}] # note: aliased`],
+    ["aliases after a line that YAML refuses as written", `description: note: aliased\n${named}\npaths: [${aliases}]`],
+  ]
+  for (const [name, front] of retried)
+    test(`refuses ${name} in every retry, and the rule that holds it waits`, () => {
+      for (const indicators of [false, true])
+        expect(() => ConfigMarkdown.parse(md(front), indicators)).toThrow(ConfigMarkdown.Oversized)
+      expect(ConfigInstructionFile.rulePatterns(ConfigMarkdown.split(md(front)).frontmatter)).toEqual({
+        patterns: [],
+        malformed: false,
+        dropped: 1,
+      })
     })
 
   test("keeps the value of a file that names an anchor more than once", () => {
@@ -234,6 +258,17 @@ describe("an untrusted project whose agent and skill files are aliased", () => {
       const digests = yield* load(made, logs)
       expect(digests).toHaveLength(1)
       expect(digests[0]?.hooks).toMatch(/^[0-9a-f]{64}$/)
+      expect(logs.filter((line) => line.includes("config file skipped"))).toEqual([])
+    }),
+  )
+
+  it.live("an agent whose front matter does not parse carries nothing, and is not logged as refused", () =>
+    Effect.gen(function* () {
+      const made = yield* project({ [agent]: "hooks: [unclosed" })
+      const logs: string[] = []
+      expect(yield* load(made, logs)).toEqual([{}])
+      // Only a block refused for its aliases is logged. Mutation: logging every file whose front matter does not parse
+      // logs this one too.
       expect(logs.filter((line) => line.includes("config file skipped"))).toEqual([])
     }),
   )

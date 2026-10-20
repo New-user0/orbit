@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { ParsedSize } from "@orbit/util/parsed-size"
 import {
   importsModule,
   loadSuite,
@@ -917,4 +918,31 @@ test("control: an anchor named in two places is read as written", async () => {
   await Bun.write(file, lines.join("\n") + "\n")
   expect((await loadWorkflow(file)).name).toBe("data")
   expect(await workflowCommands(file)).toEqual([])
+})
+
+// The allowance grows with the text: a file that writes out more than `ParsedSize.MARGIN` without one alias is read by
+// every reader. Mutation: measuring the value against the margin alone, without the length of the text, refuses both.
+test("control: a workflow and a suite written out past the margin, without aliases, are read by every reader", async () => {
+  const long = "y".repeat(2 * ParsedSize.MARGIN)
+  const files: ReadonlyArray<readonly [string, string, ReadonlyArray<(file: string) => Promise<unknown>>]> = [
+    [
+      "long-workflow.yaml",
+      `name: data\nnodes:\n  - id: a\n    prompt: ${long}\n`,
+      [loadWorkflow, workflowCommands, workflowApprovals, workflowAgents, workflowModels],
+    ],
+    ["long-suite.yaml", `name: data\ntasks:\n  - id: t\n    prompt: ${long}\n`, [loadSuite, suiteCommands, suiteAgents, suiteModels]],
+  ]
+  for (const [name, text, readers] of files) {
+    const file = path.join(root, name)
+    await Bun.write(file, text)
+    for (const reader of readers) {
+      const failure = await reader(file).then(
+        () => "",
+        (error: Error) => error.message,
+      )
+      expect({ name, reader: reader.name, failure }).toEqual({ name, reader: reader.name, failure: "" })
+    }
+  }
+  expect((await loadWorkflow(path.join(root, "long-workflow.yaml"))).name).toBe("data")
+  expect((await loadSuite(path.join(root, "long-suite.yaml"))).name).toBe("data")
 })
