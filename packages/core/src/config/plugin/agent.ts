@@ -27,6 +27,8 @@ export const Plugin = define({
     const global = yield* Global.Service
     const trust = yield* ProjectTrust.Service
     const managed = yield* ManagedPolicy.Service
+    // The transform below is synchronous; run its log lines with this plugin's services so they reach the configured logger.
+    const runSync = Effect.runSyncWith(yield* Effect.context<never>())
     // The documents that come from a file under agent/ or agents/, which define an agent instead of tuning it.
     const definitions = new WeakSet<Document>()
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
@@ -115,7 +117,7 @@ export const Plugin = define({
               )
             : []
           if (skipped.length > 0)
-            Effect.runSync(
+            runSync(
               Effect.logInfo("untrusted agent entry text held back", { agent: id, path: document.path, fields: skipped }),
             )
           editor.update(agentID, (agent) => {

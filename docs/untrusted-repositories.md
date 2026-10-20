@@ -1658,7 +1658,9 @@ runs" is a permission.
   it from a default that allows everything. Therefore an untrusted file of that kind never replaces or tunes an agent
   that exists (its prompt included), and `ProjectTrust.status` lists `permissions` for every such file, not only for
   the ids Orbit ships, because which ids exist depends on entries the status cannot see. A file under `mode/` or
-  `modes/` is not covered by this rule. Proof: `core/test/config/agent-definition.test.ts` ("an untrusted folder") and
+  `modes/` is not covered by this rule. Proof: `core/test/config/agent-definition.test.ts` ("an untrusted folder": "holds a
+  definition file back whole when it names a shipped agent", with keys the text rule does not cover, a trusted control
+  and a `modes/` row; "logs one line for held-back entry text to the configured logger" for the log line) and
   `core/test/project-trust.test.ts` ("lists every file under agents/ as held back").
 
 **How to test:**
