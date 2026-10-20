@@ -259,6 +259,8 @@ describe("family specifics and the content contract", () => {
     ["comment policy", /(states a reason a reader could not recover|Comments give reasons the code cannot)/],
     ["evidence before asking", /evidence about a failure before asking the user/],
     ["parallel independent calls", /[Ii]ndependent calls (go out )?together/],
+    ["a contradicted premise and an uncovered bug are raised", /Point out to the user any premise of the request that the code contradicts, and any bug you come across that the task does not cover\./],
+    ["outside values are escaped or parameterized", /- Write code that gives an attacker nothing to work with: outside values are escaped or parameterized before anything interprets them\.\n/],
   ] as const
 
   test.each(contract.flatMap(([rule, pattern]) => overrideRows.map(([name, text]) => [`${rule}: ${name}`, pattern, text] as const)))(
