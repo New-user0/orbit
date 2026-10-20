@@ -65,9 +65,10 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     expect(ConfigInstructionFile.rulePatterns(front(`paths: "${"x".repeat(1_025)}, ok"`)).patterns).toEqual(["ok"])
   })
 
-  // The work stops once the cap is kept, so a value of a megabyte costs the parse and no more. It is synchronous, so it runs
-  // in a child process with a deadline.
-  test("stops expanding once 256 patterns are kept, for a value of a megabyte", async () => {
+  // The work stops once the cap is kept or the work allowance is spent, so a value of a megabyte, or a few kilobytes that
+  // aliases repeat thousands of times, costs the parse and a bounded amount more. It is synchronous, so it runs in a child
+  // process with a deadline.
+  test("stops once 256 patterns are kept or the work allowance is spent, whatever a file repeats or spells out", async () => {
     const child = Bun.spawn({
       cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "rule-patterns-stress.ts")],
       stdout: "pipe",
@@ -77,13 +78,65 @@ describe("ConfigInstructionFile.rulePatterns", () => {
     const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
     clearTimeout(timer)
     expect(code).toBe(0)
-    const report = JSON.parse(out) as { readonly name: string; readonly ms: number; readonly kept: number }[]
-    expect(report.map((item) => item.name)).toEqual(["commaString", "commaList", "braceString", "oneHugePart"])
-    for (const item of report) {
-      expect(item.kept).toBe(item.name === "oneHugePart" ? 0 : ConfigInstructionFile.RULE_PATTERNS)
-      expect(item.ms).toBeLessThan(1_500)
+    const report = JSON.parse(out) as {
+      readonly name: string
+      readonly ms: number
+      readonly cpu: number
+      readonly kept: number
+      readonly dropped: number
+    }[]
+    // Each row is a value and whether it reaches the cap of kept patterns. The rows that keep nothing are stopped by the
+    // allowance alone, and each costs a few milliseconds of processor time with it. Mutation: counting only kept patterns,
+    // as before (no allowance in the split or the expansion), takes from about a second (droppedList) to tens of seconds
+    // (aliasedCommas) for each of those rows, and the child's deadline kills the run.
+    const rows: ReadonlyArray<readonly [string, boolean]> = [
+      ["commaString", true],
+      ["commaList", true],
+      ["braceString", true],
+      ["oneHugePart", false],
+      ["aliasedEmpty", false],
+      ["emptyList", false],
+      ["droppedList", false],
+      ["aliasedDropped", false],
+      ["aliasedCommas", false],
+      ["aliasedLongPart", false],
+      ["aliasedShortParts", false],
+    ]
+    expect(report.map((item) => item.name)).toEqual(rows.map((row) => row[0]))
+    for (const [name, capped] of rows) {
+      const item = report.find((entry) => entry.name === name)
+      expect(item?.kept).toBe(capped ? ConfigInstructionFile.RULE_PATTERNS : 0)
+      expect(item?.ms).toBeLessThan(1_500)
+      if (capped) continue
+      // A row that keeps nothing still waits: what it left unread counts as dropped.
+      expect(item?.dropped).toBeGreaterThan(0)
+      expect(item?.cpu).toBeLessThan(500)
     }
   }, 90_000)
+
+  test("keeps what it had kept when the work allowance runs out, and waits when that is nothing", () => {
+    const anchor = `s: &s "${"{,}".repeat(340)}"\n`
+    const aliases = Array(2_000).fill("*s").join(", ")
+    // Mutation: without the allowance every alias is expanded, `c` is reached, and the rule of empty spellings alone keeps
+    // only `c` (and would apply from the start without it).
+    expect(ConfigInstructionFile.rulePatterns(front(`${anchor}paths: [a, b, ${aliases}, c]`))).toEqual({
+      patterns: ["a", "b"],
+      malformed: false,
+      dropped: 1,
+    })
+    expect(ConfigInstructionFile.rulePatterns(front(`${anchor}paths: [${aliases}, c]`))).toEqual({
+      patterns: [],
+      malformed: false,
+      dropped: 1,
+    })
+  })
+
+  test("keeps a list of 256 patterns of 480 characters whole, within the work allowance", () => {
+    const list = Array.from({ length: 256 }, (_, index) => `src/${String(index).padStart(3, "0")}${"a".repeat(473)}`)
+    const result = ConfigInstructionFile.rulePatterns(front(`paths:\n${list.map((item) => `  - ${item}`).join("\n")}`))
+    // Mutation: halving the allowance keeps about 130 of them.
+    expect(result).toEqual({ patterns: list, malformed: false, dropped: 0 })
+  })
 
   // Bun's matcher does not backtrack, and the repository writes both the pattern and the file name: a read must stay cheap.
   test("matches a read in bounded time, whatever wildcards a repository writes", async () => {
