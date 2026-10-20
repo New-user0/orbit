@@ -308,18 +308,21 @@ describe("agent definition: native files", () => {
     }),
   )
 
-  it.live("gives a file without a mode all, a file under modes primary", () =>
-    Effect.gen(function* () {
-      const agents = yield* load({
-        "agents/free.md": md("description: x"),
-        "agents/sub.md": md("mode: subagent"),
-        "modes/main.md": md("description: x"),
-      })
-      expect((yield* get(agents, "free"))?.mode).toBe("all")
-      expect((yield* get(agents, "sub"))?.mode).toBe("subagent")
-      expect((yield* get(agents, "main"))?.mode).toBe("primary")
-    }),
-  )
+  // Both spellings of the folder make a file primary. Mutation: change the scan pattern {mode,modes}/*.md to modes/*.md
+  // and the mode/ row sees no main agent.
+  for (const folder of ["mode", "modes"])
+    it.live(`gives a file without a mode all, a file under ${folder} primary`, () =>
+      Effect.gen(function* () {
+        const agents = yield* load({
+          "agents/free.md": md("description: x"),
+          "agents/sub.md": md("mode: subagent"),
+          [`${folder}/main.md`]: md("description: x"),
+        })
+        expect((yield* get(agents, "free"))?.mode).toBe("all")
+        expect((yield* get(agents, "sub"))?.mode).toBe("subagent")
+        expect((yield* get(agents, "main"))?.mode).toBe("primary")
+      }),
+    )
 })
 
 describe("agent definition: replacement", () => {
@@ -468,14 +471,33 @@ describe("agent definition: an untrusted folder", () => {
     )
   }
 
-  it.live("applies the same keys from modes/, where an untrusted file only tunes", () =>
-    Effect.gen(function* () {
-      const { agents, before } = yield* loadWithBaseline({ "modes/build.md": tuning }, (directory) => [
-        untrustedEntry(directory),
-      ])
-      expect(yield* get(agents, "build")).not.toEqual(before.find((item) => item.id === "build"))
-    }),
-  )
+  // Mutation: change `AgentFile.defines` to /^(?:agent|agents|mode)$/ and the mode/ rows fail (an untrusted file replaces
+  // build instead of tuning it); drop mode from the scan pattern and the mode/ rows see no file at all.
+  for (const folder of ["mode", "modes"]) {
+    it.live(`applies the same keys from ${folder}/, where an untrusted file only tunes`, () =>
+      Effect.gen(function* () {
+        const { agents, before } = yield* loadWithBaseline({ [`${folder}/build.md`]: tuning }, (directory) => [
+          untrustedEntry(directory),
+        ])
+        expect(yield* get(agents, "build")).not.toEqual(before.find((item) => item.id === "build"))
+      }),
+    )
+
+    it.live(`a trusted ${folder}/ file tunes build and keeps its rules, and stays primary`, () =>
+      Effect.gen(function* () {
+        const { agents, before } = yield* loadWithBaseline({
+          [`${folder}/build.md`]: tuning,
+          [`${folder}/solo.md`]: md("description: x"),
+        })
+        const was = before.find((item) => item.id === "build")
+        const agent = yield* get(agents, "build")
+        expect(agent).not.toEqual(was)
+        expect(agent?.mode).toBe(was?.mode)
+        expect(agent?.description).toBe(was?.description)
+        expect((yield* get(agents, "solo"))?.mode).toBe("primary")
+      }),
+    )
+  }
 
   // Class 7: the line for held-back text goes to the configured logger, once per entry, and not to the console.
   // Mutation: switch the call back to Effect.runSync and the row sees no line in the logger (and one on the console).

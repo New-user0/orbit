@@ -255,6 +255,9 @@ describe("ProjectTrust.status", () => {
           const status = held(folders.root, yield* project.status())
           expect<unknown>(status).toContainEqual([path.join("work", "repo", ".orbit"), ["permissions"]])
           expect<unknown>(status).toContainEqual([path.join("work", ".orbit"), ["permissions"]])
+          // Trusted control: granting the repository folder releases its file; only the parent's persistent entry stays.
+          const granted = yield* project.grant({ persist: false, via: "test" })
+          expect<unknown>(granted.withheld.map((entry) => entry.path)).toEqual([path.join(folders.work, ".orbit")])
         }).pipe(Effect.provide(loader(folders)))
       }),
     )
