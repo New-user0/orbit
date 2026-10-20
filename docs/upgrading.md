@@ -4018,13 +4018,15 @@ A later settings file that has an `experimental` block no longer hides the keys 
 
 **What to do:** Nothing.
 
-## A dropped or pasted `.svg` path is no longer read into the prompt
+## A dropped or pasted `.svg` path is no longer read into the prompt, and only absolute image paths attach
 
-Dropping or pasting the path of an `.svg` file used to read the file and put its text into the prompt as if you had typed it, in the full terminal UI and in Mini. The path now stays as the text you pasted and the file is never opened. Only PNG, JPEG, GIF and WebP paths attach: a PDF path and an AVIF path stay as typed text too, and a PDF is no longer read and attached whole. A drop or paste is split into lines and into absolute paths separated by spaces; each path that reads as one of those images attaches, and every other path in the same drop (an SVG, a PDF, a missing or oversized file, a relative path) stays in the prompt as typed text, unread. So `shot.png logo.svg` attaches the PNG and leaves the SVG path in the text, in either order. To show a model an SVG or a PDF, ask it to read the file, or paste the markup yourself.
+Dropping or pasting the path of an `.svg` file used to read the file and put its text into the prompt as if you had typed it, in the full terminal UI and in Mini. The path now stays as the text you pasted and the file is never opened. Only PNG, JPEG, GIF and WebP files attach: a PDF path and an AVIF path stay as typed text too, and a PDF is no longer read and attached whole. A relative image path such as `shot.png` or `assets/logo.png` used to be looked up in the working folder and attached when the file was there; it now stays as typed text and is not read.
 
-**Affects:** people who drop SVG or PDF files into the prompt to send their contents.
+Both clients read a drop or a paste the same way. The text is cut into lines, and a line is cut again only at a space that comes right before an absolute path, or before a quote that opens one, since Windows Terminal puts quotes around every path it drops. A piece attaches when, once one pair of quotes around it and (outside Windows) its backslash escapes are taken off, it is an absolute path ending in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` that reads as an image; a `file://` URL counts as the path it names. Every other piece stays in the prompt exactly as you pasted it, quotes, backslashes and line breaks included, and is never read. So `/tmp/shot.png /tmp/logo.svg` attaches the PNG and keeps the SVG path, a paste of three lines whose middle line is an image path attaches the image and keeps the first and last lines, and `compare /tmp/shot.png with the mockup` stays as typed with nothing attached, because the piece that starts at the path ends in `mockup`. To show a model an SVG or a PDF, ask it to read the file, or paste the markup yourself.
 
-**What to do:** Ask the agent to read the file, or paste the markup.
+**Affects:** people who drop SVG or PDF files into the prompt to send their contents, and people who paste a relative image path to attach it.
+
+**What to do:** Ask the agent to read an SVG or a PDF, or paste the markup. To attach an image, drop it or paste its absolute path.
 
 ## U+2028 and U+2029 are text inside a line of an instruction file or of front matter
 

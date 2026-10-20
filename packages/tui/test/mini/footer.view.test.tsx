@@ -549,6 +549,54 @@ test("mini keeps a dropped SVG path as typed text and never reads the file", asy
   }
 })
 
+test("mini attaches only absolute image paths that stand alone in a paste, and sends the rest as typed", async () => {
+  await using tmp = await tmpdir()
+  const png = `${tmp.path}/shot.png`
+  const other = `${tmp.path}/other.png`
+  await Promise.all([
+    Bun.write(png, diffImageFixture),
+    Bun.write(other, diffImageFixture),
+    Bun.write(`${tmp.path}/assets/logo.png`, diffImageFixture),
+  ])
+  // [what is pasted, the text that is sent, how many images are sent]
+  const rows: [string, string, number][] = [
+    [`compare ${png} with the mockup`, `compare ${png} with the mockup`, 0],
+    [`first line\n${png}\nthird line`, "[Image 1] first line\nthird line", 1],
+    // shot.png and assets/logo.png exist in the working folder, yet a relative path is never read.
+    ["shot.png", "shot.png", 0],
+    ["assets/logo.png", "assets/logo.png", 0],
+    ["/a/My\\ Docs/b.svg", "/a/My\\ Docs/b.svg", 0],
+    [`${png} /a/My\\ Docs/b.svg`, "[Image 1] /a/My\\ Docs/b.svg", 1],
+    [`"${png}" "${other}"`, "[Image 1] [Image 2]", 2],
+  ]
+  const before = process.cwd()
+  process.chdir(tmp.path)
+  try {
+    for (const [pasted, text, images] of rows) {
+      const sent = Promise.withResolvers<RunPrompt>()
+      const app = await renderFooter({
+        onSubmit: (prompt) => {
+          sent.resolve(prompt)
+          return true
+        },
+      })
+      try {
+        await app.renderOnce()
+        await app.mockInput.pasteBracketedText(pasted)
+        await Bun.sleep(150)
+        await app.renderOnce()
+        app.mockInput.pressEnter()
+        const prompt = await sent.promise
+        expect({ pasted, text: prompt.text.trim(), images: prompt.parts.length }).toEqual({ pasted, text, images })
+      } finally {
+        app.cleanup()
+      }
+    }
+  } finally {
+    process.chdir(before)
+  }
+})
+
 test("mini preserves mentionless images through draft edits and a rejected submission", async () => {
   const part = {
     type: "file" as const,
