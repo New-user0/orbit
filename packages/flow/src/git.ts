@@ -3,6 +3,7 @@ export * as Git from "./git.js"
 import { existsSync, statSync } from "node:fs"
 import { appendFile, readdir, readFile, realpath, rm } from "node:fs/promises"
 import path from "node:path"
+import { GitSubmodules } from "@orbit/util/git-submodules"
 
 // Worktrees give each agent its own checkout and branch, so agents running in parallel never touch the same files.
 // They live under .orbit/worktrees/<run>/<node> and branch from the commit the run started at.
@@ -28,9 +29,13 @@ async function spawn(directory: string, args: ReadonlyArray<string>, top: string
     return { code: 1, stdout: "", stderr: "git was not started: the folder above the repository cannot be its ceiling" }
   // Worktrees nest deep under .orbit/worktrees; on Windows that passes the 260-character path limit without this.
   const options = process.platform === "win32" ? ["-c", "core.longpaths=true"] : []
-  const child = Bun.spawn(["git", ...options, ...args], {
+  const child = Bun.spawn(["git", ...GitSubmodules.skip([...options, ...args])], {
     cwd: directory,
-    env: above === bound ? process.env : { ...process.env, GIT_CEILING_DIRECTORIES: above },
+    env: {
+      ...process.env,
+      [GitSubmodules.VARIABLE]: "all",
+      ...(above === bound ? {} : { GIT_CEILING_DIRECTORIES: above }),
+    },
     stdout: "pipe",
     stderr: "pipe",
     stdin: "ignore",
@@ -153,6 +158,13 @@ const adding = new Map<string, Promise<void>>()
 const GENERATED = ["__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules", ".DS_Store"]
 
 export async function commit(directory: string, message: string) {
+  // `git add` takes no switch that keeps it out of a submodule (`GitSubmodules`), so each gitlink of the index is left
+  // out by name.
+  const gitlinks = (await ok(directory, ["ls-files", "--stage", "-z"]))
+    .split("\0")
+    .flatMap((entry) =>
+      entry.startsWith("160000 ") ? [`:(exclude,literal)${entry.slice(entry.indexOf("\t") + 1)}`] : [],
+    )
   await ok(directory, [
     "add",
     "-A",
@@ -160,6 +172,7 @@ export async function commit(directory: string, message: string) {
     ".",
     ...GENERATED.map((pattern) => `:(exclude,glob)**/${pattern}/**`),
     ...GENERATED.map((pattern) => `:(exclude,glob)**/${pattern}`),
+    ...gitlinks,
   ])
   if ((await git(directory, ["diff", "--cached", "--quiet"])).code === 0) return false
   await ok(directory, ["-c", "user.name=Orbit", "-c", "user.email=orbit@localhost", "commit", "-q", "-m", message])
@@ -173,7 +186,9 @@ export async function dirty(repository: string) {
 
 /** Merge `name` into the checkout at `repository`; on conflict, abort and report the conflicting files. */
 export async function merge(repository: string, name: string, message: string) {
+  // Before it merges, git saves the work tree with a `git stash create` of its own, which takes no switch.
   const result = await git(repository, [
+    ...GitSubmodules.pinned(await submodules(repository)),
     "-c",
     "user.name=Orbit",
     "-c",
@@ -197,6 +212,31 @@ export async function merge(repository: string, name: string, message: string) {
   if (left.length > 0) await git(repository, ["checkout", "HEAD", "--", ...left])
   if (files.length === 0) throw new Error(`git merge ${name} failed: ${result.stderr || result.stdout}`)
   return { merged: false as const, files, blocked: [] }
+}
+
+// The names that `.gitmodules` gives the submodules of the checkout at `repository`, read from where git reads it to
+// compare the work tree: the file in the work tree, else the one in the index, else the one in HEAD.
+async function submodules(repository: string) {
+  const sources = existsSync(path.join(repository, ".gitmodules"))
+    ? [["--file", ".gitmodules"]]
+    : [
+        ["--blob", ":.gitmodules"],
+        ["--blob", "HEAD:.gitmodules"],
+      ]
+  for (const source of sources) {
+    const listed = await spawn(
+      repository,
+      ["config", ...source, "-z", "--name-only", "--get-regexp", "^submodule\\..*\\.path$"],
+      repository,
+    )
+    // 1: the file names no submodule. Anything else: there is no such file, and the next source is read.
+    if (listed.code === 0 || listed.code === 1)
+      return listed.stdout
+        .split("\0")
+        .filter(Boolean)
+        .map((key) => key.slice("submodule.".length, -".path".length))
+  }
+  return []
 }
 
 /** Keep run data and worktrees out of the user's status without touching their tracked .gitignore. */

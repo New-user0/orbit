@@ -213,8 +213,8 @@ const gitlinkGuard = (root: string) =>
 // Class 1 (round 2): each row plants a key into a nested repository `sub`, and the plain command of the row is the live
 // control. While the folder is not trusted no git starts at all. Orbit's own repository, with the folder recorded as a
 // gitlink, starts nothing inside it either.
-// Mutations: the untrusted capture going on fails the untrusted half of every row; removing `--ignore-submodules=all` from
-// the `diff-files` of `Git.index.refresh` fails the gitlink half.
+// Mutations: the untrusted capture going on fails the untrusted half of every row; `GitSubmodules.skip` leaving
+// `--ignore-submodules=all` off the `diff-files` of `Git.index.refresh` fails the gitlink half.
 describe("Snapshot starts no git program of a repository nested in an untrusted folder", () => {
   const rows = ["core.fsmonitor", "core.hooksPath", ".git/hooks"].map((name) => keys.find((key) => key.name === name)!)
 

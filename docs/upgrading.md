@@ -155,6 +155,23 @@ repository.
 
 **What to do:** Trust the repository that the folder's `.git` leads to as well, or open that repository instead.
 
+### Orbit's git no longer looks inside submodules
+
+To find out whether a submodule changed, git starts a second git in the submodule's folder, and that git applies the
+config of whatever repository the folder's `.git` names. In a repository you trusted, a submodule folder whose `.git`
+named a repository you had not trusted, such as the clone around it, let that repository's file system monitor or clean
+filter run when Orbit took the git snapshot or asked the Git provider for changes, and when `orb flow` checked the
+checkout for uncommitted changes, committed an agent's work, merged it or gave a reviewer its diff. Now no git that Orbit
+starts looks inside a submodule. The git snapshot, the Git provider and `orb flow`'s check for uncommitted changes and
+review diff no longer report a submodule as changed, and the commit that `orb flow` makes of an agent's work does not
+stage submodules (`git-gitlink.test.ts`, `packages/flow/test/git-gitlink.test.ts`).
+
+**Affects:** people whose repositories have submodules and who relied on the git snapshot, the Git provider or
+`orb flow` to show or commit a change in one.
+
+**What to do:** Check submodules with git itself, for example `git status` or `git submodule status` in the shell, and
+commit a submodule's new commit yourself.
+
 ### A repository that git or Mercurial cannot name keeps its project once trusted
 
 Orbit names a project by what git or Mercurial says about it once you trust the folder, and some repositories get no

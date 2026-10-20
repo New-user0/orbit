@@ -6,6 +6,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { FileDiff } from "@orbit/schema/file-diff"
 import { Trust } from "@orbit/schema/trust"
 import { Base, BranchList, FileStatus, Info, Mode } from "@orbit/schema/vcs"
+import { GitSubmodules } from "@orbit/util/git-submodules"
 import { AppProcess } from "@orbit/util/process"
 import { Bus } from "../../bus.js"
 import { Git } from "../../git.js"
@@ -199,7 +200,7 @@ function makeGit(proc: AppProcess.Interface, env: Record<string, string> | undef
       // A folder that git cannot be kept inside of gets no git, as if git had failed.
       if (!env) return { exitCode: 1, text: () => "", truncated: false }
       const result = yield* proc.run(
-        ChildProcess.make(gitExecutable, [...cfg, ...args], {
+        ChildProcess.make(gitExecutable, GitSubmodules.skip([...cfg, ...args]), {
           cwd: opts.cwd,
           env,
           extendEnv: true,

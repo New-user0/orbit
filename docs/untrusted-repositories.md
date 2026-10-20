@@ -220,10 +220,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     trust check out of the comparison and the restore fails their row; dropping the log line fails the rows that count
     it; asking the trust store once when the service starts, instead of at each capture, fails the transition row.
     A nested repository is a gitlink in Orbit's own index once a trusted folder records it, and the comparison of the
-    index with the work tree passes `--ignore-submodules=all`; without it git starts a status inside the nested
-    repository with the config that repository ships. The nested-repository and submodule rows also run the Git service
-    by itself over the folder, whose first capture records the gitlink, and find nothing started inside it. Mutation:
-    removing `--ignore-submodules=all` from the `diff-files` of `Git.index.refresh` fails those four rows.
+    index with the work tree passes `--ignore-submodules=all` (`GitSubmodules.skip`, the submodule bullet below);
+    without it git starts a status inside the nested repository with the config that repository ships. The
+    nested-repository and submodule rows also run the Git service by itself over the folder, whose first capture records
+    the gitlink, and find nothing started inside it. Mutation: `GitSubmodules.skip` leaving `--ignore-submodules=all`
+    off the `diff-files` of `Git.index.refresh` fails those four rows.
     The refresh (`diff-files`, `ls-files`, `rm`, `add`), the comparison (`diff`) and the restore (`ls-tree`,
     `checkout`) pass `--literal-pathspecs`. `check-ignore`, which the refresh and the comparison ask to leave out what
     the folder ignores, refuses that flag, so it is handed each path behind `./`, which keeps a leading `:` part of the
@@ -306,6 +307,34 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     the same fails its four rows; dropping the ceiling of `Git.git` fails its rows; matching `HEAD` as decoded text fails
     the byte order mark row of `test/git-layout.test.ts` and that shape's row of "Project.resolve names the repository
     that git uses".
+  - Git also looks inside submodules. To tell whether the folder of a gitlink changed, `git status`, `git diff` against
+    the work tree, `git checkout` of a branch, `git add` and the `git stash create` that `git merge` runs first start
+    another git in that folder, which goes wherever the folder's `.git` points and applies the config and attributes of
+    the repository there. `GitAccess` asks about the repository of the folder Orbit works in, not about its gitlinks, so
+    in a trusted repository whose gitlink has a `.git` naming a repository that nobody trusted, that repository's file
+    system monitor and clean filter ran (M4 verification round 9). Every git that Orbit starts now goes through
+    `GitSubmodules.skip` (`packages/util/src/git-submodules.ts`), in the `Git` service, the Git provider and `Git.git` of
+    the flow runner: it puts `-c diff.ignoreSubmodules=all` before the command, which the porcelain commands read, and
+    `--ignore-submodules=all` after `status`, `diff`, `diff-files` and `diff-index`, which plumbing obeys as well and an
+    `ignore` in `.gitmodules` cannot overrule. `git add` takes neither: the undo snapshot's refresh names the paths it
+    adds, and `Git.commit` of the flow runner leaves each gitlink of the index out by name. `Git.merge` gives each
+    submodule that `.gitmodules` names `ignore = all` on the command line (`GitSubmodules.pinned`), which outranks
+    `.gitmodules` in the `git stash create` of `git merge`. The repository cache's `git checkout` of a branch is kept out
+    by the setting alone, which an `ignore` in `.gitmodules` overrules; it checks out only clones that Orbit made, where
+    no gitlink has a `.git`. Git still reads the `HEAD` of a gitlink's repository inside the process that compares it,
+    which starts no program; what else that read opens is not tested (register row FU-M4-r9-gitlink-read). Proof:
+    `test/git-gitlink.test.ts` (the git snapshot, the provider, `Lsp.ignored`, the undo snapshot, the worktree list, a new
+    worktree and the cache's checkout, for a gitlink that names the commit the repository above has checked out, and all
+    but the checkout again with `ignore = none` in `.gitmodules`; a plain `git status` in the folder runs the program
+    first; no git process works in the gitlink, no program runs, and what the snapshot and the provider show as changed
+    leaves the gitlink out; controls: the repository above runs its program once it is trusted itself) and
+    `packages/flow/test/git-gitlink.test.ts` (`Git.dirty`, `Git.commit`, a conflicting `Git.merge`, `Git.diff` and a
+    whole run, each without and with `ignore = none` for a submodule whose name holds `=`). Mutations: `GitSubmodules.skip`
+    returning its arguments fails the core rows of the snapshot, the provider, the undo snapshot and the checkout, and
+    every flow row but the commit's; leaving out `--ignore-submodules=all` fails the `ignore = none` rows of the snapshot,
+    the provider and the flow (all but the commit's) and both rows of the undo snapshot; leaving out
+    `-c diff.ignoreSubmodules=all` fails the checkout row; `Git.commit` without the gitlinks fails both commit rows;
+    `Git.merge` without the settings per submodule, or with them given as `-c`, fails the merge's `ignore = none` row.
   - Proof: `test/project-git-trust.test.ts` (one row for each of eleven keys, a linked worktree, and every layout of
     `test/fixture/git-forged.ts`), `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts` ("finds the git
     directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts`, `test/worktree-untrusted-git.test.ts` and `test/git.test.ts`. Each row
@@ -314,7 +343,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     says whether any git started.
 - The git snapshot of a session (`VcsInstructions`, `packages/core/src/vcs/instructions.ts`): `status --short`, `log
 --oneline`, `config user.name` and the refs of `origin` run in the session's folder, and git applies that folder's
-  config to them (`core.fsmonitor`, `include.path`, `gpg.program` with `log.showSignature`), with no `-c` override. The
+  config to them (`core.fsmonitor`, `include.path`, `gpg.program` with `log.showSignature`), with no `-c` override of
+  those keys (its one `-c` keeps git out of submodules, the submodule bullet above). The
   source asks `ProjectTrust.trusted()` first at every read, whatever else it knows, and starts no git for a folder that is
   not trusted, and before it captures it asks `ProjectTrust.git` whether the repository git uses there lies in trusted
   folders (the `GitAccess` bullet above). A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
@@ -2587,7 +2617,9 @@ The program-wide register of every follow-up, these gaps included, with each one
   row of `test/instruction-notes.test.ts`, `test/session-context-vcs.test.ts`). In a trusted folder `status.short` reaches
   `core.fsmonitor` and clean filters, and `history.recent` reaches `gpg.program` when `log.showSignature` is set
   (`test/git.test.ts`; a fact about the commands and git versions the tests ran with, 2.52
-  on Windows and the container's on Linux). What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
+  on Windows and the container's on Linux). Orbit's git starts no git inside a submodule, so in a trusted repository a
+  gitlink whose `.git` names a repository that is not trusted runs none of that repository's programs
+  (`test/git-gitlink.test.ts`, `packages/flow/test/git-gitlink.test.ts`). What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
   and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the
   folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
   git in the shell tool (`shell-safety-12`); the `orb flow` commands that open the run store (`ls`, `show`, `cost`, `trace`,

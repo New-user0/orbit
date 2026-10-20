@@ -8,6 +8,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { AppProcess } from "@orbit/util/process"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { FileDiff } from "@orbit/schema/file-diff"
+import { GitSubmodules } from "@orbit/util/git-submodules"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
 import { VcsPatch } from "./vcs/patch.js"
 import { gitExecutable } from "./util/git-executable.js"
@@ -308,12 +309,16 @@ const layer = Layer.effect(
       if (!env) return []
       const result = yield* proc
         .run(
-          ChildProcess.make(gitExecutable, ["--no-optional-locks", "log", "--oneline", "-n", String(count)], {
-            cwd: directory,
-            env,
-            extendEnv: true,
-            stdin: "ignore",
-          }),
+          ChildProcess.make(
+            gitExecutable,
+            GitSubmodules.skip(["--no-optional-locks", "log", "--oneline", "-n", String(count)]),
+            {
+              cwd: directory,
+              env,
+              extendEnv: true,
+              stdin: "ignore",
+            },
+          ),
           { maxOutputBytes: SNAPSHOT_OUTPUT_BYTES },
         )
         .pipe(Effect.orElseSucceed(() => undefined))
@@ -339,7 +344,7 @@ const layer = Layer.effect(
       if (!env) return yield* failed(unbounded)
       const result = yield* proc
         .run(
-          ChildProcess.make(gitExecutable, ["--no-optional-locks", "status", "--short"], {
+          ChildProcess.make(gitExecutable, GitSubmodules.skip(["--no-optional-locks", "status", "--short"]), {
             cwd: directory,
             env,
             extendEnv: true,
@@ -423,13 +428,8 @@ const layer = Layer.effect(
       yield* operation("reset", repository.worktree, ["reset", "--hard", revision])
     })
 
-    const repositoryArgs = (repository: Repository, args: string[]) => [
-      "--git-dir",
-      repository.gitDirectory,
-      "--work-tree",
-      repository.worktree,
-      ...args,
-    ]
+    const repositoryArgs = (repository: Repository, args: string[]) =>
+      GitSubmodules.skip(["--git-dir", repository.gitDirectory, "--work-tree", repository.worktree, ...args])
 
     const repositoryOperation = Effect.fnUntraced(function* (
       operationName: OperationError["operation"],
@@ -537,16 +537,7 @@ const layer = Layer.effect(
         repositoryOperation("refresh", input.repository, args).pipe(Effect.map((result) => nuls(result.text)))
       const [tracked, untracked] = yield* Effect.all(
         [
-          // A nested repository is a gitlink here; git would start a status inside it, with the config that clone ships.
-          list([
-            "--literal-pathspecs",
-            "diff-files",
-            "--ignore-submodules=all",
-            "--name-only",
-            "-z",
-            "--",
-            input.scope,
-          ]),
+          list(["--literal-pathspecs", "diff-files", "--name-only", "-z", "--", input.scope]),
           list(["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "-z", "--", input.scope]),
         ],
         { concurrency: 2 },
@@ -679,7 +670,6 @@ const layer = Layer.effect(
       return nuls(
         (yield* repositoryOperation("list_files", input.repository, [
           "diff",
-          "--ignore-submodules=all",
           "--name-only",
           "--no-renames",
           "-z",
@@ -702,7 +692,7 @@ const layer = Layer.effect(
       paths?: readonly RelativePath[]
     }) {
       if (input.paths?.length === 0) return []
-      const args = ["--ignore-submodules=all", "--no-renames", input.from, input.to, "--", ...(input.paths ?? [])]
+      const args = ["--no-renames", input.from, input.to, "--", ...(input.paths ?? [])]
       // Patch headers have no -z form: unquoted paths keep chunksByFile matching non-ASCII names.
       const [names, numbers, patch] = yield* Effect.all(
         [
@@ -831,7 +821,7 @@ const layer = Layer.effect(
       cwd = repository.worktree,
     ) {
       const result = yield* proc
-        .run(ChildProcess.make(gitExecutable, args, { cwd, extendEnv: true, stdin: "ignore" }))
+        .run(ChildProcess.make(gitExecutable, GitSubmodules.skip(args), { cwd, extendEnv: true, stdin: "ignore" }))
         .pipe(
           Effect.mapError(
             (cause) => new WorktreeError({ operation, directory: worktreeDirectory, message: cause.message, cause }),
@@ -957,7 +947,7 @@ function execute(cwd: string, proc: AppProcess.Interface, args: string[], top?: 
   if (!env) return Effect.succeed({ exitCode: 1, text: "", stderr: unbounded } satisfies Result)
   return proc
     .run(
-      ChildProcess.make(gitExecutable, args, {
+      ChildProcess.make(gitExecutable, GitSubmodules.skip(args), {
         cwd,
         env,
         extendEnv: true,
