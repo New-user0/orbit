@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { $ } from "bun"
 import { expect } from "bun:test"
 import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
@@ -473,6 +474,53 @@ it.live("a grant for a folder covers the folders below it, as the reference's wa
       expect(after.body).toMatchObject({ directory: child, trusted: true, source: "saved" })
       // And a session starts there without a question of its own.
       expect((await createSession(server, child)).status).toBe(200)
+    })
+  }),
+)
+
+// A child session is created at its parent's folder, whatever folder the request names, so that is the folder that has to
+// be trusted (class 3).
+it.live("a child session is decided by its parent's folder, not by the folder the request names", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const server = yield* startServer(folders.config, untrusted)
+    yield* Effect.promise(async () => {
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      expect((await grant(server, folders.other)).status).toBe(200)
+      const parent = await createSession(server, folders.repo)
+      expect(parent.status).toBe(200)
+      expect((await revoke(server, folders.repo)).body).toMatchObject({ trusted: false })
+      const child = (directory: string) =>
+        request(server, "POST", "/api/session", {
+          directory,
+          body: { parentID: parent.body?.data?.id, location: { directory } },
+        })
+      expect(await child(folders.other)).toEqual(refusedFor(folders.repo))
+      // The control: once the parent's folder is trusted again, the same request creates the child there.
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      const created = await child(folders.other)
+      expect(created.status).toBe(200)
+      expect(created.body?.data?.location.directory).toBe(folders.repo)
+    })
+  }),
+)
+
+// Where a session is created is decided for the folder its Location's trust is decided for, the project's main checkout,
+// so a linked worktree of a trusted repository starts one, and a revoke of that checkout stops it (class 3).
+it.live("a linked worktree is decided by its main checkout when a session is created there", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const worktree = path.join(folders.other, "linked")
+    yield* Effect.promise(async () => {
+      await $`git init -q`.cwd(folders.repo).quiet()
+      await $`git -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m init`.cwd(folders.repo).quiet()
+      await $`git worktree add -q --detach ${worktree}`.cwd(folders.repo).quiet()
+    })
+    const server = yield* startServer(folders.config, untrusted)
+    yield* Effect.promise(async () => {
+      expect(await createSession(server, worktree)).toEqual(refusedFor(folders.repo))
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      expect((await createSession(server, worktree)).status).toBe(200)
     })
   }),
 )
