@@ -3,6 +3,7 @@ import path from "node:path"
 import { $ } from "bun"
 import { expect } from "bun:test"
 import { Effect } from "effect"
+import { CompatNames } from "../../compat/src/names"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
@@ -196,6 +197,54 @@ it.live("a terminal starts once the folder is trusted: the control for the row a
   }),
 )
 
+it.live("a terminal does not start in an untrusted folder that the caller names, though the Location is trusted", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const server = yield* startServer(folders.config, untrusted)
+    const start = (cwd: string) =>
+      request(server, "POST", "/api/pty", {
+        directory: folders.repo,
+        body: { command: process.execPath, args: ["--version"], cwd },
+      })
+    yield* Effect.promise(async () => {
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      // Both folders count, so the stricter answer wins (class 3). A relative folder is taken from the Location's, as
+      // the terminal is started there.
+      expect(await start(folders.other)).toEqual(refusedFor(folders.other))
+      expect(await start(path.join("..", "other"))).toEqual(refusedFor(folders.other))
+
+      // The trusted control: once the folder it starts in is trusted too, the terminal starts.
+      expect((await grant(server, folders.other)).status).toBe(200)
+      expect((await start(folders.other)).status).toBe(200)
+    })
+  }),
+)
+
+it.live("an instruction note is not written into an untrusted folder, whatever its scope, and is once it is trusted", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const file = path.join(folders.repo, "AGENTS.md")
+    yield* Effect.promise(() => Bun.write(file, "CLONE-AGENTS-MD\n"))
+    const server = yield* startServer(folders.config, untrusted)
+    const note = (scope: string) =>
+      request(server, "POST", "/api/location/instructions/note", {
+        directory: folders.repo,
+        body: { scope, text: "REVIEW-NOTE" },
+      })
+    yield* Effect.promise(async () => {
+      expect(await note("project")).toEqual(refusedFor(folders.repo))
+      expect(await note("user")).toEqual(refusedFor(folders.repo))
+      expect(await Bun.file(file).text()).toBe("CLONE-AGENTS-MD\n")
+      expect(await Bun.file(path.join(folders.config, "ORBIT.md")).exists()).toBe(false)
+
+      // The trusted control: the same note is added to the folder's instruction file.
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      expect((await note("project")).status).toBe(200)
+      expect(await Bun.file(file).text()).toContain("REVIEW-NOTE")
+    })
+  }),
+)
+
 it.live("no MCP server is connected and no file is written for an untrusted folder, and both run once it is trusted", () =>
   Effect.gen(function* () {
     const folders = yield* layout
@@ -323,6 +372,18 @@ it.live(
 it.live("an untrusted folder's config, agents, commands and skills are not loaded at all, and a grant loads them", () =>
   Effect.gen(function* () {
     const folders = yield* layout
+    // What other agent products keep in a folder, which Orbit reads too: a skill in their shared skills directory, and
+    // their project MCP file, naming a server on a port nothing listens on.
+    yield* Effect.promise(async () => {
+      await Bun.write(
+        path.join(folders.repo, CompatNames.agents, "skills", "clone-compat-skill", "SKILL.md"),
+        "---\nname: clone-compat-skill\ndescription: CLONE-COMPAT-SKILL from the repository\n---\nThe clone's skill.\n",
+      )
+      await Bun.write(
+        path.join(folders.repo, CompatNames.mcp),
+        JSON.stringify({ mcpServers: { "clone-compat-mcp": { type: "http", url: "http://127.0.0.1:9/mcp" } } }),
+      )
+    })
     const server = yield* startServer(folders.config, untrusted)
     const read = (directory: string) =>
       Promise.all(
@@ -335,9 +396,11 @@ it.live("an untrusted folder's config, agents, commands and skills are not loade
       // Not one entry from the folder: not a document cut down to its harmless fields, not a directory marked untrusted.
       expect(config).not.toContain(path.join(folders.repo, "orbit.json").replaceAll("\\", "\\\\"))
       expect(config).not.toContain("clone-user")
+      expect(config).not.toContain(path.join(folders.repo, CompatNames.mcp).replaceAll("\\", "\\\\"))
       expect(agents).not.toContain("CLONE-AGENT")
       expect(commands).not.toContain("CLONE-COMMAND")
       expect(skills).not.toContain("CLONE-SKILL")
+      expect(skills).not.toContain("CLONE-COMPAT-SKILL")
       // Nothing was read, so the status has nothing to list as held back either.
       const status = await request(server, "GET", "/api/location/trust", { directory: folders.repo })
       expect(status.body).toMatchObject({ trusted: false, withheld: [] })
@@ -347,9 +410,11 @@ it.live("an untrusted folder's config, agents, commands and skills are not loade
       expect((await request(server, "POST", "/api/location/reload")).status).toBe(204)
       const after = await read(folders.repo)
       expect(after[0]).toContain("clone-user")
+      expect(after[0]).toContain("clone-compat-mcp")
       expect(after[1]).toContain("CLONE-AGENT")
       expect(after[2]).toContain("CLONE-COMMAND")
       expect(after[3]).toContain("CLONE-SKILL")
+      expect(after[3]).toContain("CLONE-COMPAT-SKILL")
     })
   }),
 )
@@ -557,7 +622,7 @@ it.live("no shell command or session terminal starts in an untrusted folder, and
       expect(await shell()).toEqual(refusedFor(folders.repo))
       // A terminal for no known session is decided by the folder it starts in.
       expect(await terminal("ses_unknown", folders.repo)).toEqual(refusedFor(folders.repo))
-      // One for a session works for that session, so its folder decides, wherever the terminal is asked to start.
+      // One for a session works for that session, so its folder has to be trusted, wherever the terminal is asked to start.
       expect(await terminal(id, folders.other)).toEqual(refusedFor(folders.repo))
       await Bun.sleep(1_000)
       expect(await Bun.file(marker).exists()).toBe(false)
@@ -570,6 +635,11 @@ it.live("no shell command or session terminal starts in an untrusted folder, and
       expect(await Bun.file(marker).exists()).toBe(true)
       expect(await terminal("ses_unknown", folders.repo)).toEqual(unavailable)
       expect(await terminal(id, folders.other)).toEqual(unavailable)
+
+      // The reverse: the session's folder is trusted and the folder the terminal is asked to start in is not, so the
+      // stricter answer wins there too (class 3).
+      expect((await revoke(server, folders.other)).body).toMatchObject({ trusted: false })
+      expect(await terminal(id, folders.other)).toEqual(refusedFor(folders.other))
     })
   }),
   60_000,

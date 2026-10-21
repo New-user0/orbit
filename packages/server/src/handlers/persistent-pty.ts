@@ -44,21 +44,18 @@ export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experiment
       .handle(
         "persistentPty.create",
         Effect.fn(function* (ctx) {
-          // A terminal belongs to a session and starts a program for it, so the session's folder has to be trusted
-          // (class 12). A terminal for no known session is decided by the folder it starts in, where the daemon puts it.
+          // A terminal belongs to a session and starts a program for it in the folder the caller picks, so the session's
+          // folder and that one both have to be trusted (class 3 and 12). The daemon is given the folder that was checked.
           const owner = yield* sessions.get(ctx.params.sessionID).pipe(Effect.option)
-          yield* requireTrustedAt(
-            folders,
-            Option.isSome(owner)
-              ? owner.value.location.directory
-              : AbsolutePath.make(path.resolve(ctx.payload.cwd ?? "/")),
-          )
+          if (Option.isSome(owner)) yield* requireTrustedAt(folders, owner.value.location.directory)
+          const cwd = AbsolutePath.make(path.resolve(ctx.payload.cwd ?? "/"))
+          yield* requireTrustedAt(folders, cwd)
           return {
             data: yield* pty
               .create(ctx.params.sessionID, {
                 command: ctx.payload.command,
                 args: ctx.payload.args,
-                cwd: ctx.payload.cwd,
+                cwd,
                 title: ctx.payload.title,
                 env: ctx.payload.env,
                 cols: ctx.payload.size?.cols,

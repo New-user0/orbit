@@ -11,6 +11,8 @@ import { isolatedEnv } from "./fixture/environment"
 // ORBIT_TRUST_PROJECT, as the shared background service does, against a private server and a scripted model.
 const model = "ollama/trust-first:1b"
 let asked = 0
+// Every request for an answer, with or without tools: a doctor probe asks without them.
+let requests = 0
 const details = {
   format: "gguf",
   family: "llama",
@@ -45,6 +47,7 @@ const ollama = Bun.serve({
       })
     if (pathname === "/api/ps") return Response.json({ models: [] })
     const body: { tools?: unknown } = await request.json()
+    requests++
     if (body.tools) asked++
     const events = [
       { choices: [{ index: 0, delta: { role: "assistant", content: body.tools ? "ran fine" : "Title" } }] },
@@ -84,6 +87,22 @@ async function clone(name: string) {
     path.join(directory, "suite.json"),
     JSON.stringify({ name: "plain", tasks: [{ id: "task", prompt: "say ok", checks: [] }] }),
   )
+  // A session someone exported, which `orb session import` brings into this folder.
+  await Bun.write(
+    path.join(directory, "session.json"),
+    JSON.stringify({
+      info: {
+        id: `ses_trust_first_${name.replace(/\W+/g, "_")}`,
+        projectID: "global",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 1, updated: 2 },
+        title: "Exported session",
+        location: { directory },
+      },
+      messages: [{ id: "msg_trust_first", type: "user", text: "First", time: { created: 1 } }],
+    }),
+  )
   return directory
 }
 
@@ -110,33 +129,53 @@ async function orb(directory: string, args: string[]) {
   return { code, stdout, stderr }
 }
 
-// The doors, each with the words after `orb` for a folder. `--trust` goes right after the command words in the trusted
-// control. `orb -p` already stops in such a folder (`packages/cli/test/trust.test.ts`, "orb -p stops in an untrusted
-// folder that holds nothing back"), so it is not repeated here.
+// The doors, each with the words after `orb` for a folder, and what the trusted control prints once it has done its
+// work, where a row pins that. `--trust` goes right after the command words in the trusted control. `orb -p` already
+// stops in such a folder (`packages/cli/test/trust.test.ts`, "orb -p stops in an untrusted folder that holds nothing
+// back"), so it is not repeated here.
 const doors = [
-  ["orb run", () => ["run"], () => ["--standalone", "--model", model, "say ok"]],
-  ["orb run --bare", () => ["run"], () => ["--bare", "--model", model, "say ok"]],
-  ["orb loop", () => ["loop", "10s", "check"], () => ["--times", "1", "--standalone", "--model", model]],
-  ["orb flow run", () => ["flow", "run"], (folder: string) => ["--standalone", path.join(folder, "workflow.yaml")]],
+  ["orb run", () => ["run"], () => ["--standalone", "--model", model, "say ok"], ""],
+  ["orb run --bare", () => ["run"], () => ["--bare", "--model", model, "say ok"], ""],
+  ["orb loop", () => ["loop", "10s", "check"], () => ["--times", "1", "--standalone", "--model", model], ""],
+  [
+    "orb flow run",
+    () => ["flow", "run"],
+    (folder: string) => ["--standalone", path.join(folder, "workflow.yaml")],
+    "",
+  ],
   [
     "orb eval",
     (folder: string) => ["eval", path.join(folder, "suite.json")],
     () => ["--standalone", "--models", model],
+    "",
+  ],
+  // A probe starts a throwaway session in the folder; before this row it ended in a stack trace (review, fix loop 2).
+  ["orb doctor --probe", () => ["doctor", "--probe"], () => ["--standalone", "--model", model], `ok ${model}`],
+  // The server refuses the import; before this row the command said only "Forbidden" (review, fix loop 2).
+  [
+    "orb session import",
+    (folder: string) => ["session", "import", path.join(folder, "session.json")],
+    () => ["--standalone"],
+    "Imported session: ses_trust_first_",
   ],
 ] as const
 
 test.each(doors)(
   "%s stops in an untrusted folder that holds no config, asks no model, and --trust gets past the check",
-  async (name, words, flags) => {
+  async (name, words, flags, done) => {
     const folder = await clone(`door-${name.replace(/\W+/g, "-")}`)
     const command = words(folder)
     const rest = flags(folder)
     const before = asked
+    const sent = requests
 
     const refused = await orb(folder, [...command, ...rest])
 
     expect({ name, code: refused.code }).toEqual({ name, code: 1 })
     expect(refused.stdout + refused.stderr).toContain(`${folder} is not trusted`)
+    // A refusal, not a crash.
+    expect(refused.stderr).not.toMatch(/^\s+at /m)
+    expect(requests).toBe(sent)
     // It says how to trust the folder for good and for this run.
     expect(refused.stderr).toContain("`orb trust`")
     expect(refused.stderr).toContain("--trust")
@@ -145,6 +184,7 @@ test.each(doors)(
     // The trusted control: the same door with --trust gets past the check.
     const trusted = await orb(folder, [...command, "--trust", ...rest])
     expect(trusted.stdout + trusted.stderr).not.toContain("is not trusted")
+    expect(trusted.stdout).toContain(done)
   },
   180_000,
 )

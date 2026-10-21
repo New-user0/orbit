@@ -8,6 +8,8 @@ import path from "node:path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
+import { requireTrust } from "../../../util/trust"
+import { directory } from "../flow/execute"
 
 export default Runtime.handler(
   Commands.commands.session.commands.import,
@@ -28,16 +30,17 @@ export default Runtime.handler(
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
+      trust: input.trust,
     })
     const client = Orbit.make({
       baseUrl: server.endpoint.url,
       headers: Service.headers(server.endpoint),
     })
-    const location = yield* Effect.promise(() =>
-      client.location.get({
-        location: { directory: path.resolve(Option.getOrElse(input.directory, () => process.cwd())) },
-      }),
-    )
+    const folder = path.resolve(Option.getOrElse(input.directory, directory))
+    // The server refuses a session in an untrusted folder; asking first gives the refusal that names the folder and the
+    // ways to trust it (class 13).
+    yield* requireTrust(client, folder, { grant: input.trust })
+    const location = yield* Effect.promise(() => client.location.get({ location: { directory: folder } }))
     const response = yield* Effect.promise(() =>
       fetch(new URL("/api/experimental/session/import", server.endpoint.url), {
         method: "POST",

@@ -11,6 +11,8 @@ import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { sandboxCheck, sandboxState } from "../../util/doctor-sandbox"
 import { settledModels } from "../../util/models"
+import { requireTrust } from "../../util/trust"
+import { directory } from "./flow/execute"
 import { ORBIT_VERSION } from "../../version"
 
 // Names only: doctor output is meant to be pasted into a bug report, so it never prints a value.
@@ -58,8 +60,12 @@ export default Runtime.handler(
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
+      trust: input.trust,
     })
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+    // A probe starts a session in this folder, which an untrusted folder refuses, so the folder is asked about first and
+    // the refusal says how to trust it, rather than the probe failing on the server's answer (class 12).
+    yield* requireTrust(client, directory(), { grant: input.trust })
     const available = yield* Effect.promise(() => settledModels(client, model))
     const targets =
       model === undefined
@@ -158,7 +164,7 @@ async function probe(client: ReturnType<typeof Orbit.make>, target: string): Pro
   const model = { providerID: target.slice(0, separator), id: target.slice(separator + 1) }
   const started = Date.now()
   // A throwaway session resolves the model with this directory's configuration, as a real session would.
-  const session = await client.session.create({ title: "orb doctor", model, location: { directory: process.cwd() } })
+  const session = await client.session.create({ title: "orb doctor", model, location: { directory: directory() } })
   return client.session
     .generate({ sessionID: session.id, prompt: "Reply with ok" })
     .then(
@@ -181,7 +187,7 @@ async function probe(client: ReturnType<typeof Orbit.make>, target: string): Pro
 const minimumContext = 16_384
 
 async function ollamaContext(client: ReturnType<typeof Orbit.make>): Promise<Check[]> {
-  const providers = await client.provider.list({ location: { directory: process.cwd() } })
+  const providers = await client.provider.list({ location: { directory: directory() } })
   const baseURL = providers.data.find((provider) => provider.id === "ollama")?.settings?.baseURL
   const origin = (typeof baseURL === "string" ? baseURL : "http://127.0.0.1:11434/v1").replace(/\/v1\/?$/, "")
   const running = await fetch(`${origin}/api/ps`)

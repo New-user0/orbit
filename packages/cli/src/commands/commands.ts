@@ -445,6 +445,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Check network, TLS, provider settings and, with --probe, reachability of each provider",
       params: {
         ...ServerParams,
+        ...TrustParams,
         probe: Flag.boolean("probe").pipe(
           Flag.withDescription("Send one short request to one model per available provider"),
           Flag.withDefault(false),
@@ -819,6 +820,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           description: "Import session data from a JSON file or URL",
           params: {
             ...ServerParams,
+            ...TrustParams,
             file: Argument.string("file").pipe(Argument.withDescription("JSON file or URL to import")),
             directory: Flag.string("directory").pipe(
               Flag.withDescription("Directory in which to import the session"),

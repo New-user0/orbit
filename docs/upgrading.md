@@ -346,13 +346,14 @@ What changed:
   "Not now"; "Not now" keeps the terminal UI open, and the server refuses that session's work. When the trust read fails
   or times out, the question opens anyway.
 - Every headless door refuses an untrusted folder, even one with no config at all: `orb run` (with or without `--bare`),
-  `orb -p`, stream-json input, `orb loop`, `orb flow run`, `orb eval`, `orb mini`, an ACP `session/new`,
+  `orb -p`, stream-json input, `orb loop`, `orb flow run`, `orb eval`, `orb doctor --probe`, `orb session import`
+  (for the folder the session lands in), `orb mini`, an ACP `session/new`,
   `session/load` or `session/resume` (a JSON-RPC error whose `data.type` is `untrusted_folder`), and an SDK host that
   does not set `trust: { implicit: true }`. The server refuses a session, an imported session, a prompt, a command, a
   skill, a synthetic message, a shell command (in a session or through `POST /api/shell`), a compaction, a fork, a move
   into the folder, text generated from a session (`session.generate`, and the title Orbit writes when you clear one),
-  the instruction preview, a terminal (`pty.create` and a session's terminal), a worktree (create, remove and refresh),
-  an MCP connection and a file write there with `UntrustedFolderError` (HTTP 403), which names the folder. A server older
+  the instruction preview, an instruction note (whatever its scope), a terminal (`pty.create` and a session's
+  terminal), a worktree (create, remove and refresh), an MCP connection and a file write there with `UntrustedFolderError` (HTTP 403), which names the folder. A server older
   than workspace trust cannot say, so the CLI stops there too.
 - A grant for a folder now covers every folder below it, as the reference's walk up the parents does, and a trust
   status names the folder whose grant applies as `granted`. The walk starts from where the folder really is: a folder
@@ -361,7 +362,11 @@ What changed:
   --revoke` names the folder whose grant to end; `orb trust` on such a folder gives it a grant of its own. A grant for
   the home directory or a filesystem root still lasts only until Orbit restarts, and covers that folder alone.
 - `orb flow ls`, `show`, `cost`, `trace`, `watch` and `approve` need the folder trusted before they open its run store,
-  and take `--trust`, `--standalone` and `--server` like `orb flow run`.
+  and take `--trust`, `--standalone` and `--server` like `orb flow run`. `orb doctor` and `orb session import` take
+  `--trust` too.
+- A terminal checks the folder it is asked to start in as well as the Location's or the session's folder, and is refused
+  when either is untrusted. A relative `cwd` for `pty.create` is now taken from the Location's folder, where it used to
+  be taken from the server's working folder.
 - A session that began in a folder that is still untrusted, under an earlier release, takes no more work until the
   folder is trusted, and is not resumed after a restart until then.
 

@@ -8,6 +8,7 @@ import { AbsolutePath } from "@orbit/schema/schema"
 import { Cause, Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
+import { requireTrusted } from "./trust-error"
 
 export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (handlers) =>
   Effect.gen(function* () {
@@ -44,6 +45,8 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
       .handle(
         "instruction.note.add",
         Effect.fn(function* (ctx) {
+          // A note changes an instruction file, and a folder nobody trusted stays as it is (class 12).
+          yield* requireTrusted()
           const notes = yield* InstructionNotes.Service
           return {
             data: yield* notes.add(ctx.payload).pipe(

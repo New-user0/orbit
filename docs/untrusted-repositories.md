@@ -888,8 +888,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Every server route that starts work, reads the folder's instruction files or runs something in a folder
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
   the destination of `move`, `generate`, `update` when it clears the title for the model to write one,
-  `instructions.preview`, `shell.create`, `pty.create`, `persistentPty.create` (the session's folder), `worktree.create`,
-  `remove` and `refresh`, `mcp.connect`, `fs.write`): `requireTrusted` in
+  `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
+  Location's or the session's folder and the folder the terminal starts in, the stricter answer winning, class 3),
+  `worktree.create`, `remove` and `refresh`, `mcp.connect`, `fs.write`): `requireTrusted` in
   `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
@@ -2305,7 +2306,8 @@ already guarded elsewhere.
 - `requireTrust` and `trustRefusal` in `packages/cli/src/util/trust.ts` stop a command in any folder that is not
   trusted, whatever it holds, and in a trusted one whose executable config changed since the grant. The handlers for
   `run` (with or without `--bare`), `loop`, `flow run`, `flow resume`, `flow replay`, `flow clean`, the store readers
-  `flow ls`, `show`, `cost`, `trace`, `watch` and `approve` (before `openStore`), `eval` and `orb -p`
+  `flow ls`, `show`, `cost`, `trace`, `watch` and `approve` (before `openStore`), `eval`, `doctor --probe` (before
+  its throwaway session), `session import` (for the folder the session lands in) and `orb -p`
   (`handlers/print.ts`, through the `headlessInput` that `run` shares) call them before any load; `trust.test.ts` and
   `trust-first.test.ts` pin a clean folder, `--bare`, `--continue` and the 404 stub. `orb acp` cannot stop, because the
   editor chooses the folders, so it refuses each `session/new`, `session/load` and `session/resume` in an untrusted

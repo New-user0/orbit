@@ -4,7 +4,7 @@ import { AbsolutePath } from "@orbit/schema/schema"
 import { Trust } from "@orbit/schema/trust"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { InvalidRequestError, ServiceUnavailableError } from "../errors.js"
+import { InvalidRequestError, ServiceUnavailableError, UntrustedFolderError } from "../errors.js"
 
 export const LocationQuery = Schema.Struct({
   location: Schema.optional(
@@ -136,7 +136,7 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
           }),
         }),
         success: Schema.Struct({ data: Instruction.NoteAdded }),
-        error: [InvalidRequestError, ServiceUnavailableError],
+        error: [InvalidRequestError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(locationMiddleware)
         .annotateMerge(locationQueryOpenApi)
@@ -145,7 +145,7 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             identifier: "instruction.note.add",
             summary: "Add an instruction note",
             description:
-              "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
+              "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A folder that is not trusted is refused with an untrusted-folder error, whatever the scope, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
           }),
         ),
     )

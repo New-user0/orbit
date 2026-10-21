@@ -2909,6 +2909,15 @@ export type ServiceUnavailableError = {
 export const isServiceUnavailableError = (value: unknown): value is ServiceUnavailableError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ServiceUnavailableError"
 
+export type UntrustedFolderError = {
+  readonly _tag: "UntrustedFolderError"
+  readonly directory: string
+  readonly persistent: boolean
+  readonly message: string
+}
+export const isUntrustedFolderError = (value: unknown): value is UntrustedFolderError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "UntrustedFolderError"
+
 export type AgentNotFoundError = {
   readonly _tag: "AgentNotFoundError"
   readonly agentID: string
@@ -2924,15 +2933,6 @@ export const isForbiddenError = (value: unknown): value is ForbiddenError =>
 export type InvalidCursorError = { readonly _tag: "InvalidCursorError"; readonly message: string }
 export const isInvalidCursorError = (value: unknown): value is InvalidCursorError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "InvalidCursorError"
-
-export type UntrustedFolderError = {
-  readonly _tag: "UntrustedFolderError"
-  readonly directory: string
-  readonly persistent: boolean
-  readonly message: string
-}
-export const isUntrustedFolderError = (value: unknown): value is UntrustedFolderError =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "UntrustedFolderError"
 
 export type SessionNotFoundError = {
   readonly _tag: "SessionNotFoundError"

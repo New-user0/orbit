@@ -44,6 +44,16 @@ const sanitizedTransfer = {
 
 const status = () =>
   Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [], paths: { tmp: "/tmp/orbit" } })
+// An import asks whether the folder the session lands in is trusted first; these servers say it is.
+const trusted = (url: URL) =>
+  Response.json({
+    directory: url.searchParams.get("location[directory]") ?? "",
+    trusted: true,
+    persistent: true,
+    source: "saved",
+    withheld: [],
+    changed: [],
+  })
 
 function run(args: string[], stdin?: string) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
@@ -160,6 +170,7 @@ test("import validates a file and sends it to the resolved location", async () =
     async fetch(request) {
       const url = new URL(request.url)
       if (url.pathname === "/api/info") return status()
+      if (url.pathname === "/api/location/trust") return trusted(url)
       if (url.pathname === "/api/location") {
         return Response.json({
           directory: root,
@@ -203,6 +214,7 @@ test("import reports an existing session without a stack trace", async () => {
     fetch(request) {
       const url = new URL(request.url)
       if (url.pathname === "/api/info") return status()
+      if (url.pathname === "/api/location/trust") return trusted(url)
       if (url.pathname === "/api/location") {
         return Response.json({
           directory: root,

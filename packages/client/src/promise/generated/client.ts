@@ -548,7 +548,7 @@ export function make(options: ClientOptions) {
                 query: { location: input["location"] },
                 body: { scope: input["scope"], text: input["text"] },
                 successStatus: 200,
-                declaredStatuses: [400, 401, 503],
+                declaredStatuses: [400, 401, 403, 503],
                 empty: false,
               },
               requestOptions,
