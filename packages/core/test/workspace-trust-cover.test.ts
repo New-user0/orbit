@@ -169,6 +169,43 @@ describe("WorkspaceTrust coverage", () => {
       }),
   )
 
+  // A path that is not there keeps its spelling when it is resolved, so the walk has to start from where its existing part
+  // really is: a missing folder below a link into a clone is the clone's, and a link that leads nowhere is covered by no
+  // folder above it (class 4).
+  it.live("a missing folder below a link is decided where the link leads, and a link that leads nowhere is covered by nothing", () =>
+    Effect.gen(function* () {
+      const folders = yield* fixture
+      const link = path.join(folders.linkHost, "clone")
+      const gone = path.join(folders.root, "gone")
+      const dangling = path.join(folders.linkHost, "dangling")
+      const type = process.platform === "win32" ? "junction" : undefined
+      yield* Effect.promise(async () => {
+        await fs.symlink(folders.sibling, link, type)
+        await fs.mkdir(gone)
+        await fs.symlink(gone, dangling, type)
+        await fs.rm(gone, { recursive: true })
+      })
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        yield* trust.grant(folders.linkHost, { persist: true, via: "test" })
+        // The control: a missing folder that really lies below the granted folder is covered by it.
+        expect(yield* trust.status(path.join(folders.linkHost, "missing", "deeper"))).toMatchObject({
+          trusted: true,
+          granted: folders.linkHost,
+        })
+        expect(yield* trust.status(path.join(link, "missing"))).toMatchObject({ trusted: false })
+        expect(yield* trust.status(dangling)).toMatchObject({ trusted: false })
+        expect(yield* trust.status(path.join(dangling, "missing"))).toMatchObject({ trusted: false })
+        // A grant for where the link leads covers the missing folder below it.
+        yield* trust.grant(folders.sibling, { persist: true, via: "test" })
+        expect(yield* trust.status(path.join(link, "missing"))).toMatchObject({
+          trusted: true,
+          granted: folders.sibling,
+        })
+      }).pipe(Effect.provide(build(folders)))
+    }),
+  )
+
   const windows = process.platform === "win32" ? it.live : it.live.skip
   windows("on Windows a parent's grant covers a child spelled in another case", () =>
     Effect.gen(function* () {

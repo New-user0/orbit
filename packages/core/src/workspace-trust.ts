@@ -158,7 +158,8 @@ export function layer(options?: Options) {
 
       // The nearest folder above `directory` whose grant covers it, as the reference's walk up the parents finds one. The
       // home directory and filesystem roots hold everything below them, so their grant covers themselves alone and the
-      // walk passes over them (class 3). `directory` is a real path, so a link is covered by where it leads (class 4).
+      // walk passes over them (class 3). `directory` is a real path (`real` below), so a link is covered by where it leads
+      // (class 4).
       const covering = (
         directory: string,
       ): Effect.Effect<{ readonly directory: AbsolutePath; readonly source: Trust.Source } | undefined> => {
@@ -173,11 +174,33 @@ export function layer(options?: Options) {
         )
       }
 
+      // Where the walk up the parents starts. `identify` keeps the spelled path of a part that is not there, and a walk up
+      // that spelling would let a missing folder below a link be covered by the folder the link sits in (class 4). So the
+      // longest part that exists is made real and the rest is added to it. A part that is there but leads nowhere, such
+      // as a dangling link, or that cannot be read, gives no start, and only the folder's own grant counts.
+      const real = (directory: string): Effect.Effect<string | undefined> =>
+        fs.realPath(directory).pipe(
+          Effect.catchReason("PlatformError", "NotFound", () =>
+            fs.readLink(directory).pipe(
+              Effect.as(undefined),
+              Effect.catchReason("PlatformError", "NotFound", () => {
+                const parent = path.dirname(directory)
+                if (parent === directory) return Effect.succeed(undefined)
+                return real(parent).pipe(
+                  Effect.map((found) => (found === undefined ? undefined : path.join(found, path.basename(directory)))),
+                )
+              }),
+            ),
+          ),
+          Effect.orElseSucceed(() => undefined),
+        )
+
       const status = Effect.fn("WorkspaceTrust.status")(function* (root: string) {
         const folder = yield* identify(root)
         const mine = yield* own(folder.id, folder.persistent)
         const implied = mine === undefined && implicit && folder.persistent ? ("implicit" as const) : undefined
-        const cover = mine === undefined && implied === undefined ? yield* covering(folder.directory) : undefined
+        const start = mine === undefined && implied === undefined ? yield* real(folder.directory) : undefined
+        const cover = start === undefined ? undefined : yield* covering(FSUtil.normalizePath(start))
         const source = mine ?? implied ?? cover?.source
         return {
           directory: folder.directory,
