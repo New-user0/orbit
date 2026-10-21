@@ -236,7 +236,7 @@ async function layered(name: string) {
   const child = path.join(parent, "child")
   await Bun.write(path.join(parent, "orbit.json"), JSON.stringify(guard))
   await fs.mkdir(child, { recursive: true })
-  expect(Bun.spawnSync(["git", "init", "--quiet", child]).exitCode).toBe(0)
+  expect((await spawned(["git", "init", "--quiet", child])).code).toBe(0)
   return { parent, child }
 }
 
@@ -258,13 +258,23 @@ async function orb(directory: string, given: string[], env: Record<string, strin
     stdout: "pipe",
     stderr: "pipe",
   })
+  return finished(child, `orb ${args.join(" ")} in ${directory}`, 240_000)
+}
+
+// A program the tests run in their folders, such as git. It is never started with `Bun.spawnSync`: a synchronous spawn
+// that does not return stops the event loop, so neither the limit below nor the runner's own can say which command hung
+// (CI runs held rows of this file for their whole limit with nothing in the log, and no `orb` limit fired).
+const spawned = (command: string[], cwd?: string) =>
+  finished(Bun.spawn(command, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" }), command.join(" "), 60_000)
+
+// Waits for a child to print and end, for `limit` milliseconds at most. A child still running then is killed, and the
+// failure names the command, what it printed, the processes still running and the end of the newest logs, so that a
+// hang on a CI runner can be read from the CI log and does not hold the rows after it.
+async function finished(child: Bun.Subprocess<"ignore", "pipe", "pipe">, command: string, limit: number) {
   const stdout = collect(child.stdout)
   const stderr = collect(child.stderr)
-  // A door that never ends would hold its test until the runner's limit and say nothing about why, so each `orb` gets
-  // four minutes. One still running then is killed, and the failure names the command, what it printed, the processes
-  // still running and the end of the newest logs, so that a hang on a CI runner can be read from the CI log.
   const late = Promise.withResolvers<"late">()
-  const timer = setTimeout(() => late.resolve("late"), 240_000)
+  const timer = setTimeout(() => late.resolve("late"), limit)
   const code = await Promise.race([
     Promise.all([child.exited, stdout.done, stderr.done]).then(([code]) => code),
     late.promise,
@@ -272,12 +282,16 @@ async function orb(directory: string, given: string[], env: Record<string, strin
   clearTimeout(timer)
   if (code !== "late") return { code, stdout: stdout.text(), stderr: stderr.text() }
   child.kill("SIGKILL")
+  const processes =
+    process.platform === "win32"
+      ? ""
+      : await new Response(Bun.spawn(["ps", "-eo", "pid,ppid,etimes,args"], { stdin: "ignore" }).stdout).text()
   throw new Error(
     [
-      `orb ${args.join(" ")} in ${directory} did not end within four minutes (exited: ${child.exitCode ?? "no"})`,
+      `${command} did not end within ${limit / 1000} s (exited: ${child.exitCode ?? "no"})`,
       `stdout:\n${stdout.text()}`,
       `stderr:\n${stderr.text()}`,
-      `processes:\n${process.platform === "win32" ? "" : Bun.spawnSync(["ps", "-eo", "pid,ppid,etimes,args"]).stdout.toString()}`,
+      `processes:\n${processes}`,
       `logs:\n${await logTails()}`,
     ].join("\n"),
   )
@@ -583,7 +597,7 @@ test("orb trust --revoke of a folder that a parent's grant covers names that par
   const parent = path.join(root, "work", "covering")
   const child = path.join(parent, "inner")
   await fs.mkdir(child, { recursive: true })
-  expect(Bun.spawnSync(["git", "init", "--quiet", child]).exitCode).toBe(0)
+  expect((await spawned(["git", "init", "--quiet", child])).code).toBe(0)
   succeeded(await orb(child, ["trust", "--standalone", parent]))
 
   const revoked = await orb(child, ["trust", "--standalone", "--revoke"])
@@ -1700,7 +1714,7 @@ test("a workflow in another folder of the trusted project, or in the home direct
     ["init", "--quiet"],
     ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "--quiet", "-m", "init"],
   ])
-    expect(Bun.spawnSync(["git", ...args], { cwd: repository }).exitCode).toBe(0)
+    expect((await spawned(["git", ...args], repository)).code).toBe(0)
   succeeded(await orb(repository, ["trust", "--standalone"]))
   const inside = await traced(path.join(repository, "flows"), "workflow.ts", noop)
   succeeded(await orb(repository, ["flow", "run", "--standalone", inside.file]))
@@ -2044,7 +2058,7 @@ async function nested(name: string) {
   const inner = path.join(middle, "inner")
   await fs.mkdir(inner, { recursive: true })
   await Bun.write(path.join(middle, "orbit.json"), JSON.stringify(guard))
-  for (const folder of [outer, inner]) expect(Bun.spawnSync(["git", "init", "--quiet", folder]).exitCode).toBe(0)
+  for (const folder of [outer, inner]) expect((await spawned(["git", "init", "--quiet", folder])).code).toBe(0)
   return { outer, middle, inner }
 }
 
@@ -2132,10 +2146,10 @@ test("the commands the advice prints for a folder name are quoted so that no she
     }
     // Run the printed text as a shell would, with the command swapped for a program that only prints its arguments.
     if (sh === null) continue
-    const ran = Bun.spawnSync([sh, "-c", command.replace(/^orb trust/, "printf '%s\\n'")], { cwd: root })
-    expect(ran.exitCode).toBe(0)
+    const ran = await spawned([sh, "-c", command.replace(/^orb trust/, "printf '%s\\n'")], root)
+    expect(ran.code).toBe(0)
     expect(await Bun.file(marker).exists()).toBe(false)
-    expect(ran.stdout.toString().split("\n")[0]).toBe(folder)
+    expect(ran.stdout.split("\n")[0]).toBe(folder)
   }
 })
 
@@ -2766,22 +2780,22 @@ test("orb -p with a word after a flag that widens what runs starts nothing", asy
 // A hook that leaves a marker is the oracle; a trusted run is the control that the hook is live.
 test("orb flow clean runs no hook of an untrusted repository, and the commands that read the run store start no git", async () => {
   const repository = await hooked("flow-clean")
-  const vcs = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: repository }).exitCode
-  expect(vcs("init", "--quiet", "-b", "main")).toBe(0)
-  expect(vcs("config", "user.email", "t@orbit.test")).toBe(0)
-  expect(vcs("config", "user.name", "T")).toBe(0)
-  expect(vcs("config", "commit.gpgsign", "false")).toBe(0)
-  expect(vcs("commit", "--allow-empty", "-q", "-m", "root")).toBe(0)
+  const vcs = async (...args: string[]) => (await spawned(["git", ...args], repository)).code
+  expect(await vcs("init", "--quiet", "-b", "main")).toBe(0)
+  expect(await vcs("config", "user.email", "t@orbit.test")).toBe(0)
+  expect(await vcs("config", "user.name", "T")).toBe(0)
+  expect(await vcs("config", "commit.gpgsign", "false")).toBe(0)
+  expect(await vcs("commit", "--allow-empty", "-q", "-m", "root")).toBe(0)
   // A run that finished, made while the folder is trusted.
   succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", workflow]))
   const id: string = JSON.parse((await orb(repository, ["flow", "ls", "--standalone", "--trust", "--format", "json"])).stdout)[0].id
-  expect(vcs("branch", `orbit/${id}/n`)).toBe(0)
+  expect(await vcs("branch", `orbit/${id}/n`)).toBe(0)
   // The clone's own config names a hook for every update of a ref.
   const marker = path.join(root, "flow-clean-hook.marker")
   const hook = path.join(repository, "hooks", "reference-transaction")
   await Bun.write(hook, `#!/bin/sh\necho ran >> "${marker.replaceAll("\\", "/")}"\n`)
   await fs.chmod(hook, 0o755)
-  expect(vcs("config", "core.hooksPath", "hooks")).toBe(0)
+  expect(await vcs("config", "core.hooksPath", "hooks")).toBe(0)
 
   const trace = path.join(root, "flow-clean-trace.txt")
   for (const args of [
@@ -2853,22 +2867,22 @@ const programKeys = [
 async function armed(name: string, key: (typeof programKeys)[number]) {
   const repository = await bare(name)
   const marker = path.join(root, `${name}.marker`)
-  const vcs = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: repository }).exitCode
-  expect(vcs("init", "--quiet", "-b", "main")).toBe(0)
-  expect(vcs("config", "user.email", "t@orbit.test")).toBe(0)
-  expect(vcs("config", "user.name", "T")).toBe(0)
-  expect(vcs("config", "commit.gpgsign", "false")).toBe(0)
+  const vcs = async (...args: string[]) => (await spawned(["git", ...args], repository)).code
+  expect(await vcs("init", "--quiet", "-b", "main")).toBe(0)
+  expect(await vcs("config", "user.email", "t@orbit.test")).toBe(0)
+  expect(await vcs("config", "user.name", "T")).toBe(0)
+  expect(await vcs("config", "commit.gpgsign", "false")).toBe(0)
   await Bun.write(path.join(repository, ".gitattributes"), "*.txt filter=marker\n")
   await Bun.write(path.join(repository, "a.txt"), "one\n")
-  expect(vcs("add", "-A")).toBe(0)
-  expect(vcs("commit", "-q", "-m", "root")).toBe(0)
+  expect(await vcs("add", "-A")).toBe(0)
+  expect(await vcs("commit", "-q", "-m", "root")).toBe(0)
   await Bun.write(gateFile, "name: pause\nnodes:\n  - id: approve\n    type: gate\n    message: Go on?\n")
   await Bun.write(taskSuite, JSON.stringify({ name: "vcs", tasks: [{ id: "task", prompt: "say ok", checks: [] }] }))
   expect((await orb(repository, ["flow", "run", "--trust", "--standalone", gateFile])).code).toBe(2)
   const id: string = JSON.parse((await orb(repository, ["flow", "ls", "--standalone", "--trust", "--format", "json"])).stdout)[0].id
   succeeded(await orb(repository, ["flow", "approve", "--standalone", "--trust", id, "approve"]))
   const config = await key.arm(repository, marker)
-  if (config) expect(vcs(...config)).toBe(0)
+  if (config) expect(await vcs(...config)).toBe(0)
   await Bun.write(path.join(repository, "a.txt"), "two\n")
   return { repository, marker, id }
 }
@@ -2995,25 +3009,25 @@ for (const door of resumeDoors)
       const { Store } = await import("@orbit/flow")
       const name = `resume-${door.door.replace(/\W+/g, "-")}-${trust}`
       const repository = await bare(name)
-      const vcs = (directory: string, ...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: directory }).exitCode
-      expect(vcs(repository, "init", "--quiet", "-b", "main")).toBe(0)
-      expect(vcs(repository, "config", "user.email", "t@orbit.test")).toBe(0)
-      expect(vcs(repository, "config", "user.name", "T")).toBe(0)
-      expect(vcs(repository, "config", "commit.gpgsign", "false")).toBe(0)
+      const vcs = async (directory: string, ...args: string[]) => (await spawned(["git", ...args], directory)).code
+      expect(await vcs(repository, "init", "--quiet", "-b", "main")).toBe(0)
+      expect(await vcs(repository, "config", "user.email", "t@orbit.test")).toBe(0)
+      expect(await vcs(repository, "config", "user.name", "T")).toBe(0)
+      expect(await vcs(repository, "config", "commit.gpgsign", "false")).toBe(0)
       await Bun.write(path.join(repository, "a.txt"), "one\n")
-      expect(vcs(repository, "add", "a.txt")).toBe(0)
-      expect(vcs(repository, "commit", "-q", "-m", "one")).toBe(0)
+      expect(await vcs(repository, "add", "a.txt")).toBe(0)
+      expect(await vcs(repository, "commit", "-q", "-m", "one")).toBe(0)
       // The folder the store names: a copy of the clone outside it, so a diff from HEAD works there, with a file of the
       // person's in it.
       const outside = path.join(root, "work", `${name}-outside`)
-      expect(vcs(root, "clone", "--quiet", repository, outside)).toBe(0)
+      expect(await vcs(root, "clone", "--quiet", repository, outside)).toBe(0)
       const target = path.join(outside, "secret.txt")
       await Bun.write(target, `${secret}\n`)
       const marker = path.join(root, `${name}.marker`)
       const script = path.join(root, `${name}.sh`)
       await Bun.write(script, `#!/bin/sh\necho ran >> "${unix(marker)}"\n`)
       await fs.chmod(script, 0o755)
-      expect(vcs(repository, "config", "core.fsmonitor", unix(script))).toBe(0)
+      expect(await vcs(repository, "config", "core.fsmonitor", unix(script))).toBe(0)
       await Bun.write(path.join(repository, "a.txt"), "two\n")
       await Bun.write(path.join(repository, door.file), door.text)
 

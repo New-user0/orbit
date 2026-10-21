@@ -52,14 +52,30 @@ async function run(home: string, directory: string, args: string[]) {
       stderr: "pipe",
     },
   )
-  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+  // A run that never ends is killed after four minutes and fails with what it printed, so a hang on a CI runner says
+  // which run it was and does not hold the rows after it.
+  const timer = setTimeout(() => child.kill("SIGKILL"), 240_000)
+  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text(), new Response(child.stdout).text()])
+  clearTimeout(timer)
+  if (child.signalCode === "SIGKILL") throw new Error(`orb run in ${directory} did not end within four minutes:\n${stderr}`)
   return { code, stderr: stderr.slice(-400), sent: JSON.stringify(model.requests.slice(before).map((request) => request.body)) }
+}
+
+// git in a test folder, started asynchronously: a synchronous spawn that does not return stops the event loop, so no
+// limit can say which command hung (a CI run held a row of this file for its whole limit with nothing in the log).
+async function git(...args: string[]) {
+  const child = Bun.spawn(["git", ...args], { stdin: "ignore", stdout: "ignore", stderr: "pipe" })
+  const timer = setTimeout(() => child.kill("SIGKILL"), 60_000)
+  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+  clearTimeout(timer)
+  if (child.signalCode === "SIGKILL") throw new Error(`git ${args.join(" ")} did not end within a minute:\n${stderr}`)
+  return code
 }
 
 test("the person's own linked agent and skill are used from a project and from the home folder", async () => {
   const repo = path.join(root, "work", "repo")
   await fs.mkdir(repo, { recursive: true })
-  expect(Bun.spawnSync(["git", "init", "--quiet", repo]).exitCode).toBe(0)
+  expect(await git("init", "--quiet", repo)).toBe(0)
   const rows = []
   for (const directory of [repo, root]) {
     const agent = await run(root, directory, ["--trust", "--agent", "mine"])
@@ -87,7 +103,7 @@ for (const homeIsRepo of [true, false])
       const directory = path.join(home, "Downloads", "x")
       await fs.mkdir(directory, { recursive: true })
       await fs.symlink(path.join(home, "work", "secret", ".orbit"), path.join(directory, ".orbit"), kind)
-      if (homeIsRepo) expect(Bun.spawnSync(["git", "init", "--quiet", home]).exitCode).toBe(0)
+      if (homeIsRepo) expect(await git("init", "--quiet", home)).toBe(0)
       // The folder is not trusted, so the run stops before it reads anything of it, and nothing reaches the model.
       const result = await run(home, directory, [])
       expect(result.code).toBe(1)
