@@ -22,6 +22,7 @@ import { SessionStore } from "@orbit/core/session/store"
 import { Effect, Layer, LayerMap, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { globalProjectNode } from "./lib/project"
+import { trustedProject } from "./fixture/project-trust"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const model = LanguageModel.make({
@@ -58,6 +59,8 @@ const locations = Layer.effect(
         Layer.provide(client),
         Layer.provide(config),
         Layer.provide(models),
+        // A drain starts only in a trusted folder (trust-first).
+        Layer.merge(trustedProject),
       ) as unknown as Layer.Layer<LocationServices>,
   ),
 )

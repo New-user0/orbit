@@ -44,6 +44,8 @@ export function DialogTrust(props: {
   leave?: "exit" | "later"
   onTrust: (persist: boolean) => void | Promise<void>
   onNotNow: () => void
+  /** The "no" key on the question about the folder the terminal UI started in, which ends it with status 0. */
+  onDecline?: () => void
 }) {
   const dialog = useDialog()
   const theme = useTheme().surface("dialog")
@@ -158,6 +160,11 @@ export function DialogTrust(props: {
         { title: props.leave === "exit" && !changed() ? "Exit" : "Not now", value: "later" },
       ]}
       onSelect={(option) => (option.value === "trust" ? void trust() : props.onNotNow())}
+      bindings={
+        props.leave === "exit" && !changed() && props.onDecline !== undefined
+          ? [{ bind: "n", title: "No, exit", group: "Trust", run: props.onDecline }]
+          : []
+      }
     />
   )
 }

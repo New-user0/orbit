@@ -173,6 +173,98 @@ it.live("no terminal starts in an untrusted folder", () =>
   }),
 )
 
+it.live("a terminal starts once the folder is trusted: the control for the row above", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const server = yield* startServer(folders.config, untrusted)
+    yield* Effect.promise(async () => {
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      const started = await request(server, "POST", "/api/pty", {
+        directory: folders.repo,
+        body: { command: process.execPath, args: ["--version"] },
+      })
+      expect(started.status).toBe(200)
+    })
+  }),
+)
+
+it.live("no MCP server is connected and no file is written for an untrusted folder, and both run once it is trusted", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const server = yield* startServer(folders.config, untrusted)
+    const target = path.join(folders.repo, "CLONE-WRITE.txt")
+    const write = () => {
+      const url = new URL("/api/experimental/fs/write", server.base)
+      url.searchParams.set("location[directory]", folders.repo)
+      url.searchParams.set("path", target)
+      return fetch(url, {
+        method: "POST",
+        headers: { ...server.headers, "content-type": "application/octet-stream" },
+        body: "written",
+      }).then(async (response) => ({ status: response.status, body: (await response.json()) as Body }))
+    }
+    yield* Effect.promise(async () => {
+      expect(await request(server, "POST", "/api/experimental/mcp/clone-server/connect", { directory: folders.repo })).toEqual(
+        refusedFor(folders.repo),
+      )
+      expect(await write()).toEqual(refusedFor(folders.repo))
+      expect(await Bun.file(target).exists()).toBe(false)
+
+      // The trusted control: past the gate, an unknown server is not found, and the file is written.
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      expect(
+        (await request(server, "POST", "/api/experimental/mcp/clone-server/connect", { directory: folders.repo })).status,
+      ).toBe(404)
+      expect((await write()).status).toBe(200)
+      expect(await Bun.file(target).text()).toBe("written")
+    })
+  }),
+)
+
+it.live("an untrusted folder's plugins are not imported, and a grant imports them", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const marker = path.join(path.dirname(folders.repo), "CLONE-PLUGIN.txt")
+    yield* Effect.promise(() =>
+      Bun.write(
+        path.join(folders.repo, ".orbit", "plugins", "clone-plugin.ts"),
+        `export default { id: "clone-plugin", async setup() { await Bun.write(${JSON.stringify(marker)}, "CLONE-PLUGIN") } }\n`,
+      ),
+    )
+    const server = yield* startServer(folders.config, untrusted)
+    yield* Effect.promise(async () => {
+      // Listing the agents waits for the Location's plugins to be active.
+      expect((await request(server, "GET", "/api/agent", { directory: folders.repo })).status).toBe(200)
+      expect(await Bun.file(marker).exists()).toBe(false)
+
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      expect((await request(server, "POST", "/api/location/reload")).status).toBe(204)
+      expect((await request(server, "GET", "/api/agent", { directory: folders.repo })).status).toBe(200)
+      expect(await Bun.file(marker).text()).toBe("CLONE-PLUGIN")
+    })
+  }),
+)
+
+// Class 9: the refusal names the folder, and a clone picks its own name. Windows forbids these characters in a name.
+const linux = process.platform === "win32" ? it.live.skip : it.live
+linux("the refusal names a folder whose name acts on a terminal without its control characters", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const hostile = path.join(path.dirname(folders.repo), "inner\u001b]0;owned\u0007")
+    yield* Effect.promise(() => fs.mkdir(hostile))
+    const server = yield* startServer(folders.config, untrusted)
+    yield* Effect.promise(async () => {
+      const refused = await createSession(server, hostile)
+      expect(refused.status).toBe(403)
+      const message = (refused.body as { message?: string } | undefined)?.message ?? ""
+      expect(message).toContain("inner")
+      expect(message).toContain("is not trusted")
+      expect(message).not.toContain("\u001b")
+      expect(message).not.toContain("\u0007")
+    })
+  }),
+)
+
 it.live(
   "a worktree is neither made nor removed for an untrusted folder, and the refusal names the folder to trust",
   () =>

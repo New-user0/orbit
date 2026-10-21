@@ -21,6 +21,7 @@ import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { Workspace } from "@orbit/core/workspace"
 import { testEffect } from "./lib/effect"
+import { trustedProject } from "./fixture/project-trust"
 
 // Keep real execution ownership, location caching, forms, and eviction. The fixture
 // runner waits on a form instead of making a model request before asking a question.
@@ -64,6 +65,8 @@ const locations = Layer.effect(
         ).pipe(
           Layer.provideMerge(Form.layer),
           Layer.provide(Layer.succeed(Bus.Service, bus)),
+          // A drain starts only in a trusted folder (trust-first).
+          Layer.merge(trustedProject),
           Layer.fresh,
         ) as unknown as Layer.Layer<LocationServices>,
       { idleTimeToLive: Duration.infinity },

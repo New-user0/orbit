@@ -4,7 +4,8 @@ export type Exit = (reason?: unknown) => void
 
 /**
  * The terminal UI ended because the person did not trust the folder it started in. It is not an error, so nothing is
- * printed for it, and the process exits with `status`: 1 for Exit or Escape on the question, as the reference does.
+ * printed for it, and the process exits with `status`: 1 for Exit or Escape on the question and 0 for its "no" key, as
+ * the reference does.
  */
 export class TrustDeclined {
   constructor(readonly status: 0 | 1) {}

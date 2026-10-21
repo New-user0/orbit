@@ -156,6 +156,8 @@ const readers = [
   ["orb flow show", ["flow", "show", "run_missing"]],
   ["orb flow cost", ["flow", "cost", "run_missing"]],
   ["orb flow trace", ["flow", "trace", "run_missing"]],
+  ["orb flow watch", ["flow", "watch", "run_missing"]],
+  ["orb flow approve", ["flow", "approve", "run_missing", "gate_missing"]],
 ] as const
 
 test.each(readers)(

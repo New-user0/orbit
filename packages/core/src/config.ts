@@ -105,6 +105,11 @@ export interface Interface {
   /** Updates supported global config fields while preserving unrelated JSONC content. */
   readonly update?: (patch: Patch) => Effect.Effect<void, FSUtil.Error>
   /**
+   * Reads the config again now, and returns once the new entries and fingerprints are in place. A grant for a folder
+   * that was not trusted asks it, because nothing of that folder was read before.
+   */
+  readonly reload?: () => Effect.Effect<void>
+  /**
    * The executable config of every project and local source the last load read, wherever the folder is not trusted
    * implicitly: what a grant records, and what `WorkspaceTrust.compare` is asked about. Empty when the server trusts
    * every folder.
@@ -210,6 +215,8 @@ export const layer = (options?: Options) =>
         ),
       ]
       const reloadLock = Semaphore.makeUnsafe(1)
+      // What a reload asked for from outside the layer runs with, as the ones the layer starts itself do.
+      const context = yield* Effect.context<FSUtil.Service | Global.Service | Location.Service>()
       const updateLock = Semaphore.makeUnsafe(1)
       const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
       const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
@@ -754,6 +761,11 @@ export const layer = (options?: Options) =>
         notify: (paths) =>
           Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
         update,
+        reload: () =>
+          reload().pipe(
+            Effect.catchCause((cause) => Effect.logError("failed to reload config", { cause })),
+            Effect.provide(context),
+          ),
         fingerprints: () => Effect.sync(() => observed),
         pluginsChanged: Effect.fn("Config.pluginsChanged")(function* (directory) {
           const entry = configs.find(

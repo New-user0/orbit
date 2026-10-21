@@ -112,8 +112,10 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     })
     // Whether a question about this folder is the one about the folder the terminal UI started in, which offers Exit in
     // place of Not now: nothing can be done there until it is trusted, as the reference does.
+    // Home shows that folder, the server's default location, and a session shows its own unless the server names the
+    // same folder for both.
     const starting = (status: TrustStatus) =>
-      status.directory === startup.status()?.directory || directory() === props.directory
+      directory() === data.location.default().directory || status.directory === startup.status()?.directory
     // The folder to ask about, if any. A string, so that a fresh read of the same answer does not ask again.
     const pending = createMemo(() => {
       const status = asked()
@@ -167,6 +169,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
             leave={leaving ? "exit" : "later"}
             onTrust={(persist) => grant(folder, persist)}
             onNotNow={() => dialog.clear()}
+            onDecline={() => exit(new TrustDeclined(0))}
           />
         ),
         // However the dialog closes, unless the folder is trusted by then the answer is no: Exit for the folder the

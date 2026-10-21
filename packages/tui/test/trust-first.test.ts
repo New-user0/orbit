@@ -169,3 +169,32 @@ test("a session in another folder that holds nothing back is asked about, and de
   expect(setup.renderer.isDestroyed).toBe(false)
   expect(grants).toEqual([])
 })
+
+// Class 7: a trust read that fails says nothing about the folder, so the question opens anyway and names the folder it
+// asked about. The server refuses work there whatever the terminal UI shows.
+test("when the trust read fails, the question opens anyway and names the folder it asked about", async () => {
+  await using state = await tmpdir()
+  await using setup = await createAppFixture({
+    state: state.path,
+    fetch: async (url) =>
+      url.pathname === "/api/location/trust" ? new Response("unavailable", { status: 503 }) : undefined,
+  })
+
+  const frame = await setup.waitForFrame((frame) => frame.includes(title))
+
+  expect(frame).toContain(directory)
+  expect(frame).toContain("Exit")
+})
+
+// The reference's question has a key of its own for "no", which leaves with status 0 where Exit and Escape leave with 1.
+test("the n key on the question ends the terminal UI and grants nothing", async () => {
+  await using state = await tmpdir()
+  const server = trustServer(() => clean(root))
+  await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
+
+  await setup.waitForFrame((frame) => frame.includes(title))
+  setup.mockInput.pressKey("n")
+
+  await setup.waitFor(() => setup.renderer.isDestroyed)
+  expect(server.grants).toEqual([])
+})

@@ -57,11 +57,11 @@ export function terminal(exit: Exit.Exit<void, SessionRunner.RunError>, reason?:
 /**
  * Whether work may start for a Session: its folder is trusted now. No work starts in a folder until a person trusts it
  * (trust-first, class 12), and that covers the work no request asked for as well: startup recovery, wake-ups, scheduled
- * prompts and subagents. A refusal is logged and leaves the execution claim as it is, so the Session resumes once the
- * folder is trusted.
+ * prompts and subagents. A refusal is logged. Ask it inside the Session's Location (`Instance.provide`).
  */
-export const permitted = Effect.fnUntraced(function* (instances: Instance.Interface, session: SessionSchema.Info) {
-  const trusted = yield* ProjectTrust.Service.use((trust) => trust.trusted()).pipe(instances.provide(session))
+export const permitted = Effect.fnUntraced(function* (session: SessionSchema.Info) {
+  const trust = yield* ProjectTrust.Service
+  const trusted = yield* trust.trusted()
   if (!trusted)
     yield* Effect.logWarning("session work not started", {
       sessionID: session.id,
@@ -102,12 +102,6 @@ export const layer = Layer.effect(
     const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
       commit: () => store.release(sessionID),
     })
-    // Runs `start` only when the Session's folder is trusted. A Session that is gone is left to the drain to report.
-    const whenPermitted = <E>(sessionID: SessionSchema.ID, start: Effect.Effect<void, E>) =>
-      store.get(sessionID).pipe(
-        Effect.flatMap((session) => (session === undefined ? Effect.succeed(true) : permitted(instances, session))),
-        Effect.flatMap((allowed) => (allowed ? start : Effect.void)),
-      )
     const drain = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       force: boolean,
@@ -116,9 +110,14 @@ export const layer = Layer.effect(
     ): Effect.fn.Return<void, SessionRunner.RunError> {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
-      const result = yield* SessionRunner.Service.use((runner) =>
-        runner.drain({ sessionID, force, continuation, promotable }),
-      ).pipe(
+      const result = yield* Effect.gen(function* () {
+        // A drain in a folder that is not trusted ends as an interruption the coordinator did not ask for, which it
+        // settles as a shutdown: the execution claim stays, so the Session resumes once the folder is trusted. The
+        // check runs in the Location the runner uses, so a wake-up waits for nothing more than it did.
+        if (!(yield* permitted(session))) return yield* Effect.interrupt
+        const runner = yield* SessionRunner.Service
+        return yield* runner.drain({ sessionID, force, continuation, promotable })
+      }).pipe(
         instances.provide(session),
         Effect.tapCause((cause) =>
           Cause.hasInterruptsOnly(cause)
@@ -128,8 +127,8 @@ export const layer = Layer.effect(
       )
       return yield* SessionRunner.DrainResult.$match(result, {
         Complete: () => Effect.void,
-        // A move lands in another folder, which has to be trusted as well before the work goes on there.
-        Moved: (result) => whenPermitted(sessionID, drain(sessionID, false, result.continuation, promotable)),
+        // A move lands in another folder, and the next drain checks that one before the work goes on there.
+        Moved: (result) => drain(sessionID, false, result.continuation, promotable),
         Reloaded: (result) => drain(sessionID, result.force, result.continuation, promotable),
       })
     })
@@ -193,8 +192,8 @@ export const layer = Layer.effect(
             yield* coordinator.wake(sessionID, "steer")
           return interrupted
         }),
-      resume: (sessionID) => whenPermitted(sessionID, coordinator.run(sessionID)),
-      wake: (sessionID) => whenPermitted(sessionID, coordinator.wake(sessionID)),
+      resume: coordinator.run,
+      wake: coordinator.wake,
       awaitIdle: coordinator.awaitIdle,
     })
   }),

@@ -19,9 +19,12 @@ class costs less than finding the next instance in review.
 
 **The promise.** Until a person trusts a folder, no file that the folder supplies may run code, spend their money, reach
 the network, carry a file of theirs to a model provider or change which of their rules apply. A change that breaks one
-of these on a default path is a defect, whatever else it adds. M1 did not keep the promise everywhere: each place where
-it does not hold yet is in [Known gaps](#known-gaps), and a change must not widen one. What users see of this is in
-[upgrading](upgrading.md), under "A project's config waits for its folder to be trusted".
+of these on a default path is a defect, whatever else it adds. Since trust-first Orbit keeps it as the reference does:
+it reads nothing a folder supplies, and starts no work there, until the folder is trusted. Every door of class 12
+refuses an untrusted folder, the server refuses work there with `UntrustedFolderError`, and `Config` reads no project
+source of it. Each place where the promise does not hold yet is in [Known gaps](#known-gaps), and a change must not
+widen one. What users see of this is in [upgrading](upgrading.md), under "Nothing in a folder loads or runs until you
+trust it".
 
 Words used here:
 
@@ -29,8 +32,11 @@ Words used here:
 - **Gate:** the check that stops a surface until its folder is trusted.
 - **Trusted:** decided for one folder, by a stored grant (`orb trust`, the terminal UI), by a grant that lasts until the
   server restarts, or because the server trusts every folder without a grant (`ORBIT_TRUST_PROJECT=1` on a private or
-  foreground server, `trust: { implicit: true }` in an SDK host). `WorkspaceTrust` keeps the decisions and
-  `ProjectTrust` answers for a Location's project.
+  foreground server, `trust: { implicit: true }` in an SDK host). A grant for a folder covers every folder below it, as
+  the reference's walk up the parents does, except a grant for the home directory or a filesystem root, which covers
+  that folder alone. The walk goes up the folder's real path, case-folded on Windows, and a status names the folder
+  whose grant applies as `granted`. `WorkspaceTrust` keeps the decisions and `ProjectTrust` answers for a Location's
+  project.
 - **Held back:** what an untrusted folder's files would have contributed. `ProjectTrust.status` lists it per file with
   its kinds (`Trust.Kind`).
 - **Holder:** the folder whose decision covers a file. For config inside the project's folders it is the project's
@@ -874,8 +880,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   person's `--model` (`runner.ts`), so an untrusted clone would choose what the person pays for. Proof:
   `packages/cli/test/trust.test.ts`, `packages/flow/test/load.test.ts`, `packages/flow/test/models.test.ts`,
   `packages/flow/test/agents.test.ts`.
-- Every command that starts work: `requireTrust`, `trustRefusal` and `warnUntrusted`. `orb acp` only warns, because the
-  editor chooses its folders. Proof: `packages/cli/test/trust.test.ts`.
+- Every command that starts work: `requireTrust` and `trustRefusal`, which refuse any folder that is not trusted,
+  whatever it holds. `orb acp` refuses `session/new`, `session/load` and `session/resume` in an untrusted folder, and
+  `orb mini` refuses before it takes the terminal (`trustRefusal` in `packages/tui/src/mini/trust.shared.ts`). Proof:
+  `packages/cli/test/trust.test.ts`, `packages/cli/test/trust-first.test.ts`,
+  `packages/cli/test/acp/trust-first.subprocess.test.ts`, `packages/tui/test/mini/trust-first.shared.test.ts`.
+- Every server route that starts work or runs something in a folder (`session.create`, `prompt`, `command`, `skill`,
+  `synthetic`, `shell`, `compact`, `fork`, the destination of `move`, `pty.create`, `worktree.create` and `remove`,
+  `mcp.connect`, `fs.write`): `requireTrusted` in `packages/server/src/handlers/trust-error.ts`, which answers
+  `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
+  folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
+  `packages/sdk/test/trust-first.test.ts`.
 - The run store, `.orbit/runs.db`, and the worktree paths built from it: `Store.run`, `Store.runs`, `Git.clean` and
   `Git.worktree` accept one plain name only. Proof: `packages/flow/test/store.test.ts`,
   `packages/flow/test/git.test.ts`, `packages/cli/test/flow.test.ts`.
@@ -2265,8 +2280,10 @@ gray-matter's default engines, or a marker test per reader written with the spec
 ### 12. Entry points and process boundaries each need the gate
 
 **Rule:** List every command, subprocess and process that can start work or load a file (`run`, `loop`, `flow run`,
-`resume` and `replay`, `eval`, `orb -p` and `orb run` with stream input, `acp`, `serve --stdio`, the terminal UI's plugin loader, IDE buttons, SDK hosts), and
-route each one through the one gate. A gate in the server does not reach the CLI or the terminal UI process.
+`resume` and `replay`, the flow store readers, `eval`, `orb -p` and `orb run` with stream input, `acp`, `mini`,
+`serve --stdio`, the terminal UI and its plugin loader, IDE buttons, SDK hosts), and route each one through the one
+gate. A gate in the server does not reach the CLI or the terminal UI process. Every door refuses a folder that is not
+trusted, whatever it holds.
 
 **Why:** The same loader had several doors. A check on `orb flow run` did not cover replay or resume, the server's
 plugin gate did not cover the plugins that the terminal UI imports in its own process, and `orb acp` cannot stop at all.
@@ -2281,11 +2298,17 @@ already guarded elsewhere.
 
 **How to comply:**
 
-- `requireTrust`, `trustRefusal` and `warnUntrusted` in `packages/cli/src/util/trust.ts`. The handlers for `run`,
-  `loop`, `flow run`, `flow resume`, `flow replay`, `eval` and `orb -p` (`handlers/print.ts`, through the `headlessInput`
-  that `run` shares, with `strict`; `trust.test.ts` pins a clean folder, `--bare`, `--continue` and the 404 stub) call them
-  before any load. `orb acp` cannot stop, because
-  the editor chooses the folders, so it warns on stderr and keeps stdout for the protocol.
+- `requireTrust` and `trustRefusal` in `packages/cli/src/util/trust.ts` stop a command in any folder that is not
+  trusted, whatever it holds, and in a trusted one whose executable config changed since the grant. The handlers for
+  `run` (with or without `--bare`), `loop`, `flow run`, `flow resume`, `flow replay`, `flow clean`, the store readers
+  `flow ls`, `show`, `cost`, `trace`, `watch` and `approve` (before `openStore`), `eval` and `orb -p`
+  (`handlers/print.ts`, through the `headlessInput` that `run` shares) call them before any load; `trust.test.ts` and
+  `trust-first.test.ts` pin a clean folder, `--bare`, `--continue` and the 404 stub. `orb acp` cannot stop, because the
+  editor chooses the folders, so it refuses each `session/new`, `session/load` and `session/resume` in an untrusted
+  folder with a JSON-RPC error whose `data` is `{ type: "untrusted_folder", directory, persistent }`, and keeps stdout
+  for the protocol. `orb mini` refuses before it takes the terminal, and on a server that cannot say. The terminal UI
+  asks about the folder it starts in with Trust or Exit, and the server refuses the work of a session in a folder that
+  is not trusted (`UntrustedFolderError`), which covers `orb serve` and SDK hosts.
 - `--trust` forces a private server and trusts for its lifetime without storing the grant (it rejects `--server`).
   `orb trust [folder] [--revoke] [--list]` refuses home and filesystem roots.
 - The routes are `GET` and `POST /api/location/trust` and `GET /api/trust` (`client.location.trust.get`, `update` and

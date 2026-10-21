@@ -450,11 +450,21 @@ const layer = Layer.effect(
           yield* Effect.logWarning("trust grant refused", { holder: input.holder, reason: "holds nothing back here" })
           return yield* report(yield* trust.status(root))
         }
-        const state = yield* trust.grant(target, {
+        const fresh = !(yield* trust.status(target)).trusted
+        const granted = yield* trust.grant(target, {
           persist: input.persist,
           via: input.via,
           observations: yield* observationsOf(target),
         })
+        // Nothing of a folder that was not trusted had been read, so the grant had nothing to record. Once the config
+        // has read the folder, the grant records what it holds now, so that its hooks and plugins are what was trusted
+        // and not taken for changes since (F18).
+        const reload = config.reload
+        const recorded = fresh && reload !== undefined ? yield* reload().pipe(Effect.andThen(observationsOf(target))) : []
+        const state =
+          recorded.length === 0
+            ? granted
+            : yield* trust.grant(target, { persist: input.persist, via: input.via, observations: recorded })
         return yield* report(target === root ? state : yield* trust.status(root))
       }),
       revoke: Effect.fn("ProjectTrust.revoke")(() => trust.revoke(root).pipe(Effect.flatMap(report))),

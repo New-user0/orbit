@@ -54,6 +54,23 @@ test.each([
   expect(text).toContain("/projects/app/packages")
 })
 
+// A server that takes the request and never answers is a refusal once the Mini stops waiting, two seconds on.
+test("refuses when the server does not answer in time", async () => {
+  const silent = Object.assign(
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => {
+        const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true })
+      }),
+    { preconnect: () => {} },
+  )
+  if (mini.trustRefusal === undefined) throw new Error("the Mini has no trust gate")
+  const started = Date.now()
+  const text = await mini.trustRefusal({ sdk: createApi(silent), directory: "/projects/app/packages" })
+  expect(text).toContain("/projects/app/packages")
+  expect(Date.now() - started).toBeLessThan(10_000)
+}, 15_000)
+
 test("shows a folder whose name acts on a terminal without its control characters", async () => {
   const folder = "/work/inner\u001b]0;owned\u0007\u001b[2J"
   const text = await refusal(() => json(status({ directory: folder })))

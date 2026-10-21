@@ -80,7 +80,8 @@ export const layer = (options?: Options) =>
         // A Session whose folder is no longer trusted is not resumed, and its claim and its count of attempts stay as
         // they are, so a later start resumes it once the folder is trusted (trust-first, class 3: its own folder).
         const session = yield* store.get(sessionID)
-        if (session !== undefined && !(yield* SessionExecution.permitted(instances, session))) return false
+        if (session !== undefined && !(yield* SessionExecution.permitted(session).pipe(instances.provide(session))))
+          return false
         // Durable before the resume runs, so a crash inside the resumed turn is
         // counted by the next sweep and the budget cannot be dodged.
         const attempts = yield* store.countResume(sessionID)

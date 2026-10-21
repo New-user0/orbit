@@ -329,6 +329,44 @@ run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit:
 also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" and "The
 terminal UI asks whether to trust a folder" under Clients.
 
+### Nothing in a folder loads or runs until you trust it
+
+The note above describes a folder that loads with parts left out. That is gone: as the reference does, Orbit now reads
+nothing a folder supplies, and starts no work there, until you trust the folder. Its `orbit.json`, `orbit.local.json`
+and `.orbit` directory, and the files other agent products keep there, are not read at all while it is untrusted, so
+its agents, commands, skills, output styles and plugins do not appear either. Your own config, managed settings and
+`--settings` load as before.
+
+What changed:
+
+- The terminal UI asks about the folder it starts in whenever that folder is not trusted, whatever the folder holds,
+  before you can work there. The question lists nothing from the folder, because nothing was read; it offers "Trust this
+  folder" (or "Trust until Orbit restarts" for a home directory or a filesystem root) and "Exit". Exit and Escape end
+  the terminal UI with exit status 1. A session in another untrusted folder is asked about with "Trust this folder" and
+  "Not now"; "Not now" keeps the terminal UI open, and the server refuses that session's work. When the trust read fails
+  or times out, the question opens anyway.
+- Every headless door refuses an untrusted folder, even one with no config at all: `orb run` (with or without `--bare`),
+  `orb -p`, stream-json input, `orb loop`, `orb flow run`, `orb eval`, `orb mini`, an ACP `session/new`,
+  `session/load` or `session/resume` (a JSON-RPC error whose `data.type` is `untrusted_folder`), and an SDK host that
+  does not set `trust: { implicit: true }`. The server refuses a session, a prompt, a command, a skill, a synthetic
+  message, a shell command, a compaction, a fork, a move into the folder, a terminal, a worktree, an MCP connection and a
+  file write there with `UntrustedFolderError` (HTTP 403), which names the folder. A server older than workspace trust
+  cannot say, so the CLI stops there too.
+- A grant for a folder now covers every folder below it, as the reference's walk up the parents does, and a trust
+  status names the folder whose grant applies as `granted`. Revoking a folder that a parent's grant covers leaves it
+  trusted. A grant for the home directory or a filesystem root still lasts only until Orbit restarts, and covers that
+  folder alone.
+- `orb flow ls`, `show`, `cost`, `trace`, `watch` and `approve` need the folder trusted before they open its run store,
+  and take `--trust`, `--standalone` and `--server` like `orb flow run`.
+- A session that began in a folder that is still untrusted, under an earlier release, takes no more work until the
+  folder is trusted, and is not resumed after a restart until then.
+
+**Affects:** scripts, CI jobs and SDK hosts that ran in folders nobody trusted, and anyone who answered "Not now" in the
+terminal UI and kept working.
+
+**What to do:** trust the folder with `orb trust`, pass `--trust` for one run, or pass `trust: { implicit: true }` to
+the host you embed. In the terminal UI, answer the question with "Trust this folder".
+
 ### A folder's model, provider and budget settings wait for it to be trusted
 
 An untrusted folder can no longer pick a model, a provider or a budget, because every one of them is paid for by you.

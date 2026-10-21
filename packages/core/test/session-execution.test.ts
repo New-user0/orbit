@@ -25,6 +25,7 @@ import { SessionStore } from "@orbit/core/session/store"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { trustedProject } from "./fixture/project-trust"
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -1375,9 +1376,10 @@ function buildExecution(
       LocationServiceMap.Service,
       LayerMap.make(
         () =>
-          // The local execution test only needs the Session runner from the Location graph.
+          // The local execution test only needs the Session runner from the Location graph, and the trust that lets a
+          // drain start (trust-first).
           // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-          runner as unknown as Layer.Layer<LocationServices>,
+          Layer.merge(runner, trustedProject) as unknown as Layer.Layer<LocationServices>,
       ),
     )
     return yield* Layer.buildWithScope(
