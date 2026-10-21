@@ -1,3 +1,4 @@
+import { requireTrusted } from "./trust-error"
 import { FileSystem } from "@orbit/core/filesystem"
 import { RelativePath } from "@orbit/core/schema"
 import { FileNotFoundError } from "@orbit/protocol/errors"
@@ -46,6 +47,7 @@ export const FileSystemHandler = HttpApiBuilder.group(Api, "server.fs", (handler
       .handle("fs.write", (ctx) =>
         response(
           Effect.gen(function* () {
+            yield* requireTrusted()
             const fs = yield* FileSystem.Service
             return yield* fs.write({ path: ctx.query.path, data: ctx.payload })
           }),

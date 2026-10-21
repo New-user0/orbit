@@ -1,3 +1,4 @@
+import { requireTrusted } from "./trust-error"
 import { Pty } from "@orbit/core/pty"
 import { PtyProtocol } from "@orbit/core/pty/protocol"
 import { PtyTicket } from "@orbit/core/pty/ticket"
@@ -40,6 +41,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
       .handle(
         "pty.create",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const pty = yield* Pty.Service
           const location = yield* Location.Service
           const cwd = ctx.payload.cwd || location.directory

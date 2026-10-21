@@ -68,8 +68,18 @@ export class StrategyUnavailableError extends Schema.TaggedError<StrategyUnavail
   { strategy: StrategyID },
 ) {}
 
+/**
+ * The project's folder is not trusted, so no worktree is made or removed for it: both run its version control, whose
+ * config can name programs (trust-first, class 1).
+ */
+export class UntrustedError extends Schema.TaggedError<UntrustedError>()("Worktree.UntrustedError", {
+  directory: AbsolutePath,
+  persistent: Schema.Boolean,
+}) {}
+
 export type Error =
   | Project.NotFoundError
+  | UntrustedError
   | SourceDirectoryNotFoundError
   | DestinationExistsError
   | DirectoryUnavailableError
@@ -113,6 +123,11 @@ const layer = Layer.effect(
     const processService = yield* AppProcess.Service
     const locations = yield* LocationServiceMap.Service
     const gitStrategy = yield* WorktreeGit.make
+    const trust = yield* WorkspaceTrust.Service
+    const requireTrusted = Effect.fnUntraced(function* (directory: AbsolutePath) {
+      const state = yield* trust.status(directory)
+      if (!state.trusted) return yield* new UntrustedError({ directory: state.directory, persistent: state.persistent })
+    })
     const project = Effect.fnUntraced(function* (projectID: Project.ID) {
       const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, projectID)).get().pipe(Effect.orDie)
       if (!row) return yield* new Project.NotFoundError({ projectID })
@@ -204,6 +219,7 @@ const layer = Layer.effect(
 
     const create = Effect.fn("Worktree.create")(function* (input: CreateInput, current?: WorktreeStrategies.Interface) {
       const row = yield* project(input.projectID)
+      yield* requireTrusted(row.worktree)
       const settings = yield* load(row.worktree, current)
       const selected = yield* getStrategy(settings.selected, settings.strategies)
       const directory = input.directory ?? settings.directory
@@ -257,6 +273,7 @@ const layer = Layer.effect(
 
     const remove = Effect.fn("Worktree.remove")(function* (input: RemoveInput, current?: WorktreeStrategies.Interface) {
       const row = yield* project(input.projectID)
+      yield* requireTrusted(row.worktree)
       const worktreeDirectory = yield* canonical(fs, input.directory)
       const stored = yield* ops.find(input.projectID, worktreeDirectory)
       if (!stored?.strategy) return yield* new InvalidDirectoryError({ directory: worktreeDirectory })

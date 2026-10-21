@@ -2,7 +2,7 @@ import { Worktree } from "@orbit/schema/worktree"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Project } from "@orbit/schema/project"
-import { ProjectNotFoundError } from "../errors.js"
+import { ProjectNotFoundError, UntrustedFolderError } from "../errors.js"
 
 const root = "/api/worktree"
 
@@ -36,7 +36,7 @@ export const WorktreeGroup = HttpApiGroup.make("server.worktree")
     HttpApiEndpoint.post("worktree.create", root, {
       payload: Worktree.CreateInput,
       success: Worktree.Info,
-      error: [WorktreeError, ProjectNotFoundError],
+      error: [WorktreeError, ProjectNotFoundError, UntrustedFolderError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "worktree.create",
@@ -50,7 +50,7 @@ export const WorktreeGroup = HttpApiGroup.make("server.worktree")
     HttpApiEndpoint.delete("worktree.remove", root, {
       payload: Worktree.RemoveInput,
       success: HttpApiSchema.NoContent,
-      error: [WorktreeError, ProjectNotFoundError],
+      error: [WorktreeError, ProjectNotFoundError, UntrustedFolderError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "worktree.remove",
@@ -64,7 +64,7 @@ export const WorktreeGroup = HttpApiGroup.make("server.worktree")
     HttpApiEndpoint.post("worktree.refresh", `${root}/refresh`, {
       payload: Schema.Struct({ projectID: Project.ID }),
       success: HttpApiSchema.NoContent,
-      error: [WorktreeError, ProjectNotFoundError],
+      error: [WorktreeError, ProjectNotFoundError, UntrustedFolderError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "worktree.refresh",

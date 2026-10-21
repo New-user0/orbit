@@ -5,6 +5,7 @@ import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
 import { Job } from "../job.js"
 import { Instance } from "../instance/service.js"
+import { ProjectTrust } from "../project-trust.js"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { SessionEvent } from "./event.js"
 import { SessionRunCoordinator } from "./run-coordinator.js"
@@ -53,6 +54,23 @@ export function terminal(exit: Exit.Exit<void, SessionRunner.RunError>, reason?:
   return { type: "failed" as const, error: toSessionError(Cause.squash(exit.cause)) }
 }
 
+/**
+ * Whether work may start for a Session: its folder is trusted now. No work starts in a folder until a person trusts it
+ * (trust-first, class 12), and that covers the work no request asked for as well: startup recovery, wake-ups, scheduled
+ * prompts and subagents. A refusal is logged and leaves the execution claim as it is, so the Session resumes once the
+ * folder is trusted.
+ */
+export const permitted = Effect.fnUntraced(function* (instances: Instance.Interface, session: SessionSchema.Info) {
+  const trusted = yield* ProjectTrust.Service.use((trust) => trust.trusted()).pipe(instances.provide(session))
+  if (!trusted)
+    yield* Effect.logWarning("session work not started", {
+      sessionID: session.id,
+      directory: session.location.directory,
+      reason: "its folder is not trusted",
+    })
+  return trusted
+})
+
 /** Process-local execution: drains run in this process using the selected instance. */
 export const layer = Layer.effect(
   Service,
@@ -84,6 +102,12 @@ export const layer = Layer.effect(
     const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
       commit: () => store.release(sessionID),
     })
+    // Runs `start` only when the Session's folder is trusted. A Session that is gone is left to the drain to report.
+    const whenPermitted = <E>(sessionID: SessionSchema.ID, start: Effect.Effect<void, E>) =>
+      store.get(sessionID).pipe(
+        Effect.flatMap((session) => (session === undefined ? Effect.succeed(true) : permitted(instances, session))),
+        Effect.flatMap((allowed) => (allowed ? start : Effect.void)),
+      )
     const drain = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       force: boolean,
@@ -104,7 +128,8 @@ export const layer = Layer.effect(
       )
       return yield* SessionRunner.DrainResult.$match(result, {
         Complete: () => Effect.void,
-        Moved: (result) => drain(sessionID, false, result.continuation, promotable),
+        // A move lands in another folder, which has to be trusted as well before the work goes on there.
+        Moved: (result) => whenPermitted(sessionID, drain(sessionID, false, result.continuation, promotable)),
         Reloaded: (result) => drain(sessionID, result.force, result.continuation, promotable),
       })
     })
@@ -168,8 +193,8 @@ export const layer = Layer.effect(
             yield* coordinator.wake(sessionID, "steer")
           return interrupted
         }),
-      resume: coordinator.run,
-      wake: coordinator.wake,
+      resume: (sessionID) => whenPermitted(sessionID, coordinator.run(sessionID)),
+      wake: (sessionID) => whenPermitted(sessionID, coordinator.wake(sessionID)),
       awaitIdle: coordinator.awaitIdle,
     })
   }),

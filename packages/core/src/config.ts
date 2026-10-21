@@ -277,6 +277,38 @@ export const layer = (options?: Options) =>
         return { roots, directory, root: holder, trusted: yield* ask(holder) }
       })
 
+      // The sources already reported as skipped, so that a folder nobody trusts is logged once and not at every reload.
+      const skipped = new Set<string>()
+      // Whether the folder that holds a project or local source is trusted, so that the source may be read at all: as the
+      // reference does, nothing a folder supplies is read until the person trusts it (class 1). A source above the
+      // project waits for a grant that covers its own folder (D7). One that is skipped is logged once (class 7).
+      const readable = Effect.fnUntraced(function* (source: string, folder: string) {
+        if ((yield* standing(folder, decide)).trusted) return true
+        if (!skipped.has(source)) {
+          skipped.add(source)
+          yield* Effect.logInfo("config source skipped", { path: source, reason: "its folder is not trusted" })
+        }
+        return false
+      })
+      // The project and local sources of a discovery that may be read now, and the rest of it as it is.
+      const trustedSources = Effect.fnUntraced(function* (sources: ConfigDiscovery.Sources) {
+        const files = (items: readonly AbsolutePath[]) => Effect.filter(items, (item) => readable(item, path.dirname(item)))
+        const compatMcp =
+          sources.compatMcp !== undefined && (yield* readable(sources.compatMcp, path.dirname(sources.compatMcp)))
+            ? sources.compatMcp
+            : undefined
+        return {
+          ...sources,
+          direct: yield* files(sources.direct),
+          local: yield* files(sources.local),
+          project: yield* Effect.filter(sources.project, (root) => readable(root.path, root.path)),
+          compat: yield* Effect.filter(sources.compat, (root) =>
+            root.scope === "user" ? Effect.succeed(true) : readable(root.path, root.path),
+          ),
+          compatMcp,
+        } satisfies ConfigDiscovery.Sources
+      })
+
       const loadFile = Effect.fnUntraced(function* (filepath: string, scope: Scope) {
         // A file of a project that a link leads to a share is not read: reading connects, before any trust check.
         if ((scope === "project" || scope === "local") && (yield* LinkShare.blocked(fs, filepath))) return
@@ -437,16 +469,18 @@ export const layer = (options?: Options) =>
       // A root of another product carries the verdict for the folder that holds it, unless it is the user's own, which is
       // never subject to trust. The verdict is the store's now, where the entries are those of the last load: whoever asks
       // for the roots right after a grant does not have to wait for a reload.
-      const stampRoot = (root: CompatRoots.Root): Effect.Effect<CompatRoot> =>
+      // A root of a folder that is not trusted is not listed at all, so nothing reads it.
+      const stampRoot = (root: CompatRoots.Root): Effect.Effect<readonly CompatRoot[]> =>
         root.scope === "user"
-          ? Effect.succeed(root)
-          : standing(root.path, decideNow).pipe(
-              Effect.map((place): CompatRoot => (place.trusted ? root : { ...root, trusted: false })),
-            )
+          ? Effect.succeed([root])
+          : standing(root.path, decideNow).pipe(Effect.map((place) => (place.trusted ? [root] : [])))
 
-      const load = Effect.fn("Config.load")(function* (sources: ConfigDiscovery.Sources) {
+      const load = Effect.fn("Config.load")(function* (discovered: ConfigDiscovery.Sources) {
         decisions.clear()
         states.clear()
+        // The project's decision is taken even when it has no source yet, so that a grant reloads the config.
+        yield* decide(location.project.canonical)
+        const sources = yield* trustedSources(discovered)
         const globalEntries = sources.global
           ? yield* loadDirectory(sources.global, userScopes).pipe(Effect.orDie)
           : undefined
@@ -714,7 +748,7 @@ export const layer = (options?: Options) =>
           const enabled = compatOn(configs)
           if (!enabled) return { enabled, roots: [] }
           const present = yield* Effect.filter(sources.compat, (root) => fs.isDir(root.path))
-          return { enabled, roots: yield* Effect.forEach(present, stampRoot) }
+          return { enabled, roots: (yield* Effect.forEach(present, stampRoot)).flat() }
         }),
         changes: () => Stream.fromPubSub(updates),
         notify: (paths) =>

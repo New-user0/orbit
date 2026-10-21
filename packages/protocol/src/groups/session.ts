@@ -33,6 +33,7 @@ import {
   SessionNotFoundError,
   SkillNotFoundError,
   UnknownError,
+  UntrustedFolderError,
 } from "../errors.js"
 import { Agent } from "@orbit/schema/agent"
 import { Skill } from "@orbit/schema/skill"
@@ -231,7 +232,7 @@ export const makeSessionGroup = <
           permissions: Permission.Ruleset.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.create",
@@ -315,7 +316,7 @@ export const makeSessionGroup = <
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ before: SessionMessage.ID.pipe(Schema.optional) }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError],
+        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -384,7 +385,7 @@ export const makeSessionGroup = <
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ ...Location.PublicRef.fields, delivery: SessionInbox.Delivery.pipe(Schema.optional) }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, InvalidRequestError],
+        error: [SessionNotFoundError, InvalidRequestError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.move",
@@ -405,7 +406,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.User }),
-        error: [ConflictError, InvalidRequestError, SessionNotFoundError],
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -425,7 +426,7 @@ export const makeSessionGroup = <
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError],
+        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -444,7 +445,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, SkillNotFoundError],
+        error: [SessionNotFoundError, SkillNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -467,7 +468,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.Synthetic }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -486,7 +487,7 @@ export const makeSessionGroup = <
           command: Schema.String,
         }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -506,7 +507,7 @@ export const makeSessionGroup = <
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.Compaction }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

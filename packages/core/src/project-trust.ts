@@ -403,6 +403,8 @@ const layer = Layer.effect(
     })
 
     const report = Effect.fnUntraced(function* (state: WorkspaceTrust.State) {
+      // Nothing of an untrusted folder is read, so there is nothing to list as held back for it.
+      if (!state.trusted) return { ...state, withheld: [], changed: [] } satisfies Trust.Status
       const entries = yield* config.entries()
       const changed = yield* differences()
       const listed = yield* Effect.forEach(entries, (entry) =>

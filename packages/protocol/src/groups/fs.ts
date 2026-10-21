@@ -3,7 +3,7 @@ import { Location } from "@orbit/schema/location"
 import { PositiveInt } from "@orbit/schema/schema"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { FileNotFoundError } from "../errors.js"
+import { FileNotFoundError, UntrustedFolderError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 const ListQuery = Schema.Struct({
@@ -77,6 +77,7 @@ export const FileSystemGroup = HttpApiGroup.make("server.fs")
       query: WriteQuery,
       payload: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
       success: Location.response(FileSystem.Write),
+      error: UntrustedFolderError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

@@ -1,3 +1,4 @@
+import { requireTrusted } from "./trust-error"
 import { Mcp } from "@orbit/core/mcp/index"
 import { ForbiddenError, McpServerNotFoundError } from "@orbit/protocol/errors"
 import { Effect } from "effect"
@@ -47,6 +48,7 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
       .handle(
         "mcp.connect",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const service = yield* Mcp.Service
           yield* notFound(service.connect(ctx.params.server))
           return HttpApiSchema.NoContent.make()
