@@ -485,8 +485,6 @@ export const layer = (options?: Options) =>
       const load = Effect.fn("Config.load")(function* (discovered: ConfigDiscovery.Sources) {
         decisions.clear()
         states.clear()
-        // The project's decision is taken even when it has no source yet, so that a grant reloads the config.
-        yield* decide(location.project.canonical)
         const sources = yield* trustedSources(discovered)
         // The files of a folder that is not trusted are not read, but they stay that folder's: naming one as the explicit
         // file must not load it in the flag scope, where the folder's trust no longer applies (class 4).
