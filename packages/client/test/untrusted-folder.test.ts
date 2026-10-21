@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { ClientError, isUntrustedFolderError, Orbit } from "../src/promise/index"
+import { ClientError, isUntrustedFolderError, Orbit, type SessionImportInput } from "../src/promise/index"
 
 // trust-first: every route that starts work in a folder answers 403 with `UntrustedFolderError` while the folder is not
 // trusted, and the client hands that refusal to its caller as the typed error it is, with the folder to trust (class 13),
@@ -27,6 +27,11 @@ test.each([
   ["session.synthetic", () => client.session.synthetic({ sessionID, text: "hello" })],
   ["session.shell", () => client.session.shell({ sessionID, command: "ls" })],
   ["session.compact", () => client.session.compact({ sessionID })],
+  [
+    "session.import",
+    // The server refuses before it reads the session, so an empty record stands in for one.
+    () => client.session.import({ info: {} as SessionImportInput["info"], messages: [], location }),
+  ],
   ["session.update", () => client.session.update({ sessionID, title: "" })],
   ["session.generate", () => client.session.generate({ sessionID, prompt: "hello" })],
   ["session.instructions.preview", () => client.session.instructions.preview({ sessionID })],
