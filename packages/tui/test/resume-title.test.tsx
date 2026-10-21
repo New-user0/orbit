@@ -44,11 +44,21 @@ async function open(input: { title: string; width: number; height?: number; sess
 }
 
 // Runs a command from the palette. Its search box starts empty, unlike the composer, whose draft other tests in the
-// same process can leave behind. The palette opens and filters over several frames, which a loaded runner draws slowly,
-// so its waits allow more passes than the default 20.
+// same process can leave behind. On a loaded runner a Ctrl+P pressed while the app is still settling is sometimes not
+// acted on at all (GitHub's Linux runner drew 120 frames with nothing changed), so the key is pressed again until the
+// palette shows.
 async function palette(setup: Awaited<ReturnType<typeof open>>, title: string) {
-  setup.mockInput.pressKey("p", { ctrl: true })
-  await setup.waitForFrame((frame) => frame.includes("Commands"), { maxPasses: 120 })
+  for (let attempt = 1; ; attempt++) {
+    setup.mockInput.pressKey("p", { ctrl: true })
+    const opened = await setup.waitForFrame((frame) => frame.includes("Commands"), { maxPasses: 40 }).then(
+      () => true,
+      (error: unknown) => {
+        if (attempt === 4) throw error
+        return false
+      },
+    )
+    if (opened) break
+  }
   for (const key of title) setup.mockInput.pressKey(key)
   await setup.waitForFrame((frame) => frame.includes(title), { maxPasses: 120 })
   setup.mockInput.pressEnter()
