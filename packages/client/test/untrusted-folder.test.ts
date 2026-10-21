@@ -46,6 +46,7 @@ test.each([
   ["worktree.create", () => client.worktree.create({ projectID: "prj_test" })],
   ["worktree.remove", () => client.worktree.remove({ projectID: "prj_test", directory: "/projects/app-wt" })],
   ["worktree.refresh", () => client.worktree.refresh({ projectID: "prj_test" })],
+  ["instruction.note.add", () => client.location.instruction.note.add({ location, scope: "project", text: "note" })],
 ] as const)("%s hands a refusal of an untrusted folder to the caller as UntrustedFolderError", async (_, call) => {
   const error: unknown = await call().then(
     () => undefined,
