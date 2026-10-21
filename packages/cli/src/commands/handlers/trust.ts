@@ -72,10 +72,19 @@ export default Runtime.handler(
     }
     if (input.revoke) {
       const status = yield* ask((signal) => client.location.trust.update({ location, trust: false }, { signal }))
+      if (!status.trusted) return yield* print([`${plain(status.directory)} is not trusted.`])
+      // A grant for a folder above still covers this one, and only revoking that grant ends it (class 3).
+      if (status.granted !== undefined) {
+        const argument = quoted(status.granted)
+        return yield* print([
+          `${plain(status.directory)} is still trusted, because ${plain(status.granted)} is trusted and that covers the folders inside it.`,
+          argument === undefined
+            ? "End that grant with `orb trust --revoke <folder>`; the folder's name is not printed as a command because a shell could act on it."
+            : `End that grant with: orb trust --revoke ${argument}`,
+        ])
+      }
       return yield* print([
-        status.trusted
-          ? `${plain(status.directory)} is still trusted: this server trusts every folder except a home directory and a filesystem root.`
-          : `${plain(status.directory)} is not trusted.`,
+        `${plain(status.directory)} is still trusted: this server trusts every folder except a home directory and a filesystem root.`,
       ])
     }
 
@@ -113,8 +122,13 @@ export default Runtime.handler(
         process.stderr,
       )
     }
-    // A folder that is trusted already is trusted again when what it holds changed since, and says what that lifted.
-    const saved = holder === undefined && before.source === "saved" && (before.changed ?? []).length === 0
+    // A folder that is trusted already is trusted again when what it holds changed since, and says what that lifted. One
+    // that only a grant for a folder above covers gets a grant of its own, so it stays trusted when that grant ends.
+    const saved =
+      holder === undefined &&
+      before.source === "saved" &&
+      before.granted === undefined &&
+      (before.changed ?? []).length === 0
     const status = saved
       ? before
       : yield* ask((signal) =>

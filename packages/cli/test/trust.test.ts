@@ -534,6 +534,41 @@ test("after orb trust a plain orb run proceeds, and orb trust --revoke takes the
   expect(refused.stderr).toContain("is not trusted")
 }, 240_000)
 
+// A grant for a folder covers the folders inside it, so revoking one of those leaves it trusted. The answer names the
+// grant that still covers it, which is the one to end, rather than putting it down to the server (class 3).
+test("orb trust --revoke of a folder that a parent's grant covers names that parent, and orb trust gives the folder a grant of its own", async () => {
+  const parent = path.join(root, "work", "covering")
+  const child = path.join(parent, "inner")
+  await fs.mkdir(child, { recursive: true })
+  expect(Bun.spawnSync(["git", "init", "--quiet", child]).exitCode).toBe(0)
+  succeeded(await orb(child, ["trust", "--standalone", parent]))
+
+  const revoked = await orb(child, ["trust", "--standalone", "--revoke"])
+
+  succeeded(revoked)
+  expect(revoked.stdout).toContain(`${child} is still trusted, because ${parent} is trusted`)
+  expect(revoked.stdout).toContain(`End that grant with: orb trust --revoke ${quoted(parent)}`)
+  expect(revoked.stdout).not.toContain("trusts every folder")
+  // Trusting the folder itself stores a grant of its own, which outlasts the parent's.
+  const granted = await orb(child, ["trust", "--standalone"])
+  succeeded(granted)
+  expect(granted.stdout).toContain(`Trusted ${child}`)
+  succeeded(await orb(child, ["trust", "--standalone", "--revoke", parent]))
+  const listed = await orb(child, ["trust", "--standalone", "--list"])
+  const folders = listed.stdout.split(EOL).map((line) => line.split("  ")[0])
+  expect(folders).toContain(child)
+  expect(folders).not.toContain(parent)
+}, 240_000)
+
+test("orb trust --revoke on a server that trusts every folder says that is why: the control for the row above", async () => {
+  const folder = await quiet("implicit-revoke")
+
+  const revoked = await orb(folder, ["trust", "--standalone", "--revoke"], { ORBIT_TRUST_PROJECT: "1" })
+
+  succeeded(revoked)
+  expect(revoked.stdout).toContain(`${folder} is still trusted: this server trusts every folder`)
+}, 120_000)
+
 test("orb trust refuses the home directory, which is never trusted for good", async () => {
   const repository = await hooked("elsewhere")
 
