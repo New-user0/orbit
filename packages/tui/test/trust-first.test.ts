@@ -53,7 +53,8 @@ test("the folder the terminal UI starts in is asked about when it holds nothing 
   const frame = await setup.waitForFrame((frame) => frame.includes(title))
 
   expect(frame).toContain(root)
-  // It says what trusting the folder lets Orbit do there.
+  // It asks whether the person knows where the folder came from, and says what trusting it lets Orbit do there.
+  expect(frame).toContain("Do you know where this folder came from?")
   expect(frame).toContain("can read, change and run")
   expect(frame).toContain("Trust this folder")
   expect(frame).toContain("Exit")

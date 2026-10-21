@@ -57,7 +57,7 @@ export function DialogTrust(props: {
   const intro = createMemo(() =>
     changed()
       ? "This folder's config changed since you trusted it, and Orbit is leaving out what changed:"
-      : "Is this your own project, or one you trust, such as your own code, a well-known open source project or your team's work? If not, look through the folder first.\nOrbit can read, change and run the files here, and nothing here loads until you trust it.",
+      : "Do you know where this folder came from? If you are not sure, read through its files before you go on.\nOrbit can read, change and run the files here, and nothing here loads until you trust it.",
   )
   // Nothing of a folder that is not trusted was read, so there is nothing to list for it.
   const held = createMemo(() =>

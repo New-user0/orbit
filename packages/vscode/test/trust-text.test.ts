@@ -77,8 +77,10 @@ test("asks about the changes of a trusted folder, listing only what changed", ()
   expect(asked.message).toBe(`Trust the changes in ${repo}?`)
   expect(asked.detail).toContain("changed since you trusted it")
   expect(asked.accept).toBe("Trust changes")
-  // The question for an untrusted folder is the one it was.
+  // The question for an untrusted folder is the one it was: where the folder came from, and what Orbit can do there.
   expect(prompt(view(untrusted, repo)).accept).toBe("Trust this folder")
+  expect(prompt(view(untrusted, repo)).detail).toContain("Do you know where this folder came from?")
+  expect(asked.detail).not.toContain("Do you know where this folder came from?")
 })
 
 test("names the folder VS Code opened when it is not the project's folder", () => {

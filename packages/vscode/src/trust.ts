@@ -126,7 +126,7 @@ export function prompt(trust: TrustView) {
             ].join("\n"),
           ]
         : [
-            "Is this your own project, or one you trust, such as your own code, a well-known open source project or your team's work? If not, look through the folder first.",
+            "Do you know where this folder came from? If you are not sure, read through its files before you go on.",
             "Orbit can read, change and run the files here, and nothing here loads until you trust it.",
           ]),
       ...(trust.opened === undefined
