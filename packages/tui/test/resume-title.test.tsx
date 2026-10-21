@@ -1,3 +1,4 @@
+import { InputRenderable } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { createAppFixture } from "./fixture/app"
 import { directory, json } from "./fixture/tui-client"
@@ -44,23 +45,18 @@ async function open(input: { title: string; width: number; height?: number; sess
 }
 
 // Runs a command from the palette. Its search box starts empty, unlike the composer, whose draft other tests in the
-// same process can leave behind. On a loaded runner a Ctrl+P pressed while the app is still settling is sometimes not
-// acted on at all (GitHub's Linux runner drew 120 frames with nothing changed), so the key is pressed again until the
-// palette shows.
+// same process can leave behind. The palette focuses its search box on a timer after it is first drawn, and letters
+// sent before that reach no input (FU-M4-322: under load the palette stays open with an empty search), so the title is
+// typed once the box holds focus.
 async function palette(setup: Awaited<ReturnType<typeof open>>, title: string) {
-  for (let attempt = 1; ; attempt++) {
-    setup.mockInput.pressKey("p", { ctrl: true })
-    const opened = await setup.waitForFrame((frame) => frame.includes("Commands"), { maxPasses: 40 }).then(
-      () => true,
-      (error: unknown) => {
-        if (attempt === 4) throw error
-        return false
-      },
-    )
-    if (opened) break
+  const search = () => {
+    const focused = setup.renderer.currentFocusedRenderable
+    return focused instanceof InputRenderable && !focused.isDestroyed
   }
+  setup.mockInput.pressKey("p", { ctrl: true })
+  await setup.waitForFrame((frame) => frame.includes("Commands") && search())
   for (const key of title) setup.mockInput.pressKey(key)
-  await setup.waitForFrame((frame) => frame.includes(title), { maxPasses: 120 })
+  await setup.waitForFrame((frame) => frame.includes(title))
   setup.mockInput.pressEnter()
 }
 
