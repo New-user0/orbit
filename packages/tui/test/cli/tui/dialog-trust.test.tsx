@@ -147,6 +147,27 @@ test("a trusted folder whose config changed asks to trust the changes, lists wha
   }
 })
 
+// The list of changes is cut to what fits, and says how many more there are, so the choices stay on screen.
+test("a long list of changes is cut to what fits and says how many more there are", async () => {
+  const many = Array.from({ length: 12 }, (_, index) => ({
+    path: `/tmp/orbit/agents/agent-${index}.md`,
+    kinds: ["hooks" as const],
+  }))
+  const fixture = await renderTrust({ ...project, withheld: many, changed: many })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust the changes?"))
+    const frame = fixture.app.captureCharFrame()
+    expect(frame).toContain("agent-0.md")
+    expect(frame).toContain("and 6 more")
+    expect(frame).not.toContain("agent-11.md")
+    expect(frame).toContain("Trust changes")
+    expect(frame).toContain("Not now")
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
 test("a grant that lasts until Orbit restarts is renewed the same way", async () => {
   const fixture = await renderTrust({ ...changedSince, source: "session" })
 

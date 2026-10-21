@@ -2558,6 +2558,26 @@ test("the refusal for the folder that holds the file names that folder to trust 
   expect(hidden).toContain(`${path.join("flows", "a")}\\x1b[8m.ts`)
 })
 
+// trust-first: a command that would only start work in the folder, such as `orb run` with no file of its own, stops in a
+// folder that is not trusted, or that an older server cannot answer for, and says why the folder itself is what matters.
+test("a command that brings nothing of its own is stopped by the folder itself, and says that nothing there is read until it is trusted", () => {
+  const status = { directory: repo, trusted: false, persistent: true, withheld: [], changed: [] }
+  const reason = "Nothing a folder holds is read, and no work starts there, until the folder is trusted"
+
+  const refused = refusal(status)
+  expect(refused).toContain(`${repo} is not trusted`)
+  expect(refused).toContain(reason)
+  expect(refused).toContain("Starting `orb` there asks the same question.")
+  // Not the reasons of the other doors.
+  expect(refused).not.toContain("sends the folder's instructions to a model")
+  expect(refused).not.toContain("run store")
+
+  const old = unanswered(repo)
+  expect(old).toContain(`the server is older than workspace trust, so it cannot say whether ${repo} is trusted`)
+  expect(old).toContain(reason)
+  expect(old).toContain("`orb service restart`")
+})
+
 test("the text for a server that cannot say whether the folder is trusted names what the command brings and every way to get an answer", () => {
   const module = path.join(repo, "workflows", "plan.ts")
   const file = path.join(repo, "flows", "feature.yaml")

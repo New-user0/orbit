@@ -479,11 +479,13 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   )
   const status = exitStatus(result.reason)
   yield* Effect.sync(() => {
-    if (result.reason !== undefined && status === undefined)
+    // A trust question about the folder the terminal UI started in, answered with Exit or Escape, ends the process with
+    // a status of its own and prints nothing: it is not an error.
+    if (status !== undefined) process.exitCode = status
+    else if (result.reason !== undefined)
       process.stderr.write((cliErrorMessage(result.reason) ?? errorFormat(result.reason)) + "\n")
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
-  return status
 })
 
 function App() {

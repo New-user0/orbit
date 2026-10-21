@@ -125,7 +125,7 @@ export default Runtime.handler(Commands, (input) =>
     const runFork = Effect.runForkWith(context)
     const runPromise = Effect.runPromiseWith(context)
     const service = server.service
-    const status = yield* run({
+    yield* run({
       app: {
         name: process.env.ORBIT_CLIENT ?? ORBIT_ARTIFACT,
         version: ORBIT_VERSION,
@@ -172,7 +172,5 @@ export default Runtime.handler(Commands, (input) =>
         runFork(effect)
       },
     }).pipe(Effect.provide(LayerNode.compile(Global.node)))
-    // A trust question answered with Exit or Escape ends the terminal UI with a status of its own.
-    if (status !== undefined) process.exitCode = status
   }),
 )

@@ -13,7 +13,7 @@ const directory = "/Users/kit/code/orbit-app"
 
 // What the indicator can be shown for: a folder that holds something back, with or without config above it that only
 // its own folder's trust turns on, one that is untrusted but holds nothing back of its own, which is most repositories
-// and shows nothing, and one that is trusted.
+// and is marked all the same (trust-first), and one that is trusted, which shows nothing.
 const STATES: readonly { label: string; status: TrustStatus }[] = [
   {
     label: "untrusted, holds config back",

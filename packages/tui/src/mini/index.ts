@@ -9,10 +9,7 @@ export type MiniFrontendResult = {
 export async function runMiniFrontend(input: MiniFrontendInput): Promise<MiniFrontendResult> {
   // Before the terminal is handed over: a folder that is not trusted, or one the server cannot answer for, ends here.
   const refused = await trustRefusal({ sdk: input.sdk, directory: input.directory })
-  if (refused !== undefined) {
-    input.host.stderr.write(`${refused}\n`)
-    return { exitCode: 1 }
-  }
-  await runInteractiveDeferredMode(input)
-  return { exitCode: 0 }
+  if (refused === undefined) return runInteractiveDeferredMode(input).then(() => ({ exitCode: 0 }))
+  input.host.stderr.write(`${refused}\n`)
+  return { exitCode: 1 }
 }

@@ -15,8 +15,6 @@ export default Runtime.handler(
     process.env.ORBIT_CLIENT = "acp"
     const endpoint = yield* Standalone.start()
     const client = Orbit.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
-    // The editor picks the folder of each session, so the folder is checked when a session opens: session/new,
-    // session/load and session/resume refuse one that is not trusted (`ACPService`).
     const connection = yield* ACP.connect(client, ndJsonStream(Writable.toWeb(process.stdout), Bun.stdin.stream()))
     const failure = yield* Effect.raceFirst(
       Effect.promise(() => connection.closed).pipe(

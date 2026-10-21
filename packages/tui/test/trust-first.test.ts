@@ -73,7 +73,10 @@ test("choosing Exit ends the terminal UI and grants nothing", async () => {
   setup.mockInput.pressEnter()
 
   await setup.waitFor(() => setup.renderer.isDestroyed)
+  await setup.ended
   expect(server.grants).toEqual([])
+  // As the reference's Exit does, `orb` ends with status 1.
+  expect(process.exitCode).toBe(1)
 })
 
 test("Escape on the question ends the terminal UI as well", async () => {
@@ -85,7 +88,9 @@ test("Escape on the question ends the terminal UI as well", async () => {
   setup.mockInput.pressEscape()
 
   await setup.waitFor(() => setup.renderer.isDestroyed)
+  await setup.ended
   expect(server.grants).toEqual([])
+  expect(process.exitCode).toBe(1)
 })
 
 test("choosing Trust this folder trusts it for good, and the question does not come back", async () => {
@@ -193,8 +198,12 @@ test("the n key on the question ends the terminal UI and grants nothing", async 
   await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
 
   await setup.waitForFrame((frame) => frame.includes(title))
+  // A status other than the one the n key leaves, so that the 0 below is the terminal UI's own.
+  process.exitCode = 1
   setup.mockInput.pressKey("n")
 
   await setup.waitFor(() => setup.renderer.isDestroyed)
+  await setup.ended
   expect(server.grants).toEqual([])
+  expect(process.exitCode).toBe(0)
 })
