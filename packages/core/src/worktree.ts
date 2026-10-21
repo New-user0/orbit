@@ -293,6 +293,8 @@ const layer = Layer.effect(
       current?: WorktreeStrategies.Interface,
     ) {
       const row = yield* project(input.projectID)
+      // Refreshing loads the folder's worktree strategies and runs git in it, so it waits for a grant as create does.
+      yield* requireTrusted(row.worktree)
       const settings = yield* load(row.worktree, current)
       const stored = yield* ops.list(input.projectID)
       const checked = yield* Effect.forEach(

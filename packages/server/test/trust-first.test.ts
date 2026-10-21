@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+import { Session } from "@orbit/schema/session"
 import { startServer } from "./fixture/server"
 
 // trust-first: nothing from a project folder loads or runs until the person trusts the folder, and no session starts or
@@ -126,6 +127,12 @@ it.live("a session whose folder is no longer trusted takes no more work, though 
         ["shell", "POST", `/api/session/${id}/shell`, { command: "echo hi" }],
         ["compact", "POST", `/api/session/${id}/compact`, {}],
         ["fork", "POST", `/api/session/${id}/fork`, {}],
+        // These ask the model from the session's context, or read the folder's instruction files.
+        ["generate", "POST", `/api/session/${id}/generate`, { prompt: "hi" }],
+        ["title", "PATCH", `/api/session/${id}`, { title: "" }],
+        ["instructions", "GET", `/api/experimental/session/${id}/instructions`, undefined],
+        // A terminal for the session starts a program in its folder.
+        ["terminal", "POST", `/api/experimental/session/${id}/terminal`, { args: [], cwd: folders.repo, title: "Terminal", env: {} }],
       ] as const
       for (const [name, method, route, body] of rows)
         expect({ name, ...(await request(server, method, route, { body })) }).toEqual({
@@ -301,6 +308,13 @@ it.live(
             body: { projectID, directory: path.join(folders.other, "copy"), force: false },
           }),
         ).toEqual(refusedFor(folders.repo))
+        // Refreshing the list loads the folder's worktree strategies and runs git there, so it waits for a grant too.
+        expect(await request(server, "POST", "/api/worktree/refresh", { body: { projectID } })).toEqual(
+          refusedFor(folders.repo),
+        )
+        // The trusted control for the refresh: it runs once the folder is trusted.
+        expect((await grant(server, folders.repo)).status).toBe(200)
+        expect((await request(server, "POST", "/api/worktree/refresh", { body: { projectID } })).status).toBe(204)
       })
     }),
 )
@@ -461,4 +475,168 @@ it.live("a grant for a folder covers the folders below it, as the reference's wa
       expect((await createSession(server, child)).status).toBe(200)
     })
   }),
+)
+
+it.live("no shell command or session terminal starts in an untrusted folder, and both get past the check once it is trusted", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const marker = path.join(folders.repo, "CLONE-SHELL-RAN")
+    // A terminal runs in a daemon of its own. Naming one that is not there makes a terminal that gets past the check fail
+    // at once with the daemon's error, where it would otherwise start one.
+    const previous = process.env.ORBIT_PTY_BIN
+    process.env.ORBIT_PTY_BIN = path.join(folders.other, "missing-orbit-pty")
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env.ORBIT_PTY_BIN
+        if (previous !== undefined) process.env.ORBIT_PTY_BIN = previous
+      }),
+    )
+    const server = yield* startServer(folders.config, untrusted)
+    const shell = () =>
+      request(server, "POST", "/api/shell", { directory: folders.repo, body: { command: "echo ran > CLONE-SHELL-RAN" } })
+    const terminal = (sessionID: string, cwd: string) =>
+      request(server, "POST", `/api/experimental/session/${sessionID}/terminal`, {
+        body: { args: [], cwd, title: "Terminal", env: {} },
+      })
+    const unavailable = { status: 503, body: expect.objectContaining({ _tag: "ServiceUnavailableError" }) }
+    yield* Effect.promise(async () => {
+      // A session is made only in a trusted folder, so this one is made before its folder's grant ends.
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      const id = (await createSession(server, folders.repo)).body?.data?.id ?? ""
+      expect((await revoke(server, folders.repo)).body).toMatchObject({ trusted: false })
+      expect((await grant(server, folders.other)).status).toBe(200)
+
+      expect(await shell()).toEqual(refusedFor(folders.repo))
+      // A terminal for no known session is decided by the folder it starts in.
+      expect(await terminal("ses_unknown", folders.repo)).toEqual(refusedFor(folders.repo))
+      // One for a session works for that session, so its folder decides, wherever the terminal is asked to start.
+      expect(await terminal(id, folders.other)).toEqual(refusedFor(folders.repo))
+      await Bun.sleep(1_000)
+      expect(await Bun.file(marker).exists()).toBe(false)
+
+      // The trusted control: the command runs and leaves its marker, and each terminal fails only for want of a daemon.
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      expect((await shell()).status).toBe(200)
+      const deadline = Date.now() + 15_000
+      while (!(await Bun.file(marker).exists()) && Date.now() < deadline) await Bun.sleep(100)
+      expect(await Bun.file(marker).exists()).toBe(true)
+      expect(await terminal("ses_unknown", folders.repo)).toEqual(unavailable)
+      expect(await terminal(id, folders.other)).toEqual(unavailable)
+    })
+  }),
+)
+
+// A model server that keeps what each request carried, so a row can show what a folder supplied reached the model.
+const recordingModel = Effect.acquireRelease(
+  Effect.sync(() => {
+    const bodies: string[] = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = (await request.json()) as { tools?: unknown }
+        bodies.push(JSON.stringify(body))
+        const events = [
+          { choices: [{ index: 0, delta: { role: "assistant", content: body.tools ? "done" : "Generated" } }] },
+          { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+        ]
+        return new Response(`${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        })
+      },
+    })
+    return { bodies, server }
+  }),
+  (llm) => Effect.promise(() => llm.server.stop(true)),
+)
+
+const modelConfig = (port: number | undefined) => ({
+  model: "test/test-model",
+  providers: {
+    test: {
+      name: "Test",
+      package: "aisdk:@ai-sdk/openai-compatible",
+      settings: { apiKey: "test-key", baseURL: `http://127.0.0.1:${port}/v1` },
+      models: {
+        "test-model": {
+          name: "Test Model",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: { input: 0, output: 0 },
+          limit: { context: 100_000, output: 10_000 },
+        },
+      },
+    },
+  },
+})
+
+// What the export route answers with, which the import route takes back.
+type Exported = { readonly data: { readonly info: Record<string, unknown>; readonly messages: readonly unknown[] } }
+
+it.live(
+  "a session is not imported into an untrusted folder, and a folder's instruction files and output style reach the model only once it is trusted",
+  () =>
+    Effect.gen(function* () {
+      const folders = yield* layout
+      const llm = yield* recordingModel
+      yield* Effect.promise(async () => {
+        await Bun.write(path.join(folders.config, "orbit.json"), JSON.stringify(modelConfig(llm.server.port)))
+        await Bun.write(
+          path.join(folders.repo, "orbit.json"),
+          JSON.stringify({ username: "clone-user", output_style: "clone-style" }),
+        )
+        await Bun.write(
+          path.join(folders.repo, ".orbit", "output-styles", "clone-style.md"),
+          "---\nname: clone-style\n---\nCLONE-STYLE: answer as the clone says.\n",
+        )
+        await Bun.write(path.join(folders.repo, "AGENTS.md"), "CLONE-AGENTS-MD: the repository's instructions.\n")
+        await Bun.write(
+          path.join(folders.other, "AGENTS.md"),
+          "CLONE-IMPORTED-INSTRUCTION: the other folder's instructions.\n",
+        )
+      })
+      const server = yield* startServer(folders.config, untrusted)
+      yield* Effect.promise(async () => {
+        // The control for the folder's own files: once it is trusted, its instruction file is read for a session there,
+        // and that file and its output style reach the model.
+        expect((await grant(server, folders.repo)).status).toBe(200)
+        expect((await request(server, "POST", "/api/location/reload")).status).toBe(204)
+        const created = await createSession(server, folders.repo)
+        expect(created.status).toBe(200)
+        const id = created.body?.data?.id
+        const preview = await request(server, "GET", `/api/experimental/session/${id}/instructions`)
+        expect(preview.status).toBe(200)
+        expect(JSON.stringify(preview.body)).toContain("CLONE-AGENTS-MD")
+        expect((await request(server, "POST", `/api/session/${id}/generate`, { body: { prompt: "hi" } })).status).toBe(
+          200,
+        )
+        expect(llm.bodies.join("")).toContain("CLONE-AGENTS-MD")
+        expect(llm.bodies.join("")).toContain("CLONE-STYLE")
+
+        // The same session imported into a folder that is not trusted: refused, nothing stored, the model not asked.
+        const exported = (await request(server, "GET", `/api/experimental/session/${id}/export`))
+          .body as unknown as Exported
+        const imported = Session.ID.create()
+        const importInto = (directory: string) =>
+          request(server, "POST", "/api/experimental/session/import", {
+            body: {
+              info: { ...exported.data.info, id: imported },
+              messages: exported.data.messages,
+              location: { directory },
+            },
+          })
+        const asked = llm.bodies.length
+        expect(await importInto(folders.other)).toEqual(refusedFor(folders.other))
+        expect((await request(server, "GET", `/api/session/${imported}`)).status).toBe(404)
+        expect(llm.bodies.length).toBe(asked)
+
+        // The trusted control: the import lands once the folder is trusted, and that folder's instructions are read.
+        expect((await grant(server, folders.other)).status).toBe(200)
+        expect((await importInto(folders.other)).status).toBe(200)
+        expect(
+          (await request(server, "POST", `/api/session/${imported}/generate`, { body: { prompt: "hi" } })).status,
+        ).toBe(200)
+        expect(llm.bodies.slice(asked).join("")).toContain("CLONE-IMPORTED-INSTRUCTION")
+      })
+    }),
+  60_000,
 )

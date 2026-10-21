@@ -1,24 +1,32 @@
+import path from "node:path"
 import { PersistentPty } from "@orbit/core/persistent-pty"
+import { Project } from "@orbit/core/project"
 import { PtyTicket } from "@orbit/core/pty/ticket"
+import { AbsolutePath } from "@orbit/core/schema"
+import { Session } from "@orbit/core/session"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { ForbiddenError, PtyNotFoundError, ServiceUnavailableError } from "@orbit/protocol/errors"
 import {
   PTY_CONNECT_TICKET_QUERY,
   PTY_CONNECT_TOKEN_HEADER,
   PTY_CONNECT_TOKEN_HEADER_VALUE,
 } from "@orbit/protocol/groups/persistent-pty"
-import { Effect, Queue, Semaphore } from "effect"
+import { Effect, Option, Queue, Semaphore } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Socket } from "effect/unstable/socket"
 import { Api } from "../api"
 import { CorsConfig, isAllowedRequestOrigin } from "../cors"
 import { runPtySocket } from "./pty-socket"
+import { requireTrustedAt } from "./trust-error"
 
 export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experimental", (handlers) =>
   Effect.gen(function* () {
     const tickets = yield* PtyTicket.Service
     const cors = yield* CorsConfig
     const pty = yield* PersistentPty.Service
+    const sessions = yield* Session.Service
+    const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
 
     return handlers
       .handle(
@@ -36,6 +44,15 @@ export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experiment
       .handle(
         "persistentPty.create",
         Effect.fn(function* (ctx) {
+          // A terminal belongs to a session and starts a program for it, so the session's folder has to be trusted
+          // (class 12). A terminal for no known session is decided by the folder it starts in, where the daemon puts it.
+          const owner = yield* sessions.get(ctx.params.sessionID).pipe(Effect.option)
+          yield* requireTrustedAt(
+            folders,
+            Option.isSome(owner)
+              ? owner.value.location.directory
+              : AbsolutePath.make(path.resolve(ctx.payload.cwd ?? "/")),
+          )
           return {
             data: yield* pty
               .create(ctx.params.sessionID, {

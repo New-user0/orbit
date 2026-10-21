@@ -1786,6 +1786,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -2149,6 +2159,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -4256,6 +4276,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -4573,6 +4603,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -10911,6 +10951,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "503": {
             "description": "ServiceUnavailableError",
             "content": {
@@ -11726,6 +11776,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }

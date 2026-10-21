@@ -5,6 +5,7 @@ import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { ShellNotFoundError } from "@orbit/protocol/errors"
 import { Api } from "../api"
 import { response } from "../location"
+import { requireTrusted } from "./trust-error"
 
 export const ShellHandler = HttpApiBuilder.group(Api, "server.shell", (handlers) =>
   Effect.gen(function* () {
@@ -19,6 +20,7 @@ export const ShellHandler = HttpApiBuilder.group(Api, "server.shell", (handlers)
       .handle(
         "shell.create",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const shell = yield* Shell.Service
           const location = yield* Location.Service
           return yield* response(

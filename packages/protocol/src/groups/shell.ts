@@ -2,7 +2,7 @@ import { Shell } from "@orbit/schema/shell"
 import { Location } from "@orbit/schema/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { ShellNotFoundError } from "../errors.js"
+import { ShellNotFoundError, UntrustedFolderError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const ShellGroup = HttpApiGroup.make("server.shell")
@@ -25,6 +25,7 @@ export const ShellGroup = HttpApiGroup.make("server.shell")
       query: LocationQuery,
       payload: Shell.CreateInput,
       success: Location.response(Shell.Info),
+      error: UntrustedFolderError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

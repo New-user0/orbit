@@ -156,11 +156,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.import",
         Effect.fn(function* (ctx) {
+          // An imported session works where it lands, as a created one does, so that folder has to be trusted (class 12).
+          const location = ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) }
+          yield* requireTrustedAt(folders, location.directory)
           return {
             data: yield* transfer
               .import({
                 data: { info: ctx.payload.info, messages: ctx.payload.messages },
-                location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+                location,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", missingSession),
@@ -279,6 +282,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 .rename({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
                 .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
             } else {
+              // An empty title asks the model for one, with the session's folder and its instructions.
+              yield* requireTrusted()
               const title = yield* SessionTitle.Service
               yield* title.generate(ctx.params.sessionID)
             }
@@ -593,6 +598,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.instructions.preview",
         Effect.fn(function* (ctx) {
+          // The preview reads the folder's instruction files, and nothing of a folder is read before it is trusted.
+          yield* requireTrusted()
           const preview = yield* session
             .instructions(ctx.params.sessionID)
             .pipe(
@@ -631,6 +638,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.generate",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const text = yield* session
             .generate({ sessionID: ctx.params.sessionID, prompt: ctx.payload.prompt })
             .pipe(

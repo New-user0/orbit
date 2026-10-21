@@ -249,7 +249,7 @@ export const makeSessionGroup = <
           location: Location.PublicRef.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "experimental.session.import",
@@ -369,7 +369,7 @@ export const makeSessionGroup = <
           permissions: Permission.Ruleset.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -660,7 +660,7 @@ export const makeSessionGroup = <
             blocked: Schema.optional(Schema.Array(Schema.String)),
           }).annotate({ identifier: "SessionInstructionsPreview" }),
         }),
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [SessionNotFoundError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -739,7 +739,7 @@ export const makeSessionGroup = <
         success: Schema.Struct({
           data: Schema.Struct({ text: Schema.String }),
         }).annotate({ identifier: "SessionGenerateResponse" }),
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [SessionNotFoundError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
