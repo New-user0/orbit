@@ -388,6 +388,22 @@ describe("Config under workspace trust", () => {
     }),
   )
 
+  // The person's own settings for another product sit in their home, which is never trusted for good: they are the
+  // person's, so trust does not apply to them, as it does not to the person's own orbit.json.
+  it.live("reads the person's own settings of another product while the folder is not trusted", () =>
+    Effect.gen(function* () {
+      const folders = yield* layout
+      const mine = path.join(folders.home, CompatNames.vendor.directory, "settings.json")
+      yield* Effect.promise(() => write(mine, { hooks: { PreToolUse: [hook("echo mine")] } }))
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
+        expect(named(entries, path.join(folders.repo, CompatNames.vendor.directory, "settings.json"))).toBeUndefined()
+        expect(named(entries, mine)?.info.hooks).toBeDefined()
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
   it.live("applies a grant that a session made without storing it", () =>
     Effect.gen(function* () {
       const folders = yield* layout

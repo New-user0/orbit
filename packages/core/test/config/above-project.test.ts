@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Schedule } from "effect"
+import { Effect, Layer, Logger, Schedule } from "effect"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
 import { Credential } from "@orbit/core/credential"
@@ -83,4 +83,31 @@ describe("config above the project", () => {
       }).pipe(Effect.provide(loader(layout)))
     }),
   )
+})
+
+describe("config sources that are skipped", () => {
+  // Each skipped source is reported once (class 7), not again at every reload while its folder stays untrusted.
+  it.live("are logged once, however often the config is read again", () => {
+    const logged: string[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "config source skipped") return
+      const details: unknown = entry.message[1]
+      if (typeof details === "object" && details !== null && "path" in details) logged.push(String(details.path))
+    })
+    return Effect.gen(function* () {
+      const layout = yield* folders
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const reload = config.reload
+        expect(reload).toBeDefined()
+        if (reload === undefined) return
+        yield* reload()
+        yield* reload()
+      }).pipe(Effect.provide(loader(layout)))
+      const above = path.join(layout.work, "orbit.json")
+      const own = path.join(layout.repo, "orbit.json")
+      expect(logged.filter((item) => item === above)).toEqual([above])
+      expect(logged.filter((item) => item === own)).toEqual([own])
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
 })
