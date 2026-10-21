@@ -444,7 +444,9 @@ it.live("lists a file imported twice once, at its first place", () =>
   }).pipe(Effect.scoped),
 )
 
-it.live("warns once for an import outside the project, names the real target, and does not read it", () =>
+// trust-first: the preview of a session in a folder that is not trusted is refused before any instruction file is read,
+// the folder's own or one it imports from outside (class 1). The trusted half of the next row is the control.
+it.live("previews no instruction file of an untrusted project, nor an import it names outside it", () =>
   Effect.gen(function* () {
     const s = yield* server({ trusted: false })
     const outside = path.join(s.root, "outside.md")
@@ -455,14 +457,13 @@ it.live("warns once for an import outside the project, names the real target, an
       path.join(s.project, "ORBIT.md"),
       `root\n@${token(outside)}\n@../outside.md\n@./sub/../../outside.md\n@${lower}`,
     )
-    const preview = yield* s.preview((yield* s.session()).id)
+    const id = (yield* s.session()).id
+    s.reads.length = 0
+    const response = yield* s.get(id)
 
-    expect(preview.status.warnings).toMatchObject([
-      { path: path.join(s.project, "ORBIT.md"), type: "import-untrusted", target: outside, directory: s.project },
-    ])
-    expect(preview.status.warnings).toHaveLength(1)
-    expect(preview.initial).not.toContain("OUTSIDE-MARKER")
-    expect(preview.status.files.map((file) => file.path)).toEqual([path.join(s.project, "ORBIT.md")])
+    expect(response.status).toBe(403)
+    expect(yield* Effect.promise(() => response.json())).toMatchObject({ _tag: "UntrustedFolderError" })
+    expect(s.reads.filter((file) => file.endsWith(".md"))).toEqual([])
   }).pipe(Effect.scoped),
 )
 
@@ -479,18 +480,19 @@ it.live("separates an import left out from one inside the project, trusted or no
           fs.symlink(path.join(s.project, "real", "notes.md"), path.join(s.project, "notes.md")),
         )
       yield* s.write(path.join(s.project, "ORBIT.md"), `root\n@${token(outside)}\n@./${canLinkFile ? "notes" : "real/notes"}.md`)
-      const preview = yield* s.preview((yield* s.session()).id)
+      const id = (yield* s.session()).id
 
-      // A link that stays inside the project is read, with or without a grant, and the file outside it is not.
-      expect(preview.initial).toContain("LINKED-MARKER")
-      // A trusted folder may reach outside: the file is loaded and nothing is warned about.
-      if (trusted) {
-        expect(preview.initial).toContain("OUTSIDE-MARKER")
-        expect(preview.status.warnings).toEqual([])
+      // A folder that is not trusted has nothing read for its preview (trust-first): it is refused.
+      if (!trusted) {
+        expect((yield* s.get(id)).status).toBe(403)
         continue
       }
-      expect(preview.initial).not.toContain("OUTSIDE-MARKER")
-      expect(preview.status.warnings).toMatchObject([{ type: "import-untrusted", target: outside, directory: s.project }])
+      const preview = yield* s.preview(id)
+      // A trusted folder's link inside the project is read, and it may reach outside: the file is loaded and nothing
+      // is warned about.
+      expect(preview.initial).toContain("LINKED-MARKER")
+      expect(preview.initial).toContain("OUTSIDE-MARKER")
+      expect(preview.status.warnings).toEqual([])
     }
   }).pipe(Effect.scoped),
 )
@@ -511,18 +513,21 @@ it.live("reads no file a link leads out of an untrusted project to, and a second
         ]),
       )
       const id = (yield* s.session()).id
-      const first = yield* s.preview(id)
+      // A folder that is not trusted has its preview refused before anything is read (trust-first).
+      const first = yield* s.get(id)
+      expect(first.status).toBe(trusted ? 200 : 403)
+      const initial = trusted ? ((yield* Effect.promise(() => first.json())) as { data: Preview }).data.initial : ""
       const read = s.reads.some((file) => file.startsWith(outside))
       // No step runs in a folder that is not trusted (trust-first), so no request carries what the link leads to.
       const stepped = yield* s.step(id, "go").pipe(Effect.exit)
       expect(Exit.isSuccess(stepped)).toBe(trusted)
       const system = Exit.isSuccess(stepped) ? JSON.stringify(stepped.value?.system ?? "") : ""
       expect(read).toBe(trusted)
-      expect((first.initial ?? "").includes("LINKED-OUT-MARKER")).toBe(trusted)
+      expect((initial ?? "").includes("LINKED-OUT-MARKER")).toBe(trusted)
       expect(system.includes("LINKED-OUT-MARKER")).toBe(trusted)
 
       s.reads.length = 0
-      yield* s.preview(id)
+      expect((yield* s.get(id)).status).toBe(trusted ? 200 : 403)
       expect(s.reads.filter((file) => file.endsWith(".md"))).toEqual([])
     }
   }).pipe(Effect.scoped),

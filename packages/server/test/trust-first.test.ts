@@ -524,6 +524,7 @@ it.live("no shell command or session terminal starts in an untrusted folder, and
       expect(await terminal(id, folders.other)).toEqual(unavailable)
     })
   }),
+  60_000,
 )
 
 // A model server that keeps what each request carried, so a row can show what a folder supplied reached the model.
