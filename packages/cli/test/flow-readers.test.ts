@@ -11,6 +11,7 @@ import ls from "../src/commands/handlers/flow/ls"
 import show from "../src/commands/handlers/flow/show"
 import trace from "../src/commands/handlers/flow/trace"
 import watch from "../src/commands/handlers/flow/watch"
+import { ORBIT_VERSION } from "../src/version"
 
 // The readers of a folder's run store (`orb flow ls`, `show`, `cost`, `trace`, `watch`, `approve`) ask the server whether
 // the folder is trusted before they open the store (trust-first, class 12; FU-M4-202). `trust-first.test.ts` runs each
@@ -24,7 +25,7 @@ const server = Bun.serve({
   port: 0,
   fetch(request) {
     const url = new URL(request.url)
-    if (url.pathname === "/api/info") return Response.json({ version: "0.0.0-test" })
+    if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION })
     if (url.pathname === "/api/location/trust") {
       const directory = url.searchParams.get("location[directory]") ?? ""
       asked.push(directory)
