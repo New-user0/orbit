@@ -1,7 +1,12 @@
-import type { TrustStatus } from "@orbit/client"
+import type { OrbitClient, TrustStatus } from "@orbit/client"
 import { expect, test } from "bun:test"
-import { trustRefusal } from "../../src/mini/trust.shared"
 import { createApi, json } from "../fixture/tui-client"
+
+// The gate the build adds to the Mini, read by name so that this file compiles before it exists: until then every row
+// fails with the error below, which is the missing gate.
+const mini: Record<string, unknown> & {
+  readonly trustRefusal?: (input: { sdk: OrbitClient; directory: string }) => Promise<string | undefined>
+} = await import("../../src/mini/trust.shared")
 
 // trust-first: nothing in the mini can ask the question, so `orb mini` is a headless door (class 12): in a folder that is
 // not trusted it stops before it hands the terminal over, whatever the folder holds, says how to trust the folder, and
@@ -18,7 +23,9 @@ const status = (overrides: Partial<TrustStatus> = {}): TrustStatus => ({
 
 async function refusal(respond: () => Response | Promise<Response>) {
   const fetch = Object.assign(async () => respond(), { preconnect: () => {} })
-  return trustRefusal({ sdk: createApi(fetch), directory: "/projects/app/packages" })
+  if (mini.trustRefusal === undefined)
+    throw new Error("the Mini has no trust gate: mini/trust.shared has no trustRefusal")
+  return mini.trustRefusal({ sdk: createApi(fetch), directory: "/projects/app/packages" })
 }
 
 test("refuses an untrusted folder that holds nothing back, and says how to trust it", async () => {
