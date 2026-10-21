@@ -1842,13 +1842,14 @@ runs" is a permission.
   into that name before a rule sees it (class 4).
 - An agent file under `agent/` or `agents/` defines its agent: it replaces an earlier definition of the id and rebuilds
   it from a default that allows everything. Therefore an untrusted file of that kind never replaces or tunes an agent
-  that exists (its prompt included), and `ProjectTrust.status` lists `permissions` for every such file, not only for
-  the ids Orbit ships, because which ids exist depends on entries the status cannot see. A file under `mode/` or
+  that exists (its prompt included). Since trust-first no such file of an untrusted folder is read at all, so
+  `ProjectTrust.status` lists nothing for it. A file under `mode/` or
   `modes/` is not covered by this rule. Proof: `core/test/config/agent-definition.test.ts` ("an untrusted folder": "holds a
   definition file in `agent`/`agents`/ back whole when it names a shipped agent, whatever keys it carries", its trusted
   control, and "applies the same keys from `mode`/`modes`/, where an untrusted file only tunes" with "a trusted
   `mode`/`modes`/ file tunes build and keeps its rules, and stays primary"; "logs one line for held-back entry text to the configured logger" for the log line) and
-  `core/test/project-trust.test.ts` ("lists every file under `agent`/`agents`/ as held back, whatever it names", with its trusted control).
+  `core/test/project-trust.test.ts` ("lists nothing for an untrusted project, whatever it holds, and nothing once it is
+  trusted", with its trusted control).
 
 **How to test:**
 

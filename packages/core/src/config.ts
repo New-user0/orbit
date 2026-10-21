@@ -488,6 +488,17 @@ export const layer = (options?: Options) =>
         // The project's decision is taken even when it has no source yet, so that a grant reloads the config.
         yield* decide(location.project.canonical)
         const sources = yield* trustedSources(discovered)
+        // The files of a folder that is not trusted are not read, but they stay that folder's: naming one as the explicit
+        // file must not load it in the flag scope, where the folder's trust no longer applies (class 4).
+        const skipped = [
+          ...discovered.direct.filter((item) => !sources.direct.includes(item)),
+          ...discovered.local.filter((item) => !sources.local.includes(item)),
+          ...discovered.project
+            .filter((root) => !sources.project.includes(root))
+            .flatMap((root) =>
+              [...ConfigDiscovery.names, ...ConfigDiscovery.localNames].map((name) => path.join(root.path, name)),
+            ),
+        ]
         const globalEntries = sources.global
           ? yield* loadDirectory(sources.global, userScopes).pipe(Effect.orDie)
           : undefined
@@ -508,12 +519,16 @@ export const layer = (options?: Options) =>
         const explicit = explicitFile
           ? yield* Effect.gen(function* () {
               const explicitIdentity = yield* identity(explicitFile)
-              const claimed = yield* Effect.forEach(
-                [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
-                  entries ? [...entries.base, ...entries.local] : [],
-                ),
-                (entry) => (entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined)),
-              )
+              const claimed = [
+                ...(yield* Effect.forEach(
+                  [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
+                    entries ? [...entries.base, ...entries.local] : [],
+                  ),
+                  (entry) =>
+                    entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined),
+                )),
+                ...(yield* Effect.forEach(skipped, identity)),
+              ]
               if (claimed.includes(explicitIdentity)) return []
               return yield* loadFile(explicitFile, "flag").pipe(
                 Effect.map((config) => (config ? [config] : [])),

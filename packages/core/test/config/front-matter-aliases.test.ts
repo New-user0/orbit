@@ -189,7 +189,9 @@ describe("Fingerprint answers unreadable for a value too large to write out", ()
   )
 })
 
-describe("an untrusted project whose agent and skill files are aliased", () => {
+// trust-first: an untrusted folder's files are not read at all, so the files are read here once the folder is trusted,
+// for the fingerprint that the grant records.
+describe("a trusted project whose agent and skill files are aliased", () => {
   // The agent's level 7 stands for a hundred million values in 492 bytes: before the fix, the load wrote them out and grew
   // by about two gigabytes. The skill's level 6 stands for ten million.
   const agent = path.join(".orbit", "agents", "x.md")
@@ -209,7 +211,10 @@ describe("an untrusted project whose agent and skill files are aliased", () => {
   const load = (made: { readonly root: string; readonly repo: string }, logs: string[]) =>
     Effect.gen(function* () {
       const config = yield* Config.Service
-      yield* config.entries()
+      const trust = yield* WorkspaceTrust.Service
+      yield* trust.grant(made.repo, { persist: false, via: "test" })
+      const reload = config.reload
+      if (reload !== undefined) yield* reload()
       return (yield* config.fingerprints()).filter((item) => item.path.endsWith(".orbit")).map((item) => item.digests)
     }).pipe(
       Effect.provide(
