@@ -75,13 +75,14 @@ function changedOwn(status: TrustStatus) {
 }
 
 /**
- * Whether the folder holds something of its own back, which is what the question and the indicators are for: it is
- * untrusted, or it is trusted and some of its config changed since. Config in a folder above it follows that folder's
- * own decision, so a folder whose only held-back config sits above it has nothing that trusting it would turn on.
+ * Whether the folder needs an answer from the person, which is what the question and the indicators are for: it is not
+ * trusted, whatever it holds, because nothing a folder supplies loads and no work starts there until it is
+ * (trust-first), or it is trusted and some of its own config changed since. Config in a folder above it follows that
+ * folder's own decision, so a trusted folder whose only held-back config sits above it has nothing to ask.
  */
-export function holdsBack(status: TrustStatus | undefined) {
+export function asksTrust(status: TrustStatus | undefined) {
   if (status === undefined) return false
-  return status.trusted ? changedOwn(status).length > 0 : groupWithheld(status.withheld).own.length > 0
+  return status.trusted ? changedOwn(status).length > 0 : true
 }
 
 /**
@@ -89,8 +90,8 @@ export function holdsBack(status: TrustStatus | undefined) {
  * belongs to is the server's: the project's root, which is not always the folder that was opened.
  */
 export function view(status: TrustStatus, opened: string): TrustView {
-  const held = groupWithheld(status.withheld)
-  const own = status.trusted ? changedOwn(status) : held.own
+  // Nothing of a folder that is not trusted was read, so only a trusted folder's changes are listed.
+  const own = status.trusted ? changedOwn(status) : []
   return {
     directory: plain(status.directory),
     ...(path.relative(opened, status.directory) === "" ? {} : { opened: plain(opened) }),
@@ -110,19 +111,24 @@ export function aboveFolders(status: TrustStatus) {
   return [...new Set(groupWithheld(status.withheld).above.flatMap((item) => item.directory ?? []))].map(plain)
 }
 
-/** The question that a modal asks, for a folder that holds something back. */
+/** The question that a modal asks, for a folder that is not trusted or whose config changed since it was. */
 export function prompt(trust: TrustView) {
   const shown = trust.held.slice(0, listed)
   return {
     message: trust.changed === true ? `Trust the changes in ${trust.directory}?` : `Trust ${trust.directory}?`,
     detail: [
-      trust.changed === true
-        ? "This folder's config changed since you trusted it, and Orbit is leaving out what changed:"
-        : "Orbit is leaving out what could run code or reach the network:",
-      [
-        ...shown.map((item) => `${item.name}: ${item.kinds}`),
-        ...(trust.held.length > shown.length ? [`and ${trust.held.length - shown.length} more`] : []),
-      ].join("\n"),
+      ...(trust.changed === true
+        ? [
+            "This folder's config changed since you trusted it, and Orbit is leaving out what changed:",
+            [
+              ...shown.map((item) => `${item.name}: ${item.kinds}`),
+              ...(trust.held.length > shown.length ? [`and ${trust.held.length - shown.length} more`] : []),
+            ].join("\n"),
+          ]
+        : [
+            "Is this your own project, or one you trust, such as your own code, a well-known open source project or your team's work? If not, look through the folder first.",
+            "Orbit can read, change and run the files here, and nothing here loads until you trust it.",
+          ]),
       ...(trust.opened === undefined
         ? []
         : [

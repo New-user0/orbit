@@ -21,13 +21,14 @@ export function changedOwn(status: TrustStatus) {
 }
 
 /**
- * Whether the folder holds something of its own back, which is what the prompt and the indicator are for: it is
- * untrusted, or it is trusted and some of its config changed since. Config in a folder above it follows that folder's
- * own decision, so a folder whose only held-back config sits above it has nothing that trusting it would turn on.
+ * Whether the folder needs an answer from the person, which is what the question and the indicator are for: it is not
+ * trusted, whatever it holds, because nothing a folder supplies loads and no work starts there until it is
+ * (trust-first), or it is trusted and some of its own config changed since. Config in a folder above it follows that
+ * folder's own decision, so a trusted folder whose only held-back config sits above it has nothing to ask.
  */
-export function holdsBack(status: TrustStatus | undefined) {
+export function asksTrust(status: TrustStatus | undefined) {
   if (status === undefined) return false
-  return status.trusted ? changedOwn(status).length > 0 : groupWithheld(status.withheld).own.length > 0
+  return status.trusted ? changedOwn(status).length > 0 : true
 }
 
 /**

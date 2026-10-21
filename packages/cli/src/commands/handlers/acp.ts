@@ -8,7 +8,6 @@ import { ACP } from "../../acp/agent"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Standalone } from "../../services/standalone"
-import { warnUntrusted } from "../../util/trust"
 
 export default Runtime.handler(
   Commands.commands.acp,
@@ -16,10 +15,8 @@ export default Runtime.handler(
     process.env.ORBIT_CLIENT = "acp"
     const endpoint = yield* Standalone.start()
     const client = Orbit.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
-    // The editor picks the folders, one session at a time, so this cannot refuse anything: it only says on stderr what
-    // the folder the agent started in holds back, without delaying the connection. A server that cannot say is no
-    // reason to stop the protocol.
-    yield* warnUntrusted(client, process.cwd()).pipe(Effect.ignore, Effect.forkScoped)
+    // The editor picks the folder of each session, so the folder is checked when a session opens: session/new,
+    // session/load and session/resume refuse one that is not trusted (`ACPService`).
     const connection = yield* ACP.connect(client, ndJsonStream(Writable.toWeb(process.stdout), Bun.stdin.stream()))
     const failure = yield* Effect.raceFirst(
       Effect.promise(() => connection.closed).pipe(

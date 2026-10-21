@@ -133,13 +133,6 @@ export const trustedProject = Effect.fn("cli.trust.project")(function* (client: 
   return location?.project
 })
 
-/** For a command that cannot stop, such as `orb acp` whose stdout belongs to the protocol: says on stderr what is held back. */
-export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: OrbitClient, directory: string) {
-  const status = yield* call((signal) => client.location.trust.get({ location: { directory } }, { signal }))
-  if (status.withheld.length === 0) return
-  process.stderr.write(`orb acp: ${notice(status, directory)}${EOL}`)
-})
-
 /**
  * What a refusal says: the folder is not trusted, and what that holds up. That is the project config it finds, which
  * holds something back, and, when the command loads a file from the folder, what running that file does: the code

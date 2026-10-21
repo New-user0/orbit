@@ -50,6 +50,16 @@ export class ServiceFailureError extends Schema.TaggedError<ServiceFailureError>
   errorName: Schema.optional(Schema.String),
 }) {}
 
+/**
+ * The folder of the session is not trusted, so no session opens there (trust-first, class 12). The editor gets the
+ * folder and whether a grant for it can be stored, typed so it can tell the refusal from a failure (class 13).
+ */
+export class UntrustedFolderError extends Schema.TaggedError<UntrustedFolderError>()("ACPUntrustedFolderError", {
+  directory: Schema.String,
+  persistent: Schema.Boolean,
+  message: Schema.String,
+}) {}
+
 export class ServerUnavailableError extends Schema.TaggedError<ServerUnavailableError>()(
   "ACPServerUnavailableError",
   {},
@@ -68,6 +78,7 @@ const Errors = Schema.Union([
   InvalidRequestError,
   ServiceFailureError,
   ServerUnavailableError,
+  UntrustedFolderError,
 ])
 
 export type Error = typeof Errors.Type
@@ -115,6 +126,11 @@ export function toRequestError(error: Error): RequestError {
       )
     case "ACPServerUnavailableError":
       return RequestError.internalError({ errorName: "ServerUnavailable" }, "Orbit server is unavailable")
+    case "ACPUntrustedFolderError":
+      return RequestError.invalidRequest(
+        { type: "untrusted_folder", directory: error.directory, persistent: error.persistent },
+        error.message,
+      )
   }
   const exhaustive: never = error
   return exhaustive

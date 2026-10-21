@@ -7,6 +7,7 @@ import {
 } from "@orbit/client/promise"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Effect, Option, Ref, Result, Stream } from "effect"
+import { plain } from "@orbit/util/plain"
 import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
 import type {
   AuthenticateRequest,
@@ -128,6 +129,21 @@ export function make(input: {
     return session
   })
 
+  // No session opens in a folder that is not trusted (trust-first, class 12). The editor picks the folder, so the
+  // refusal goes back to it as a typed error that names the folder (class 13), through `plain` (class 9). A server
+  // that cannot say fails the request as well (class 7).
+  const requireTrusted = Effect.fnUntraced(function* (directory: string) {
+    const status = yield* ACPPromise.promise((signal) =>
+      input.client.location.trust.get({ location: { directory } }, { signal }),
+    )
+    if (status.trusted) return
+    return yield* new ACPError.UntrustedFolderError({
+      directory: status.directory,
+      persistent: status.persistent,
+      message: `${plain(status.directory)} is not trusted. Trust it with \`orb trust\`, or start \`orb\` there and answer the question.`,
+    })
+  })
+
   const replay = (attached: Attached) =>
     Stream.paginate(undefined, (cursor: string | undefined) =>
       ACPPromise.promise(() =>
@@ -186,6 +202,7 @@ export function make(input: {
     }),
     newSession: Effect.fnUntraced(function* (params) {
       const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
+      yield* requireTrusted(params.cwd)
       // Load before creating so a catalog failure leaves no session behind. Agent and model stay unset
       // so the server resolves its defaults after plugins activate.
       yield* input.catalog.get(params.cwd)
@@ -201,6 +218,7 @@ export function make(input: {
     loadSession: Effect.fnUntraced(function* (params) {
       const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
       const session = yield* getSession(params.sessionId, params.cwd)
+      yield* requireTrusted(session.location.directory)
       yield* ACPDirectories.activate(input.client, session, directories)
       const attached = yield* input.sessions.attach(session, session.location.directory, params.mcpServers)
       return yield* replay(attached).pipe(
@@ -246,6 +264,7 @@ export function make(input: {
     resumeSession: Effect.fnUntraced(function* (params) {
       const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
       const session = yield* getSession(params.sessionId, params.cwd)
+      yield* requireTrusted(session.location.directory)
       yield* ACPDirectories.activate(input.client, session, directories)
       const attached = yield* input.sessions.attach(session, session.location.directory, params.mcpServers ?? [])
       return { configOptions: yield* currentOptions(attached) }

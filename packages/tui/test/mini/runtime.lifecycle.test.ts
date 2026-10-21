@@ -13,6 +13,7 @@ function host(platform: NodeJS.Platform): MiniHost {
     terminal: { stdin: process.stdin },
     platform,
     stdout: { write: () => {} },
+    stderr: { write: () => {} },
     files: { readText: async () => "" },
     editor: { open: async () => undefined },
     paths: { home: "/home" },

@@ -1,7 +1,7 @@
 import type { TrustStatus, TrustWithheld } from "@orbit/client"
 import { expect, test } from "bun:test"
 import { shellArgument } from "@orbit/util/shell-argument"
-import { groupWithheld, holdsBack, trustCommands } from "../../src/util/trust"
+import { asksTrust, groupWithheld, trustCommands } from "../../src/util/trust"
 
 const own: TrustWithheld = { path: "/projects/app/orbit.json", kinds: ["hooks"] }
 // A file in a folder above the project names that folder, because each folder is trusted on its own.
@@ -16,9 +16,9 @@ test.each([
     { ...untrusted, withheld: [above, own] },
     true,
   ],
-  // Trusting the folder would turn nothing on, as what is held back is decided by the folder that holds it.
-  ["an untrusted folder whose only held-back config is above it", { ...untrusted, withheld: [above] }, false],
-  ["an untrusted folder that holds nothing back", { ...untrusted, withheld: [] }, false],
+  // trust-first: a folder that is not trusted is asked about whatever it holds, because nothing of it loads until then.
+  ["an untrusted folder whose only held-back config is above it", { ...untrusted, withheld: [above] }, true],
+  ["an untrusted folder that holds nothing back", { ...untrusted, withheld: [] }, true],
   ["a trusted folder", { ...untrusted, trusted: true, source: "saved" as const, withheld: [] }, false],
   ["a trusted folder with config above it held back", { ...untrusted, trusted: true, withheld: [above] }, false],
   [
@@ -37,8 +37,8 @@ test.each([
     false,
   ],
   ["a folder whose status is not known", undefined, false],
-])("%s: whether it holds something back", (_, status, expected) => {
-  expect(holdsBack(status)).toBe(expected)
+])("%s: whether it needs an answer", (_, status, expected) => {
+  expect(asksTrust(status)).toBe(expected)
 })
 
 test("names the location a folder above the project is trusted through, and no command for one that cannot be trusted", () => {

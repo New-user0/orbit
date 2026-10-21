@@ -7,7 +7,7 @@ import { Orbit, type SessionInfo } from "@orbit/client"
 import { Global } from "@orbit/util/global"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { LogProvider, useLog, type LogSink } from "./context/log"
-import { ExitProvider, useExit } from "./context/exit"
+import { exitStatus, ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import { Selection } from "./util/selection"
 import {
@@ -477,11 +477,13 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       return { epilogue: exit.epilogue, reason: exit.reason }
     }),
   )
+  const status = exitStatus(result.reason)
   yield* Effect.sync(() => {
-    if (result.reason !== undefined)
+    if (result.reason !== undefined && status === undefined)
       process.stderr.write((cliErrorMessage(result.reason) ?? errorFormat(result.reason)) + "\n")
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
+  return status
 })
 
 function App() {

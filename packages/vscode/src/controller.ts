@@ -8,7 +8,7 @@ import {
 import { plain } from "@orbit/flow/plain"
 import { PermissionView } from "@orbit/schema/permission-view"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
-import { aboveFolders, holdsBack, readStatus, trusted, view, type TrustGrant } from "./trust.js"
+import { aboveFolders, asksTrust, readStatus, trusted, view, type TrustGrant } from "./trust.js"
 import { legacyToolName } from "./tool-name.js"
 
 export type Update =
@@ -196,6 +196,15 @@ export class Controller {
             JSON.stringify(text),
         tone: "error",
       })
+    // Nothing starts in a folder that is not trusted: no session, and no request to the model (trust-first, class 12).
+    // The server would refuse it too, with the same words.
+    if (this.status?.trusted !== true)
+      return this.update({
+        type: "note",
+        id: `trust:${crypto.randomUUID()}`,
+        text: `${plain(this.status?.directory ?? this.directory)} is not trusted, so the message was not sent: nothing a folder holds is read, and no work starts there, until it is trusted. Trust it from the banner above or with \`orb trust\`, then send it again.`,
+        tone: "error",
+      })
     const sessionID = this.session ?? (await this.create())
     // The editor context goes first, with no description so no client draws it, and without resuming so the prompt
     // below starts the work. One that cannot be admitted, or not soon enough, costs only itself.
@@ -269,15 +278,15 @@ export class Controller {
     return this.answered && !this.unchecked
   }
 
-  // Asks about trust before the first work in a folder that holds something back and that the person has not said "not
-  // now" to. The question is asked once however many prompts arrive meanwhile, and a grant that fails is reported in the
-  // chat: the prompt is not lost, it goes on without what the folder holds back, as it does after "not now".
+  // Asks about trust before the first work in a folder that is not trusted, or whose config changed since it was, and
+  // that the person has not said "not now" to. The question is asked once however many prompts arrive meanwhile, and a
+  // grant that fails is reported in the chat. A folder that is still not trusted afterwards gets no work (`send`).
   private async gate() {
     const grant = await this.decision(false).catch((error: unknown) => {
       this.update({
         type: "note",
         id: `trust:${crypto.randomUUID()}`,
-        text: `Could not trust the folder: ${message(error)} This chat goes on without what the folder holds back.`,
+        text: `Could not trust the folder: ${message(error)}`,
         tone: "error",
       })
       return undefined
@@ -294,7 +303,7 @@ export class Controller {
     // Asked of the server now, not of the last answer: someone may have trusted the folder, or ended its trust, with
     // `orb trust` since.
     const status = await this.read()
-    if (!status || !holdsBack(status) || (!forced && this.dismissed.has(status.directory))) return undefined
+    if (!status || !asksTrust(status) || (!forced && this.dismissed.has(status.directory))) return undefined
     if ((await this.ask(view(status, this.directory))) === "later") {
       this.dismissed.add(status.directory)
       return undefined
@@ -372,7 +381,7 @@ export class Controller {
   private publish() {
     this.emit({
       type: "trust",
-      trust: this.status && holdsBack(this.status) ? view(this.status, this.directory) : undefined,
+      trust: this.status && asksTrust(this.status) ? view(this.status, this.directory) : undefined,
       unchecked: this.unchecked,
     })
   }

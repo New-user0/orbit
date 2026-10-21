@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { TrustKind, TrustStatus } from "@orbit/client"
 import path from "node:path"
-import { aboveFolders, holdsBack, prompt, readStatus, trusted, view } from "../src/trust"
+import { aboveFolders, asksTrust, prompt, readStatus, trusted, view } from "../src/trust"
 
 // The client types a kind as the closed set the protocol knows, and the server's answer is not checked against it, so a
 // newer server, or a hostile one, can send another.
@@ -56,9 +56,9 @@ test("asks about the changes of a trusted folder, listing only what changed", ()
     changed: [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }],
   } satisfies TrustStatus
 
-  expect(holdsBack(changed)).toBe(true)
+  expect(asksTrust(changed)).toBe(true)
   // A trusted folder whose only held-back config is above it has nothing that trusting it would turn on.
-  expect(holdsBack({ ...changed, changed: [], withheld: [changed.withheld[1]] })).toBe(false)
+  expect(asksTrust({ ...changed, changed: [], withheld: [changed.withheld[1]] })).toBe(false)
   const shown = view(changed, repo)
   expect(shown.changed).toBe(true)
   expect(shown.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
@@ -82,12 +82,12 @@ test("names the folder VS Code opened when it is not the project's folder", () =
 test("asks only for a folder that is untrusted and holds something of its own back", () => {
   const above = { ...untrusted, withheld: [untrusted.withheld[2]] }
 
-  expect(holdsBack(untrusted)).toBe(true)
-  expect(holdsBack({ ...untrusted, trusted: true, withheld: [] })).toBe(false)
-  expect(holdsBack({ ...untrusted, withheld: [] })).toBe(false)
+  expect(asksTrust(untrusted)).toBe(true)
+  expect(asksTrust({ ...untrusted, trusted: true, withheld: [] })).toBe(false)
+  expect(asksTrust({ ...untrusted, withheld: [] })).toBe(false)
   // What sits above the project follows its own folder's decision, so trusting the project would turn nothing on.
-  expect(holdsBack(above)).toBe(false)
-  expect(holdsBack(undefined)).toBe(false)
+  expect(asksTrust(above)).toBe(false)
+  expect(asksTrust(undefined)).toBe(false)
 })
 
 test("writes out the control and format characters that a repository chose, wherever they show", () => {

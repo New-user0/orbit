@@ -5,7 +5,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal } from "solid-js"
 import { DialogTrust } from "../../../component/dialog-trust"
 import { TrustIndicator } from "../../../component/trust-indicator"
-import { holdsBack } from "../../../util/trust"
+import { asksTrust } from "../../../util/trust"
 import { StoryFooter } from "./footer"
 import type { Story } from "./index"
 
@@ -82,7 +82,7 @@ function TrustIndicatorStory(props: { context: Plugin.Context }) {
   // What activating the indicator does in the app, with the answers kept here. There is nothing to activate while the
   // indicator is not shown.
   const open = () => {
-    if (!holdsBack(status())) {
+    if (!asksTrust(status())) {
       setMessage("the indicator is not shown, so there is nothing to activate")
       return
     }

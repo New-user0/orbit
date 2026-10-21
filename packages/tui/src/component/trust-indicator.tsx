@@ -2,7 +2,7 @@ import type { TrustStatus } from "@orbit/client"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, Show } from "solid-js"
 import { useTheme } from "../context/theme"
-import { holdsBack } from "../util/trust"
+import { asksTrust } from "../util/trust"
 
 /** Shown while the folder in view holds something back, because it is untrusted or its config changed since; opens the question of trusting it. */
 export function TrustIndicator(props: { status: TrustStatus | undefined; onOpen: () => void }) {
@@ -11,7 +11,7 @@ export function TrustIndicator(props: { status: TrustStatus | undefined; onOpen:
   const [hovered, setHovered] = createSignal(false)
 
   return (
-    <Show when={holdsBack(props.status)}>
+    <Show when={asksTrust(props.status)}>
       <box
         flexShrink={0}
         flexDirection="row"

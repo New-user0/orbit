@@ -28,15 +28,20 @@ const labels: Record<TrustKind, string> = {
 }
 
 /**
- * Asks whether to trust the folder whose project config is held back. `onTrust` receives whether the grant can be kept
- * on disk, which it cannot for a home directory or a filesystem root: those are trusted only until Orbit restarts, and
- * the dialog offers nothing else for them. Config in a folder above it is listed after the folder's own, with the
- * command that trusts the folder that holds it, because trusting this one does not turn it on.
+ * Asks whether to trust a folder. A folder that is not trusted has had nothing read from it, so the question lists
+ * nothing: it names the folder, asks whether it is the person's own or one they trust, and says what trusting it lets
+ * Orbit do, as the reference's question does in its own words. A trusted folder whose executable config changed since
+ * is asked about again, with what changed listed, and config in a folder above it after the folder's own, with the
+ * command that trusts the folder that holds it. `onTrust` receives whether the grant can be kept on disk, which it
+ * cannot for a home directory or a filesystem root: those are trusted only until Orbit restarts, and the dialog offers
+ * nothing else for them. `leave` names the other answer: Exit for the folder the terminal UI started in, Not now for any
+ * other, and `onNotNow` takes either.
  */
 export function DialogTrust(props: {
   status: TrustStatus
   /** The folder in view, which the commands that trust a folder above the project go through. */
   location?: string
+  leave?: "exit" | "later"
   onTrust: (persist: boolean) => void | Promise<void>
   onNotNow: () => void
 }) {
@@ -50,12 +55,14 @@ export function DialogTrust(props: {
   const intro = createMemo(() =>
     changed()
       ? "This folder's config changed since you trusted it, and Orbit is leaving out what changed:"
-      : "Orbit is leaving out what could run code or reach the network:",
+      : "Is this your own project, or one you trust, such as your own code, a well-known open source project or your team's work? If not, look through the folder first.\nOrbit can read, change and run the files here, and nothing here loads until you trust it.",
   )
-  const held = createMemo(() => ({
-    ...groupWithheld(props.status.withheld),
-    ...(changed() ? { own: changedOwn(props.status) } : {}),
-  }))
+  // Nothing of a folder that is not trusted was read, so there is nothing to list for it.
+  const held = createMemo(() =>
+    changed()
+      ? { ...groupWithheld(props.status.withheld), own: changedOwn(props.status) }
+      : { own: [], above: [] },
+  )
   const outro = createMemo(() =>
     [
       changed()
@@ -104,8 +111,10 @@ export function DialogTrust(props: {
       title={changed() ? "Trust the changes?" : "Trust this folder?"}
       renderFilter={false}
       locked={pending()}
-      // The dialog can open while a person is typing, so a stray Enter must never be what trusts the folder.
-      focusTarget="later"
+      // A question about another folder can open while a person is typing, so a stray Enter there must never be what
+      // trusts it. The question about the folder the terminal UI started in comes before anything can be typed, and
+      // starts on Trust, as the reference's does.
+      focusTarget={props.leave === "exit" && !changed() ? "trust" : "later"}
       header={
         <box flexDirection="column" gap={1}>
           <text wrapMode="none" truncate>
@@ -146,7 +155,7 @@ export function DialogTrust(props: {
               : "Trust until Orbit restarts",
           value: "trust",
         },
-        { title: "Not now", value: "later" },
+        { title: props.leave === "exit" && !changed() ? "Exit" : "Not now", value: "later" },
       ]}
       onSelect={(option) => (option.value === "trust" ? void trust() : props.onNotNow())}
     />
