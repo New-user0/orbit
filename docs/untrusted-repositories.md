@@ -885,9 +885,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `orb mini` refuses before it takes the terminal (`trustRefusal` in `packages/tui/src/mini/trust.shared.ts`). Proof:
   `packages/cli/test/trust.test.ts`, `packages/cli/test/trust-first.test.ts`,
   `packages/cli/test/acp/trust-first.subprocess.test.ts`, `packages/tui/test/mini/trust-first.shared.test.ts`.
-- Every server route that starts work or runs something in a folder (`session.create`, `prompt`, `command`, `skill`,
-  `synthetic`, `shell`, `compact`, `fork`, the destination of `move`, `pty.create`, `worktree.create` and `remove`,
-  `mcp.connect`, `fs.write`): `requireTrusted` in `packages/server/src/handlers/trust-error.ts`, which answers
+- Every server route that starts work, reads the folder's instruction files or runs something in a folder
+  (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
+  the destination of `move`, `generate`, `update` when it clears the title for the model to write one,
+  `instructions.preview`, `shell.create`, `pty.create`, `persistentPty.create` (the session's folder), `worktree.create`,
+  `remove` and `refresh`, `mcp.connect`, `fs.write`): `requireTrusted` in
+  `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
   `packages/sdk/test/trust-first.test.ts`.
