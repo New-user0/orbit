@@ -44,12 +44,13 @@ async function open(input: { title: string; width: number; height?: number; sess
 }
 
 // Runs a command from the palette. Its search box starts empty, unlike the composer, whose draft other tests in the
-// same process can leave behind.
+// same process can leave behind. The palette opens and filters over several frames, which a loaded runner draws slowly,
+// so its waits allow more passes than the default 20.
 async function palette(setup: Awaited<ReturnType<typeof open>>, title: string) {
   setup.mockInput.pressKey("p", { ctrl: true })
-  await setup.waitForFrame((frame) => frame.includes("Commands"))
+  await setup.waitForFrame((frame) => frame.includes("Commands"), { maxPasses: 120 })
   for (const key of title) setup.mockInput.pressKey(key)
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await setup.waitForFrame((frame) => frame.includes(title), { maxPasses: 120 })
   setup.mockInput.pressEnter()
 }
 
