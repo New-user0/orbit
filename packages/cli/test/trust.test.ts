@@ -258,12 +258,55 @@ async function orb(directory: string, given: string[], env: Record<string, strin
     stdout: "pipe",
     stderr: "pipe",
   })
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
+  const stdout = collect(child.stdout)
+  const stderr = collect(child.stderr)
+  // A door that never ends would hold its test until the runner's limit and say nothing about why, so each `orb` gets
+  // four minutes. One still running then is killed, and the failure names the command, what it printed, the processes
+  // still running and the end of the newest logs, so that a hang on a CI runner can be read from the CI log.
+  const late = Promise.withResolvers<"late">()
+  const timer = setTimeout(() => late.resolve("late"), 240_000)
+  const code = await Promise.race([
+    Promise.all([child.exited, stdout.done, stderr.done]).then(([code]) => code),
+    late.promise,
   ])
-  return { code, stdout, stderr }
+  clearTimeout(timer)
+  if (code !== "late") return { code, stdout: stdout.text(), stderr: stderr.text() }
+  child.kill("SIGKILL")
+  throw new Error(
+    [
+      `orb ${args.join(" ")} in ${directory} did not end within four minutes (exited: ${child.exitCode ?? "no"})`,
+      `stdout:\n${stdout.text()}`,
+      `stderr:\n${stderr.text()}`,
+      `processes:\n${process.platform === "win32" ? "" : Bun.spawnSync(["ps", "-eo", "pid,ppid,etimes,args"]).stdout.toString()}`,
+      `logs:\n${await logTails()}`,
+    ].join("\n"),
+  )
+}
+
+// What a child prints, as it prints it, so that what a process that never ends printed so far can still be shown.
+function collect(stream: ReadableStream<Uint8Array>) {
+  const decoder = new TextDecoder()
+  const chunks: string[] = []
+  const done = (async () => {
+    for await (const chunk of stream) chunks.push(decoder.decode(chunk, { stream: true }))
+  })()
+  return { done, text: () => chunks.join("") }
+}
+
+// The last lines of the two newest log files of the processes these tests start.
+async function logTails() {
+  const folder = path.join(root, "data", "orbit", "log")
+  const names = await fs.readdir(folder).catch(() => [] as string[])
+  const files = await Promise.all(
+    names.map(async (name) => ({ name, modified: (await fs.stat(path.join(folder, name))).mtimeMs })),
+  )
+  const newest = files.toSorted((a, b) => b.modified - a.modified).slice(0, 2)
+  const tails = await Promise.all(
+    newest.map(async (file) =>
+      [`== ${file.name}`, ...(await Bun.file(path.join(folder, file.name)).text()).split("\n").slice(-80)].join("\n"),
+    ),
+  )
+  return tails.join("\n")
 }
 
 const succeeded = (result: { code: number; stderr: string }) =>
