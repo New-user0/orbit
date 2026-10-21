@@ -23,7 +23,11 @@ await Bun.write(
 await fs.chmod(executable, 0o755)
 const repository = path.join(root, "repo")
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(async () => {
+  // The readers below ask the background service whether the folder is trusted, which starts one under this HOME.
+  await orb(executable, root, ["service", "stop"]).catch(() => undefined)
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+})
 
 test("lists runs and their nodes, and approves a waiting gate", async () => {
   await fs.mkdir(repository, { recursive: true })
@@ -45,6 +49,10 @@ test("lists runs and their nodes, and approves a waiting gate", async () => {
   ])
     await Bun.spawn(["git", ...args], { cwd: repository, stdout: "ignore", stderr: "ignore" }).exited
   await orb(executable, repository, ["flow", "run", "--standalone", "gate.ts"], 120_000).catch(() => undefined)
+  // The Runs view reads the run store through `orb flow`, whose readers open it only in a folder the background service
+  // trusts (trust-first), and that service trusts no folder on its own. A person who ran a workflow here has trusted the
+  // folder; `orb trust` does that here.
+  await orb(executable, repository, ["trust"])
 
   const listed = await runs(executable, repository)
 
