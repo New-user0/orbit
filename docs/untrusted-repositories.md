@@ -900,9 +900,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - A plugin's session doors, which run in the server process without passing a route (`packages/core/src/plugin/host.ts`):
   `create` (the folder it names, or the parent's), `move` (the destination), `prompt`, `command`, `synthetic`,
   `compact` and `generate` (the session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not
-  trusted, decided by that Location's `ProjectTrust`. Proof: `packages/server/test/trust-first.test.ts` 'a plugin of a
-  trusted folder starts no session work in a folder that is not trusted' (CLONE-OTHER-AGENTS does not reach the model;
-  the control drives a session in the plugin's own folder).
+  trusted, decided by `ProjectTrust` of the session's own services (its Instance, or its Location in a host without
+  one) or of the Location named. Proof: `packages/server/test/trust-first.test.ts` 'a plugin of a trusted folder starts
+  no session work in a folder that is not trusted' (CLONE-OTHER-AGENTS does not reach the model; the control drives a
+  session in the plugin's own folder) and `packages/core/test/plugin/session-trust.test.ts` (a host without an
+  Instance; the grant control).
 - The run store, `.orbit/runs.db`, and the worktree paths built from it: `Store.run`, `Store.runs`, `Git.clean` and
   `Git.worktree` accept one plain name only. Proof: `packages/flow/test/store.test.ts`,
   `packages/flow/test/git.test.ts`, `packages/cli/test/flow.test.ts`.

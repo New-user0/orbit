@@ -6,7 +6,7 @@ import { EventManifest } from "@orbit/schema/event-manifest"
 import type { Event } from "@orbit/schema/event"
 import { ServerConfig } from "@orbit/schema/mcp"
 import { App } from "../app.js"
-import { Effect, Schema, Stream } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
 import { Agent } from "../agent.js"
 import { AISDK } from "../aisdk.js"
 import { Command } from "../command.js"
@@ -34,6 +34,7 @@ import { WorkspaceTrust } from "../workspace-trust.js"
 import { Worktree } from "../worktree.js"
 import { WorktreeStrategies } from "../worktree/strategies.js"
 import { Generate } from "../generate.js"
+import { Instance } from "../instance/service.js"
 import { Permission } from "../permission.js"
 import { PluginHooks } from "./hooks.js"
 import type { Interface } from "../plugin.js"
@@ -96,16 +97,27 @@ export const make = Effect.fn("PluginHost.make")(function* (
     effect.pipe(Effect.map((data) => ({ location: locationInfo(), data })))
   // A plugin drives sessions in this process without passing a server route, so its doors ask what the routes ask:
   // whether the Location a session works in is trusted, which a plugin of a trusted folder can name in any other folder
-  // (trust-first, class 3, class 12).
-  const requireTrusted = (ref: Location.Ref) =>
-    Effect.gen(function* () {
-      const trust = yield* ProjectTrust.Service
-      if (yield* trust.trusted()) return
-      const state = yield* trust.status()
-      return yield* new WorkspaceTrust.UntrustedError({ directory: state.directory, persistent: state.persistent })
-    }).pipe(Effect.provide(locations.get(ref)))
+  // (trust-first, class 3, class 12). A session that exists is asked through the services its work runs with, its
+  // Instance where this host has one (a host built for a test may not); a Location no session works in yet through
+  // its own services.
+  const requireTrustedHere = Effect.gen(function* () {
+    const trust = yield* ProjectTrust.Service
+    if (yield* trust.trusted()) return
+    const state = yield* trust.status()
+    return yield* new WorkspaceTrust.UntrustedError({ directory: state.directory, persistent: state.persistent })
+  })
+  const requireTrusted = (ref: Location.Ref) => requireTrustedHere.pipe(Effect.provide(locations.get(ref)))
+  const instances = yield* Effect.serviceOption(Instance.Service)
   const requireSessionTrusted = (sessionID: Session.ID) =>
-    sessions.get(sessionID).pipe(Effect.flatMap((info) => requireTrusted(info.location)))
+    sessions
+      .get(sessionID)
+      .pipe(
+        Effect.flatMap((info) =>
+          Option.isSome(instances)
+            ? requireTrustedHere.pipe(instances.value.provide(info))
+            : requireTrusted(info.location),
+        ),
+      )
 
   const decodeWorktree = Schema.decodeUnknownEffect(Worktree.Info)
   const decodeWorktrees = Schema.decodeUnknownEffect(Schema.Array(Worktree.ListEntry))
