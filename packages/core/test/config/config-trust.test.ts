@@ -1124,7 +1124,8 @@ describe("Config explicit file", () => {
           expect(named(entries, path.join(folders.repo, "orbit.json"))).toMatchObject({ scope: "project" })
           expect(JSON.stringify(entries)).not.toContain("hidden")
         }).pipe(
-          Effect.provide(loader(folders, { file: path.join(locked, "orbit.json") })),
+          // The project is trusted, so its own document is read (trust-first reads nothing of an untrusted one).
+          Effect.provide(loader(folders, { file: path.join(locked, "orbit.json"), implicit: true })),
           Effect.ensuring(Effect.promise(() => fs.chmod(locked, 0o755))),
         )
       }),
