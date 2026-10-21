@@ -6,6 +6,7 @@ import { onMount } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider } from "../../../src/context/data"
+import { ExitProvider } from "../../../src/context/exit"
 import { Keymap } from "../../../src/context/keymap"
 import { LocationProvider, useLocation } from "../../../src/context/location"
 import { RouteProvider } from "../../../src/context/route"
@@ -19,19 +20,31 @@ import { createApi, createEventStream, createFetch, directory, json } from "../.
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
-const project: TrustStatus = {
+// trust-first: nothing of an untrusted folder is read, so its question lists nothing, and the folder the terminal UI
+// started in is answered with Trust or Exit (`trust-first.test.ts`). The question that lists what a folder holds, and
+// offers Not now, is the one about a trusted folder whose config changed since the grant, so the rows below that pin
+// the dialog's lists and its Not now use such a folder.
+const untrusted: TrustStatus = {
   directory: "/tmp/orbit",
   trusted: false,
   persistent: true,
   changed: [],
-  withheld: [
-    { path: "/tmp/orbit/.orbit", kinds: ["plugins", "commands"] },
-    { path: "/tmp/orbit/orbit.json", kinds: ["hooks", "mcp"] },
-  ],
+  withheld: [],
 }
 
-// The home directory, which is never trusted for good.
-const home: TrustStatus = { ...project, directory: "/tmp/orbit/home", persistent: false }
+// Changed since it was trusted: its own config directory and settings file.
+const own: TrustWithheld[] = [
+  { path: "/tmp/orbit/.orbit", kinds: ["plugins", "commands"] },
+  { path: "/tmp/orbit/orbit.json", kinds: ["hooks", "mcp"] },
+]
+const project: TrustStatus = {
+  directory: "/tmp/orbit",
+  trusted: true,
+  persistent: true,
+  source: "saved",
+  withheld: own,
+  changed: own.map((item) => ({ path: item.path, kinds: item.kinds })),
+}
 
 // A project with config of its own and in the folder above it. Discovery goes from the outermost folder in, so what sits
 // above can be reported ahead of the project's own, and each folder is trusted on its own.
@@ -40,46 +53,47 @@ const layered: TrustStatus = {
   ...project,
   directory: "/tmp/orbit/app",
   withheld: [above, { path: "/tmp/orbit/app/orbit.json", kinds: ["mcp"] }],
+  changed: [{ path: "/tmp/orbit/app/orbit.json", kinds: ["mcp"] }],
 }
 
 // A folder a person can move to, such as the one a session works in: a clone of its own, with a root of its own.
 const away: TrustStatus = {
   directory: "/elsewhere/other-clone",
-  trusted: false,
+  trusted: true,
   persistent: true,
-  changed: [],
+  source: "saved",
   withheld: [{ path: "/elsewhere/other-clone/orbit.json", kinds: ["providers"] }],
+  changed: [{ path: "/elsewhere/other-clone/orbit.json", kinds: ["providers"] }],
 }
 
-const title = "Trust this folder?"
-// The choice, as opposed to the question that carries the same words.
-const choice = /Trust this folder(?!\?)/
+const title = "Trust the changes?"
+// The choice, as opposed to the question.
+const choice = /Trust changes/
 // Whether the question is on screen and asks about the folder, which is what its first line names.
-const asksAbout = (frame: string, folder: string) => frame.includes(title) && frame.includes(`⊙ Untrusted  ${folder}`)
+const asksAbout = (frame: string, folder: string) => frame.includes(title) && frame.includes(`⊙ Changed  ${folder}`)
 
-test("a folder that can be remembered offers trust and not now, and trusting it sends persist", async () => {
-  const fixture = await renderTrust(project)
+test("the folder the terminal UI started in offers trust or exit, lists nothing, and trusting it sends persist", async () => {
+  const fixture = await renderTrust(untrusted)
 
   try {
-    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust this folder?"))
     const frame = fixture.app.captureCharFrame()
     expect(frame).toContain("⊙ Untrusted")
-    expect(frame).toContain("plugins, shell snippets")
-    expect(frame).toContain("orbit.json")
-    expect(frame).toContain("hooks, MCP servers")
-    expect(frame).toMatch(choice)
-    expect(frame).toContain("Not now")
+    expect(frame).not.toContain("orbit.json")
+    expect(frame).toMatch(/Trust this folder(?!\?)/)
+    expect(frame).toContain("Exit")
+    expect(frame).not.toContain("Not now")
     // That the choice is kept, and what takes it back.
     expect(frame).toContain("It stays trusted until")
     expect(frame).toMatch(/orb\s+trust\s+--\s*revoke/)
 
-    fixture.app.mockInput.pressArrow("up")
     fixture.app.mockInput.pressEnter()
-    await fixture.app.waitForFrame((frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes("Trust this folder?"))
 
     // For the folder the question was about, which is the one in view.
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
     expect(fixture.status().trusted).toBe(true)
+    expect(fixture.exits).toEqual([])
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -182,6 +196,7 @@ test("a file that sets environment variables is listed with their label", async 
   const fixture = await renderTrust({
     ...project,
     withheld: [{ path: "/tmp/orbit/orbit.json", kinds: ["env"] }],
+    changed: [{ path: "/tmp/orbit/orbit.json", kinds: ["env"] }],
   })
 
   try {
@@ -265,7 +280,7 @@ test("trusting the folder says what stays off above it, and that its own folder 
     expect(fixture.toast().currentToast).toMatchObject({
       variant: "success",
       message:
-        "Trusted /tmp/orbit/app. Config above it stays off until its own folder is trusted: `orb trust /tmp/orbit --for /tmp/orbit/packages/tui`",
+        "Trusted the changes in /tmp/orbit/app. Config above it stays off until its own folder is trusted: `orb trust /tmp/orbit --for /tmp/orbit/packages/tui`",
     })
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
   } finally {
@@ -282,7 +297,7 @@ test("trusting a folder with nothing above it says only that it is trusted", asy
     fixture.app.mockInput.pressEnter()
     await until(() => fixture.toast().currentToast !== null)
 
-    expect(fixture.toast().currentToast).toMatchObject({ variant: "success", message: "Trusted /tmp/orbit" })
+    expect(fixture.toast().currentToast).toMatchObject({ variant: "success", message: "Trusted the changes in /tmp/orbit" })
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -303,21 +318,21 @@ test("enter on its own is not now, so a keystroke typed ahead of the dialog neve
 })
 
 test("a home directory offers only trust until restart, which never sends persist", async () => {
-  const fixture = await renderTrust(home)
+  // The home directory, which is never trusted for good.
+  const fixture = await renderTrust({ ...untrusted, directory: "/tmp/orbit/home", persistent: false })
 
   try {
-    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust this folder?"))
     const frame = fixture.app.captureCharFrame()
     expect(frame).toContain("Trust until Orbit restarts")
-    expect(frame).not.toMatch(choice)
-    expect(frame).toContain("Not now")
+    expect(frame).not.toMatch(/Trust this folder(?!\?)/)
+    expect(frame).toContain("Exit")
     // What the choice costs: how long it lasts, on the shared service, and what ends it early.
     expect(frame).toContain("until the service restarts")
     expect(frame).toMatch(/orb\s+trust\s+--\s*revoke/)
 
-    fixture.app.mockInput.pressArrow("up")
     fixture.app.mockInput.pressEnter()
-    await fixture.app.waitForFrame((frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes("Trust this folder?"))
 
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: false }])
   } finally {
@@ -368,7 +383,7 @@ test("a grant the server refuses is reported and leaves the question open", asyn
     expect(fixture.toast().currentToast).toMatchObject({ variant: "error", message: expect.stringContaining("503") })
     expect(fixture.app.captureCharFrame()).toContain(title)
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
-    expect(fixture.status().trusted).toBe(false)
+    expect(fixture.status().changed).not.toEqual([])
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -390,13 +405,13 @@ test("the question can be asked again after not now", async () => {
   }
 })
 
-test("a folder that holds nothing of its own back, or is trusted, is not asked about", async () => {
+test("a trusted folder whose own config did not change is not asked about", async () => {
   for (const status of [
     { ...project, withheld: [] },
     // Trusting this folder would turn nothing on, as the one file that is held back is decided by the folder above.
     { ...layered, withheld: [above] },
-    { ...project, trusted: true, source: "saved" as const, withheld: [] },
-    { ...layered, trusted: true, source: "saved" as const, withheld: [above] },
+    { ...project, withheld: [], changed: [] },
+    { ...layered, withheld: [above], changed: [] },
   ]) {
     const fixture = await renderTrust(status)
 
@@ -471,7 +486,7 @@ test("the question closes when another folder comes into view, so no choice is m
     await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
     expect(fixture.updates).toEqual([{ directory: away.directory, trust: true, persist: true }])
-    expect(fixture.status().trusted).toBe(false)
+    expect(fixture.status().changed).not.toEqual([])
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -517,7 +532,7 @@ test("a grant that is answered once another folder is in view leaves the questio
     await until(() => fixture.toast().currentToast !== null)
     await fixture.app.renderOnce()
 
-    expect(fixture.toast().currentToast).toMatchObject({ variant: "success", message: "Trusted /tmp/orbit" })
+    expect(fixture.toast().currentToast).toMatchObject({ variant: "success", message: "Trusted the changes in /tmp/orbit" })
     expect(asksAbout(fixture.app.captureCharFrame(), away.directory)).toBe(true)
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
   } finally {
@@ -584,6 +599,8 @@ async function renderTrust(
   if (options?.away) statuses.set(options.away.status.directory, options.away.status)
   let reads = 0
   const updates: unknown[] = []
+  // Why the terminal UI was asked to end, each time it was.
+  const exits: unknown[] = []
   let trust!: ReturnType<typeof useTrust>
   let toast!: ReturnType<typeof useToast>
   let location!: ReturnType<typeof useLocation>
@@ -626,6 +643,7 @@ async function renderTrust(
   const app = await testRender(
     () => (
       <TestTuiContexts>
+        <ExitProvider exit={(reason) => void exits.push(reason)}>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ToastProvider>
@@ -647,6 +665,7 @@ async function renderTrust(
             </ToastProvider>
           </Keymap.Provider>
         </ConfigProvider>
+        </ExitProvider>
       </TestTuiContexts>
     ),
     { width: 100, height: 40, kittyKeyboard: true },
@@ -658,6 +677,7 @@ async function renderTrust(
     app,
     events,
     updates,
+    exits,
     status,
     reads: () => reads,
     trust: () => trust,

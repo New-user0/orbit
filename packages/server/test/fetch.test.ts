@@ -14,6 +14,8 @@ const options = {
   config: { project: false },
   models: { fetch: false },
   fs: { filewatcher: false },
+  // Sessions here work in temporary folders that nothing grants, so the server trusts every folder (trust-first).
+  trust: { implicit: true },
 } as const
 
 type Handler = (request: Request) => Promise<Response>

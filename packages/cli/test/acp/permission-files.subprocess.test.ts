@@ -1,6 +1,6 @@
-// Over a real `orb acp` process in an untrusted folder with the person's own `ask` rule, an approval shows the place the
-// call acts on: a model-added key changes nothing it shows, and a `~` path is the person's home folder, not a folder
-// named `~` in the project.
+// Over a real `orb acp` process with the person's own `ask` rule, an approval shows the place the call acts on: a
+// model-added key changes nothing it shows, and a `~` path is the person's home folder, not a folder named `~` in the
+// project. Since trust-first a row in an untrusted folder pins that no session opens there at all (see `approval`).
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -1215,6 +1215,15 @@ async function approval(
       clientInfo: { name: "test", version: "0" },
     })
     const session = await request("session/new", { cwd: workspace, mcpServers: [] })
+    // trust-first: no session opens in a folder that is not trusted, so the call that an untrusted row describes never
+    // runs: the refusal is typed and names the folder, and the model is asked nothing. The trusted rows show the
+    // approvals.
+    if (!input.trusted) {
+      expect(session.result).toBeUndefined()
+      expect(session.error?.data).toMatchObject({ type: "untrusted_folder" })
+      expect(bodies).toEqual([])
+      return
+    }
     await request("session/prompt", { sessionId: session.result.sessionId, prompt: [{ type: "text", text: "go" }] })
     await check({ root, workspace, permissions, updates, bodies })
   } finally {

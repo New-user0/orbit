@@ -11,6 +11,7 @@ import { ModelsDev } from "@orbit/core/models-dev"
 import { Permission } from "@orbit/core/permission"
 import { Plugin } from "@orbit/core/plugin"
 import { Session } from "@orbit/core/session"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { define } from "@orbit/plugin/effect/plugin"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
@@ -59,6 +60,8 @@ it.live(
         App.node.replace(App.node),
         ModelsDev.node.replace(ModelsDev.configured({ fetch: false })),
         Watcher.node.replace(Watcher.configured({ enabled: false })),
+        // The sessions work in a temporary folder that nothing grants, so every folder is trusted (trust-first).
+        WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: true })),
         llmClient.replace(Layer.succeed(LLMClient.Service, llm)),
         SessionRunnerModel.node.replace(
           Layer.succeed(SessionRunnerModel.Service, { resolve: () => Effect.succeed(model) }),
@@ -158,7 +161,8 @@ it.live(
         ),
       ]
       const context = yield* Layer.build(
-        createEmbeddedRoutes({}, replacements).pipe(Layer.provide(HttpServer.layerServices)),
+        // The sessions work in a temporary folder that nothing grants, so the routes trust every folder (trust-first).
+        createEmbeddedRoutes({ trust: { implicit: true } }, replacements).pipe(Layer.provide(HttpServer.layerServices)),
       )
       const sessions = Context.get(context, Session.Service)
       const instances = Context.get(context, Instance.Service)

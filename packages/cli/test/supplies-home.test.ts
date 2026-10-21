@@ -7,7 +7,8 @@ import { scriptedModel } from "./fixture/scripted-model"
 
 // What a session started in the home folder, or below a home folder that is a repository, reads of config that is linked
 // in (class 4, `ProjectTrust.supplies`). The person's own config is theirs wherever they start; a downloaded folder's
-// `.orbit` that is itself a link out is not read from. Every run is untrusted: ORBIT_TRUST_PROJECT is unset.
+// `.orbit` that is itself a link out is not read from. ORBIT_TRUST_PROJECT is unset, so a run in a folder that is not
+// trusted stops before it reads anything (trust-first), and a run of the person's own config passes --trust.
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-supplies-home-")))
 const model = scriptedModel(["done"])
 const kind = process.platform === "win32" ? "junction" : "dir"
@@ -61,8 +62,8 @@ test("the person's own linked agent and skill are used from a project and from t
   expect(Bun.spawnSync(["git", "init", "--quiet", repo]).exitCode).toBe(0)
   const rows = []
   for (const directory of [repo, root]) {
-    const agent = await run(root, directory, ["--agent", "mine"])
-    const skills = await run(root, directory, [])
+    const agent = await run(root, directory, ["--trust", "--agent", "mine"])
+    const skills = await run(root, directory, ["--trust"])
     rows.push([
       agent.code === 0 && agent.sent.includes("MINE-AGENT-PROMPT-MARKER"),
       skills.sent.includes("OWN-SKILL-DESCRIPTION-MARKER"),
@@ -87,9 +88,12 @@ for (const homeIsRepo of [true, false])
       await fs.mkdir(directory, { recursive: true })
       await fs.symlink(path.join(home, "work", "secret", ".orbit"), path.join(directory, ".orbit"), kind)
       if (homeIsRepo) expect(Bun.spawnSync(["git", "init", "--quiet", home]).exitCode).toBe(0)
+      // The folder is not trusted, so the run stops before it reads anything of it, and nothing reaches the model.
       const result = await run(home, directory, [])
-      expect(result.code).toBe(0)
-      expect(result.sent).not.toContain("SECRET-PROJECT-SKILL-MARKER")
+      expect(result.code).toBe(1)
+      // The run keeps the end of stderr, which is the advice on how to trust the folder.
+      expect(result.stderr).toContain("--trust")
+      expect(result.sent).toBe("[]")
     } finally {
       await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
     }

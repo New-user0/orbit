@@ -19,7 +19,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { ManagedSettings } from "@orbit/core/managed-settings"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Exit, Layer } from "effect"
 import { HttpEffect, HttpRouter, HttpServer } from "effect/unstable/http"
 import { LanguageModel, LLMClient } from "../../ai/src"
 import { OpenAIChat } from "../../ai/src/protocols/openai-chat"
@@ -513,8 +513,10 @@ it.live("reads no file a link leads out of an untrusted project to, and a second
       const id = (yield* s.session()).id
       const first = yield* s.preview(id)
       const read = s.reads.some((file) => file.startsWith(outside))
-      const step = yield* s.step(id, "go")
-      const system = JSON.stringify(step?.system ?? "")
+      // No step runs in a folder that is not trusted (trust-first), so no request carries what the link leads to.
+      const stepped = yield* s.step(id, "go").pipe(Effect.exit)
+      expect(Exit.isSuccess(stepped)).toBe(trusted)
+      const system = Exit.isSuccess(stepped) ? JSON.stringify(stepped.value?.system ?? "") : ""
       expect(read).toBe(trusted)
       expect((first.initial ?? "").includes("LINKED-OUT-MARKER")).toBe(trusted)
       expect(system.includes("LINKED-OUT-MARKER")).toBe(trusted)

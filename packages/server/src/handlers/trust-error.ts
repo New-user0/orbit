@@ -1,7 +1,7 @@
-import { Location } from "@orbit/core/location"
-import { LocationServiceMap } from "@orbit/core/location-services"
+import { Project } from "@orbit/core/project"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { UntrustedFolderError } from "@orbit/protocol/errors"
 import { plain } from "@orbit/util/plain"
 import { Effect } from "effect"
@@ -32,6 +32,16 @@ export const requireTrusted = Effect.fnUntraced(function* () {
   return yield* untrustedFolder(yield* trust.status())
 })
 
-/** `requireTrusted` for a folder other than the request's own, such as where a session is created or moved to. */
-export const requireTrustedAt = (locations: LocationServiceMap.Service["Service"], ref: Location.Ref) =>
-  requireTrusted().pipe(Effect.provide(locations.get(ref)))
+/**
+ * `requireTrusted` for a folder other than the request's own, such as where a session is created or moved to. It decides
+ * for the same folder `ProjectTrust` does, the project's canonical root, without building that folder's Location: a
+ * session that is created is not started yet.
+ */
+export const requireTrustedAt = Effect.fnUntraced(function* (
+  services: { readonly projects: Project.Interface; readonly trust: WorkspaceTrust.Interface },
+  directory: AbsolutePath,
+) {
+  const project = yield* services.projects.resolve(directory)
+  const state = yield* services.trust.status(project.canonical)
+  if (!state.trusted) return yield* untrustedFolder(state)
+})

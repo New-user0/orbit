@@ -129,9 +129,10 @@ export function make(input: {
     return session
   })
 
-  // No session opens in a folder that is not trusted (trust-first, class 12). The editor picks the folder, so the
-  // refusal goes back to it as a typed error that names the folder (class 13), through `plain` (class 9). A server
-  // that cannot say fails the request as well (class 7).
+  // No session opens in a folder that is not trusted (trust-first, class 12). The server refuses a new one itself, and
+  // `ACPPromise` carries that refusal; a session that exists is opened without a route that would refuse, so it is asked
+  // here. The editor picks the folder, so the refusal goes back to it as a typed error that names the folder (class 13),
+  // through `plain` (class 9). A server that cannot say fails the request as well (class 7).
   const requireTrusted = Effect.fnUntraced(function* (directory: string) {
     const status = yield* ACPPromise.promise((signal) =>
       input.client.location.trust.get({ location: { directory } }, { signal }),
@@ -202,7 +203,6 @@ export function make(input: {
     }),
     newSession: Effect.fnUntraced(function* (params) {
       const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
-      yield* requireTrusted(params.cwd)
       // Load before creating so a catalog failure leaves no session behind. Agent and model stay unset
       // so the server resolves its defaults after plugins activate.
       yield* input.catalog.get(params.cwd)

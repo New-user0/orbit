@@ -23,8 +23,8 @@ import {
   SkillNotFoundError,
 } from "@orbit/protocol/errors"
 import { AbsolutePath } from "@orbit/core/schema"
-import { Location } from "@orbit/core/location"
-import { LocationServiceMap } from "@orbit/core/location-services"
+import { Project } from "@orbit/core/project"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { failedMessageDecode, failedSnapshot, missingMessage, missingSession } from "./session-error"
 import { requireTrusted, requireTrustedAt } from "./trust-error"
 
@@ -37,7 +37,8 @@ function missingForm(id: Form.ID) {
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
-    const locations = yield* LocationServiceMap.Service
+    // What decides whether a folder is trusted, for the routes that act on a folder other than the request's own.
+    const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
     const transfer = yield* SessionTransfer.Service
     const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
       const form = yield* Form.Service
@@ -134,7 +135,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ? (ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) })
               : (yield* session.get(ctx.payload.parentID).pipe(Effect.catchTag("Session.NotFoundError", missingSession)))
                   .location
-          yield* requireTrustedAt(locations, Location.Ref.make({ directory: location.directory }))
+          yield* requireTrustedAt(folders, location.directory)
           return {
             data: yield* session
               .create({
@@ -297,7 +298,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.move",
         Effect.fn(function* (ctx) {
           // The session goes on in the folder it moves to, so that is the folder that has to be trusted (class 3).
-          yield* requireTrustedAt(locations, Location.Ref.make({ directory: ctx.payload.directory }))
+          yield* requireTrustedAt(folders, ctx.payload.directory)
           yield* session
             .move({
               sessionID: ctx.params.sessionID,

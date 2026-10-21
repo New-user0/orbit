@@ -114,7 +114,8 @@ const idle = (updates: Update[], times = 1) =>
   until(() => (updates.filter((update) => update.type === "busy" && !update.busy).length >= times ? true : undefined))
 const same = (left: string, right: string) => path.relative(left, right) === ""
 
-test("shows what an untrusted folder holds back, as the server names it", async () => {
+// trust-first: nothing of an untrusted folder is read, so the banner names the folder and lists nothing from it.
+test("shows an untrusted folder in the banner, and lists nothing from it", async () => {
   const repo = await folder({ config: true })
 
   const { updates, questions } = chat(main.client, repo)
@@ -122,7 +123,7 @@ test("shows what an untrusted folder holds back, as the server names it", async 
 
   expect(update).toMatchObject({
     unchecked: false,
-    trust: { persistent: true, summary: "hooks", held: [{ name: "orbit.json", kinds: "hooks" }], above: [] },
+    trust: { persistent: true, summary: "", held: [], above: [] },
   })
   expect(same(update?.trust?.directory ?? "", repo)).toBe(true)
   expect(update?.trust?.opened).toBeUndefined()
@@ -141,7 +142,7 @@ test("shows, trusts and works in one folder when VS Code opened a folder inside 
   // Asked about the folder that VS Code opened, shown as the project's folder, with the opened one named beside it.
   expect(same(update?.trust?.directory ?? "", repo)).toBe(true)
   expect(update?.trust?.opened).toBe(sub)
-  expect(update?.trust?.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
+  expect(update?.trust?.held).toEqual([])
 
   const grant = await controller.review()
 
@@ -178,7 +179,7 @@ test("asks before the first message in an untrusted folder, and the model is ask
   await idle(updates)
 
   expect(questions).toHaveLength(1)
-  expect(questions[0]?.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
+  expect(questions[0]?.held).toEqual([])
   // No session existed and the model had not been asked when the person was.
   expect(before).toEqual([{ steps: asked, sessions: 0 }])
   expect(steps.length).toBeGreaterThan(asked)
@@ -192,19 +193,20 @@ test("asks before the first message in an untrusted folder, and the model is ask
   )
 })
 
-test("goes on without the folder's config after Not now, asks once, and asks again when the person opens the question", async () => {
+test("sends nothing after Not now, asks once, and asks again when the person opens the question", async () => {
   const repo = await folder({ config: true })
   const { controller, updates, questions } = chat(main.client, repo, "later")
   await Bun.sleep(500)
   const asked = steps.length
 
   await controller.send("one")
-  await idle(updates, 1)
   await controller.send("two")
-  await idle(updates, 2)
 
-  // Both prompts went to the model, and the person was asked once.
-  expect(steps.length - asked).toBeGreaterThanOrEqual(2)
+  // Neither prompt went to the model, no session was started, each was refused with a note, and the person was asked
+  // once (trust-first).
+  expect(steps.length).toBe(asked)
+  expect(await controller.sessions()).toEqual([])
+  expect(notes(updates).filter((note) => note.text.includes("is not trusted"))).toHaveLength(2)
   expect(questions).toHaveLength(1)
   expect(trusts(updates).at(-1)?.trust).toBeDefined()
   expect(await main.client.location.trust.get({ location: { directory: repo } })).toMatchObject({ trusted: false })
@@ -214,12 +216,12 @@ test("goes on without the folder's config after Not now, asks once, and asks aga
   expect(await main.client.location.trust.get({ location: { directory: repo } })).toMatchObject({ trusted: false })
 })
 
-test("asks nothing in a folder that holds nothing back or is already trusted", async () => {
-  const bare = await folder()
+// A folder that holds nothing back is asked about too since trust-first (`trust-first.test.ts`).
+test("asks nothing in a folder that is already trusted", async () => {
   const known = await folder({ config: true })
   await main.client.location.trust.update({ location: { directory: known }, trust: true })
 
-  for (const directory of [bare, known]) {
+  for (const directory of [known]) {
     const { controller, updates, questions } = chat(main.client, directory, "trust")
     await Bun.sleep(500)
     const asked = steps.length
@@ -247,27 +249,21 @@ test("follows a grant and a revoke that are made elsewhere", async () => {
   expect(await until(() => (trusts(updates).at(-1)?.trust !== undefined ? true : undefined))).toBe(true)
 })
 
-test("names config above the project, and gives no command for it", async () => {
+// trust-first: config above a project is not read until a grant covers its own folder, so nothing is listed for it, and
+// trusting the project does not trust the folder around it.
+test("asks about a repository below an untrusted folder on its own, and its grant leaves that folder untrusted", async () => {
   const parent = await folder({ config: true })
   const child = await folder({ config: true, git: true, in: parent })
-  const only = await folder({ git: true, in: parent })
-
-  // A repository that holds nothing of its own back has nothing that trusting it would turn on, however much sits above.
-  const quiet = chat(main.client, only)
-  expect((await shown(quiet.updates))?.trust).toBeUndefined()
-  expect(await quiet.controller.review()).toBeUndefined()
-  expect(quiet.questions).toEqual([])
 
   const { controller, updates, questions } = chat(main.client, child, "trust")
   const update = await shown(updates)
-  expect(update?.trust?.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
-  expect(update?.trust?.above.map((item) => same(item, parent))).toEqual([true])
+  expect(update?.trust?.held).toEqual([])
+  expect(update?.trust?.above).toEqual([])
 
   const grant = await controller.review()
 
-  expect(grant?.above.map((item) => same(item, parent))).toEqual([true])
+  expect(grant?.above).toEqual([])
   const text = prompt(update?.trust as TrustView).detail
-  expect(text).toContain("stays off: each folder is trusted on its own.")
   expect(text.replaceAll("`orb trust --revoke`", "")).not.toMatch(/orb trust/)
   expect(questions).toHaveLength(1)
   // The parent is another folder with a decision of its own, and it is still not trusted.
@@ -308,7 +304,7 @@ test("trust persists across a restart of the server, for the folder that was tru
       const again = chat(second.client, trusted)
       expect((await shown(again.updates))?.trust).toBeUndefined()
       const elsewhere = chat(second.client, other)
-      expect((await shown(elsewhere.updates))?.trust?.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
+      expect((await shown(elsewhere.updates))?.trust?.held).toEqual([])
       expect(await elsewhere.controller.review()).toBeUndefined()
       expect(elsewhere.questions).toHaveLength(1)
     } finally {
@@ -557,7 +553,16 @@ test("sends nothing, with one line in the log, when the server only fails or sen
 })
 
 test("a withheld entry that does not fit costs only itself: the banner and the question stay", async () => {
-  const server = stub({ get: () => answer({ withheld: [null, ...held, { path: 7, kinds: [] }] }) })
+  // A trusted folder whose config changed, which is the answer whose entries the question lists.
+  const server = stub({
+    get: () =>
+      answer({
+        trusted: true,
+        source: "saved",
+        withheld: [null, ...held, { path: 7, kinds: [] }],
+        changed: held,
+      }),
+  })
   try {
     const { updates } = chat(server.client, project, "later", quick)
 
@@ -590,7 +595,7 @@ test("keeps the last answer when a later read fails, and still asks", async () =
   const server = stub({ get: (count) => (count === 1 ? answer() : new Response("boom", { status: 500 })) })
   try {
     const { controller, updates, questions } = chat(server.client, project, "later", quick)
-    expect((await shown(updates))?.trust?.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
+    expect((await shown(updates))?.trust).toBeDefined()
 
     await controller.review()
 
@@ -714,10 +719,10 @@ test("takes the stricter answer when the folder VS Code opened still reads as un
 
     await controller.send("hello").catch(() => undefined)
 
-    // The grant came back trusted, the read for the opened folder did not, and the second one stands: not trusted. The
-    // message goes on without what the folder holds back, and the chat says that the trust did not take.
+    // The grant came back trusted, the read for the opened folder did not, and the second one stands: not trusted. No
+    // session starts there (trust-first), and the chat says that the trust did not take.
     expect(questions).toHaveLength(1)
-    expect(server.seen).toContain("POST /api/session")
+    expect(server.seen).not.toContain("POST /api/session")
     expect(trusts(updates).at(-1)?.trust).toBeDefined()
     expect(notes(updates)).toContainEqual(
       expect.objectContaining({

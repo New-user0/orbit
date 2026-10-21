@@ -58,6 +58,7 @@ it.live("serves turn diffs by user message with range validation", () =>
         database: { path: ":memory:" },
         fs: { filewatcher: false },
         models: { fetch: false },
+        trust: { implicit: true },
       },
       {
         overrides: [

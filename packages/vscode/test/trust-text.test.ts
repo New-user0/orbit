@@ -28,9 +28,20 @@ const untrusted = {
 const hostile = "evil\u001b]0;pwned\u0007\u001b[2K\u009b‮gpj.\r\nrest"
 const controls = /\p{C}/u
 
-test("splits what trusting the folder turns on from what stays off above it", () => {
-  const shown = view(untrusted, repo)
+// The same files as a trusted folder whose config changed since the grant: the one case where the question lists what a
+// folder holds, since nothing of an untrusted folder is read (trust-first).
+const changedAll = (status: TrustStatus): TrustStatus => ({
+  ...status,
+  trusted: true,
+  source: "saved",
+  changed: status.withheld.filter((item) => item.directory === undefined).map((item) => ({ path: item.path, kinds: item.kinds })),
+})
 
+test("lists nothing of an untrusted folder, and splits what changed in a trusted one from what stays off above it", () => {
+  // Nothing of an untrusted folder was read, so the question lists none of it, whatever the answer carries.
+  expect(view(untrusted, repo)).toMatchObject({ directory: repo, persistent: true, summary: "", held: [] })
+
+  const shown = view(changedAll(untrusted), repo)
   expect(shown.directory).toBe(repo)
   expect(shown.persistent).toBe(true)
   expect(shown.summary).toBe("hooks, MCP servers, plugins")
@@ -79,20 +90,21 @@ test("names the folder VS Code opened when it is not the project's folder", () =
   expect(view(untrusted, repo + path.sep).opened).toBeUndefined()
 })
 
-test("asks only for a folder that is untrusted and holds something of its own back", () => {
+test("asks for every folder that is not trusted, whatever it holds, and for a trusted one only when it changed", () => {
   const above = { ...untrusted, withheld: [untrusted.withheld[2]] }
 
   expect(asksTrust(untrusted)).toBe(true)
+  expect(asksTrust({ ...untrusted, withheld: [] })).toBe(true)
+  expect(asksTrust(above)).toBe(true)
   expect(asksTrust({ ...untrusted, trusted: true, withheld: [] })).toBe(false)
-  expect(asksTrust({ ...untrusted, withheld: [] })).toBe(false)
-  // What sits above the project follows its own folder's decision, so trusting the project would turn nothing on.
-  expect(asksTrust(above)).toBe(false)
+  // What sits above a trusted project follows its own folder's decision, so trusting the project turns nothing on.
+  expect(asksTrust({ ...above, trusted: true })).toBe(false)
   expect(asksTrust(undefined)).toBe(false)
 })
 
 test("writes out the control and format characters that a repository chose, wherever they show", () => {
   const shown = view(
-    {
+    changedAll({
       directory: path.join(outer, hostile),
       trusted: false,
       persistent: true,
@@ -100,7 +112,7 @@ test("writes out the control and format characters that a repository chose, wher
         { path: path.join(outer, hostile, `${hostile}.json`), kinds: kinds("hooks", hostile) },
         { path: path.join(outer, hostile, "x"), kinds: kinds("mcp"), directory: path.join(outer, hostile, hostile) },
       ],
-    },
+    }),
     path.join(outer, hostile, hostile),
   )
   const everything = JSON.stringify(shown)
@@ -119,14 +131,20 @@ test("lists the first files in the question and says how many more there are", (
     path: path.join(repo, `f${index}.json`),
     kinds: kinds("hooks"),
   }))
-  const asked = prompt(view({ ...untrusted, withheld: files }, repo))
+  const asked = prompt(view(changedAll({ ...untrusted, withheld: files }), repo))
 
-  expect(asked.message).toBe(`Trust ${repo}?`)
+  expect(asked.message).toBe(`Trust the changes in ${repo}?`)
   expect(asked.detail).toContain("f0.json: hooks")
   expect(asked.detail).toContain("f5.json: hooks")
   expect(asked.detail).not.toContain("f6.json")
   expect(asked.detail).toContain("and 3 more")
-  expect(asked.accept).toBe("Trust this folder")
+  expect(asked.accept).toBe("Trust changes")
+  // The question about an untrusted folder lists none of them, and says what trusting it lets Orbit do.
+  const first = prompt(view({ ...untrusted, withheld: files }, repo))
+  expect(first.message).toBe(`Trust ${repo}?`)
+  expect(first.detail).not.toContain("f0.json")
+  expect(first.detail).toContain("Orbit can read, change and run the files here")
+  expect(first.accept).toBe("Trust this folder")
 })
 
 test("says what a grant lasts, and gives no command for config above the project", () => {
@@ -152,7 +170,7 @@ test("says what a grant lasts, and gives no command for config above the project
 
 test("falls back to the kind as written when the protocol has no words for it", () => {
   const shown = view(
-    { ...untrusted, withheld: [{ path: path.join(repo, "a"), kinds: kinds("hooks", "constructor", "teleport") }] },
+    changedAll({ ...untrusted, withheld: [{ path: path.join(repo, "a"), kinds: kinds("hooks", "constructor", "teleport") }] }),
     repo,
   )
 

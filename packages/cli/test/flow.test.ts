@@ -158,7 +158,7 @@ test("parallel agents run in separate worktrees and merge into the checkout", as
   expect(await files(repository)).toEqual(["a.txt", "b.txt", "c.txt", "readme.md"])
   expect(concurrent).toBeGreaterThan(1)
   const shown = JSON.parse(
-    (await orb(repository, ["flow", "show", await runID(repository), "--format", "json"])).stdout,
+    (await orb(repository, ["flow", "show", "--standalone", await runID(repository), "--format", "json"])).stdout,
   )
   expect(shown.run.status).toBe("succeeded")
   expect(shown.nodes.map((node: { id: string; status: string }) => [node.id, node.status]).toSorted()).toEqual([
@@ -225,7 +225,7 @@ test("resume reruns only the node that failed", async () => {
   expect(resumed.stderr).toContain("= a (recorded)")
   expect(resumed.stderr).toContain("= b (recorded)")
   expect(await files(repository)).toEqual(["a.txt", "b.txt", "c.txt", "readme.md"])
-  const listed = JSON.parse((await orb(repository, ["flow", "ls", "--format", "json"])).stdout)
+  const listed = JSON.parse((await orb(repository, ["flow", "ls", "--standalone", "--format", "json"])).stdout)
   expect(listed.map((run: { id: string; status: string }) => [run.id, run.status])).toEqual([[id, "succeeded"]])
 }, 240_000)
 
@@ -248,7 +248,7 @@ async function files(directory: string) {
 }
 
 async function runID(directory: string) {
-  return JSON.parse((await orb(directory, ["flow", "ls", "--format", "json"])).stdout)[0].id as string
+  return JSON.parse((await orb(directory, ["flow", "ls", "--standalone", "--format", "json"])).stdout)[0].id as string
 }
 
 // Git must see the configuration orb ran with: on Windows the isolated home hides a global core.autocrlf, so a file
@@ -375,13 +375,13 @@ test("a gate pauses the run until a person approves it, then resume continues pa
   expect(paused.stderr).toContain("ship: Merge g into the checkout?")
   expect(await files(repository)).toEqual(["readme.md"])
   const id = await runID(repository)
-  expect((await orb(repository, ["flow", "ls", "--format", "json"])).stdout).toContain('"status": "waiting"')
-  expect((await orb(repository, ["flow", "show", id])).stdout).toContain("? ship")
+  expect((await orb(repository, ["flow", "ls", "--standalone", "--format", "json"])).stdout).toContain('"status": "waiting"')
+  expect((await orb(repository, ["flow", "show", "--standalone", id])).stdout).toContain("? ship")
   const calls = requests.length
 
-  const approved = await orb(repository, ["flow", "approve", id, "ship", "--note", "looks good"])
+  const approved = await orb(repository, ["flow", "approve", "--standalone", id, "ship", "--note", "looks good"])
   expect(approved.code).toBe(0)
-  expect((await orb(repository, ["flow", "approve", id, "ship"])).code).not.toBe(0)
+  expect((await orb(repository, ["flow", "approve", "--standalone", id, "ship"])).code).not.toBe(0)
   const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
 
   expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
@@ -414,18 +414,18 @@ test("a budget pauses the run before it overspends, and cost reports spend by no
   expect(paused.stderr).toContain("budget: Budget reached")
   expect([...new Set(requests.map((request) => request.node))]).toEqual(["p", "q"])
   const id = await runID(repository)
-  expect((await orb(repository, ["flow", "approve", id, "budget"])).code).toBe(0)
+  expect((await orb(repository, ["flow", "approve", "--standalone", id, "budget"])).code).toBe(0)
 
   const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
 
   expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
   expect([...new Set(requests.map((request) => request.node))]).toEqual(["p", "q", "r"])
-  const cost = JSON.parse((await orb(repository, ["flow", "cost", id, "--format", "json"])).stdout)
+  const cost = JSON.parse((await orb(repository, ["flow", "cost", "--standalone", id, "--format", "json"])).stdout)
   expect(cost.rows.map((row: { node: string }) => row.node)).toEqual(["p", "q", "r"])
   expect(cost.rows[0]).toMatchObject({ model: "ollama/tiny:1b", attempts: 1, input: 2000, output: 200 })
   expect(cost.total).toMatchObject({ attempts: 3, input: 6000, output: 600 })
   expect(cost.total.cost).toBeCloseTo(0.0072, 6)
-  expect((await orb(repository, ["flow", "cost", id])).stdout).toContain("total")
+  expect((await orb(repository, ["flow", "cost", "--standalone", id])).stdout).toContain("total")
 }, 240_000)
 
 test("a model that does not exist is named in the error, and the fallback model runs", async () => {
@@ -511,7 +511,7 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
   expect(diverged.stderr).toContain(`Replay diverged: d is not in the recording of ${id}`)
   expect(requests.length).toBe(calls)
 
-  const watched = await orb(repository, ["flow", "watch", id])
+  const watched = await orb(repository, ["flow", "watch", "--standalone", id])
   expect(watched.code).toBe(0)
   expect(watched.stdout).toContain(`${id}  three  succeeded`)
   expect(watched.stdout).toContain("✓ merge")
@@ -569,7 +569,7 @@ output: merge
   const c = requests.find((request) => request.node === "c" && request.step === "write")
   expect(c?.prompt).toContain("now that a said: Wrote a.txt (task demo)")
   const id = await runID(repository)
-  expect((await orb(repository, ["flow", "approve", id, "approve"])).code).toBe(0)
+  expect((await orb(repository, ["flow", "approve", "--standalone", id, "approve"])).code).toBe(0)
 
   const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
 
@@ -650,13 +650,13 @@ test("orb flow trace shows a timeline, prints OTLP, and sends it only to a colle
   expect((await orb(repository, ["flow", "run", "--standalone", file])).code).toBe(0)
   const id = await runID(repository)
 
-  const timeline = await orb(repository, ["flow", "trace", id])
+  const timeline = await orb(repository, ["flow", "trace", "--standalone", id])
   expect(timeline.stdout).toContain("✓ run traced")
   expect(timeline.stdout).toContain("  ✓ t ")
   expect(timeline.stdout).toContain("    ✗ attempt ollama/no-such-model")
   expect(timeline.stdout).toContain("    ✓ attempt ollama/tiny:1b")
 
-  const exported = JSON.parse((await orb(repository, ["flow", "trace", id, "--format", "otlp"])).stdout)
+  const exported = JSON.parse((await orb(repository, ["flow", "trace", "--standalone", id, "--format", "otlp"])).stdout)
   const spans = exported.resourceSpans[0].scopeSpans[0].spans
   expect(spans.map((span: { name: string }) => span.name)).toEqual([
     "run traced",
@@ -679,7 +679,7 @@ test("orb flow trace shows a timeline, prints OTLP, and sends it only to a colle
       return Response.json({})
     },
   })
-  const sent = await orb(repository, ["flow", "trace", id, "--otlp", `http://127.0.0.1:${collector.port}`])
+  const sent = await orb(repository, ["flow", "trace", "--standalone", id, "--otlp", `http://127.0.0.1:${collector.port}`])
   await collector.stop(true)
   expect(sent.stdout).toContain(`Sent 4 spans of ${id}`)
   expect(received).toEqual([exported])
@@ -708,7 +708,7 @@ test("orb flow clean in a clone whose run store names runs like paths leaves eve
   expect(cleaned.stdout).toContain("from 1 run(s)")
   // Naming such a run does not make it one, for any command that takes a run, and resuming one makes no worktree.
   for (const command of ["clean", "show", "resume"]) {
-    const named = await orb(repository, ["flow", command, ...(command === "show" ? [] : ["--standalone", "--trust"]), "../../../victim"])
+    const named = await orb(repository, ["flow", command, "--standalone", ...(command === "show" ? [] : ["--trust"]), "../../../victim"])
     expect({ command, code: named.code }).toEqual({ command, code: 1 })
     expect(named.stderr).toContain("No run ../../../victim in this repository")
   }
@@ -772,8 +772,9 @@ test("orb flow prints what a run store says without the characters that act on a
 
   // One after the other: processes that open the same store at once can find it locked.
   const outputs = []
+  // Each reader asks a private server whether the folder is trusted before it opens the store (trust-first).
   for (const args of [["ls"], ["show", id], ["watch", id], ["cost", id], ["trace", id]])
-    outputs.push(await orb(repository, ["flow", ...args]))
+    outputs.push(await orb(repository, ["flow", ...args, "--standalone"]))
 
   // No line has a control character in it: nothing reaches the terminal that moves the cursor, sets a title or erases
   // text. The ends of the lines are the commands' own, and `watch` only clears a terminal when its output is one.
@@ -807,7 +808,7 @@ test("orb flow prints what a run store says without the characters that act on a
     ["cost", id, "--format", "json"],
     ["trace", id, "--format", "otlp"],
   ])
-    formats.push(await orb(repository, ["flow", ...args]))
+    formats.push(await orb(repository, ["flow", ...args, "--standalone"]))
   for (const [index, output] of formats.entries()) {
     expect({ index, code: output.code, stderr: output.code === 0 ? "" : output.stderr }).toEqual({
       index,

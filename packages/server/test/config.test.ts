@@ -65,11 +65,11 @@ it.live("returns ordered config entries for the requested directory", () =>
 )
 
 for (const scenario of [
-  { name: "withholds a project's executable config on a server with implicit trust off", trust: { implicit: false } },
+  { name: "reads none of a project's config on a server with implicit trust off", trust: { implicit: false } },
   { name: "applies a project's executable config on a server with implicit trust on", trust: { implicit: true } },
   // The variable is for `orb` to read, for the servers it starts. A host that leaves the option unset trusts nothing.
   {
-    name: "withholds a project's executable config on a server that leaves implicit trust unset, whatever the environment says",
+    name: "reads none of a project's config on a server that leaves implicit trust unset, whatever the environment says",
     trust: {},
     environment: "1",
   },
@@ -110,19 +110,15 @@ for (const scenario of [
         )
 
         expect(response.status).toBe(200)
+        // trust-first: a server that does not trust the folder reads nothing of it, not even what could not run code.
+        if (!implicit) return expect(document).toBeUndefined()
         expect(document?.scope).toBe("project")
         expect(document?.info.username).toBeDefined()
-        if (implicit) {
+        {
           expect(document).not.toHaveProperty("trusted")
           expect(document?.info.mcp?.servers?.docs).toBeDefined()
           expect(document?.info.permissions).toHaveLength(2)
-          return
         }
-        // The same file, as an untrusted server reports it: what it may not supply is gone, and the entry says so.
-        expect(document?.trusted).toBe(false)
-        expect(document?.withheld).toEqual(["mcp", "permissions"])
-        expect(document?.info.mcp).toBeUndefined()
-        expect(document?.info.permissions).toEqual([{ action: "shell", resource: "rm *", effect: "deny" }])
       }),
     ),
   )
