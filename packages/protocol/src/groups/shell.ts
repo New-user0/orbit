@@ -33,7 +33,7 @@ export const ShellGroup = HttpApiGroup.make("server.shell")
           identifier: "shell.create",
           summary: "Run shell command",
           description:
-            "Spawn one non-interactive shell command for a location. Combined stdout/stderr is captured to a file pageable via output.",
+            "Spawn one non-interactive shell command for a location, in `cwd` (taken from the location's folder when relative) or else the location's folder. The location and the folder the command runs in must both be trusted. Combined stdout/stderr is captured to a file pageable via output.",
         }),
       ),
   )

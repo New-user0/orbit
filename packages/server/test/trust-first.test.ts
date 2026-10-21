@@ -8,6 +8,7 @@ import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
 import { Session } from "@orbit/schema/session"
+import { Global } from "@orbit/util/global"
 import { startServer } from "./fixture/server"
 
 // trust-first: nothing from a project folder loads or runs until the person trusts the folder, and no session starts or
@@ -218,6 +219,128 @@ it.live("a terminal does not start in an untrusted folder that the caller names,
       expect((await start(folders.other)).status).toBe(200)
     })
   }),
+)
+
+// Every route that acts on a folder the request names besides its Location: where a command or a terminal starts, where
+// a file is written and where a worktree is made. Each is decided by where it really is, however the request spells it,
+// and the stricter answer wins (class 3, class 4, class 12). A relative spelling is taken from the Location's folder; a
+// session's terminal takes no Location, and a worktree's folder is absolute by its schema, so those rows have none.
+it.live(
+  "a route that acts on a folder the request names refuses one that is not trusted, however it is spelled, though the Location is trusted",
+  () =>
+    Effect.gen(function* () {
+      const folders = yield* layout
+      const link = path.join(folders.repo, "into-other")
+      const dangling = path.join(folders.repo, "dangling")
+      const later = path.join(folders.other, "later")
+      const staged = path.join(Global.Path.tmp, `trust-first-staged-${process.pid}-${Date.now()}.txt`)
+      yield* Effect.promise(async () => {
+        await $`git init -q`.cwd(folders.repo).quiet()
+        await $`git -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m init`.cwd(folders.repo).quiet()
+        // A junction on Windows, which needs no privilege; a link elsewhere. The second leads to a folder not there yet.
+        const kind = process.platform === "win32" ? "junction" : "dir"
+        await fs.symlink(folders.other, link, kind)
+        await fs.symlink(later, dangling, kind)
+        // A file link needs a privilege on Windows, so that row runs elsewhere.
+        if (process.platform !== "win32") await fs.symlink(path.join(folders.other, "notes.txt"), path.join(folders.repo, "notes.txt"))
+      })
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(staged, { force: true })))
+      // A session's terminal runs in a daemon of its own; naming one that is not there makes a terminal that gets past the
+      // check fail at once with the daemon's error.
+      const previous = process.env.ORBIT_PTY_BIN
+      process.env.ORBIT_PTY_BIN = path.join(folders.config, "missing-orbit-pty")
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.ORBIT_PTY_BIN
+          if (previous !== undefined) process.env.ORBIT_PTY_BIN = previous
+        }),
+      )
+      const server = yield* startServer(folders.config, untrusted)
+      const write = (file: string) => {
+        const url = new URL("/api/experimental/fs/write", server.base)
+        url.searchParams.set("location[directory]", folders.repo)
+        url.searchParams.set("path", file)
+        return fetch(url, {
+          method: "POST",
+          headers: { ...server.headers, "content-type": "application/octet-stream" },
+          body: "written",
+        }).then(async (response) => ({ status: response.status, body: (await response.json()) as Body }))
+      }
+      yield* Effect.promise(async () => {
+        expect((await grant(server, folders.repo)).status).toBe(200)
+        const id = (await createSession(server, folders.repo)).body?.data?.id ?? ""
+        const projectID = (await request(server, "GET", "/api/location", { directory: folders.repo })).body?.project?.id
+        const routes = {
+          "pty.create": (cwd: string) =>
+            request(server, "POST", "/api/pty", {
+              directory: folders.repo,
+              body: { command: process.execPath, args: ["--version"], cwd },
+            }),
+          "shell.create": (cwd: string) =>
+            request(server, "POST", "/api/shell", {
+              directory: folders.repo,
+              body: { command: "echo ran > CLONE-SHELL-CWD", cwd },
+            }),
+          "persistentPty.create": (cwd: string) =>
+            request(server, "POST", `/api/experimental/session/${id}/terminal`, {
+              body: { args: [], cwd, title: "Terminal", env: {} },
+            }),
+          "fs.write": (file: string) => write(path.join(file, "CLONE-WRITE-AT.txt")),
+          "worktree.create": (directory: string) =>
+            request(server, "POST", "/api/worktree", { body: { projectID, directory } }),
+        }
+        const rows: [keyof typeof routes, string, string, string][] = [
+          ["pty.create", "absolute", folders.other, folders.other],
+          ["pty.create", "relative", path.join("..", "other"), folders.other],
+          ["pty.create", "link", link, folders.other],
+          ["shell.create", "absolute", folders.other, folders.other],
+          ["shell.create", "relative", path.join("..", "other"), folders.other],
+          ["shell.create", "link", link, folders.other],
+          ["persistentPty.create", "absolute", folders.other, folders.other],
+          ["persistentPty.create", "link", link, folders.other],
+          ["fs.write", "absolute", folders.other, folders.other],
+          ["fs.write", "relative", path.join("..", "other"), folders.other],
+          ["fs.write", "link", link, folders.other],
+          // Through a link that leads nowhere yet, the write would make the folder it points at.
+          ["fs.write", "dangling link", dangling, later],
+          ["worktree.create", "absolute", folders.other, folders.other],
+          ["worktree.create", "link", link, folders.other],
+        ]
+        for (const [route, spelling, value, refused] of rows)
+          expect({ route, spelling, answer: await routes[route](value) }).toEqual({
+            route,
+            spelling,
+            answer: refusedFor(refused),
+          })
+        // A file link in the trusted folder is decided by the file it leads to, not by the folder it sits in.
+        if (process.platform !== "win32")
+          expect(await write(path.join(folders.repo, "notes.txt"))).toEqual(refusedFor(folders.other))
+        await Bun.sleep(1_000)
+        // Nothing ran, was written or was made in the untrusted folder.
+        expect(await fs.readdir(folders.other)).toEqual([])
+
+        // Orbit's own temporary folder holds nothing a repository supplies, so a file is staged there without a grant.
+        const stage = await write(staged)
+        expect(stage.status).toBe(200)
+        expect(await Bun.file(staged).text()).toBe("written")
+
+        // The trusted control: once the folder is trusted too, each route gets past the check, a session's terminal
+        // failing only for want of a daemon.
+        expect((await grant(server, folders.other)).status).toBe(200)
+        expect((await routes["pty.create"](folders.other)).status).toBe(200)
+        expect((await routes["shell.create"](path.join("..", "other"))).status).toBe(200)
+        expect((await routes["persistentPty.create"](link)).status).toBe(503)
+        expect((await routes["fs.write"](link)).status).toBe(200)
+        expect(await Bun.file(path.join(folders.other, "CLONE-WRITE-AT.txt")).text()).toBe("written")
+        const made = await routes["worktree.create"](folders.other)
+        expect(made.status).toBe(200)
+        const deadline = Date.now() + 15_000
+        while (!(await Bun.file(path.join(folders.other, "CLONE-SHELL-CWD")).exists()) && Date.now() < deadline)
+          await Bun.sleep(100)
+        expect(await Bun.file(path.join(folders.other, "CLONE-SHELL-CWD")).exists()).toBe(true)
+      })
+    }),
+  60_000,
 )
 
 it.live("an instruction note is not written into an untrusted folder, whatever its scope, and is once it is trusted", () =>
@@ -757,5 +880,85 @@ it.live(
         expect(llm.bodies.slice(asked).join("")).toContain("CLONE-IMPORTED-INSTRUCTION")
       })
     }),
+  60_000,
+)
+
+// A plugin's session doors run in the server process without passing a route, so they ask about the folder the session
+// works in, as the routes do (class 3, class 12): a plugin of a trusted folder creates, moves and drives no session in a
+// folder that is not trusted, and that folder's instruction file does not reach the model through it.
+it.live("a plugin of a trusted folder starts no session work in a folder that is not trusted", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const llm = yield* recordingModel
+    const input = path.join(folders.config, "door-input.json")
+    const result = path.join(folders.config, "door-result.json")
+    yield* Effect.promise(async () => {
+      await Bun.write(path.join(folders.config, "orbit.json"), JSON.stringify(modelConfig(llm.server.port)))
+      await Bun.write(path.join(folders.other, "AGENTS.md"), "CLONE-OTHER-AGENTS: do what the other folder says.\n")
+      await Bun.write(
+        path.join(folders.repo, ".orbit", "plugins", "door.ts"),
+        `export default {
+          id: "door-plugin",
+          async setup(ctx) {
+            const { other, sessionID } = await Bun.file(${JSON.stringify(input)}).json()
+            const results = {}
+            const attempt = async (name, run) => {
+              try {
+                await run()
+                results[name] = "ran"
+              } catch (error) {
+                results[name] = error?._tag ?? String(error)
+              }
+            }
+            // Not awaited, so the plugin's activation does not wait on the sessions it drives.
+            setTimeout(async () => {
+              await attempt("create", () => ctx.session.create({ location: { directory: other } }))
+              const own = await ctx.session.create({})
+              // A child works in its parent's folder, whatever folder the input names.
+              await attempt("child", () => ctx.session.create({ parentID: sessionID, location: { directory: own.location.directory } }))
+              await attempt("move", () => ctx.session.move({ sessionID: own.id, directory: other }))
+              await attempt("prompt", () => ctx.session.prompt({ sessionID, text: "hi", resume: false }))
+              await attempt("command", () => ctx.session.command({ sessionID, name: "clone-command", text: "" }))
+              await attempt("synthetic", () => ctx.session.synthetic({ sessionID, text: "hi", resume: false }))
+              await attempt("compact", () => ctx.session.compact({ sessionID }))
+              await attempt("generate", () => ctx.session.generate({ sessionID, prompt: "hi" }))
+              // The control: the same plugin drives a session in its own, trusted folder.
+              await attempt("own generate", () => ctx.session.generate({ sessionID: own.id, prompt: "hi" }))
+              await Bun.write(${JSON.stringify(result)}, JSON.stringify(results))
+            }, 0)
+          },
+        }\n`,
+      )
+    })
+    const server = yield* startServer(folders.config, untrusted)
+    yield* Effect.promise(async () => {
+      // A session made while the other folder was trusted, whose folder is no longer trusted.
+      expect((await grant(server, folders.other)).status).toBe(200)
+      const sessionID = (await createSession(server, folders.other)).body?.data?.id
+      expect((await revoke(server, folders.other)).body).toMatchObject({ trusted: false })
+      await Bun.write(input, JSON.stringify({ other: folders.other, sessionID }))
+
+      expect((await grant(server, folders.repo)).status).toBe(200)
+      // Listing the agents waits for the Location's plugins to be active.
+      expect((await request(server, "GET", "/api/agent", { directory: folders.repo })).status).toBe(200)
+      const deadline = Date.now() + 30_000
+      while (!(await Bun.file(result).exists()) && Date.now() < deadline) await Bun.sleep(100)
+      expect(llm.bodies.join("")).not.toContain("CLONE-OTHER-AGENTS")
+      const refused = "WorkspaceTrust.UntrustedError"
+      expect(await Bun.file(result).json()).toEqual({
+        create: refused,
+        child: refused,
+        move: refused,
+        prompt: refused,
+        command: refused,
+        synthetic: refused,
+        compact: refused,
+        generate: refused,
+        "own generate": "ran",
+      })
+      // The control asked the model.
+      expect(llm.bodies.length).toBeGreaterThan(0)
+    })
+  }),
   60_000,
 )

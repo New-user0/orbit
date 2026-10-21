@@ -889,12 +889,20 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
   the destination of `move`, `generate`, `update` when it clears the title for the model to write one,
   `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
-  Location's or the session's folder and the folder the terminal starts in, the stricter answer winning, class 3),
-  `worktree.create`, `remove` and `refresh`, `mcp.connect`, `fs.write`): `requireTrusted` in
+  Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
+  class 3), `worktree.create` (the project's folder and the folder it is asked to make the worktree in), `remove` and
+  `refresh`, `mcp.connect`, `fs.write` (the Location and the folder the file really lands in, except Orbit's temporary
+  folder)): `requireTrusted` and `requireTrustedAt` in
   `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
   `packages/sdk/test/trust-first.test.ts`.
+- A plugin's session doors, which run in the server process without passing a route (`packages/core/src/plugin/host.ts`):
+  `create` (the folder it names, or the parent's), `move` (the destination), `prompt`, `command`, `synthetic`,
+  `compact` and `generate` (the session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not
+  trusted, decided by that Location's `ProjectTrust`. Proof: `packages/server/test/trust-first.test.ts` 'a plugin of a
+  trusted folder starts no session work in a folder that is not trusted' (CLONE-OTHER-AGENTS does not reach the model;
+  the control drives a session in the plugin's own folder).
 - The run store, `.orbit/runs.db`, and the worktree paths built from it: `Store.run`, `Store.runs`, `Git.clean` and
   `Git.worktree` accept one plain name only. Proof: `packages/flow/test/store.test.ts`,
   `packages/flow/test/git.test.ts`, `packages/cli/test/flow.test.ts`.
@@ -1368,6 +1376,13 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
   which work tree, git directory and common directory it would use, never by a copy of git's rules for finding one:
   `ProjectTrust.git` for a Location, `GitAccess.check` for `Project.resolve` and `WorktreeGit`, and `Git.root` for the
   flow runner. Each of the three must lie in a folder whose decision is trusted.
+- A server route that acts on a folder the request names besides its Location checks that folder too, and acts in the
+  folder it checked: the `cwd` of `pty.create` and `shell.create` (a relative one taken from the Location's folder) and
+  of `persistentPty.create` (`requireTrustedAt`), the folder `fs.write` lands in once `ProjectTrust.leads` has followed
+  every link in the path (Orbit's temporary folder excepted, since no repository supplies it), and the `directory` of
+  `worktree.create` (`Worktree.create`). Proof: `packages/server/test/trust-first.test.ts` 'a route that acts on a
+  folder the request names refuses one that is not trusted, however it is spelled, though the Location is trusted'
+  (absolute, relative, link and dangling-link spellings; a file link outside Windows; the grant control).
 - When the components disagree, take the stricter answer and log it.
 
 **How to test:**

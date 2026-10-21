@@ -70,7 +70,7 @@ export class StrategyUnavailableError extends Schema.TaggedError<StrategyUnavail
 
 /**
  * The project's folder is not trusted, so no worktree is made or removed for it: both run its version control, whose
- * config can name programs (trust-first, class 1).
+ * config can name programs (trust-first, class 1). Or the folder a caller asked to make the worktree in is not trusted.
  */
 export class UntrustedError extends Schema.TaggedError<UntrustedError>()("Worktree.UntrustedError", {
   directory: AbsolutePath,
@@ -220,6 +220,9 @@ const layer = Layer.effect(
     const create = Effect.fn("Worktree.create")(function* (input: CreateInput, current?: WorktreeStrategies.Interface) {
       const row = yield* project(input.projectID)
       yield* requireTrusted(row.worktree)
+      // The caller can name the folder the worktree is made in, which can be another than the project's: that folder is
+      // written into, so it has to be trusted as well, decided by where it really is (class 3, class 4).
+      if (input.directory !== undefined) yield* requireTrusted(input.directory)
       const settings = yield* load(row.worktree, current)
       const selected = yield* getStrategy(settings.selected, settings.strategies)
       const directory = input.directory ?? settings.directory

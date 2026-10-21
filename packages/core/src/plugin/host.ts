@@ -20,6 +20,7 @@ import { Model } from "../model.js"
 import { Mcp } from "../mcp/index.js"
 import { Session } from "../session.js"
 import { PersistentPty } from "../persistent-pty.js"
+import { ProjectTrust } from "../project-trust.js"
 import { Provider } from "../provider.js"
 import { Reference } from "../reference.js"
 import { Rpc } from "../rpc.js"
@@ -29,6 +30,7 @@ import { Tool } from "../tool.js"
 import { Workspace } from "../workspace.js"
 import { Vcs } from "../vcs.js"
 import { WebSearch } from "../websearch.js"
+import { WorkspaceTrust } from "../workspace-trust.js"
 import { Worktree } from "../worktree.js"
 import { WorktreeStrategies } from "../worktree/strategies.js"
 import { Generate } from "../generate.js"
@@ -92,6 +94,18 @@ export const make = Effect.fn("PluginHost.make")(function* (
     ref.directory === location.directory && ref.workspaceID === location.workspaceID
   const response = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.map((data) => ({ location: locationInfo(), data })))
+  // A plugin drives sessions in this process without passing a server route, so its doors ask what the routes ask:
+  // whether the Location a session works in is trusted, which a plugin of a trusted folder can name in any other folder
+  // (trust-first, class 3, class 12).
+  const requireTrusted = (ref: Location.Ref) =>
+    Effect.gen(function* () {
+      const trust = yield* ProjectTrust.Service
+      if (yield* trust.trusted()) return
+      const state = yield* trust.status()
+      return yield* new WorkspaceTrust.UntrustedError({ directory: state.directory, persistent: state.persistent })
+    }).pipe(Effect.provide(locations.get(ref)))
+  const requireSessionTrusted = (sessionID: Session.ID) =>
+    sessions.get(sessionID).pipe(Effect.flatMap((info) => requireTrusted(info.location)))
 
   const decodeWorktree = Schema.decodeUnknownEffect(Worktree.Info)
   const decodeWorktrees = Schema.decodeUnknownEffect(Schema.Array(Worktree.ListEntry))
@@ -526,30 +540,37 @@ export const make = Effect.fn("PluginHost.make")(function* (
     },
     session: {
       hook: (name, callback, options) => hooks.register("session", name, callback, options),
-      create: (input) =>
-        sessions.create({
+      create: Effect.fn(function* (input) {
+        const own = Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID })
+        // A child session works in its parent's folder, whatever folder the input names.
+        yield* requireTrusted(
+          input?.parentID === undefined ? (input?.location ?? own) : (yield* sessions.get(input.parentID)).location,
+        )
+        return yield* sessions.create({
           id: input?.id,
           title: input?.title,
           agent: input?.agent,
           model: input?.model,
           metadata: input?.metadata,
           permissions: input?.permissions,
-          ...(input?.parentID === undefined
-            ? {
-                location:
-                  input?.location ??
-                  Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID }),
-              }
-            : { parentID: input.parentID }),
-        }),
+          ...(input?.parentID === undefined ? { location: input?.location ?? own } : { parentID: input.parentID }),
+        })
+      }),
       get: (input) => sessions.get(input.sessionID),
       remove: (input) => sessions.remove(input.sessionID),
       switchAgent: sessions.switchAgent,
       switchModel: sessions.switchModel,
-      prompt: sessions.prompt,
-      generate: (input) => sessions.generate(input).pipe(Effect.map((text) => ({ text }))),
-      command: (input) => sessions.command({ ...input, command: input.name }),
-      compact: sessions.compact,
+      prompt: (input) => requireSessionTrusted(input.sessionID).pipe(Effect.andThen(() => sessions.prompt(input))),
+      generate: (input) =>
+        requireSessionTrusted(input.sessionID).pipe(
+          Effect.andThen(() => sessions.generate(input)),
+          Effect.map((text) => ({ text })),
+        ),
+      command: (input) =>
+        requireSessionTrusted(input.sessionID).pipe(
+          Effect.andThen(() => sessions.command({ ...input, command: input.name })),
+        ),
+      compact: (input) => requireSessionTrusted(input.sessionID).pipe(Effect.andThen(() => sessions.compact(input))),
       update: Effect.fn(function* (input) {
         yield* sessions.get(input.sessionID)
         if (input.title !== undefined) yield* sessions.rename({ sessionID: input.sessionID, title: input.title })
@@ -558,8 +579,13 @@ export const make = Effect.fn("PluginHost.make")(function* (
         if (input.permissions !== undefined)
           yield* sessions.setPermissions({ sessionID: input.sessionID, permissions: input.permissions })
       }),
-      move: sessions.move,
-      synthetic: sessions.synthetic,
+      // The session goes on in the folder it moves to, so that is the folder that has to be trusted.
+      move: (input) =>
+        requireTrusted(Location.Ref.make({ directory: input.directory })).pipe(
+          Effect.andThen(() => sessions.move(input)),
+        ),
+      synthetic: (input) =>
+        requireSessionTrusted(input.sessionID).pipe(Effect.andThen(() => sessions.synthetic(input))),
       interrupt: (input) =>
         sessions
           .interrupt(input.sessionID, { resume: input.resume })

@@ -92,6 +92,15 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/WorkspaceTrust") {}
 
+/**
+ * Work was asked for in a folder that is not trusted, through a door that no server route stands in front of, such as a
+ * plugin's (trust-first, class 12). It names the folder whose grant would let the work through.
+ */
+export class UntrustedError extends Schema.TaggedError<UntrustedError>()("WorkspaceTrust.UntrustedError", {
+  directory: AbsolutePath,
+  persistent: Schema.Boolean,
+}) {}
+
 export interface Options {
   /**
    * Trust every folder except the home directory and filesystem roots, without a grant. Unset, it follows

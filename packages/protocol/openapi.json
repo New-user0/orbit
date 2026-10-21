@@ -9560,7 +9560,7 @@
             }
           }
         },
-        "description": "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location. Experimental: may change without compatibility guarantees.",
+        "description": "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location, but the folder it really lands in, once every link in the path is followed, must be trusted as the location must, unless it is Orbit's temporary folder. Experimental: may change without compatibility guarantees.",
         "summary": "Write file",
         "requestBody": {
           "content": {
@@ -11801,7 +11801,7 @@
             }
           }
         },
-        "description": "Spawn one non-interactive shell command for a location. Combined stdout/stderr is captured to a file pageable via output.",
+        "description": "Spawn one non-interactive shell command for a location, in `cwd` (taken from the location's folder when relative) or else the location's folder. The location and the folder the command runs in must both be trusted. Combined stdout/stderr is captured to a file pageable via output.",
         "summary": "Run shell command",
         "requestBody": {
           "content": {

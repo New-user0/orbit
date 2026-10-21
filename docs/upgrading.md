@@ -363,10 +363,17 @@ What changed:
   the home directory or a filesystem root still lasts only until Orbit restarts, and covers that folder alone.
 - `orb flow ls`, `show`, `cost`, `trace`, `watch` and `approve` need the folder trusted before they open its run store,
   and take `--trust`, `--standalone` and `--server` like `orb flow run`. `orb doctor` and `orb session import` take
-  `--trust` too.
-- A terminal checks the folder it is asked to start in as well as the Location's or the session's folder, and is refused
-  when either is untrusted. A relative `cwd` for `pty.create` is now taken from the Location's folder, where it used to
-  be taken from the server's working folder.
+  `--trust` too, and `orb doctor --probe` lists the models of the folder it asks about and probes (the one your shell
+  names in `PWD`), not of the folder the process runs in.
+- A terminal or a shell command (`POST /api/shell`) checks the folder it is asked to start in as well as the Location's
+  or the session's folder, and is refused when either is untrusted. A relative `cwd` for `pty.create` and
+  `shell.create` is now taken from the Location's folder, where it used to be taken from the server's working folder.
+  A file write (`fs.write`) is refused when the folder it really lands in, once every link in its path is followed, is
+  not trusted, unless that folder is Orbit's temporary folder. A worktree is not made in a `directory` that is not
+  trusted.
+- A plugin can no longer create a session in a folder that is not trusted, move one there, or send a session there a prompt,
+  a command, a synthetic message or a compaction, or generate text from it: those calls fail with `WorkspaceTrust.UntrustedError`, which names the
+  folder.
 - A session that began in a folder that is still untrusted, under an earlier release, takes no more work until the
   folder is trusted, and is not resumed after a restart until then.
 
