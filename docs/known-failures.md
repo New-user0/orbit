@@ -58,6 +58,7 @@ Each passes when re-run alone, unless its row says otherwise.
 
 | Package | Test (file) | Cause | On main |
 | --- | --- | --- | --- |
+| tui | `a session title is drawn safely in the <view> at 100 columns: trusted false` (`packages/tui/test/resume-title.test.tsx`; the home recent list, agent map and rename prompt rows) | On GitHub's Linux runner only, about one CI run in two since trust-first part 1 (06b2d566 to 89f853d8): a key sent after the title is drawn is not acted on, so the palette does not open (Ctrl+P) or its search stays empty (typed text), with no frame change over 120 passes. The palette helper presses Ctrl+P again until the palette shows (89f853d8), which cleared the first case. Not reproduced on Windows (10 parallel runs of the file) or in Linux Docker (the full tui suite, 3184 pass); not root-caused. Not seen on `m4-integration` CI. | no |
 | cli | `a headless run reaches only the configured model` (`packages/cli/test/egress.test.ts`) | Spawns a CLI child process and can time out when the machine is busy. Gate: see Gates. | intermittent |
 | cli | `an idle server makes no outbound connections` (`packages/cli/test/egress.test.ts`) | Same as above. Gate. | intermittent |
 | cli | (`packages/cli/test/flow.test.ts`) `a YAML workflow runs nodes as their needs finish, fills templates, and pauses at its gate` | Timing flake in the YAML gate test. | intermittent |
