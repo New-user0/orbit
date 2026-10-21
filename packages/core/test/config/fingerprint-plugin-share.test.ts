@@ -119,7 +119,32 @@ describe.skipIf(process.platform !== "win32")("a plugin folder with a name that 
       30_000,
     )
 
-  const hostOf = (name: string, count: number) => `10.255.255.${(name === "plugins" ? 10 : 30) + [1, 40, 41, 63].indexOf(count)}`
+  // The `skills` of a repository's orbit.json reach the fingerprint as written, before the key is withheld. A dot segment in
+  // front of the NT root must not turn the share into a folder that is walked part by part (each `readlink` of
+  // `\??\UNC\host` connects to the host). Each row has its own unreachable host, because Windows remembers a failed one.
+  for (const [index, spell] of [
+    (host: string) => `\\??\\UNC\\${host}\\share\\skills`,
+    (host: string) => `/./??/UNC/${host}/share/skills`,
+    (host: string) => `\\x\\..\\??\\UNC\\${host}\\share\\skills`,
+    (host: string) => `\\.\\??\\UNC\\${host}\\share\\skills`,
+    (host: string) => `\\x\\..\\??\\GLOBALROOT\\Device\\Mup\\${host}\\share\\skills`,
+  ].entries())
+    it.live(`an untrusted Config load does not connect to the share that a skills path spells (row ${index})`, () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        const repo = path.join(root, "work", "repo")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(repo, { recursive: true })
+          await Bun.write(path.join(repo, "orbit.json"), JSON.stringify({ skills: [spell(`10.255.255.${60 + index}`)] }))
+        })
+        const started = Date.now()
+        yield* untrustedLoad(root, repo)
+        expect(Date.now() - started).toBeLessThan(10_000)
+      }),
+    30_000,
+    )
+
+  const hostOf =(name: string, count: number) => `10.255.255.${(name === "plugins" ? 10 : 30) + [1, 40, 41, 63].indexOf(count)}`
 
   const untrustedLoad = (root: string, repo: string) =>
     Effect.gen(function* () {

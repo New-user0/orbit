@@ -16,6 +16,8 @@ import { IntegrationConnection } from "./integration/connection.js"
 import { Credential } from "@orbit/schema/credential"
 import { Location } from "./location.js"
 import { freeze } from "immer"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { AISDKNative } from "./aisdk-native.js"
 
 export const ID = Provider.ID
@@ -107,6 +109,9 @@ export const loadPackage = Effect.fn("Provider.loadPackage")(function* (input: s
   const builtin = builtins.get(specifier)
   if (builtin) return yield* importPackage(specifier, specifier, builtin)
   if (specifier.startsWith("file://")) return yield* importPackage(specifier, specifier)
+  // A plain absolute file path loads as the file: URL it stands for. A relative one is refused: it would resolve against
+  // this module's folder, not the one that wrote it.
+  if (path.isAbsolute(specifier)) return yield* importPackage(specifier, pathToFileURL(specifier).href)
   if (specifier.startsWith("@orbit/ai/")) {
     if (!compiled) return yield* importPackage(specifier, specifier)
     return yield* new LoadError({

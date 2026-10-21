@@ -1042,7 +1042,6 @@ get-unique: gu
 select-string: sls
 resolve-path: rvpa
 convert-path: cvpa
-format-hex: fhx
 get-alias: gal
 get-history: h history ghy
 get-module: gmo
@@ -1107,11 +1106,17 @@ get-service: gsv
 start-service: sasv
 stop-service: spsv
 out-gridview: ogv
-out-printer: lp
 `)
+// Windows PowerShell 5.1 only: pwsh 7 on Windows dropped these, and `lp` there runs a program found on PATH.
 const WINDOWS_POWERSHELL = aliases(`
 set-content: sc
+out-printer: lp
 invoke-webrequest: curl wget
+`)
+// PowerShell 7 defines these everywhere; Windows PowerShell 5.1 only on some builds (the Windows Server 2025 image that
+// GitHub runs has no `fhx`). Where the alias is missing the name runs a program found on PATH, so 5.1 never maps it.
+const POWERSHELL_7 = aliases(`
+format-hex: fhx
 `)
 
 const EXTENSIONS = /\.(exe|cmd|bat|com)$/i
@@ -1137,13 +1142,14 @@ export function aliasTarget(name: string, kind: Dialect, platform: NodeJS.Platfo
   return (
     EVERYWHERE.get(name) ??
     (windows ? WINDOWS.get(name) : undefined) ??
-    (windows && kind === "powershell-5.1" ? WINDOWS_POWERSHELL.get(name) : undefined)
+    (windows && kind === "powershell-5.1" ? WINDOWS_POWERSHELL.get(name) : undefined) ??
+    (kind === "pwsh" ? POWERSHELL_7.get(name) : undefined)
   )
 }
 
 /** Every name in the alias table, for the fixture recorder. */
 export function aliasNames() {
-  return [...new Set([...EVERYWHERE.keys(), ...WINDOWS.keys(), ...WINDOWS_POWERSHELL.keys()])]
+  return [...new Set([...EVERYWHERE.keys(), ...WINDOWS.keys(), ...WINDOWS_POWERSHELL.keys(), ...POWERSHELL_7.keys()])]
 }
 
 export const LOCATION = new Set(["set-location", "push-location", "pop-location", "new-psdrive"])

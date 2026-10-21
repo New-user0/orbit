@@ -146,7 +146,9 @@ export const Plugin = define({
                   yield* sessions.prompt({
                     ...input.prompt,
                     sessionID: child.id,
-                    text: ["You are a subagent spawned by another session.", text].join("\n"),
+                    text,
+                    // The child's prompt is built by the harness, not typed by the person: the effort keyword does not boost it.
+                    metadata: { origin: "agent" },
                     resume: false,
                   })
                   const recovery = {
@@ -268,7 +270,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
     const shell = yield* services.shell.resolve({ priority: "compat" })
     const entries = yield* services.config.entries()
     const sandbox = Config.latest(entries, "sandbox")
-    const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
+    const portable = Config.experimental(entries, "portable_shell_scanner") === true
     const cwd = services.location.directory
     const settingsEnv = services.location.workspaceID === undefined ? ConfigEnv.resolve(entries) : {}
     const failure = (source: string) => (error: Error) =>

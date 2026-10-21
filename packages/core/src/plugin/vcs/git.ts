@@ -1,15 +1,21 @@
 export * as VcsGitPlugin from "./git.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { FileDiff } from "@orbit/schema/file-diff"
+import { Trust } from "@orbit/schema/trust"
 import { Base, BranchList, FileStatus, Info, Mode } from "@orbit/schema/vcs"
+import { GitSubmodules } from "@orbit/util/git-submodules"
 import { AppProcess } from "@orbit/util/process"
+import { Bus } from "../../bus.js"
+import { Git } from "../../git.js"
 import { Location } from "../../location.js"
+import { ProjectTrust } from "../../project-trust.js"
 import type { Adapter, BranchOptions, DiffOptions } from "../../vcs.js"
 import { DiffError } from "../../vcs.js"
 import { gitExecutable } from "../../util/git-executable.js"
+import { guard } from "../../vcs/guard.js"
 import {
   chunksByFile,
   emptyPatch,
@@ -26,10 +32,28 @@ export const Plugin = define({
     if (location.vcs?.type !== "git") return
 
     const processes = yield* AppProcess.Service
-    const adapter = make(processes, {
-      directory: location.directory,
-      worktree: location.project.directory,
-    })
+    const bus = yield* Bus.Service
+    const trust = yield* ProjectTrust.Service
+    // Git applies the config of the folder it runs in, and a clone chooses that file. The terminal UI asks for the branch of
+    // the folder it opens before anyone has been asked about it, and `status` and `diff` run the filter and text conversion
+    // drivers that the config names, and `base` runs the `gpg.program` that it names for a commit with a signature
+    // (class 1). Until the folder is trusted no git is started: the branch is unknown, nothing has changed, and there is no
+    // diff. The answer is asked at each call, so a grant or revoke takes effect on the next one. Git follows what the
+    // folder's `.git` names, so the repository it lands in from each folder the provider runs it in must be trusted too.
+    const adapter = guard(
+      make(processes, {
+        directory: location.directory,
+        worktree: location.project.directory,
+      }),
+      () =>
+        trust
+          .git(location.directory)
+          .pipe(Effect.flatMap((allowed) => (allowed ? trust.git(location.project.directory) : Effect.succeed(false)))),
+    )
+    yield* bus.subscribe(Trust.Event.Updated).pipe(
+      Stream.runForEach(() => ctx.vcs.reload()),
+      Effect.forkScoped({ startImmediately: true }),
+    )
 
     yield* ctx.vcs.transform((editor) => {
       editor.add({
@@ -53,7 +77,12 @@ export const Plugin = define({
 function make(proc: AppProcess.Interface, input: { directory: string; worktree: string }) {
   // Listing commands scope pathspecs to the requested directory; per-file
   // commands run from the worktree root because git lists root-relative paths.
-  const ctx: Ctx = { git: makeGit(proc), directory: input.directory, worktree: input.worktree }
+  // The worktree is the folder that the trust decision covers, and git looks for the repository no further up than it.
+  const ctx: Ctx = {
+    git: makeGit(proc, Git.ceiling(input.worktree)),
+    directory: input.directory,
+    worktree: input.worktree,
+  }
 
   return {
     info: Effect.fn("VcsGit.info")(function* () {
@@ -165,12 +194,15 @@ const kind = (code: string): Kind => {
 
 const nuls = (text: string) => text.split("\0").filter(Boolean)
 
-function makeGit(proc: AppProcess.Interface) {
+function makeGit(proc: AppProcess.Interface, env: Record<string, string> | undefined) {
   const run = Effect.fnUntraced(
     function* (args: string[], opts: { cwd: string; maxOutputBytes?: number }) {
+      // A folder that git cannot be kept inside of gets no git, as if git had failed.
+      if (!env) return { exitCode: 1, text: () => "", truncated: false }
       const result = yield* proc.run(
-        ChildProcess.make(gitExecutable, [...cfg, ...args], {
+        ChildProcess.make(gitExecutable, GitSubmodules.skip([...cfg, ...args]), {
           cwd: opts.cwd,
+          env,
           extendEnv: true,
           stdin: "ignore",
         }),

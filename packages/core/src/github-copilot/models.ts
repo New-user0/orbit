@@ -159,6 +159,8 @@ function build(id: Model.ID, remote: UsableModel, baseURL: string, previous?: Mo
     providerID: Provider.ID.githubCopilot,
     family: previous?.family ?? Model.Family.make(remote.capabilities.family),
     name: previous?.name ?? remote.name,
+    // The provider reports no cutoff of its own, so the catalog's entry for the same model is the only source.
+    knowledge: previous?.knowledge,
     package: messages ? "@orbit/ai/providers/anthropic" : Provider.aisdk("@ai-sdk/github-copilot"),
     settings: Provider.mergeOverlay(previous?.settings, {
       baseURL: messages ? `${baseURL}/v1` : baseURL,

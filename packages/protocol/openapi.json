@@ -450,6 +450,205 @@
         }
       }
     },
+    "/api/location/instructions/note": {
+      "get": {
+        "tags": ["location"],
+        "operationId": "instruction.note.targets",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Instruction.NoteTargetEncoded"
+                      }
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "For the user, project and local scopes, in that order, the instruction file a note would be added to, whether it exists, whether the scope's instruction files are loaded here, and whether the file is loaded now. It reads the instruction files from disk again first, so the answer does not depend on a file watcher. Nothing is written.",
+        "summary": "List instruction note targets"
+      },
+      "post": {
+        "tags": ["location"],
+        "operationId": "instruction.note.add",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Instruction.NoteAddedEncoded"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
+        "summary": "Add an instruction note",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "type": "string",
+                    "enum": ["user", "project", "local"]
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["scope", "text"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/api/trust": {
       "get": {
         "tags": ["location"],
@@ -2495,6 +2694,9 @@
                       "$ref": "#/components/schemas/PromptInput.SkillAttachment"
                     }
                   },
+                  "editor": {
+                    "$ref": "#/components/schemas/Prompt.EditorContext"
+                  },
                   "metadata": {
                     "type": "object"
                   },
@@ -2633,6 +2835,9 @@
                     "items": {
                       "$ref": "#/components/schemas/PromptInput.SkillAttachment"
                     }
+                  },
+                  "editor": {
+                    "$ref": "#/components/schemas/Prompt.EditorContext"
                   },
                   "delivery": {
                     "anyOf": [
@@ -3905,6 +4110,92 @@
           },
           "required": true
         }
+      }
+    },
+    "/api/experimental/session/{sessionID}/instructions": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "experimental.session.instructions.preview",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SessionInstructionsPreview"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "List the instruction files the session's location has loaded in the order the model reads them, with their sizes and warnings, and the baseline and pending instruction update the next step would send. `blocked` names the unavailable sources that keep an uninitialized session from having a baseline.",
+        "summary": "Preview instructions"
       }
     },
     "/api/experimental/session/{sessionID}/instructions/entries": {
@@ -13292,12 +13583,113 @@
           "required": true
         }
       }
+    },
+    "/api/experimental/config/sources/changed": {
+      "post": {
+        "tags": ["config"],
+        "operationId": "experimental.config.sources.changed",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "<No Content>"
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Tell the location that files under its configuration directories were written, so that the owners that read them rebuild without a full reload. Paths outside the directories of the location's configuration are ignored. Nothing is reloaded, so asks that are pending keep waiting.",
+        "summary": "Report changed config files",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 100
+                  }
+                },
+                "required": ["paths"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
     "schemas": {
       "Agent.Color": {
         "type": "string"
+      },
+      "Agent.Context": {
+        "type": "object",
+        "properties": {
+          "instructions": {
+            "type": "boolean"
+          },
+          "git_status": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "What the agent leaves out of its context"
       },
       "Agent.Info": {
         "type": "object",
@@ -13336,10 +13728,298 @@
           },
           "permissions": {
             "$ref": "#/components/schemas/Permission.Ruleset"
+          },
+          "modelTier": {
+            "$ref": "#/components/schemas/Agent.ModelTier"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "object",
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "deny": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "permissionMode": {
+            "$ref": "#/components/schemas/Permission.Mode"
+          },
+          "mcpServers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent.McpServer"
+            }
+          },
+          "hooks": {
+            "type": "object",
+            "properties": {
+              "SessionStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SessionEnd": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Setup": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "UserPromptSubmit": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUseFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionRequest": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionDenied": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Stop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "StopFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCreated": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCompleted": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TeammateIdle": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Notification": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Elicitation": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ElicitationResult": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ConfigChange": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "InstructionsLoaded": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "CwdChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "FileChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeCreate": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeRemove": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "disabled": {
+                "type": "boolean"
+              },
+              "managed_only": {
+                "type": "boolean"
+              },
+              "http": {
+                "$ref": "#/components/schemas/Config.Hooks.HttpPolicy"
+              }
+            },
+            "additionalProperties": false
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "initialPrompt": {
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/Agent.Memory"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "isolation": {
+            "$ref": "#/components/schemas/Agent.Isolation"
+          },
+          "context": {
+            "$ref": "#/components/schemas/Agent.Context"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "$ref": "#/components/schemas/Config.Scope"
+              },
+              "path": {
+                "type": "string"
+              },
+              "plugin": {
+                "type": "string"
+              }
+            },
+            "required": ["scope"],
+            "additionalProperties": false
           }
         },
         "required": ["id", "name", "request", "mode", "hidden", "permissions"],
         "additionalProperties": false
+      },
+      "Agent.Isolation": {
+        "type": "string",
+        "enum": ["worktree"],
+        "description": "Run the agent in a separate git worktree"
+      },
+      "Agent.McpServer": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Mcp.LocalConfigEncoded"
+                },
+                {
+                  "$ref": "#/components/schemas/Mcp.RemoteConfigEncoded"
+                }
+              ]
+            },
+            "minProperties": 1,
+            "maxProperties": 1
+          }
+        ],
+        "description": "The name of a configured MCP server, or a record with one key that names an inline server and holds its config"
+      },
+      "Agent.Memory": {
+        "type": "string",
+        "enum": ["user", "project", "local"],
+        "description": "Which memory scope the agent keeps its notes in"
+      },
+      "Agent.ModelTier": {
+        "type": "string",
+        "enum": ["inherit", "small", "large"],
+        "description": "A provider-neutral model choice: inherit uses the caller's model, small the configured small model and large the configured large model"
+      },
+      "Agent.ModelTierEncoded": {
+        "type": "string"
       },
       "AgentNotFoundErrorEncoded": {
         "type": "object",
@@ -13411,29 +14091,16 @@
           "model": {
             "anyOf": [
               {
-                "type": "string",
-                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+                "$ref": "#/components/schemas/Config.ModelSelectionEncoded"
               },
               {
-                "type": "object",
-                "properties": {
-                  "providerID": {
-                    "type": "string",
-                    "pattern": "^[^/#]+$"
-                  },
-                  "model": {
-                    "type": "string",
-                    "pattern": "^[^#]+$"
-                  },
-                  "variant": {
-                    "type": "string",
-                    "pattern": "^[^#]+$"
-                  }
-                },
-                "required": ["providerID", "model"],
-                "additionalProperties": false
+                "$ref": "#/components/schemas/Agent.ModelTierEncoded"
               }
             ]
+          },
+          "effort": {
+            "type": "string",
+            "pattern": "^[^#]+$"
           },
           "request": {
             "type": "object",
@@ -13471,11 +14138,267 @@
             "type": "integer",
             "exclusiveMinimum": 0
           },
+          "max_turns": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
           "disabled": {
             "type": "boolean"
           },
           "permissions": {
             "$ref": "#/components/schemas/Permission.Ruleset"
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disallowed_tools": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permission_mode": {
+            "$ref": "#/components/schemas/Permission.Mode"
+          },
+          "mcp_servers": {
+            "type": "array"
+          },
+          "hooks": {
+            "type": "object",
+            "properties": {
+              "SessionStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SessionEnd": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Setup": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "UserPromptSubmit": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUse": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostToolUseFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionRequest": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionDenied": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Stop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "StopFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCreated": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCompleted": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TeammateIdle": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Notification": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PreCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PostCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Elicitation": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ElicitationResult": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ConfigChange": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "InstructionsLoaded": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "CwdChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "FileChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeCreate": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeRemove": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "disabled": {
+                "type": "boolean"
+              },
+              "managed_only": {
+                "type": "boolean"
+              },
+              "http": {
+                "$ref": "#/components/schemas/Config.Hooks.HttpPolicy"
+              }
+            },
+            "additionalProperties": false
+          },
+          "skills": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initial_prompt": {
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/Agent.Memory"
+          },
+          "background": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "enum": ["true", "false"]
+              }
+            ]
+          },
+          "isolation": {
+            "$ref": "#/components/schemas/Agent.Isolation"
+          },
+          "context": {
+            "$ref": "#/components/schemas/Agent.Context"
           }
         },
         "additionalProperties": false
@@ -14011,14 +14934,32 @@
               }
             ]
           },
+          "model_aliases": {
+            "$ref": "#/components/schemas/Config.ModelAliasesEncoded"
+          },
           "output_token_cap": {
             "type": "integer",
             "exclusiveMinimum": 0
+          },
+          "git_status": {
+            "type": "boolean"
           },
           "default_agent": {
             "type": "string"
           },
           "output_style": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "system_prompt": {
+            "type": "string"
+          },
+          "system_prompt_file": {
+            "type": "string"
+          },
+          "append_system_prompt": {
             "type": "string"
           },
           "update": {
@@ -14310,6 +15251,18 @@
             },
             "additionalProperties": false
           },
+          "attribution": {
+            "type": "object",
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "pr": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
           "sandbox": {
             "type": "object",
             "properties": {
@@ -14448,6 +15401,12 @@
             }
           },
           "instructions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "instructions_exclude": {
             "type": "array",
             "items": {
               "type": "string"
@@ -14676,6 +15635,66 @@
           }
         ]
       },
+      "Config.ModelAliasesEncoded": {
+        "type": "object",
+        "properties": {
+          "small": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "providerID": {
+                    "type": "string",
+                    "pattern": "^[^/#]+$"
+                  },
+                  "model": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  },
+                  "variant": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  }
+                },
+                "required": ["providerID", "model"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "large": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "providerID": {
+                    "type": "string",
+                    "pattern": "^[^/#]+$"
+                  },
+                  "model": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  },
+                  "variant": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  }
+                },
+                "required": ["providerID", "model"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "Config.ModelEncoded": {
         "type": "object",
         "properties": {
@@ -14768,6 +15787,33 @@
         },
         "additionalProperties": false
       },
+      "Config.ModelSelectionEncoded": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string",
+                "pattern": "^[^/#]+$"
+              },
+              "model": {
+                "type": "string",
+                "pattern": "^[^#]+$"
+              },
+              "variant": {
+                "type": "string",
+                "pattern": "^[^#]+$"
+              }
+            },
+            "required": ["providerID", "model"],
+            "additionalProperties": false
+          }
+        ]
+      },
       "Config.Patch": {
         "type": "object",
         "properties": {
@@ -14782,6 +15828,16 @@
             ]
           },
           "output_style": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "language": {
             "anyOf": [
               {
                 "type": "string"
@@ -15934,6 +16990,168 @@
           }
         },
         "required": ["data"],
+        "additionalProperties": false
+      },
+      "Instruction.NoteAddedEncoded": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": ["user", "project", "local"]
+          },
+          "path": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "loaded": {
+            "type": "boolean"
+          }
+        },
+        "required": ["scope", "path", "created", "loaded"],
+        "additionalProperties": false
+      },
+      "Instruction.NoteTargetEncoded": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": ["user", "project", "local"]
+          },
+          "path": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "loaded": {
+            "type": "boolean"
+          }
+        },
+        "required": ["scope", "path", "exists", "enabled", "loaded"],
+        "additionalProperties": false
+      },
+      "Instruction.StatusEncoded": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.StatusFileEncoded"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.StatusWarningEncoded"
+            }
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": ["files", "warnings", "available"],
+        "additionalProperties": false
+      },
+      "Instruction.StatusFileEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["managed", "user", "project", "local"]
+          },
+          "chars": {
+            "type": "integer"
+          },
+          "importedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["path", "kind", "chars"],
+        "additionalProperties": false
+      },
+      "Instruction.StatusWarningEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["size", "import-untrusted", "import-external"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["path", "type", "message"],
         "additionalProperties": false
       },
       "InstructionEntry.Info": {
@@ -17111,6 +18329,10 @@
           "name": {
             "type": "string"
           },
+          "knowledge": {
+            "type": "string",
+            "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])$"
+          },
           "compatibility": {
             "$ref": "#/components/schemas/Model.Compatibility"
           },
@@ -17292,6 +18514,11 @@
       "Permission.Effect": {
         "type": "string",
         "enum": ["allow", "deny", "ask"]
+      },
+      "Permission.Mode": {
+        "type": "string",
+        "enum": ["default", "accept-edits", "plan", "bypass", "dont-ask", "auto"],
+        "description": "How permission requests are decided: default asks, accept-edits allows file edits, plan is read-only, bypass allows everything, dont-ask refuses what would be asked, auto lets a classifier decide"
       },
       "Permission.Reply": {
         "type": "string",
@@ -17962,6 +19189,35 @@
       "Prompt.Base64": {
         "type": "string",
         "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+      },
+      "Prompt.EditorContext": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "selection": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["start", "end", "text"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["path"],
+        "additionalProperties": false
       },
       "Prompt.FileAttachment": {
         "type": "object",
@@ -18748,6 +20004,9 @@
             "items": {
               "$ref": "#/components/schemas/Prompt.SkillAttachment"
             }
+          },
+          "editor": {
+            "$ref": "#/components/schemas/Prompt.EditorContext"
           },
           "metadata": {
             "type": "object"
@@ -19755,6 +21014,9 @@
               "$ref": "#/components/schemas/Prompt.SkillAttachment"
             }
           },
+          "editor": {
+            "$ref": "#/components/schemas/Prompt.EditorContext"
+          },
           "turn": {
             "$ref": "#/components/schemas/Session.Turn.Options"
           },
@@ -19948,6 +21210,49 @@
           }
         },
         "required": ["data"],
+        "additionalProperties": false
+      },
+      "SessionInstructionsPreview": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/Instruction.StatusEncoded"
+          },
+          "initial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "update": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocked": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["status"],
         "additionalProperties": false
       },
       "SessionInterruptResponse": {
@@ -20536,7 +21841,7 @@
           "network",
           "settings"
         ],
-        "description": "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, environment variables for the programs it starts, formatters, language servers, the sandbox, skill folders and the hooks their files carry, anything that reaches the network or is paid for, and other settings that point Orbit at code or files."
+        "description": "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, the attribution text added to commits and pull requests, environment variables for the programs it starts, formatters, language servers, the sandbox, skill folders and the hooks their files carry, anything that reaches the network or is paid for, and other settings that point Orbit at code or files."
       },
       "Trust.Source": {
         "type": "string",

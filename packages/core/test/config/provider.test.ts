@@ -253,6 +253,36 @@ describe("ConfigProviderPlugin.Plugin", () => {
     }),
   )
 
+  it.effect("gives a configured alias of a catalog model its cutoff, and a model that only config lists none", () =>
+    Effect.gen(function* () {
+      const providers = yield* Provider.Service
+      const models = yield* Model.Service
+      const providerID = Provider.ID.make("custom")
+      yield* providers.transform((editor) => {
+        editor.models.update(providerID, Model.ID.make("base"), (model) => {
+          model.knowledge = Model.Knowledge.make("2025-03")
+        })
+      })
+
+      yield* addPlugin([
+        new Document({
+          type: "document",
+          info: decode({
+            providers: {
+              custom: {
+                package: "aisdk:@ai-sdk/openai-compatible",
+                models: { alias: { modelID: "base" }, listed: {} },
+              },
+            },
+          }),
+        }),
+      ])
+
+      expect((yield* models.get(providerID, Model.ID.make("alias")))?.knowledge).toBe(Model.Knowledge.make("2025-03"))
+      expect((yield* models.get(providerID, Model.ID.make("listed")))?.knowledge).toBeUndefined()
+    }),
+  )
+
   it.effect("merges partial config capabilities onto the base model's existing fields", () =>
     Effect.gen(function* () {
       const providers = yield* Provider.Service

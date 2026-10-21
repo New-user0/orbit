@@ -2,15 +2,18 @@ import { afterAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { ParsedSize } from "@orbit/util/parsed-size"
 import {
   importsModule,
   loadSuite,
   loadWorkflow,
   suiteAgents,
   suiteCommands,
+  suiteModels,
   workflowAgents,
   workflowApprovals,
   workflowCommands,
+  workflowModels,
 } from "../src/load"
 import type { Context } from "../src/workflow"
 
@@ -861,4 +864,85 @@ test("a JSON file is no workflow, as loadWorkflow cannot load one, so workflowCo
   expect(await workflowApprovals(file)).toEqual([])
   expect(await workflowAgents(file)).toEqual([])
   await expect(loadWorkflow(file)).rejects.toThrow("must export default { name, run(ctx) }")
+})
+
+// Class 7: YAML keeps an alias as one more reference to what its anchor names, and `validate` and the listers write a node
+// out once for each, so a file of a few hundred bytes can stand for a million values, a file of 24 kilobytes for 20
+// megabytes of text, and a node for itself. The parser lets each of these rows through: the refusal is `read`'s, before
+// trust is asked. Mutation: deleting the `ParsedSize.within` check in `read` lets each row through to `validate` and the
+// listers, which write it out (megabytes for each node) or fail on the node that holds itself with a message about a
+// cyclic structure, so no row throws the refusal.
+test("a workflow or suite whose aliases come to more than its text is refused by every reader before trust", async () => {
+  // `a0` lists ten values and each later anchor lists the one before ten times, so `a5` stands for a million.
+  const anchors = [
+    `a0: &a0 [${Array(10).fill("x").join(", ")}]`,
+    ...Array.from({ length: 5 }, (_, index) => `a${index + 1}: &a${index + 1} [${Array(10).fill(`*a${index}`).join(", ")}]`),
+  ]
+  const text = [`s: &s "${"y".repeat(20_000)}"`, `t: [${Array(1_000).fill("*s").join(", ")}]`]
+  const workflowReaders = [loadWorkflow, workflowCommands, workflowApprovals, workflowAgents, workflowModels]
+  const suiteReaders = [loadSuite, suiteCommands, suiteAgents, suiteModels]
+  const files: ReadonlyArray<readonly [string, readonly string[], ReadonlyArray<(file: string) => Promise<unknown>>]> = [
+    [
+      "aliased-workflow.yaml",
+      ["name: data", ...anchors, "nodes:", "  - id: a", "    prompt: say ok", "    agent: *a5"],
+      workflowReaders,
+    ],
+    [
+      "text-workflow.yaml",
+      ["name: data", ...text, "nodes:", "  - id: a", "    prompt: say ok", "    agent: *s"],
+      workflowReaders,
+    ],
+    ["itself-workflow.yaml", ["name: data", "nodes: &n", "  - id: a", "    prompt: say ok", "    agent: *n"], workflowReaders],
+    ["aliased-suite.yaml", ["name: data", ...anchors, "tasks:", "  - id: t", "    prompt: say ok", "    checks: *a5"], suiteReaders],
+  ]
+  for (const [name, lines, readers] of files) {
+    const file = path.join(root, name)
+    await Bun.write(file, lines.join("\n") + "\n")
+    for (const reader of readers) {
+      const refused = await reader(file).then(
+        () => "",
+        (error: Error) => error.message,
+      )
+      expect({ name, reader: reader.name, refused }).toEqual({
+        name,
+        reader: reader.name,
+        refused: expect.stringContaining(`${JSON.stringify(file)} comes to more than its text once its aliases are followed`),
+      })
+    }
+  }
+})
+
+test("control: an anchor named in two places is read as written", async () => {
+  const file = path.join(root, "anchor-twice.yaml")
+  const lines = ["name: data", "ask: &ask say ok", "nodes:", "  - id: a", "    prompt: *ask", "  - id: b", "    prompt: *ask"]
+  await Bun.write(file, lines.join("\n") + "\n")
+  expect((await loadWorkflow(file)).name).toBe("data")
+  expect(await workflowCommands(file)).toEqual([])
+})
+
+// The allowance grows with the text: a file that writes out more than `ParsedSize.MARGIN` without one alias is read by
+// every reader. Mutation: measuring the value against the margin alone, without the length of the text, refuses both.
+test("control: a workflow and a suite written out past the margin, without aliases, are read by every reader", async () => {
+  const long = "y".repeat(2 * ParsedSize.MARGIN)
+  const files: ReadonlyArray<readonly [string, string, ReadonlyArray<(file: string) => Promise<unknown>>]> = [
+    [
+      "long-workflow.yaml",
+      `name: data\nnodes:\n  - id: a\n    prompt: ${long}\n`,
+      [loadWorkflow, workflowCommands, workflowApprovals, workflowAgents, workflowModels],
+    ],
+    ["long-suite.yaml", `name: data\ntasks:\n  - id: t\n    prompt: ${long}\n`, [loadSuite, suiteCommands, suiteAgents, suiteModels]],
+  ]
+  for (const [name, text, readers] of files) {
+    const file = path.join(root, name)
+    await Bun.write(file, text)
+    for (const reader of readers) {
+      const failure = await reader(file).then(
+        () => "",
+        (error: Error) => error.message,
+      )
+      expect({ name, reader: reader.name, failure }).toEqual({ name, reader: reader.name, failure: "" })
+    }
+  }
+  expect((await loadWorkflow(path.join(root, "long-workflow.yaml"))).name).toBe("data")
+  expect((await loadSuite(path.join(root, "long-suite.yaml"))).name).toBe("data")
 })

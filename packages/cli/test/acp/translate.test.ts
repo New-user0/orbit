@@ -133,6 +133,10 @@ describe("acp turn translation", () => {
     const unknown = started(failed(root, { type: "limit.cost-unknown", message: "No price." }))
     expect(ACPTranslate.failure(unknown.state)).toMatchObject({ errorName: "limit.cost-unknown" })
     expect(ACPTranslate.response(unknown.state, root, "failed").stopReason).not.toBe("max_turn_requests")
+    // The same for a token limit that cannot be counted because a response reported no tokens.
+    const noTokens = started(failed(root, { type: "limit.tokens-unknown", message: "No tokens." }))
+    expect(ACPTranslate.failure(noTokens.state)).toMatchObject({ errorName: "limit.tokens-unknown" })
+    expect(ACPTranslate.response(noTokens.state, root, "failed").stopReason).not.toBe("max_turn_requests")
   })
 
   test("forwards any synthetic message that names a notice, and none that does not", () => {

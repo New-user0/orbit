@@ -22,7 +22,7 @@ windows(
     const ran = await plant(folder, "git")
     using _ = currentDirectoryOnPath()
 
-    const child = Bun.spawn([process.execPath, "run", "src/index.ts", "flow", "clean"], {
+    const child = Bun.spawn([process.execPath, "run", "src/index.ts", "flow", "clean", "--standalone", "--trust"], {
       cwd: path.join(import.meta.dir, ".."),
       // The ceiling keeps git from finding a repository above the temporary folder, which would not be an error.
       env: isolatedEnv(root.path, { USERPROFILE: root.path, PWD: folder, GIT_CEILING_DIRECTORIES: root.path }),

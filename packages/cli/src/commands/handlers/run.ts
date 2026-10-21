@@ -7,7 +7,7 @@ import { ServerConnection } from "../../services/server-connection"
 import { errorMessage } from "../../util/error"
 import { findResumeSession } from "../../session-target"
 import { ConfigOverlay } from "../../config-overlay"
-import { bypassRefusal } from "../../util/managed-bypass"
+import { bypassDecision, printBypassNotice } from "../../util/managed-bypass"
 import { mcpConfigRefusal } from "../../util/managed-mcp"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
@@ -156,12 +156,12 @@ export function headlessInput(input: HeadlessInput) {
     }).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
     if (stopped !== undefined) return reportRunError({ format, envelope }, stopped)
     // Before the first prompt, and in the format that was asked for, like the trust refusal above.
-    const bypass = yield* bypassRefusal(
+    const bypass = yield* bypassDecision(
       client,
       directory(),
       input.auto || input.yolo || input.dangerouslySkipPermissions,
     )
-    if (bypass !== undefined) return reportRunError({ format, envelope }, bypass)
+    printBypassNotice(bypass.notice, format, envelope)
     const mcpOnly = yield* mcpConfigRefusal(client, directory(), applied.named)
     if (mcpOnly !== undefined) return reportRunError({ format, envelope }, mcpOnly)
     yield* Effect.promise(() =>
@@ -189,7 +189,7 @@ export function headlessInput(input: HeadlessInput) {
         maxCost: Option.getOrUndefined(input.maxCost),
         maxTokens: Option.getOrUndefined(input.maxTokens),
         fallbackModel: Option.getOrUndefined(input.fallbackModel),
-        auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
+        auto: bypass.auto,
       }),
     )
   })

@@ -96,8 +96,13 @@ describe("ShellTool.concurrent", () => {
     expect(await answer(command, windows)).toBe(false)
   })
 
-  test("runs nothing beside others when the Windows Path ends in a separator", async () => {
-    expect(await answer("ls", { ...windows, env: { Path: "C:\\Windows\\System32;" } })).toBe(false)
+  // FU-M3-180: Git Bash drops an empty entry, so a Path that ends in a separator does not make a command unsafe to overlap.
+  test("runs beside others when the Windows Path ends in a separator", async () => {
+    expect(await answer("ls", { ...windows, env: { Path: "C:\\Windows\\System32;" } })).toBe(true)
+  })
+
+  test("runs nothing beside others when the Windows Path holds a relative entry", async () => {
+    expect(await answer("ls", { ...windows, env: { Path: "C:\\Windows\\System32;.;" } })).toBe(false)
   })
 
   const others = [

@@ -3,6 +3,7 @@ import { Duration, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { ConfigNormalize } from "@orbit/core/config/normalize"
 import { Info } from "@orbit/schema/config"
+import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigHooks } from "@orbit/schema/config/hooks"
 
 const options = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
@@ -93,6 +94,42 @@ describe("ConfigNormalize", () => {
     }
   })
 
+  describe("system prompt keys", () => {
+    test("accepts the three keys", () => {
+      const result = decoded({ system_prompt: "A", system_prompt_file: "p.md", append_system_prompt: "B" }) as Record<
+        string,
+        unknown
+      >
+      expect(result.system_prompt).toBe("A")
+      expect(result.system_prompt_file).toBeUndefined()
+      expect(result.append_system_prompt).toBe("B")
+      expect(decoded({ system_prompt_file: "p.md" }).system_prompt_file).toBe("p.md")
+    })
+
+    test("keeps system_prompt and reports a conflict when one document sets both replacement keys", () => {
+      const result = normalized({ system_prompt: "A", system_prompt_file: "p.md" })
+      expect(result.encoded.system_prompt).toBe("A")
+      expect(result.encoded).not.toHaveProperty("system_prompt_file")
+      expect(result.diagnostics).toEqual([
+        { kind: "conflict", path: ["system_prompt_file"], message: "retained system_prompt over system_prompt_file" },
+      ])
+    })
+
+    test("treats an empty string as unset, so the pair does not conflict", () => {
+      const result = normalized({ system_prompt: "", system_prompt_file: "p.md" })
+      expect(result.diagnostics).toEqual([])
+      expect(result.encoded.system_prompt_file).toBe("p.md")
+    })
+
+    test("rejects a non-string value for that key alone", () => {
+      const result = normalized({ system_prompt: 5, append_system_prompt: "B", system_prompt_file: ["x"] })
+      expect(result.encoded).not.toHaveProperty("system_prompt")
+      expect(result.encoded).not.toHaveProperty("system_prompt_file")
+      expect(result.encoded.append_system_prompt).toBe("B")
+      expect(result.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(["invalid", "invalid"])
+    })
+  })
+
   test("keeps unrelated native fields when a legacy field is present", () => {
     const result = decoded({ snapshot: false, agents: { reviewer: { system: "Use V2" } } })
     expect(result.snapshots).toBe(false)
@@ -118,6 +155,16 @@ describe("ConfigNormalize", () => {
     expect(invalid.encoded.fallback_model).toBeUndefined()
     expect(invalid.encoded.share).toBe("auto")
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+  })
+
+  test("accepts attribution strings, and a bad field costs only itself", () => {
+    expect(decoded({ attribution: { commit: "", pr: "Made with care" } }).attribution).toEqual({
+      commit: "",
+      pr: "Made with care",
+    })
+    const invalid = normalized({ attribution: { commit: "Co-authored-by: A", pr: 7 } })
+    expect(invalid.encoded.attribution).toEqual({ commit: "Co-authored-by: A" })
+    expect(invalid.diagnostics.map((item) => [item.kind, item.path])).toContainEqual(["invalid", ["attribution", "pr"]])
   })
 
   test("keeps webfetch verbatim hosts and reports a malformed value without touching its siblings", () => {
@@ -172,20 +219,34 @@ describe("ConfigNormalize", () => {
   test("preserves arbitrary JSON-round-tripped native configuration", () => {
     FastCheck.assert(
       FastCheck.property(Schema.toArbitrary(Info)(FastCheck), (info) => {
-        const source = JSON.parse(JSON.stringify(Schema.encodeSync(Info)(info)))
+        const generated = JSON.parse(JSON.stringify(Schema.encodeSync(Info)(info)))
+        // An agent whose name is not a plain one defines nothing, so it is not expected to come through.
+        const source =
+          generated.agents === undefined
+            ? generated
+            : {
+                ...generated,
+                agents: Object.fromEntries(
+                  Object.entries(generated.agents).filter(([name]) => ConfigAgent.isName(name)),
+                ),
+              }
         const result = normalized(source)
         // Normalizing hooks drops the entries their event or hook type cannot honor, and reports each one.
-        const expected =
+        const hooked =
           source.hooks === undefined
             ? source
             : { ...source, hooks: withoutReportedHooks(source.hooks, result.diagnostics) }
+        // A document that sets both replacement keys keeps the text and loses the file.
+        const { system_prompt_file: dropped, ...withoutFile } = hooked
+        const expected = hooked.system_prompt && dropped ? withoutFile : hooked
         expect(Schema.decodeUnknownSync(Info)(result.encoded)).toEqual(
           Schema.decodeUnknownSync(Info)(withoutEmptyCompatibilityContainers(expected)),
         )
       }),
       { numRuns: 100 },
     )
-  })
+    // The generated documents are large (agents, hooks, mcp), so this takes longer than the 5 s default on a loaded host.
+  }, 30_000)
 
   test("merges named maps by entry and gives valid native entries precedence", () => {
     const result = normalized({
@@ -369,6 +430,27 @@ describe("ConfigNormalize", () => {
     expect(result.encoded.instructions).toEqual(["one", "three"])
     expect(result.encoded.permissions).toEqual([{ action: "read", resource: "*", effect: "allow" }])
     expect(result.diagnostics.filter((item) => item.kind === "invalid")).toHaveLength(4)
+  })
+
+  test("recovers list items for instructions_exclude, and reports each one that is not text", () => {
+    const result = normalized({ instructions_exclude: ["**/a/**", 2, null, "/b/AGENTS.md", { x: 1 }] })
+    expect(result.encoded.instructions_exclude).toEqual(["**/a/**", "/b/AGENTS.md"])
+    expect(result.diagnostics.filter((item) => item.kind === "invalid").map((item) => item.path)).toEqual([
+      ["instructions_exclude", "1"],
+      ["instructions_exclude", "2"],
+      ["instructions_exclude", "4"],
+    ])
+  })
+
+  test("omits an instructions_exclude that is not a list, and keeps the empty list it was given", () => {
+    const bad = normalized({ instructions_exclude: "**/AGENTS.md", instructions: ["one"] })
+    expect(bad.encoded).not.toHaveProperty("instructions_exclude")
+    expect(bad.encoded.instructions).toEqual(["one"])
+    expect(bad.diagnostics.filter((item) => item.kind === "invalid").map((item) => item.path)).toEqual([
+      ["instructions_exclude"],
+    ])
+    expect(normalized({ instructions_exclude: [] }).encoded.instructions_exclude).toEqual([])
+    expect(normalized({}).encoded).not.toHaveProperty("instructions_exclude")
   })
 
   test("omits malformed collection roots instead of synthesizing empty values", () => {
@@ -928,5 +1010,95 @@ describe("ConfigNormalize", () => {
         { numRuns: 100 },
       )
     })
+  })
+})
+
+describe("ConfigNormalize agent definitions", () => {
+  test("migrates an orbit.json agent whose tools is a map of booleans, and keeps the entry", () => {
+    const result = normalized({ agents: { reviewer: { description: "Reviews", tools: { edit: false } } } })
+    expect(result.encoded.agents).toEqual({
+      reviewer: { description: "Reviews", permissions: [{ action: "edit", resource: "*", effect: "deny" }] },
+    })
+  })
+
+  test("reads a string or a list of tools as the native allow list", () => {
+    const input = { agents: { a: { tools: "read, grep" }, b: { tools: ["read"] } } }
+    expect(decoded(input).agents?.a?.tools).toEqual(["read", "grep"])
+    expect(normalized(input).diagnostics).toEqual([])
+  })
+
+  test.each(["fast", "default", "sonnet", "not a model", 3])(
+    "drops the model %p with a diagnostic and keeps the agent",
+    (model) => {
+      const result = normalized({ agents: { a: { description: "Kept", model } } })
+      expect(result.encoded.agents).toEqual({ a: { description: "Kept" } })
+      expect(result.diagnostics.map((item) => [item.kind, item.path.join(".")])).toEqual([
+        ["invalid", "agents.a.model"],
+      ])
+    },
+  )
+
+  test.each([
+    [" Inherit ", "inherit"],
+    ["SMALL", "small"],
+    ["large", "large"],
+  ])("reads the model alias %p", (model, tier) => {
+    expect<unknown>(decoded({ agents: { a: { model } } }).agents?.a?.model).toBe(tier)
+  })
+
+  test("keeps the fields of an agent that decode and drops each bad one on its own", () => {
+    const result = normalized({
+      agents: {
+        a: {
+          description: "Kept",
+          max_turns: 0,
+          memory: "global",
+          isolation: "remote",
+          background: "yes",
+          effort: "a#b",
+        },
+      },
+    })
+    expect(result.encoded.agents).toEqual({ a: { description: "Kept" } })
+    expect(result.diagnostics.map((item) => item.path.join(".")).toSorted()).toEqual([
+      "agents.a.background",
+      "agents.a.effort",
+      "agents.a.isolation",
+      "agents.a.max_turns",
+      "agents.a.memory",
+    ])
+  })
+
+  test("keeps the good items of mcp_servers and drops the others", () => {
+    const local = { type: "local", command: ["x"] }
+    const parsed = decoded({ agents: { a: { mcp_servers: ["docs", 42, { one: local }, { one: local, two: local }] } } })
+    expect<unknown>(parsed.agents?.a?.mcp_servers).toEqual(["docs", { one: local }])
+  })
+
+  test.each(["../x", "a\\b", "a:b", "a b", "", ".hidden", "nul", "con.txt", "a/../b", "a//b", "x".repeat(65)])(
+    "defines no agent for the name %p, in agents, agent and mode, and the sibling loads",
+    (name) => {
+      const result = normalized({
+        agents: { [name]: { description: "bad" }, ok: { description: "ok" } },
+        agent: { [name]: { description: "bad" }, legacy: { description: "ok" } },
+        mode: { [name]: { description: "bad" }, modal: { description: "ok" } },
+      })
+      expect(Object.keys(result.encoded.agents as object).toSorted()).toEqual(["legacy", "modal", "ok"])
+      expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(
+        ["agent", "mode", "agents"].map((key) => [key, name].join(".")),
+      )
+    },
+  )
+
+  test("keeps a nested agent name", () => {
+    expect(
+      Object.keys(normalized({ agents: { "team/helper": { description: "ok" } } }).encoded.agents as object),
+    ).toEqual(["team/helper"])
+  })
+
+  test("normalizes model_aliases field by field", () => {
+    const result = normalized({ model_aliases: { small: "acme/cheap", large: "no-provider" } })
+    expect(result.encoded.model_aliases).toEqual({ small: { providerID: "acme", model: "cheap" } })
+    expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(["model_aliases.large"])
   })
 })

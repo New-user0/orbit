@@ -120,7 +120,7 @@ export const initialize = Effect.fn("InstructionState.initialize")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   seq: number,
-  values: Instructions.Values,
+  seeded: { readonly initial: Instructions.Values; readonly current: Instructions.Values },
 ) {
   yield* db
     .insert(InstructionStateTable)
@@ -128,8 +128,8 @@ export const initialize = Effect.fn("InstructionState.initialize")(function* (
       session_id: sessionID,
       epoch_start: seq,
       through_seq: seq,
-      initial_values: values,
-      current_values: values,
+      initial_values: seeded.initial,
+      current_values: seeded.current,
     })
     .onConflictDoNothing()
     .run()
@@ -179,6 +179,23 @@ export const current = Effect.fn("InstructionState.current")(function* (
   sessionID: SessionSchema.ID,
 ) {
   return (yield* find(db, sessionID))?.current_values
+})
+
+/** Both value sets of one state row, read together so an exact fork sees a consistent epoch. */
+export const values = Effect.fn("InstructionState.values")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+  const state = yield* find(db, sessionID)
+  return state && { initial: state.initial_values, current: state.current_values }
+})
+
+/** The value that a session currently holds for one source, or undefined when it holds none. */
+export const value = Effect.fn("InstructionState.value")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  key: Instructions.Key,
+) {
+  const hash = (yield* current(db, sessionID))?.[key]
+  if (hash === undefined) return undefined
+  return (yield* loadBlobs(db, [hash])).get(hash)
 })
 
 export const preview = Effect.fn("InstructionState.preview")(function* (

@@ -6,6 +6,7 @@ import { Context, Effect, Fiber, Layer, Schema, Scope } from "effect"
 import { FileDiff } from "@orbit/schema/file-diff"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Git } from "./git.js"
+import { ProjectTrust } from "./project-trust.js"
 import { Global } from "@orbit/util/global"
 import { Location } from "./location.js"
 import { AbsolutePath, RelativePath } from "./schema.js"
@@ -74,6 +75,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
+    const trust = yield* ProjectTrust.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
     const lifetime = yield* Scope.Scope
@@ -100,10 +102,59 @@ const layer = Layer.effect(
           : yield* git.repo
               .create({ worktree, gitDirectory, seed: source })
               .pipe(Effect.mapError((cause) => failure("capture", cause)))
+        // A Location keeps the project ID it was bound with, and the ID of a folder with no remote changes when trust is
+        // granted, so the snapshots taken after a grant and before a reload are filed under the old ID. Each repository
+        // that Orbit keeps for this work tree, under any ID, is listed as an alternate, so that the next resolve still
+        // compares and restores those snapshots. They are Orbit's own directories, so nothing the folder chose is opened.
+        const root = path.join(global.data, "snapshot")
+        const siblings = yield* fs.readDirectory(root).pipe(
+          Effect.orElseSucceed(() => [] as string[]),
+          Effect.map((names) => names.map((name) => path.join(root, name, Hash.fast(worktree)))),
+          Effect.flatMap((items) =>
+            Effect.filter(
+              items.filter((item) => item !== gitDirectory),
+              (item) => fs.existsSafe(path.join(item, "HEAD")),
+            ),
+          ),
+        )
+        const alternates = path.join(gitDirectory, "objects", "info", "alternates")
+        const current = yield* fs.readFileString(alternates).pipe(Effect.orElseSucceed(() => ""))
+        const lines = siblings
+          .map((item) => path.join(item, "objects"))
+          .filter((line) => !current.split("\n").includes(line))
+        if (lines.length)
+          yield* fs
+            .ensureDir(path.dirname(alternates))
+            .pipe(
+              Effect.andThen(
+                fs.writeFileString(
+                  alternates,
+                  current + (current && !current.endsWith("\n") ? "\n" : "") + lines.join("\n") + "\n",
+                ),
+              ),
+              Effect.orDie,
+            )
         return { source, worktree, snapshotRepository }
       }).pipe(Effect.forkIn(lifetime)),
     )
-    const repository = repositoryFiber.pipe(Effect.uninterruptible, Effect.flatMap(Fiber.join))
+    const opened = repositoryFiber.pipe(Effect.uninterruptible, Effect.flatMap(Fiber.join))
+    // Every git command a snapshot runs applies config that the clone chooses: the folder's own repository's, and that
+    // of each nested repository git looks into while it walks the work tree, even from a git directory of Orbit's. That
+    // config names programs (`core.fsmonitor`, hooks, attribute drivers) and files or shares to open (`include.path`,
+    // alternates, a `.git` file naming a share). Narrower guards each left a spelling open, so no snapshot starts git at
+    // all while the folder is not trusted, in the folder or in Orbit's own directory (class 1, class 6): its steps get no
+    // snapshot, as in a folder without git, and comparing or restoring fails until it is trusted. Git follows what the
+    // folder's `.git` names, so the repository it lands in has to be in a trusted folder as well (class 3).
+    const repository = Effect.fnUntraced(function* (operation: Error["operation"]) {
+      if (!(yield* trust.trusted())) return yield* new Error({ operation, message: "The folder is not trusted" })
+      if (!(yield* trust.git(location.project.directory)))
+        return yield* new Error({ operation, message: "The repository that git uses here is not in a trusted folder" })
+      return yield* opened
+    })
+    // One log line for each Location says why its steps have no snapshot.
+    const untrustedNotice = yield* Effect.cached(
+      Effect.logInfo("no snapshot while the folder is not trusted: undo is unavailable for these steps"),
+    )
 
     const scope = Effect.fnUntraced(function* (worktree: AbsolutePath) {
       const relative = path.relative(worktree, location.directory)
@@ -116,8 +167,10 @@ const layer = Layer.effect(
 
     const capture = Effect.fn("Snapshot.capture")(function* () {
       if (!enabled()) return undefined
+      if (!(yield* trust.trusted())) return yield* untrustedNotice.pipe(Effect.as(undefined))
+      if (!(yield* trust.git(location.project.directory))) return undefined
       return yield* Effect.gen(function* () {
-        const repo = yield* repository
+        const repo = yield* opened
         return ID.make(
           yield* git.tree.capture({
             repository: repo.snapshotRepository,
@@ -132,7 +185,7 @@ const layer = Layer.effect(
     })
 
     const comparison = Effect.fnUntraced(function* (operation: "files" | "diff", input: CompareInput) {
-      const repo = yield* repository.pipe(Effect.mapError((cause) => failure(operation, cause)))
+      const repo = yield* repository(operation).pipe(Effect.mapError((cause) => failure(operation, cause)))
       return {
         source: repo.source,
         repository: repo.snapshotRepository,
@@ -195,7 +248,7 @@ const layer = Layer.effect(
 
     const restore = Effect.fn("Snapshot.restore")(function* (input: RestoreInput) {
       if (!enabled()) return yield* new Error({ operation: "restore", message: "Snapshots are disabled" })
-      const repo = yield* repository.pipe(Effect.mapError((cause) => failure("restore", cause)))
+      const repo = yield* repository("restore").pipe(Effect.mapError((cause) => failure("restore", cause)))
       yield* git.tree
         .restore({ repository: repo.snapshotRepository, files: yield* plan(repo.worktree, input) })
         .pipe(Effect.mapError((cause) => failure("restore", cause)))
@@ -208,7 +261,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Git.node, Global.node, Location.node],
+  deps: [FSUtil.node, Git.node, Global.node, Location.node, ProjectTrust.node],
 })
 
 export const noopLayer = Layer.succeed(

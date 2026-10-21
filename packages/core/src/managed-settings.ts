@@ -420,7 +420,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // The override is the server's own option or environment. An empty or relative one would read the working folder,
 // which a repository supplies, so it is refused with one log line and the per-OS default applies.
 const resolveDirectory = Effect.fnUntraced(function* (override: string | undefined) {
-  const requested = override ?? process.env.ORBIT_MANAGED_DIR
+  const requested = override ?? ManagedPath.override()
   if (requested && path.isAbsolute(requested)) return requested
   if (override !== undefined || requested)
     yield* Effect.logWarning("ignored a managed settings folder that is not an absolute path", {

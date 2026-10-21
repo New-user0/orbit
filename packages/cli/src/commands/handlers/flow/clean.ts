@@ -1,14 +1,36 @@
+import { Orbit } from "@orbit/client"
+import { Service } from "@orbit/client/effect/service"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
+import { ServerConnection } from "../../../services/server-connection"
+import { requireTrust, trustedProject } from "../../../util/trust"
 import { directory } from "./execute"
 
 export default Runtime.handler(
   Commands.commands.flow.commands.clean,
   Effect.fn("cli.flow.clean")(function* (input) {
-    const { Git, openStore } = yield* Effect.promise(() => import("@orbit/flow"))
-    const repository = yield* Effect.promise(() => Git.root(directory()))
+    // The version control of a folder applies the config the folder ships, and removing a worktree or a branch runs the
+    // hooks that config names, so nothing starts it here until the folder is trusted (class 1, class 12).
+    const server = yield* ServerConnection.resolve({
+      server: Option.getOrUndefined(input.server),
+      standalone: input.standalone,
+      trust: input.trust,
+    })
+    const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+    yield* requireTrust(client, directory(), { grant: input.trust, strict: true })
+    const project = yield* trustedProject(client, directory())
+    if (!project) return yield* Effect.fail(new Error(`Could not check whether ${directory()} is trusted`))
+    const { Git, openStore, plain } = yield* Effect.promise(() => import("@orbit/flow"))
+    // Git follows what the folder's `.git` names, so the repository it uses has to be in the folders that the decision
+    // covers too, or its hooks and config would run for a folder that nobody trusted (class 3).
+    const found = yield* Effect.promise(() => Git.root(directory(), project))
+    if (found.outside !== undefined)
+      return yield* Effect.fail(
+        new Error(`orb flow clean does not use git here: ${plain(found.outside)} is outside the trusted folder`),
+      )
+    const repository = found.root
     if (!repository) return yield* Effect.fail(new Error("orb flow clean works inside a git repository"))
     const store = yield* Effect.promise(() => openStore(directory()))
     const runs = store.runs(1000)
@@ -23,6 +45,8 @@ export default Runtime.handler(
       const total = { worktrees: 0, branches: 0 }
       for (const run of selected) {
         const item = await Git.clean(repository, run.id)
+        if (item.refused !== undefined)
+          process.stderr.write(`Left run ${plain(run.id)} alone: ${plain(item.refused)} is a link, not a folder${EOL}`)
         total.worktrees += item.worktrees
         total.branches += item.branches
       }

@@ -56,6 +56,18 @@ export async function initRepo(directory: string) {
   await $`git commit --allow-empty -m root`.cwd(directory).quiet()
 }
 
+/** A repository at `root` (made if it is missing) on `main`, with a first commit and, when given, an `origin`. */
+export const repository = (root: string, remote?: string) =>
+  Effect.promise(async () => {
+    await fs.mkdir(root, { recursive: true })
+    await git(root, "init", "-b", "main")
+    await git(root, "config", "commit.gpgsign", "false")
+    await git(root, "config", "user.email", "test@orbit.test")
+    await git(root, "config", "user.name", "Test")
+    if (remote) await git(root, "remote", "add", "origin", remote)
+    await git(root, "commit", "--allow-empty", "-m", "root")
+  })
+
 export async function commit(source: string, content: string, message: string) {
   await fs.writeFile(path.join(source, "README.md"), content)
   await git(source, "add", "README.md")

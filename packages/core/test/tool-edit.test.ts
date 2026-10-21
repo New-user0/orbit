@@ -509,7 +509,7 @@ describe("EditTool", () => {
                   status: "error",
                   error: {
                     type: "file.unread",
-                    message: "secret.txt has not been read in this session. Read it before changing it.",
+                    message: "secret.txt has no read in this session behind it; read it before changing it.",
                   },
                 })
                 expect(missing).toEqual(matching)
@@ -576,7 +576,7 @@ describe("EditTool", () => {
       name: "identical strings",
       input: { file_path: "matches.txt", old_string: "same", new_string: "same" },
       type: "edit.no-change",
-      message: "No changes to apply: old_string and new_string are identical.",
+      message: "The edit would change nothing, because new_string equals old_string.",
     },
     {
       name: "an empty old_string",
@@ -595,7 +595,7 @@ describe("EditTool", () => {
       input: { file_path: "matches.txt", old_string: "same", new_string: "after" },
       type: "edit.ambiguous",
       message:
-        "Found 2 matches for old_string, but expected exactly one. Add more surrounding context to make old_string unique, or set replace_all to true to replace every occurrence.",
+        "Found 2 matches for old_string, but expected exactly one. Lengthen old_string until it matches one place, or set replace_all to true to change all of them.",
     },
     {
       name: "a file that does not exist",
@@ -614,14 +614,14 @@ describe("EditTool", () => {
       input: { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true },
       ledger: "unread",
       type: "file.unread",
-      message: "matches.txt has not been read in this session. Read it before changing it.",
+      message: "matches.txt has no read in this session behind it; read it before changing it.",
     },
     {
       name: "a file that changed since the session read it",
       input: { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true },
       ledger: "stale",
       type: "file.stale",
-      message: "matches.txt changed since it was last read. Read it again before changing it.",
+      message: "matches.txt changed on disk after your last read, so read it again before changing it.",
     },
   ]
   for (const item of doomed)
@@ -1293,7 +1293,6 @@ describe("EditTool fidelity", () => {
     { name: "Q11 em dash only", file: 'x = “a” + "b"—c\n', old: 'x = “a” + "b"-c', new: 'x = “a” + "d"-c', expected: 'x = “a” + "d"-c\n' },
     { name: "Q12 no-break space only", file: "\u2018a\u2019 <a k='b'\u00a0/>\n", old: "\u2018a\u2019 <a k='b' />", new: "\u2018a\u2019 <a k='c' />", expected: "\u2018a\u2019 <a k='c' />\n" },
     { name: "Q13 dash differs, quotes curly in both", file: "a “b”—c\n", old: "a “b”-c", new: 'a "b"-c', expected: 'a "b"-c\n' },
-    { name: "Q9 low-9 quotes detect nothing", file: "x „y‟\n", old: 'x "y"', new: 'x "z"', expected: 'x "z"\n' },
     ...(
       [
         ['He said "goodbye".', "He said “goodbye”."],
@@ -1329,6 +1328,24 @@ describe("EditTool fidelity", () => {
           expect(result.settled).toMatchObject({ status: "completed" })
           expect(result.text).toBe(row.expected)
           if (row.replacements) expect(result.settled).toMatchObject({ output: { replacements: row.replacements } })
+        }),
+      ),
+    )
+
+  // FU-M3-117: only U+2018, U+2019, U+201C and U+201D are matched as straight quotes. The low-9 (U+201A, U+201E) and
+  // reversed (U+201B, U+201F) forms, such as German quotes, do not match, so the edit is not found and the file stays.
+  for (const [name, file, old] of [
+    ["Q9 low-9 quotes do not match straight quotes", "x „y‟\n", 'x "y"'],
+    ["Q9 German opening quote", "Er sagte „Hallo“.\n", 'Er sagte "Hallo".'],
+    ["Q9 low-9 single quote", "x ‚y‘\n", "x 'y'"],
+    ["Q9 reversed double quote", "x ‟y”\n", 'x "y"'],
+    ["Q9 reversed single quote", "x ‛y’\n", "x 'y'"],
+  ] as const)
+    it.live(`quote style ${name}`, () =>
+      editFile(file, { old_string: old, new_string: "z" }).pipe(
+        Effect.map((result) => {
+          expect(result.settled).toMatchObject({ status: "error", error: { type: "edit.no-match" } })
+          expect(result.text).toBe(file)
         }),
       ),
     )
@@ -1416,7 +1433,7 @@ describe("EditTool fidelity", () => {
       withTool(tmp.path, makeEditFixture(), (registry) =>
         Effect.gen(function* () {
           const edit = (yield* toolDefinitions(registry)).find((tool) => tool.name === "Edit")
-          expect(edit?.description).toContain("To delete whole lines, set new_string to an empty string")
+          expect(edit?.description).toContain("An empty new_string deletes the matched lines together with their line break")
         }),
       ),
     ),

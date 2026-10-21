@@ -509,7 +509,9 @@ describe("project-local heads (class 10)", () => {
   test("win32 splits on ; and unquotes", () => {
     expect(bash("ls", windows({ env: { Path: '"C:\\Windows";C:\\bin' } })).readOnly).toBe(true)
     expect(bash("ls", windows({ env: { PATH: "C:\\Windows;." } })).readOnly).toBe(false)
-    expect(bash("ls", windows({ env: { Path: "C:\\Windows;;C:\\bin" } })).readOnly).toBe(false)
+    // An empty entry is dropped by Git Bash and does not search the working folder (FU-M3-180); a relative one does.
+    expect(bash("ls", windows({ env: { Path: "C:\\Windows;;C:\\bin" } })).readOnly).toBe(true)
+    expect(bash("ls", windows({ env: { Path: "C:\\Windows;;bin" } })).readOnly).toBe(false)
   })
   test("the locator decides for one head only", () => {
     const ctx = linux({ local: (head) => head === "ls" })

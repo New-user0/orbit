@@ -10,6 +10,10 @@ import type {
   LocationTrustGetOutput,
   LocationTrustUpdateInput,
   LocationTrustUpdateOutput,
+  LocationInstructionNoteTargetsInput,
+  LocationInstructionNoteTargetsOutput,
+  LocationInstructionNoteAddInput,
+  LocationInstructionNoteAddOutput,
   LocationTrustListOutput,
   LocationTrustRevokeInput,
   LocationTrustRevokeOutput,
@@ -78,6 +82,8 @@ import type {
   SessionInboxCancelOutput,
   SessionInboxUpdateInput,
   SessionInboxUpdateOutput,
+  SessionInstructionsPreviewInput,
+  SessionInstructionsPreviewOutput,
   SessionInstructionsEntryListInput,
   SessionInstructionsEntryListOutput,
   SessionInstructionsEntryPutInput,
@@ -274,6 +280,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  ConfigSourcesChangedInput,
+  ConfigSourcesChangedOutput,
 } from "./types.js"
 import { ClientError } from "./client-error.js"
 
@@ -517,6 +525,35 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+      },
+      instruction: {
+        note: {
+          targets: (input?: LocationInstructionNoteTargetsInput, requestOptions?: RequestOptions) =>
+            request<{ readonly data: LocationInstructionNoteTargetsOutput }>(
+              {
+                method: "GET",
+                path: `/api/location/instructions/note`,
+                query: { location: input?.["location"] },
+                successStatus: 200,
+                declaredStatuses: [400, 401],
+                empty: false,
+              },
+              requestOptions,
+            ).then((value) => value.data),
+          add: (input: LocationInstructionNoteAddInput, requestOptions?: RequestOptions) =>
+            request<{ readonly data: LocationInstructionNoteAddOutput }>(
+              {
+                method: "POST",
+                path: `/api/location/instructions/note`,
+                query: { location: input["location"] },
+                body: { scope: input["scope"], text: input["text"] },
+                successStatus: 200,
+                declaredStatuses: [400, 401, 503],
+                empty: false,
+              },
+              requestOptions,
+            ).then((value) => value.data),
+        },
       },
     },
     agent: {
@@ -774,6 +811,7 @@ export function make(options: ClientOptions) {
               files: input["files"],
               agents: input["agents"],
               skills: input["skills"],
+              editor: input["editor"],
               metadata: input["metadata"],
               turn: input["turn"],
               delivery: input["delivery"],
@@ -796,6 +834,7 @@ export function make(options: ClientOptions) {
               files: input["files"],
               agents: input["agents"],
               skills: input["skills"],
+              editor: input["editor"],
               delivery: input["delivery"],
             },
             successStatus: 204,
@@ -966,6 +1005,17 @@ export function make(options: ClientOptions) {
           ),
       },
       instructions: {
+        preview: (input: SessionInstructionsPreviewInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionInstructionsPreviewOutput }>(
+            {
+              method: "GET",
+              path: `/api/experimental/session/${encodeURIComponent(input.sessionID)}/instructions`,
+              successStatus: 200,
+              declaredStatuses: [400, 401, 404, 503],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
         entry: {
           list: (input: SessionInstructionsEntryListInput, requestOptions?: RequestOptions) =>
             request<{ readonly data: SessionInstructionsEntryListOutput }>(
@@ -2275,13 +2325,28 @@ export function make(options: ClientOptions) {
           {
             method: "PATCH",
             path: `/api/experimental/config`,
-            body: { shell: input?.["shell"], output_style: input?.["output_style"] },
+            body: { shell: input?.["shell"], output_style: input?.["output_style"], language: input?.["language"] },
             successStatus: 204,
             declaredStatuses: [400, 401],
             empty: true,
           },
           requestOptions,
         ),
+      sources: {
+        changed: (input: ConfigSourcesChangedInput, requestOptions?: RequestOptions) =>
+          request<ConfigSourcesChangedOutput>(
+            {
+              method: "POST",
+              path: `/api/experimental/config/sources/changed`,
+              query: { location: input["location"] },
+              body: { paths: input["paths"] },
+              successStatus: 204,
+              declaredStatuses: [400, 401],
+              empty: true,
+            },
+            requestOptions,
+          ),
+      },
     },
   }
 }

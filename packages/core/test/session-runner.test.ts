@@ -55,6 +55,7 @@ import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionTurn } from "@orbit/core/session/turn"
 import { ShellResult } from "@orbit/core/shell/result"
 import { SessionOutput } from "@orbit/core/session/output"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
@@ -93,8 +94,18 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { Expected } from "./lib/session-message"
 import { permissionLayer } from "./lib/permission"
 import { overloaded } from "./lib/provider-failure"
+import { tempGlobalLayer } from "./fixture/global"
+import { SessionContext } from "@orbit/core/session/context"
+import { SessionHistory } from "@orbit/core/session/history"
+import { SessionScratchpad } from "@orbit/core/session/scratchpad"
+import { noVcsSnapshot } from "./lib/vcs-snapshot"
+import { SessionTitle } from "@orbit/core/session/title"
+import { Global } from "@orbit/util/global"
+import fs from "fs/promises"
+import path from "path"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
+import { Token } from "@orbit/core/util/token"
 
 const emptyCodeMode = `${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}\n\n`
 type ToolBarrier = {
@@ -123,7 +134,12 @@ const testModel = (id: string, limit: ModelLimit = defaultModelLimit) => {
   return LanguageModel.make({ id, provider: "fake", route: OpenAIChat.route })
 }
 const model = testModel("fake-model")
-const defaultSystem = SessionSystemPrompt.make([])
+// Every request of these tests offers the Code Mode tool, which `testLLM` takes out of the request it records, and the
+// base prompt carries that tool's guidance line.
+const defaultSystem = SessionSystemPrompt.make(["Execute"])
+// A window for the compaction tests below: the base prompt, which every request counts, and `tokens` of room beside it.
+// Their windows were 12,000 and 9,000 tokens when the base prompt was 1,048 tokens, so they keep 10,952 and 7,952.
+const withPrompt = (tokens: number) => Token.estimate(defaultSystem) + tokens
 const identity = (providerID: string, id: string) =>
   ["# Your Model", `- Name: ${id}`, `- Provider ID: ${providerID}`, `- Model ID: ${id}`].join("\n")
 const fakeIdentity = identity("fake", "fake-model")
@@ -235,6 +251,10 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    // Runs inside every echo call, while the response that made it has not ended its step yet.
+    echoProbe: Effect.void as Effect.Effect<void>,
+    // The sessions that a drain made the scratchpad of, and how many model requests had been made by then.
+    scratchpads: new Array<{ readonly sessionID: Session.ID; readonly requests: number }>(),
     // Busy periods the coordinator started and settled; one continuation must stay inside one of them.
     drains: { started: 0, settled: 0 },
     turnEnd: ((_input: SessionTurnEnd.Input) => Effect.succeed(undefined)) as SessionTurnEnd.Check["run"],
@@ -317,9 +337,29 @@ const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string,
       editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } }),
     ),
   )
-const makeLayer = (persist: boolean) =>
+// With `real` the scratchpad is the service itself on a temporary folder, as a person has it. Otherwise a stand-in names
+// no folder, so that no request holds a path of this machine, and it records each drain that made one.
+const makeLayer = (persist: boolean, real = false) =>
   Layer.unwrap(
   Effect.map(RunnerState, (state) => {
+    const scratchpad: LayerNode.Replacements = real
+      ? [Global.node.replace(tempGlobalLayer)]
+      : [
+          SessionScratchpad.node.replace(
+            Layer.effect(
+              SessionScratchpad.Service,
+              Effect.gen(function* () {
+                const llm = yield* TestLLM.Service
+                return SessionScratchpad.Service.of({
+                  path: () => undefined,
+                  source: () => Instructions.empty,
+                  ensure: (session) =>
+                    Effect.sync(() => void state.scratchpads.push({ sessionID: session.id, requests: llm.requests.length })),
+                })
+              }),
+            ).pipe(Layer.provide(testLLM)),
+          ),
+        ]
     const modelTransport = Layer.succeed(
       SessionModelTransport.Service,
       SessionModelTransport.Service.of({
@@ -343,6 +383,7 @@ const makeLayer = (persist: boolean) =>
                 Effect.gen(function* () {
                   state.authorizations.push(context)
                   state.executions.push(text)
+                  yield* state.echoProbe
                   yield* state.awaitToolBarrier
                   return { output: { text }, content: text }
                 }),
@@ -460,6 +501,7 @@ const makeLayer = (persist: boolean) =>
     })
     const systemContextKey = Instructions.Key.make("test/context")
     const systemContext = Layer.mock(InstructionBuiltIns.Service, {
+      preferences: () => Effect.succeed(Instructions.empty),
       load: () =>
         Effect.sync(() =>
           Instructions.make({
@@ -546,6 +588,8 @@ const makeLayer = (persist: boolean) =>
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(systemContext),
       InstructionDiscovery.node.replace(instructionContext),
+      ...scratchpad,
+      noVcsSnapshot,
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SkillInstructions.node.replace(skillInstructions),
       ReferenceInstructions.node.replace(referenceInstructions),
@@ -617,6 +661,9 @@ const makeLayer = (persist: boolean) =>
         Snapshot.node,
         SessionCompaction.node,
         LayerNodePlatform.llmClient,
+        SessionContext.node,
+        SessionScratchpad.node,
+        SessionTitle.node,
         SessionRunnerLLM.node,
         SessionExecution.node,
         Session.node,
@@ -640,6 +687,8 @@ const layer = makeLayer(true)
 const productionLayer = makeLayer(false)
 const it = testEffect(layer)
 const productionIt = testEffect(productionLayer)
+// The scratchpad service itself, on a temporary folder: the only scenarios that read what the baseline says of it.
+const scratchpadIt = testEffect(makeLayer(true, true))
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
 
@@ -672,7 +721,11 @@ const setup = Effect.gen(function* () {
     agent: agentHost(agents),
     model: modelHost(models),
     provider: noProviders,
-    session: { hook: (name, callback) => hooks.register("session", name, callback) },
+    session: {
+      hook: (name, callback) => hooks.register("session", name, callback),
+      // These sessions have no parent and no fork, so no plugin takes them for a subagent.
+      get: (input) => Effect.fail(new Session.NotFoundError({ sessionID: input.sessionID })),
+    },
   })
   yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(pluginHost), {
     discard: true,
@@ -1161,6 +1214,29 @@ describe("SessionRunnerLLM", () => {
 
     expect((yield* s.session.get(sessionID)).title).toBe("Generated title")
     yield* Fiber.interrupt(fiber)
+  })
+
+  scenario("an ultrathink prompt sends the same model and options as the runs around it, and only adds the note", function* (s) {
+    yield* s.llm.push(TestLLM.text("One", "boost-1"), TestLLM.text("Two", "boost-2"), TestLLM.text("Three", "boost-3"))
+    yield* s.runPrompt("A plain opener")
+    yield* s.runPrompt("Please ultrathink about this")
+    yield* s.runPrompt("A plain follow-up")
+
+    expect(s.requests).toHaveLength(3)
+    const [plain, boosted, after] = s.requests
+    // Everything but the messages is identical: the keyword changes no request parameter, and a later prompt that
+    // follows the keyword in history is not affected either.
+    const options = (request: typeof plain) => ({ ...request, messages: undefined, id: undefined })
+    expect(options(boosted)).toEqual(options(plain))
+    expect(options(after)).toEqual(options(plain))
+    // The recorded model and variant of every step are the same too.
+    const steps = (yield* s.messages).flatMap((message) => (message.type === "assistant" ? [message.model] : []))
+    expect(steps).toHaveLength(3)
+    expect(steps[1]).toEqual(steps[0])
+    expect(steps[2]).toEqual(steps[0])
+    const EFFORT = "asked for a high level of reasoning effort"
+    const noted = (request: typeof plain) => JSON.stringify(request.messages).split(EFFORT).length - 1
+    expect([noted(plain), noted(boosted), noted(after)]).toEqual([0, 1, 1])
   })
 
   scenario("does not automatically replace an existing session title", function* (s) {
@@ -1982,6 +2058,224 @@ describe("SessionRunnerLLM", () => {
     ).toMatchObject({ current_values: { "test/context": Instructions.hash("Latest context") } })
   })
 
+  // An exact fork of a parent whose step is still running a tool, after an instruction change in the epoch.
+  const exactSetup = function* (s: Scenario) {
+    yield* s.runPrompt("First")
+    s.systemBaseline = "Changed context"
+    yield* s.admit("Second")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "working" }),
+      TestLLM.text("Parent done", "text-parent"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    return { tools, run, parentRequest: s.requests.at(-1)! }
+  }
+  // Copied messages get their own IDs; everything else about them must match.
+  const withoutIDs = (messages: readonly LLMRequest["messages"][number][]) =>
+    messages.map((message) => ({ ...message, id: undefined }))
+  const forkEvents = (s: Scenario, id: Session.ID, type: string) =>
+    s.db
+      .select()
+      .from(EventTable)
+      .where(and(eq(EventTable.aggregate_id, id), eq(EventTable.type, type)))
+      .all()
+
+  scenario("an exact fork repeats the parent's latest request while a tool call runs", function* (s) {
+    const setup = yield* exactSetup(s)
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const forkedAt = s.requests.length
+    yield* s.llm.push(TestLLM.text("Child done", "text-child"))
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    const child = s.requests[forkedAt]!
+
+    expect(child.system).toEqual(setup.parentRequest.system)
+    expect(child.system.map((part) => part.text).at(-1)).toBe("Initial context")
+    expect(child.tools).toEqual(setup.parentRequest.tools)
+    expect(child.promptCacheKey).toBe(setup.parentRequest.promptCacheKey)
+    expect(withoutIDs(child.messages.slice(0, setup.parentRequest.messages.length))).toEqual(
+      withoutIDs(setup.parentRequest.messages),
+    )
+    expect(userTexts(child)).toEqual([...userTexts(setup.parentRequest), "Forked"])
+    // Only the child's own input follows the copied history: no running assistant or tool result comes across.
+    expect(messageRoles(child)).toEqual([...messageRoles(setup.parentRequest)!, "user"])
+    // The change is stated once, by the copied update; the child adds no update of its own.
+    expect(systemTexts(child).filter((text) => text.includes("Changed context"))).toHaveLength(1)
+    expect(yield* forkEvents(s, forked.id, "session.instructions.updated.2")).toEqual([])
+
+    yield* setup.tools.release
+    yield* Fiber.join(setup.run)
+  })
+
+  scenario("an exact fork seeds the parent's epoch baseline and a default fork the current values", function* (s) {
+    const setup = yield* exactSetup(s)
+    const exact = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const standard = yield* s.session.fork({ sessionID })
+    const state = (id: Session.ID) =>
+      s.db.select().from(InstructionStateTable).where(eq(InstructionStateTable.session_id, id)).get()
+
+    expect(yield* state(exact.id)).toMatchObject({
+      initial_values: { "test/context": Instructions.hash("Initial context") },
+      current_values: { "test/context": Instructions.hash("Changed context") },
+    })
+    expect(yield* state(standard.id)).toMatchObject({
+      initial_values: { "test/context": Instructions.hash("Changed context") },
+      current_values: { "test/context": Instructions.hash("Changed context") },
+    })
+    const forked = (id: Session.ID) => forkEvents(s, id, "session.forked.2")
+    expect((yield* forked(exact.id))[0]?.data).toHaveProperty("baseline")
+    expect((yield* forked(standard.id))[0]?.data).not.toHaveProperty("baseline")
+
+    yield* setup.tools.release
+    yield* Fiber.join(setup.run)
+  })
+
+  scenario("exact forks of the same tail share the same first request", function* (s) {
+    const setup = yield* exactSetup(s)
+    const first = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const second = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const start = s.requests.length
+    yield* s.llm.push(TestLLM.text("One", "text-one"), TestLLM.text("Two", "text-two"))
+    yield* s.session.prompt({ sessionID: first.id, text: "Forked", resume: false })
+    yield* s.session.resume(first.id)
+    yield* s.session.prompt({ sessionID: second.id, text: "Forked", resume: false })
+    yield* s.session.resume(second.id)
+
+    expect(s.requests[start + 1]?.system).toEqual(s.requests[start]?.system)
+    expect(s.requests[start + 1]?.tools).toEqual(s.requests[start]?.tools)
+    expect(s.requests[start + 1]?.promptCacheKey).toBe(s.requests[start]?.promptCacheKey)
+    expect(withoutIDs(s.requests[start + 1]!.messages)).toEqual(withoutIDs(s.requests[start]!.messages))
+
+    yield* setup.tools.release
+    yield* Fiber.join(setup.run)
+  })
+
+  scenario("an exact fork must start at the settled tail", function* (s) {
+    yield* s.runPrompt("First")
+    s.systemBaseline = "Changed context"
+    const second = yield* s.runPrompt("Second")
+    const sessionsBefore = (yield* s.db.select({ id: SessionTable.id }).from(SessionTable).all()).length
+    const eventsBefore = (yield* s.db.select().from(EventTable).all()).length
+
+    expect(
+      yield* s.session.fork({ sessionID, before: second.id, prompt: "exact" }).pipe(Effect.flip),
+    ).toMatchObject({ _tag: "Session.ForkBoundaryError", messageID: second.id })
+    expect((yield* s.db.select({ id: SessionTable.id }).from(SessionTable).all()).length).toBe(sessionsBefore)
+    expect((yield* s.db.select().from(EventTable).all()).length).toBe(eventsBefore)
+
+    // The same boundary is fine for a default fork, and the tail is fine for an exact one.
+    yield* s.session.fork({ sessionID, before: second.id })
+    yield* s.session.fork({ sessionID, prompt: "exact" })
+  })
+
+  scenario("an exact fork while the tool runs accepts the running assistant as its boundary", function* (s) {
+    const setup = yield* exactSetup(s)
+    const running = (yield* s.session.messages({ sessionID })).findLast((message) => message.type === "assistant")!
+    const forked = yield* s.session.fork({ sessionID, before: running.id, prompt: "exact" })
+    const copied = yield* s.session.messages({ sessionID: forked.id })
+    const parentSettled = (yield* s.session.messages({ sessionID })).filter(
+      (message) => message.type !== "assistant" || message.time.completed !== undefined,
+    )
+    expect(copied.map((message) => message.type)).toEqual(parentSettled.map((message) => message.type))
+    expect(copied.some((message) => message.type === "assistant" && message.time.completed === undefined)).toBe(false)
+    const earlier = (yield* s.session.messages({ sessionID })).find((message) => message.type === "user")!
+    expect(yield* s.session.fork({ sessionID, before: earlier.id, prompt: "exact" }).pipe(Effect.flip)).toMatchObject({
+      _tag: "Session.ForkBoundaryError",
+    })
+
+    yield* setup.tools.release
+    yield* Fiber.join(setup.run)
+  })
+
+  scenario("an exact fork after a compaction repeats the parent's request", function* (s) {
+    yield* s.runPrompt("First")
+    s.systemBaseline = "Before compaction"
+    yield* s.llm.push(TestLLM.text("## Objective\n- summary", "exact-summary"))
+    yield* s.session.compact({ sessionID })
+    yield* s.resume
+    yield* s.runPrompt("Second")
+    const parentRequest = s.requests.at(-1)!
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const forkedAt = s.requests.length
+    yield* s.llm.push(TestLLM.text("Child done", "text-child"))
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    const child = s.requests[forkedAt]!
+
+    expect(child.system).toEqual(parentRequest.system)
+    expect(child.tools).toEqual(parentRequest.tools)
+    expect(withoutIDs(child.messages.slice(0, parentRequest.messages.length))).toEqual(
+      withoutIDs(parentRequest.messages),
+    )
+    expect(messageRoles(child)).toEqual([...messageRoles(parentRequest)!, "user"])
+  })
+
+  scenario("an exact fork of a parent that never ran a step takes no baseline and syncs on its first step", function* (s) {
+    yield* s.runPrompt("Only")
+    yield* s.db.delete(InstructionStateTable).where(eq(InstructionStateTable.session_id, sessionID)).run()
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const recorded = (yield* forkEvents(s, forked.id, "session.forked.2"))[0]?.data
+    expect(recorded).not.toHaveProperty("baseline")
+    expect(recorded).not.toHaveProperty("instructions")
+
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    expect(s.requests.at(-1)?.system.map((part) => part.text).at(-1)).toBe("Initial context")
+  })
+
+  scenario("an exact fork still records a real change made after the fork", function* (s) {
+    const setup = yield* exactSetup(s)
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    s.systemBaseline = "Edited again"
+    yield* s.llm.push(TestLLM.text("Child done", "text-child"))
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+
+    expect(yield* forkEvents(s, forked.id, "session.instructions.updated.2")).toHaveLength(1)
+    expect(systemTexts(s.requests.at(-1)!)).toContain("Edited again")
+
+    yield* setup.tools.release
+    yield* Fiber.join(setup.run)
+  })
+
+  scenario("replaying an exact fork reproduces its baseline", function* (s) {
+    const setup = yield* exactSetup(s)
+    const forked = yield* s.session.fork({ sessionID, prompt: "exact" })
+    const state = () =>
+      s.db.select().from(InstructionStateTable).where(eq(InstructionStateTable.session_id, forked.id)).get()
+    const before = yield* state()
+    const recorded = yield* s.db
+      .select()
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, forked.id))
+      .orderBy(asc(EventTable.seq))
+      .all()
+    yield* s.bus.remove(forked.id)
+    yield* s.db.delete(SessionTable).where(eq(SessionTable.id, forked.id)).run()
+    yield* Effect.forEach(
+      recorded.map((event) => ({
+        id: event.id,
+        created: event.created,
+        aggregateID: event.aggregate_id,
+        seq: event.seq,
+        type: event.type,
+        data: event.data,
+      })),
+      (event) => s.bus.replay(event),
+      { discard: true },
+    )
+    expect(yield* state()).toMatchObject({
+      initial_values: before?.initial_values,
+      current_values: before?.current_values,
+    })
+    expect(before?.initial_values).not.toEqual(before?.current_values)
+
+    yield* setup.tools.release
+    yield* Fiber.join(setup.run)
+  })
+
   scenario("keeps nested forks self-contained", function* (s) {
     yield* s.runPrompt("First")
     s.systemBaseline = "Changed context"
@@ -2090,7 +2384,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
 
     expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
-      expect.stringContaining("# Delegation"),
+      expect.stringContaining("## Commentary"),
       gptIdentity,
       "Initial context",
     ])
@@ -2111,7 +2405,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
 
     expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
-      expect.stringContaining("# Delegation"),
+      expect.stringContaining("## Commentary"),
       gptIdentity,
       "Initial context",
     ])
@@ -3189,17 +3483,19 @@ describe("SessionRunnerLLM", () => {
 
   scenario("resends compaction as text after payload too large, then shrinks later rejections", function* (s) {
     const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    const filler = "context ".repeat(1_000)
+    // Enough large exchanges that each of the three shrinking attempts still keeps one beside the base prompt, which
+    // every attempt counts, and drops fewer than the attempt before.
+    const filler = "context ".repeat(3_000)
     yield* s.session.prompt({
       sessionID,
       text: "Request 0 with an image",
       files: [{ uri: `data:image/png;base64,${image}` }],
       resume: false,
     })
-    yield* s.llm.push(...Array.from({ length: 7 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
+    yield* s.llm.push(...Array.from({ length: 11 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
     yield* s.resume
     yield* Effect.forEach(
-      Array.from({ length: 6 }, (_, index) => index + 1),
+      Array.from({ length: 10 }, (_, index) => index + 1),
       (index) => s.runPrompt(`Request ${index}: ${filler}`),
     )
     s.currentModel = unknownContextModel
@@ -3254,7 +3550,7 @@ describe("SessionRunnerLLM", () => {
       Array.from({ length: 6 }, (_, index) => index),
       (index) => s.runPrompt(`Request ${index}: ${"x".repeat(8_000)}`),
     )
-    s.currentModel = testModel("smaller-history", { context: 12_000, output: 1_000 })
+    s.currentModel = testModel("smaller-history", { context: withPrompt(10_952), output: 1_000 })
     s.requests.length = 0
     yield* s.llm.push(Stream.fail(payloadTooLarge()), TestLLM.text("## Objective\n- Recovered", "summary"))
     const compaction = yield* s.session.compact({ sessionID })
@@ -3342,7 +3638,7 @@ describe("SessionRunnerLLM", () => {
       Array.from({ length: 4 }, (_, index) => index),
       (index) => s.runPrompt(`Request ${index}: ${"x".repeat(8_000)}`),
     )
-    s.currentModel = testModel("smaller-history", { context: 9_000, output: 1_000 })
+    s.currentModel = testModel("smaller-history", { context: withPrompt(7_952), output: 1_000 })
     s.requests.length = 0
     yield* s.llm.push(TestLLM.text("## Objective\n- Recovered", "summary"))
     const compaction = yield* s.session.compact({ sessionID })
@@ -5102,7 +5398,12 @@ describe("SessionRunnerLLM", () => {
       Expected.user("STEER"),
       { type: "assistant", finish: "stop" },
     ])
-    expect(userTexts(s.requests[1])).toEqual(["Look and echo", "STEER"])
+    expect(userTexts(s.requests[1])).toEqual([
+      "Look and echo",
+      // A steer that follows a round of tool calls carries the mid-turn note first.
+      "<system-reminder>\nThe person sent the message below after your current task had begun. Act on it when that task is done, and do not drop it.\n</system-reminder>\n\n",
+      "STEER",
+    ])
     expect(toolResultIDs(s.requests[1])).toEqual(["call-cancelable", "call-echo"])
     expect(JSON.stringify(s.requests[1]?.messages)).toContain("Cancelled because the user sent a new message")
   })
@@ -5739,6 +6040,120 @@ describe("SessionRunnerLLM", () => {
         expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.expected)
       })
 
+    const turnSpend = (s: Scenario) =>
+      Effect.gen(function* () {
+        const options = (yield* SessionTurn.current(s.db, sessionID)).options!
+        return yield* SessionTurn.usage(s.db, sessionID, options)
+      })
+    // A price a prompt-sized estimate stays well under a limit of a few dollars at.
+    const cheap = {
+      input: Money.USDPerMillionTokens.make(1),
+      output: Money.USDPerMillionTokens.make(1),
+      cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.zero },
+    }
+
+    // FU-M2-057: a reply cut off mid-stream is counted by estimate, so the recovery that follows it can run under a cost
+    // limit instead of ending the turn as unknown spend.
+    scenario("continues a reply cut off mid-stream under a cost limit and counts the cut-off by estimate", function* (s) {
+      s.modelCost = [cheap]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
+      yield* s.llm.push(
+        TestLLM.failAfter(
+          incompleteStream(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "cut-off" }),
+          LLMEvent.textDelta({ id: "cut-off", text: "A partial answer ".repeat(40) }),
+        ),
+        TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("continued")),
+      )
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[0]!)
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
+      const spent = yield* turnSpend(s)
+      expect(spent.unknown).toBe(0)
+      // The cut-off reply's estimate comes on top of the continuation's one token in and one out.
+      expect(spent.tokens).toBeGreaterThan(2)
+      expect(spent.cost).toBeGreaterThan(0.000002)
+    })
+
+    scenario("still refuses a cost limit up front when the model has no price", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
+      yield* s.llm.push(TestLLM.text("Never sent", "no-price"))
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown" })
+      expect(s.requests).toHaveLength(0)
+    })
+
+    // FU-M2-014: an attempt that reported usage before it failed and was repeated billed that usage.
+    scenario("counts the usage of an attempt that failed before output and was retried", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(100) }, resume: false })
+      yield* s.llm.push(
+        TestLLM.failAfter(
+          providerUnavailable(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" }, usage: spend }),
+        ),
+        TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("retried")),
+      )
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[0]!)
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
+      // Both attempts: $1 each, and the retry is no second step.
+      expect(yield* turnSpend(s)).toMatchObject({ cost: 2, tokens: 4, steps: 1, unknown: 0 })
+    })
+
+    scenario("counts nothing for an attempt the provider refused before streaming", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(100) }, resume: false })
+      yield* s.llm.push(
+        Stream.fail(providerUnavailable()),
+        TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("retried")),
+      )
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[0]!)
+      yield* Fiber.join(run)
+
+      expect(yield* turnSpend(s)).toMatchObject({ cost: 1, tokens: 2, steps: 1, unknown: 0 })
+    })
+
+    // FU-M2-113: a subagent a response starts is limited by that response's own spend, before its step has ended.
+    scenario("counts the parent's response in a subagent's limit check while its tools run", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(1) }, resume: false })
+      yield* insertSession(otherSessionID)
+      yield* s.db
+        .update(SessionTable)
+        .set({ parent_id: sessionID, time_created: 1 })
+        .where(eq(SessionTable.id, otherSessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const probed: Array<{ readonly type: string } | undefined> = []
+      s.echoProbe = SessionTurn.ancestorLimit(s.db, otherSessionID, true).pipe(
+        Effect.tap((limit) => Effect.sync(() => probed.push(limit))),
+        Effect.orDie,
+        Effect.asVoid,
+      )
+      yield* s.llm.push(toolStep(spend), TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("done")))
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost" })
+
+      expect(probed.map((limit) => limit?.type)).toEqual(["limit.cost"])
+      // Once the step has ended the response is counted from its row alone, not twice.
+      expect(yield* turnSpend(s)).toMatchObject({ cost: 1, tokens: 2 })
+      expect(yield* SessionTurn.ancestorLimit(s.db, otherSessionID, true)).toMatchObject({ type: "limit.cost" })
+    })
+
     // A background subagent outlives the turn that started it: the parent's terminal writes the idle marker that closes
     // the turn, and the limit it set must still bind the child (`orb run --max-cost` exits at that terminal).
     for (const [mode, scenario] of limitScenarios)
@@ -5956,17 +6371,27 @@ describe("SessionRunnerLLM", () => {
     })
 
     scenario("leaves no resume note behind when the turn limit is spent at an output-limit stop", function* (s) {
-      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
-      yield* s.llm.push(lengthStop("limit-note", "Part"), TestLLM.stop())
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxTokens: 2 }, resume: false })
+      yield* s.llm.push(
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" }, usage: { nonCachedInputTokens: 1, outputTokens: 1 } },
+          LLMEvent.textStart({ id: "limit-note" }),
+          LLMEvent.textDelta({ id: "limit-note", text: "Part" }),
+          LLMEvent.textEnd({ id: "limit-note" }),
+        ),
+        TestLLM.stop(),
+      )
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
 
       expect(s.requests).toHaveLength(1)
-      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+      expect(
+        (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+      ).toHaveLength(0)
     })
 
     scenario("fails with the limit when it is spent at the output-limit cap", function* (s) {
-      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 4 }, resume: false })
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
       yield* s.llm.push(
         lengthStop("cap-1", "A"),
         lengthStop("cap-2", "B"),
@@ -5978,8 +6403,61 @@ describe("SessionRunnerLLM", () => {
       expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
 
       expect(s.requests).toHaveLength(4)
-      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
+      expect(
+        (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+      ).toHaveLength(3)
     })
+
+    // The step rule counts a cut-off that holds a tool part, so the check at the cut-off must count it too; otherwise a
+    // resume or escalation note is left behind and the next check fails with the limit.
+    const cutOffTool = [
+      {
+        name: "a cut-off tool input on the resume path",
+        escalate: false,
+        cut: () =>
+          TestLLM.complete(
+            { reason: { normalized: "length", raw: "max_tokens" } },
+            LLMEvent.toolInputStart({ id: "cut-call", name: "echo" }),
+            LLMEvent.toolInputDelta({ id: "cut-call", name: "echo", text: '{"text":"par' }),
+            LLMEvent.toolCall({ id: "cut-call", name: "echo", input: { text: "par" }, partialInput: true }),
+          ),
+      },
+      {
+        name: "a cut-off tool input on the escalation path",
+        escalate: true,
+        cut: () =>
+          TestLLM.complete(
+            { reason: { normalized: "length", raw: "max_tokens" } },
+            LLMEvent.toolInputStart({ id: "cut-input", name: "echo" }),
+            LLMEvent.toolInputDelta({ id: "cut-input", name: "echo", text: '{"text":' }),
+          ),
+      },
+      {
+        name: "a cut-off hosted tool call",
+        escalate: false,
+        cut: () =>
+          TestLLM.complete({ reason: { normalized: "length", raw: "max_tokens" } }, hostedCall("cut-hosted", "query")),
+      },
+    ]
+    cutOffTool.forEach((row) =>
+      scenario(`leaves no note behind when the step limit is spent at ${row.name}`, function* (s) {
+        if (row.escalate) {
+          yield* s.configControl!.setEntries([
+            new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+          ])
+          s.currentModel = fittedOutputModel
+        }
+        yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+        yield* s.llm.push(row.cut(), TestLLM.stop())
+
+        expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+
+        expect(s.requests).toHaveLength(1)
+        expect(
+          (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+        ).toHaveLength(0)
+      }),
+    )
 
     scenario("runs a queued prompt without options unlimited in the same busy period", function* (s) {
       yield* s.session.prompt({ sessionID, text: "A", turn: { maxSteps: 1 }, resume: false })
@@ -7560,6 +8038,57 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests).toHaveLength(11)
     expect(s.requests.every((request) => request.model === model)).toBe(true)
   })
+
+  // Spend recorded for a failed attempt can pass a turn limit; the handlers fail with it before they leave a notice.
+  const limitRows = [
+    {
+      name: "a continuation after a failed partial response",
+      turn: { maxTokens: 50 },
+      requests: 1,
+      attempts: () => [
+        TestLLM.failAfter(
+          incompleteStream(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "spent-partial" }),
+          LLMEvent.textDelta({ id: "spent-partial", text: "x".repeat(680) }),
+        ),
+        TestLLM.text("Never", "spent-never"),
+      ],
+    },
+    {
+      name: "a fallback after repeated overloads",
+      turn: { maxTokens: 7500, fallbackModel },
+      requests: 3,
+      attempts: () => [
+        ...Array.from({ length: 3 }, () => TestLLM.failAfter(overloaded(), LLMEvent.stepStart({ index: 0 }))),
+        TestLLM.text("Never", "spent-never"),
+      ],
+    },
+  ]
+  limitRows.forEach((row) =>
+    scenario(`leaves no synthetic message behind when a limit is spent at ${row.name}`, function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Spent", turn: row.turn, resume: false })
+      yield* s.llm.push(...row.attempts())
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.flip, Effect.forkChild)
+      while (true) {
+        const retrying = yield* Effect.raceFirst(
+          Queue.take(scheduled).pipe(Effect.as(true)),
+          Fiber.await(run).pipe(Effect.as(false)),
+        )
+        if (!retrying) break
+        yield* TestClock.adjust("1 minute")
+      }
+      const error = yield* Fiber.join(run)
+
+      expect(error).toBeInstanceOf(StepFailedError)
+      expect((error as StepFailedError).error).toMatchObject({ type: "limit.tokens" })
+      expect(s.requests).toHaveLength(row.requests)
+      expect(
+        (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+      ).toHaveLength(0)
+    }),
+  )
 
   scenario("does not switch when another failure interrupts the overloads", function* (s) {
     yield* s.session.prompt({ sessionID, text: "Mixed", turn: { fallbackModel }, resume: false })
@@ -9366,6 +9895,22 @@ describe("SessionRunnerLLM", () => {
     expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
   })
 
+  // FU-M1-081: the resume allowance counts the notices the runner recorded, not a message a client admits.
+  scenario("keeps the three resumes when a client admits an output-limit notice", function* (s) {
+    yield* s.admit("Never finishes")
+    yield* s.session.synthetic({
+      sessionID,
+      text: "From a client",
+      metadata: { notice: "output-limit" },
+      resume: false,
+    })
+    yield* s.llm.push(...Array.from({ length: 8 }, (_, index) => lengthStop(`client-${index + 1}`, String(index + 1))))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(4)
+  })
+
   scenario("never runs a tool call that was cut off by the output limit", function* (s) {
     yield* s.admit("Truncated call")
     yield* s.llm.push(
@@ -9501,11 +10046,13 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests.map((request) => request.toolChoice?.type)).not.toContain("none")
   })
 
-  scenario("delivers a steered message at a text-only output-limit stop instead of resuming", function* (s) {
+  // FU-M2-058: a text-only cut-off is resumed in the same step before any waiting steer is delivered.
+  scenario("resumes a text-only output-limit stop before it delivers a waiting steer", function* (s) {
     yield* s.admit("Write a long answer")
     yield* s.llm.push(
       lengthStop("steer-1", "A"),
       TestLLM.text("Answer", "steer-done"),
+      TestLLM.text("After the steer", "steer-after"),
     )
     const first = yield* s.llm.gate
     const run = yield* s.resume.pipe(Effect.forkChild)
@@ -9514,10 +10061,35 @@ describe("SessionRunnerLLM", () => {
     yield* first.release
     yield* Fiber.join(run)
 
-    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[1]).includes("STEER")).toBe(false)
+    expect(userTexts(s.requests[1]).at(-1)).toContain("reached the output limit. Resume exactly where it stopped")
+    expect(userTexts(s.requests[2]).at(-1)).toBe("STEER")
     expect(
-      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
-    ).toHaveLength(0)
+      (yield* s.context).map((message) =>
+        message.type === "synthetic" ? `synthetic:${message.metadata?.notice}` : message.type,
+      ),
+    ).toEqual(["user", "assistant", "synthetic:output-limit", "assistant", "user", "assistant"])
+  })
+
+  scenario("resumes a text-only output-limit stop whose waiting steer was cancelled, and asks the turn-end checks once", function* (s) {
+    let asked = 0
+    s.turnEnd = () => Effect.sync(() => void asked++).pipe(Effect.as(undefined))
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(lengthStop("cancel-1", "A"), TestLLM.text("Answer", "cancel-done"))
+    const first = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    const steer = yield* s.admit("STEER")
+    yield* s.session.cancelInbox({ sessionID, inboxID: steer.id }).pipe(Effect.orDie)
+    yield* first.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(userTexts(s.requests[1]).at(-1)).toContain("reached the output limit. Resume exactly where it stopped")
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+    // The checks ask once, after the finished reply, and not at the cut-off.
+    expect(asked).toBe(1)
   })
 
   const notices = (messages: ReadonlyArray<SessionMessage.Info>, notice: string) =>
@@ -9625,20 +10197,47 @@ describe("SessionRunnerLLM", () => {
   scenario("does not escalate at a spent turn limit", function* (s) {
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
     s.currentModel = fittedOutputModel
-    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
-    yield* s.llm.push(lengthStop("esc-limit", "Part"), TestLLM.stop())
+    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxTokens: 2 }, resume: false })
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" }, usage: { nonCachedInputTokens: 1, outputTokens: 1 } },
+        LLMEvent.textStart({ id: "esc-limit" }),
+        LLMEvent.textDelta({ id: "esc-limit", text: "Part" }),
+        LLMEvent.textEnd({ id: "esc-limit" }),
+      ),
+      TestLLM.stop(),
+    )
 
     yield* s.resume.pipe(Effect.ignore)
 
     expect(s.requests).toHaveLength(1)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && !SessionReminders.isReminder(message)),
+    ).toHaveLength(0)
   })
 
-  scenario("delivers a waiting steer instead of escalating", function* (s) {
+  // FU-M2-078: the cut-off reply is part of the logical step that its escalation continues, not a step of its own.
+  scenario("escalates a capped reply under a step limit of one", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+    yield* s.llm.push(lengthStop("esc-step-1", "Part"), TestLLM.text(" rest", "esc-step-2"))
+
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(1)
+  })
+
+  scenario("delivers a waiting steer after the escalated retry", function* (s) {
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
     s.currentModel = fittedOutputModel
     yield* s.admit("Write a long answer")
-    yield* s.llm.push(lengthStop("esc-steer-1", "A"), TestLLM.text("Answer", "esc-steer-done"))
+    yield* s.llm.push(
+      lengthStop("esc-steer-1", "A"),
+      TestLLM.text("Answer", "esc-steer-done"),
+      TestLLM.text("After the steer", "esc-steer-after"),
+    )
     const first = yield* s.llm.gate
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* first.started
@@ -9646,8 +10245,9 @@ describe("SessionRunnerLLM", () => {
     yield* first.release
     yield* Fiber.join(run)
 
-    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
-    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
+    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, false, true])
+    expect(s.requests.map((request) => request.generation?.maxTokens).slice(0, 2)).toEqual([8_000, 64_000])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(1)
   })
 
   scenario("leaves an escalated attempt out of a fork's requests", function* (s) {
@@ -9818,5 +10418,118 @@ describe("SessionRunnerLLM", () => {
 
     expect(s.requests).toHaveLength(2)
     expect(s.requests.map((request) => request.toolChoice)).toMatchObject([{ type: "none" }, { type: "none" }])
+  })
+})
+
+// The folder that the baseline names is made when a drain starts, once, and by nothing else.
+describe("SessionRunnerLLM scratchpad", () => {
+  const exists = (file: string) =>
+    Effect.promise(() =>
+      fs.lstat(file).then(
+        () => true,
+        () => false,
+      ),
+    )
+  const scratchpadScenario = scenarioOn(scratchpadIt)
+
+  scenario("makes the scratchpad once when a drain starts, before its first model request", function* (s) {
+    yield* s.admit("Use the tool, then answer")
+    yield* s.llm.push(TestLLM.tool("call-scratch", "echo", { text: "a" }), TestLLM.text("Done", "done-scratch"))
+
+    yield* s.resume
+
+    // Two steps ran in one drain, and the folder was asked for once, before either request.
+    expect(s.requests).toHaveLength(2)
+    expect(s.scratchpads).toEqual([{ sessionID, requests: 0 }])
+
+    yield* s.admit("Again")
+    yield* s.llm.push(TestLLM.text("Done again", "again-scratch"))
+    yield* s.resume
+
+    expect(s.scratchpads).toEqual([
+      { sessionID, requests: 0 },
+      { sessionID, requests: 2 },
+    ])
+  })
+
+  scenario("makes no scratchpad for a drain that has nothing to run", function* (s) {
+    const runner = yield* SessionRunner.Service
+    yield* runner.drain({ sessionID, force: false })
+    expect(s.scratchpads).toEqual([])
+  })
+
+  scratchpadScenario("makes the folder when a drain starts, and not for an admitted prompt or a preview", function* (s) {
+    const context = yield* SessionContext.Service
+    const scratchpad = yield* SessionScratchpad.Service
+    const stored = yield* s.session.get(sessionID)
+    const folder = scratchpad.path(stored)
+    if (folder === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+
+    yield* s.admit("Hello")
+    // What a preview or a generation reads, and the section a request would hold: neither makes the folder.
+    const selected = yield* context.select(sessionID)
+    yield* Instructions.read(selected.instructions)
+    yield* SessionHistory.preview(s.db, sessionID, selected.instructions, "local")
+    expect(yield* exists(folder)).toBe(false)
+
+    yield* s.llm.push(TestLLM.text("Hi", "hi-scratch"))
+    yield* s.resume
+
+    expect((yield* Effect.promise(() => fs.lstat(folder))).isDirectory()).toBe(true)
+    expect(s.requests[0]?.system.map((part) => part.text).join("\n")).toContain(`\`${folder}\``)
+
+    // The next drain makes it again if it is gone, which is all that "once per drain" needs.
+    yield* Effect.promise(() => fs.rm(folder, { recursive: true, force: true }))
+    yield* s.admit("Again")
+    yield* s.llm.push(TestLLM.text("Hi again", "hi-again-scratch"))
+    yield* s.resume
+    expect(yield* exists(folder)).toBe(true)
+  })
+
+  scratchpadScenario("does not make the folder when a title is generated", function* (s) {
+    const title = yield* SessionTitle.Service
+    const scratchpad = yield* SessionScratchpad.Service
+    const folder = scratchpad.path(yield* s.session.get(sessionID))
+    if (folder === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+
+    // A first drain makes the folder and delivers the prompt, which a title is made from; then the folder is taken away.
+    yield* s.admit("Hello")
+    yield* s.llm.push(TestLLM.text("Hi", "hi-title-scratch"))
+    yield* s.resume
+    yield* Effect.promise(() => fs.rm(folder, { recursive: true, force: true }))
+
+    yield* prepareTitleGeneration
+    yield* s.llm.push(TestLLM.text("Generated title", "text-title-scratch"))
+    yield* title.generate(sessionID)
+
+    expect((yield* s.session.get(sessionID)).title).toBe("Generated title")
+    expect(yield* exists(folder)).toBe(false)
+  })
+
+  scratchpadScenario("makes the folder of the session that a subagent goes back to", function* (s) {
+    const scratchpad = yield* SessionScratchpad.Service
+    const stored = yield* s.session.get(sessionID)
+    const child = Session.ID.make("ses_runner_scratch_child")
+    yield* s.db
+      .insert(SessionTable)
+      .values({
+        id: child,
+        project_id: Project.ID.global,
+        slug: child,
+        directory: "/project",
+        title: "child",
+        version: "test",
+        parent_id: sessionID,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    const folder = scratchpad.path(stored)
+    if (folder === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+
+    yield* s.session.prompt({ sessionID: child, text: "Hello from the subagent", resume: false })
+    yield* s.llm.push(TestLLM.text("Hi", "hi-child-scratch"))
+    yield* s.session.resume(child)
+
+    expect(yield* Effect.promise(() => fs.readdir(path.dirname(folder)))).toEqual([path.basename(folder)])
   })
 })

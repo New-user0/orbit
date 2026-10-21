@@ -6,7 +6,7 @@ import { ShellAnalysis } from "../../src/shell/analysis"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import { currentDirectoryOnPath, plant } from "../fixture/decoy"
 import { tmpdir } from "../fixture/tmpdir"
-import { linux, windows } from "./helper"
+import { linux, SHELL_START, windows } from "./helper"
 
 // A program the shell would find in the working folder is project code, so a command that starts it is never read-only
 // (class 10). These rows run the real locator (`inspect` supplies it), not a stub.
@@ -75,7 +75,7 @@ onWindows("Windows decoys", () => {
 
     // Analysis only looked: the decoy ran once, in the control.
     expect(await ran()).toHaveLength(1)
-  })
+  }, SHELL_START)
 
   test("cmd.exe is unanalysed, so nothing under it is read-only", async () => {
     await using tmp = await tmpdir()

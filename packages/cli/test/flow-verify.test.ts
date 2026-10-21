@@ -191,8 +191,12 @@ test("a reviewer that never approves fails the node after maxIterations", async 
   expect(reviews[0]).toContain("The answer must be 42.")
 }, 180_000)
 
+// Both run in a folder inside the repository, whose project is the repository: the runs take their worktrees from it,
+// and `clean` finds them there.
 test("orb eval compares models on a suite, and orb flow clean removes what the runs left", async () => {
   const repository = await repo("eval")
+  const inside = path.join(repository, "docs")
+  await fs.mkdir(inside)
   const suite = path.join(flows, "suite.ts")
   await Bun.write(
     suite,
@@ -204,7 +208,7 @@ test("orb eval compares models on a suite, and orb flow clean removes what the r
 `,
   )
 
-  const result = await orb(repository, ["eval", "--standalone", suite, "--format", "json"])
+  const result = await orb(inside, ["eval", "--standalone", suite, "--format", "json"])
 
   expect({ code: result.code, stderr: result.code === 0 ? "" : result.stderr }).toEqual({ code: 0, stderr: "" })
   const report = JSON.parse(result.stdout)
@@ -220,7 +224,7 @@ test("orb eval compares models on a suite, and orb flow clean removes what the r
   expect(table.stdout).toContain("ollama/learner:1b  0/1")
   expect(await branches(repository)).not.toEqual([])
 
-  const cleaned = await orb(repository, ["flow", "clean"])
+  const cleaned = await orb(inside, ["flow", "clean", "--standalone", "--trust"])
 
   expect(cleaned.code).toBe(0)
   expect(cleaned.stdout).toContain("Removed 3 worktree(s) and 3 branch(es) from 2 run(s)")

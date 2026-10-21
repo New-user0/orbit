@@ -8,6 +8,7 @@ import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import type { BunPlugin } from "bun"
 import pkg from "../package.json"
 import { autoload } from "./autoload"
+import { managedDefine } from "./managed-define"
 import { runtimeRequires, verifyRuntimeRequires } from "./runtime-requires"
 import { verifyArtifact, verifySimulationGraph } from "./verify-artifact"
 
@@ -117,6 +118,7 @@ for (const item of targets) {
       ORBIT_CLI_NAME: "'orb'",
       ORBIT_CHANNEL: `'${Script.channel}'`,
       ORBIT_ARTIFACT: `'cli'`,
+      ...managedDefine,
       ORBIT_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "undefined",
       // FFF_LIBC selects the fff native lib variant: "musl" or "gnu".
       FFF_LIBC: item.os === "linux" ? `'${item.abi ?? "gnu"}'` : "undefined",

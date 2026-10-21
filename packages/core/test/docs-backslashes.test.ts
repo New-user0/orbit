@@ -21,3 +21,25 @@ describe("share and device spellings in the docs", () => {
     expect(lone("(`\\\\host\\share`, `\\\\.\\...`)")).toHaveLength(0)
   })
 })
+
+describe("control bytes in the docs", () => {
+  // A backslash before b, t or n in a shell string turns into a control byte; a note once held a backspace.
+  const control = (text: string) =>
+    text.split("\n").flatMap((line, index) => (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(line) ? [index + 1] : []))
+
+  test("no document under docs/ holds a C0 control byte", async () => {
+    const dir = path.join(import.meta.dir, "../../../docs")
+    const hits = await Promise.all(
+      [...new Bun.Glob("**/*.md").scanSync(dir)].map(async (name) => ({
+        name,
+        lines: control(await Bun.file(path.join(dir, name)).text()),
+      })),
+    )
+    expect(hits.filter((hit) => hit.lines.length > 0)).toEqual([])
+  })
+
+  test("the check finds a backspace (control)", () => {
+    expect(control(`usr${String.fromCharCode(8)}in`)).toEqual([1])
+    expect(control("usr\\bin")).toEqual([])
+  })
+})

@@ -8,6 +8,9 @@ import { FileAccess } from "../file-access.js"
 import { Location } from "../location.js"
 import type { PluginInternal } from "../plugin/internal.js"
 import { WriteTool } from "../tool/plugin/write.js"
+import { Session } from "../session.js"
+import { LspClient } from "./client.js"
+import { LspDiagnostics } from "./collector.js"
 import { Lsp } from "./index.js"
 
 /**
@@ -17,13 +20,14 @@ import { Lsp } from "./index.js"
 
 const EDITING_TOOLS = new Set(["Edit", "Write", "Patch", "NotebookEdit"])
 const MAX_PER_FILE = 10
-const ERROR = 1
 
 export const Plugin = define({
   id: "orbit.lsp.diagnostics",
   effect: Effect.fn("LspPlugin")(function* (ctx) {
     const lsp = yield* Lsp.Service
     const location = yield* Location.Service
+    const collector = yield* LspDiagnostics.Service
+    const sessions = yield* Session.Service
 
     yield* ctx.tool.hook("execute.after", (event) =>
       Effect.gen(function* () {
@@ -36,11 +40,20 @@ export const Plugin = define({
             ? writtenFile(event.input, event.result.output, location.directory)
             : changedFiles(event.result.metadata?.files).map((file) => path.resolve(location.directory, file))
         if (files.length === 0) return
-        const found = yield* lsp.diagnostics(files, { save: true })
+        // A server that is not running yet is started in the background: the edit does not wait for a cold start, and the
+        // next step's reminder carries what the server publishes.
+        const found = yield* lsp.diagnostics(files, { save: true, background: true })
+        // A diagnostic without a usable severity counts as an error, as it does in the query tool.
         const errors = Object.entries(found).flatMap(([file, items]) => {
-          const list = items.filter((item) => item.severity === ERROR)
+          const list = items.filter((item) => LspClient.severity(item) === 1)
           return list.length === 0 ? [] : [[file, list] as const]
         })
+        // A server may publish after the wait below, so the files are remembered for the next step's reminder, with the
+        // errors that this block shows. A subagent's files are remembered for its top-level session only, because only that
+        // conversation gets the reminder, and a child's own record would never be drained.
+        const shown = Object.fromEntries(errors.map(([file, items]) => [file, items.slice(0, MAX_PER_FILE)]))
+        const top = yield* topLevel(event.sessionID)
+        yield* collector.touch(top, Object.keys(found), top === event.sessionID ? shown : {})
         if (errors.length === 0) return
         const lines = errors.flatMap(([file, items]) => [
           `${path.relative(location.directory, file)}:`,
@@ -71,6 +84,16 @@ export const Plugin = define({
         }
       }),
     )
+    // The session whose conversation receives the reminder: the root of the chain of parents.
+    const topLevel = Effect.fnUntraced(function* (sessionID: Session.ID) {
+      let current = sessionID
+      for (let depth = 0; depth < 16; depth++) {
+        const info = yield* sessions.get(current).pipe(Effect.option)
+        if (info._tag === "None" || info.value.parentID === undefined) return current
+        current = info.value.parentID
+      }
+      return current
+    })
   }),
 } satisfies PluginInternal.InternalPlugin)
 

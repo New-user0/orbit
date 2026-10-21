@@ -19,6 +19,9 @@ export type VariantID = typeof VariantID.Type
 export const Family = Model.Family
 export type Family = Model.Family
 
+export const Knowledge = Model.Knowledge
+export type Knowledge = Model.Knowledge
+
 export const ReasoningField = Model.ReasoningField
 export type ReasoningField = Model.ReasoningField
 

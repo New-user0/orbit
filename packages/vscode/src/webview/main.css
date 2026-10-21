@@ -610,9 +610,27 @@ body.sidebar .composer {
   text-overflow: ellipsis;
 }
 
-.chip .close {
+.chips {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+button.chip {
+  border: 0;
   cursor: pointer;
-  opacity: 0.7;
+}
+
+/* A chip that is off still shows, so one click puts it on for the next message. */
+.chip.off {
+  opacity: 0.55;
+  background: transparent;
+  outline: 1px dashed var(--vscode-button-secondaryBackground);
+}
+
+.context {
+  margin-top: 4px;
+  font-size: 11px;
 }
 
 .pick {

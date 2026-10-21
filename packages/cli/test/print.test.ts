@@ -589,13 +589,18 @@ test("the flags that the interface also takes are not refused without -p", async
 
 // One hostile string per sink of `renderTool`: the inline title, the description, the block title and the block body.
 // Each tool succeeds, so the line that is drawn is the one for a finished call and not the failed line.
+// A shell row names the session shell in the config. Left to the host, the session offers the shell tool as PowerShell
+// wherever no SHELL is set (GitHub's Windows runner), and a row written for Bash would see its call refused.
 const evil = "e\u001b]0;pwned\u0007\u009b31m"
 const sinks: Array<{
   sink: string
   name: string
+  shell?: string
   input: (value: string) => Record<string, unknown>
   hostile: string
   escaped: string
+  // What only a finished call prints for the plain value, so a refused or missing tool fails the row.
+  ran: RegExp
 }> = [
   {
     sink: "inline title",
@@ -603,6 +608,7 @@ const sinks: Array<{
     input: (value) => ({ pattern: value }),
     hostile: evil,
     escaped: "e\\x1b]0;pwned\\x07",
+    ran: /Grep "plain" .*0 matches/,
   },
   {
     sink: "description",
@@ -610,43 +616,79 @@ const sinks: Array<{
     input: (value) => ({ file_path: path.join(workspace, "AGENTS.md"), note: value }),
     hostile: evil,
     escaped: "e\\x1b]0;pwned\\x07",
+    ran: /Read AGENTS\.md .*\[note=plain\]/,
   },
   // The command is the title of the block; a comment keeps the shell from running the characters.
   {
     sink: "block title",
     name: "Bash",
+    shell: "bash",
     input: (value) => ({ command: `echo marker # ${value}`, description: "marker" }),
     hostile: evil,
     escaped: "e\\x1b]0;pwned\\x07",
+    ran: /^marker\r?$/m,
   },
   // The shell writes the escape sequence itself, so the title holds only its spelling and the output holds the bytes.
   {
     sink: "block body",
     name: "Bash",
+    shell: "bash",
     input: (value) => ({ command: `printf '${value}\\n'`, description: "marker" }),
     hostile: "e\\033]0;pwned\\007\\233",
     escaped: "e\\x1b]0;pwned\\x07",
+    ran: /^plain\r?$/m,
   },
+  // Windows PowerShell is on every Windows host, and there the shell tool is offered under its name.
+  ...(process.platform === "win32"
+    ? [
+        {
+          sink: "block title",
+          name: "PowerShell",
+          shell: "powershell",
+          input: (value: string) => ({ command: `Write-Output marker # ${value}`, description: "marker" }),
+          hostile: evil,
+          escaped: "e\\x1b]0;pwned\\x07",
+          ran: /^marker\r?$/m,
+        },
+        // Windows PowerShell 5.1 has no escape for ESC in a string, so the command builds the characters from their codes.
+        {
+          sink: "block body",
+          name: "PowerShell",
+          shell: "powershell",
+          input: (value: string) => ({ command: `Write-Output ${value}`, description: "marker" }),
+          hostile: '("e" + [char]27 + "]0;pwned" + [char]7 + [char]0x9b)',
+          escaped: "e\\x1b]0;pwned\\x07",
+          ran: /^plain\r?$/m,
+        },
+      ]
+    : []),
 ]
 
 test.each(sinks)(
   "a hostile $name input reaches no terminal through the $sink",
   async (row) => {
-    const run = await scripted([{ tool: { name: row.name, input: row.input(row.hostile) } }, "done"], (own, home) =>
-      print(own, home, ["--yolo", "say ok"], "text"),
-    )
-    const control = await scripted([{ tool: { name: row.name, input: row.input("plain") } }, "done"], (own, home) =>
-      print(own, home, ["--yolo", "say ok"], "text"),
-    )
+    const call = (value: string) =>
+      scripted([{ tool: { name: row.name, input: row.input(value) } }, "done"], async (own, home) => {
+        if (row.shell) {
+          const file = path.join(home, "config", "orbit.json")
+          await Bun.write(file, JSON.stringify({ ...(await Bun.file(file).json()), shell: row.shell }))
+        }
+        return print(own, home, ["--yolo", "say ok"], "text")
+      })
+    const run = await call(row.hostile)
+    const control = await call("plain")
 
+    // The control: the tool was offered under this name and finished, so the absence below is the escaping's doing.
+    const shown = control.stdout + control.stderr
+    expect(shown).toMatch(row.ran)
+    expect(shown).not.toContain("✗")
     const printed = run.stdout + run.stderr
+    expect(printed).not.toContain("✗")
     expect(printed).toContain(row.escaped)
     // The interface's own colors are escape sequences too, so only what a tool could inject is looked for.
     expect(printed).not.toContain("\u001b]")
     expect(printed).not.toContain("\u0007")
     expect(printed).not.toContain("\u009b")
-    // The same call with a plain value is printed too, so the absence above is the escaping's doing.
-    expect(control.stdout + control.stderr).toContain("plain")
   },
   240_000,
 )

@@ -30,10 +30,11 @@ import { host } from "./plugin/host"
 import { initRepo } from "./fixture/git"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 
 class Fixture extends Context.Service<Fixture, Effect.Success<ReturnType<typeof makeFixture>>>()("WorktreeFixture") {}
 
-const infrastructure = AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node]))
+const infrastructure = AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node, WorkspaceTrust.node]))
 const it = testEffect(
   Layer.unwrap(
     Effect.gen(function* () {

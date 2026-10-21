@@ -81,6 +81,7 @@ export interface GlobInput {
   readonly cwd: string
   readonly pattern: string
   readonly limit: number
+  /** Hidden files are listed unless this is `false`. */
   readonly hidden?: boolean
   readonly follow?: boolean
   readonly signal?: AbortSignal
@@ -256,9 +257,11 @@ const layer = Layer.effect(
     }) => {
       const program = Effect.scoped(
         Effect.gen(function* () {
+          // The lookup's message says where ripgrep was looked for and how to provide it, so it is the error shown.
+          const filepath = yield* binary.filepath.pipe(Effect.mapError((cause) => failure(cause.message, cause)))
           // Hosted environments will resolve rg through their driver image; the spawner is the execution seam.
           const handle = yield* environment.spawner.spawn(
-            ChildProcess.make(yield* binary.filepath, input.args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
+            ChildProcess.make(filepath, input.args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
           )
           const stderrFiber = yield* collectStream(handle.stderr, ERROR_BYTES).pipe(
             Effect.map((output) => output.buffer.toString("utf8")),
@@ -322,13 +325,15 @@ const layer = Layer.effect(
           args: [
             "--no-config",
             "--files",
-            // Newest first, so a limited listing keeps the files most likely to matter.
-            "--sortr=modified",
-            ...(input.hidden ? ["--hidden"] : []),
+            // Oldest first, as a listing by modification time reads. Hidden files and files that .gitignore names are
+            // listed: a search for a file by name is not a search of what a build leaves out.
+            "--sort=modified",
+            ...(input.hidden === false ? [] : ["--hidden"]),
+            "--no-ignore",
             ...(input.follow ? ["--follow"] : []),
             `--glob=${input.pattern}`,
             // Positive globs override rg's hidden-file filter; exclude before applying the result limit.
-            ...(input.hidden ? [] : ["--glob=!**/.*"]),
+            ...(input.hidden === false ? ["--glob=!**/.*"] : []),
             ...vcsGlobs,
             ".",
           ],

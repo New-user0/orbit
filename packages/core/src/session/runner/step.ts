@@ -13,6 +13,7 @@ import {
 import type { Agent } from "@orbit/schema/agent"
 import { Cause, Clock, Data, Effect, Exit, Fiber, Option, Stream } from "effect"
 import { SessionError } from "@orbit/schema/session-error"
+import { Money } from "@orbit/schema/money"
 import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
 import { Database } from "../../database/database.js"
@@ -28,8 +29,11 @@ import { SessionInbox } from "../inbox.js"
 import { SessionMessage } from "../message.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionSchema } from "../schema.js"
+import { SessionCompaction } from "../compaction.js"
 import { toSessionError } from "../to-session-error.js"
+import { SessionTurn } from "../turn.js"
 import { SessionUsage } from "../usage.js"
+import { Token } from "../../util/token.js"
 import { SessionRunnerModel } from "./model.js"
 import { createLLMEventPublisher } from "./publish-llm-event.js"
 import { SessionRunnerRetry } from "./retry.js"
@@ -199,10 +203,17 @@ export const make = Effect.gen(function* () {
     // Provider and tool fibers retain per-source order without a shared writer queue.
     // A local execution starts only after its Tool.Called publication completes.
     let overflowFailure: ProviderErrorEvent | undefined
+    // What the provider has sent so far. A response that failed after this began was probably billed, but its usage
+    // never arrived; one that failed before it (an error status) was refused and billed nothing.
+    let observed = false
+    let streamedLength = 0
     // Read to the end, not just the finish event, so the next request can reuse this response.
     const providerStream = llm.stream(input.prepared.request, input.prepared.options).pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
+          if (event.type !== "provider-error") observed = true
+          if (event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-input-delta")
+            streamedLength += event.text.length
           if (overflowFailure || publisher.hasProviderError()) return
           if (
             LLMEvent.is.providerError(event) &&
@@ -213,6 +224,9 @@ export const make = Effect.gen(function* () {
             return
           }
           yield* publisher.publish(event)
+          // From here a descendant's limit check counts the response, though the step ends only after its tools do.
+          if (event.type === "step-finish")
+            SessionTurn.reportStep(input.sessionID, input.assistantMessageID, SessionUsage.record(event.usage, input.model.cost))
           if (event.type !== "tool-call" || event.providerExecuted) return
           // Registering in the same uninterruptible block as the fork keeps provider order, and no call is left
           // registered without a fiber that releases it. The scheduler starts the call once its traits allow.
@@ -315,13 +329,38 @@ export const make = Effect.gen(function* () {
             : undefined
         const llmFailure = streamFailure instanceof AIError ? streamFailure : unknownFinish
         const llmError = llmFailure && !recorded.providerFailed ? toSessionError(llmFailure) : undefined
+        // What this attempt cost. The provider's figures when it reported them; otherwise, for a response that began
+        // and was cut off, an estimate priced with the model's own rates, so the turn counts it instead of reading
+        // it as free. A request the provider refused before sending anything cost nothing.
+        const billed = (): SessionUsage.Recorded | undefined => {
+          const finish = publisher.record().finish
+          if (finish) return { cost: SessionUsage.calculateCost(input.model.cost, finish.tokens), tokens: finish.tokens }
+          if (!observed) return undefined
+          return SessionUsage.estimate(input.model.cost, {
+            input: SessionCompaction.estimateRequest(input.prepared.request),
+            output: Token.estimateLength(streamedLength),
+          })
+        }
+        // An attempt that is repeated leaves no response of its own, so what it billed is a usage record.
+        const recordDiscarded = Effect.suspend(() => {
+          const spent = billed()
+          return spent
+            ? bus.publish(SessionEvent.SideQueryRecorded, {
+                sessionID: input.sessionID,
+                purpose: "step.retry",
+                ...spent,
+              })
+            : Effect.void
+        })
         if (
           input.recoverContinuation &&
           llmFailure?.reason._tag === "Transport" &&
           (llmFailure.reason.recovery === "retry-full" || llmFailure.reason.recovery === "rotate-and-retry-full") &&
           !recorded.outputStarted
-        )
+        ) {
+          yield* recordDiscarded
           return Outcome.RecoverFull()
+        }
         const retry =
           llmFailure && llmError && !isContextOverflowFailure(llmFailure)
             ? yield* restore(
@@ -336,6 +375,7 @@ export const make = Effect.gen(function* () {
         if (llmFailure && llmError && retry?.retry && !recorded.outputStarted) {
           // Retry state projects onto the existing assistant, even before it has produced output.
           yield* publisher.startAssistant()
+          yield* recordDiscarded
           return Outcome.Retry({ error: llmError, decision: retry, overloaded: isOverloaded(llmFailure) })
         }
         if (llmError) yield* publisher.failAssistant(llmError)
@@ -388,7 +428,14 @@ export const make = Effect.gen(function* () {
           const usage = record.finish
             ? { cost: SessionUsage.calculateCost(input.model.cost, record.finish.tokens), tokens: record.finish.tokens }
             : undefined
-          if (record.failure) yield* publisher.publishStepFailure({ ...usage, snapshot, files })
+          // A failure always records what it cost, so the row never reads as unknown: nothing, when the provider
+          // refused the request.
+          if (record.failure)
+            yield* publisher.publishStepFailure({
+              ...(billed() ?? { cost: Money.USD.zero, tokens: SessionUsage.tokens(undefined) }),
+              snapshot,
+              files,
+            })
           if (record.finish && usage && !record.failure)
             yield* bus.publish(SessionEvent.Step.Ended, {
               sessionID: input.sessionID,
@@ -424,7 +471,7 @@ export const make = Effect.gen(function* () {
         if (record.finish?.finish === "length") return Outcome.OutputLimited({ needsContinuation: needsContinuation && ran, toolCalled: before.toolCalled })
         return Outcome.Completed({ needsContinuation })
       }),
-    )
+    ).pipe(Effect.ensuring(Effect.sync(() => SessionTurn.settleStep(input.sessionID, input.assistantMessageID))))
   }, Effect.scoped)
 
   return { attempt }

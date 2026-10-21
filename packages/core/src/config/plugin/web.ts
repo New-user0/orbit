@@ -13,7 +13,7 @@ export const Plugin = define({
     const tools = yield* Tool.Service
     const loaded = yield* ConfigEntryObserver.observe(config, ctx.event, tools.reload())
     yield* tools.transform((editor) => {
-      editor.web({ allowLocal: Config.latest(loaded.entries, "experimental")?.allow_local_fetch === true })
+      editor.web({ allowLocal: Config.experimental(loaded.entries, "allow_local_fetch") === true })
     })
   }),
 })

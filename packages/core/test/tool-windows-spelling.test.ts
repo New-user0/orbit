@@ -7,6 +7,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
+import { NodeFileSystem } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -71,6 +72,25 @@ const executionNode = makeGlobalNode({
   deps: [],
 })
 
+// The folder whose listing fails in the row that sets it, to see what a short name in a folder that cannot be listed
+// becomes. The real file system answers everything else.
+const unlisted: { folder?: string } = {}
+const unlistable = Layer.effect(
+  FSUtil.Service,
+  Effect.gen(function* () {
+    const real = yield* FSUtil.Service
+    return new Proxy(real, {
+      get: (target, key) =>
+        key === "readDirectoryEntries"
+          ? (listed: string) =>
+              unlisted.folder !== undefined && path.resolve(listed) === path.resolve(unlisted.folder)
+                ? Effect.fail(new Error("cannot list this folder"))
+                : target.readDirectoryEntries(listed)
+          : (target as unknown as Record<string | symbol, unknown>)[key],
+    })
+  }),
+).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -90,6 +110,7 @@ const it = testEffect(
       Permission.node.replace(permission),
       Global.node.replace(tempGlobalLayer),
       offlineModels,
+      FSUtil.node.replace(unlistable),
     ],
   ),
 )
@@ -426,6 +447,66 @@ describe.skipIf(process.platform !== "win32")("file tools and Windows spellings 
             }),
           (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
         ),
+      { timeout: 30_000 },
+    )
+})
+
+// FU-M2-131: a folder that cannot be listed cannot say what a short name in it stands for. A part in the form of a short
+// name that exists there is refused as a spelling, not passed to the rules unchanged; a part that is not there stays as
+// it is, and a folder that can be listed resolves the name to the file's own.
+describe.skipIf(process.platform !== "win32")("a Windows short name in a folder that cannot be listed", () => {
+  const rows = [
+    { name: "is refused as a spelling when the folder cannot be listed", listable: false, part: "short", expect: "spelling" },
+    { name: "is decided by the rule of the long name when the folder can be listed", listable: true, part: "short", expect: "denied" },
+    { name: "that is not there stays as it is when the folder cannot be listed", listable: false, part: "ABSENT~1", expect: "missing" },
+  ] as const
+  for (const row of rows)
+    it.live(`Read of a short name ${row.name}`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          Effect.gen(function* () {
+            const vault = path.join(tmp.path, "vault")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(vault)
+              await fs.writeFile(path.join(vault, ".env"), "API_KEY=SECRET-MARKER\n")
+            })
+            const short = shortName(vault, ".env")
+            expect(short).toEqual(expect.stringContaining("~"))
+            unlisted.folder = row.listable ? undefined : vault
+            yield* withTools(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                state.rules = rules("Read", "*.env", "deny")
+                state.assertions = []
+                const result = yield* executeTool(registry, {
+                  sessionID,
+                  ...toolIdentity,
+                  call: {
+                    type: "tool-call",
+                    id: "call-unlistable",
+                    name: "Read",
+                    input: { file_path: path.join("vault", row.part === "short" ? short! : row.part) },
+                  },
+                })
+                const decided = state.assertions.filter((item) => item.action === "Read")
+                if (row.expect === "spelling") {
+                  expect(result).toMatchObject({ status: "error", error: { type: "file.spelling" } })
+                  expect(decided).toEqual([])
+                }
+                if (row.expect === "denied") {
+                  expect(result.status).toBe("error")
+                  expect(decided.some((item) => item.resources.some((resource) => resource.endsWith(".env")))).toBe(true)
+                }
+                if (row.expect === "missing") {
+                  expect(result.status).toBe("error")
+                  expect(result).not.toMatchObject({ error: { type: "file.spelling" } })
+                }
+                expect(JSON.stringify(result)).not.toContain("SECRET-MARKER")
+              }),
+            )
+          }).pipe(Effect.ensuring(Effect.sync(() => void (unlisted.folder = undefined)))),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
       { timeout: 30_000 },
     )
 })

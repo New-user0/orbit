@@ -80,6 +80,64 @@ test.each(spellings)("no status line runs in an untrusted start folder: $name", 
   }
 }, 40_000)
 
+// A change of the prompt's vim mode asks the status line for a run, and the ask only helps if the gate says yes: in an
+// untrusted start folder it starts nothing, and the same change in a trusted one does (the control).
+test("a vim mode change in an untrusted start folder starts no status line command", async () => {
+  await using clone = await tmpdir()
+  await using state = await tmpdir()
+  await using scripts = await tmpdir()
+  await mkdir(path.join(clone.path, ".git"), { recursive: true })
+  const marker = path.join(scripts.path, "marker.txt").replaceAll("\\", "/")
+  const script = path.join(scripts.path, "line.ts").replaceAll("\\", "/")
+  await Bun.write(
+    script,
+    `import { appendFileSync } from "node:fs"
+appendFileSync(${JSON.stringify(marker)}, "x")
+const input = JSON.parse(await Bun.stdin.text())
+console.log("MODE-" + input.vim_mode)
+`,
+  )
+  let trusted = false
+  const before = process.cwd()
+  process.chdir(clone.path)
+  try {
+    await using setup = await createAppFixture({
+      state: state.path,
+      width: 120,
+      config: { animations: false, prompt: { vim: true }, status_line: { interval: 60_000, command: `${bun} ${script}` } },
+      fetch: (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        return json({
+          directory: process.cwd(),
+          trusted,
+          persistent: true,
+          ...(trusted ? { source: "saved" } : {}),
+          withheld: trusted ? [] : [{ path: path.join(process.cwd(), "orbit.json"), kinds: ["hooks"] }],
+        })
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    setup.mockInput.pressEscape()
+    await Bun.sleep(1_000)
+    await setup.renderOnce()
+    setup.mockInput.pressKey("i")
+    await Bun.sleep(1_000)
+    await setup.renderOnce()
+    expect(await Bun.file(marker).exists()).toBe(false)
+    expect(setup.captureCharFrame()).not.toContain("MODE-")
+
+    // The control: once trusted, the same mode change runs the command and the line shows the new mode.
+    trusted = true
+    setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
+    await setup.waitForFrame((frame) => frame.includes("MODE-insert"))
+    setup.mockInput.pressEscape()
+    await setup.waitForFrame((frame) => frame.includes("MODE-normal"))
+  } finally {
+    process.chdir(before)
+  }
+}, 40_000)
+
 // The command is also handed the folder of the session in view as `cwd` and `project_dir`, and a status line that shows
 // repository state runs its VCS program there, which reads `core.fsmonitor` from the folder's own config (a bunfig.toml
 // preload for bun). The start folder being trusted says nothing about that folder, so nothing runs until it is trusted

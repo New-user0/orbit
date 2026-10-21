@@ -233,11 +233,11 @@ describe("WebSearchTool registration", () => {
           Effect.map((result) => (result.output as { results: { url: string }[] }).results.map((item) => item.url)),
         )
 
-      expect(yield* search({ allowedDomains: ["python.org"] })).toEqual([
+      expect(yield* search({ allowed_domains: ["python.org"] })).toEqual([
         "https://docs.python.org/3/",
         "https://blog.python.org/x",
       ])
-      expect(yield* search({ blockedDomains: ["example.com"] })).toEqual([
+      expect(yield* search({ blocked_domains: ["example.com"] })).toEqual([
         "https://docs.python.org/3/",
         "https://blog.python.org/x",
       ])
@@ -256,7 +256,7 @@ describe("WebSearchTool registration", () => {
           type: "tool-call",
           id: "call-domains-content",
           name: "WebSearch",
-          input: { query: "python", blockedDomains: ["blog.python.org", "example.com"] },
+          input: { query: "python", blocked_domains: ["blog.python.org", "example.com"] },
         },
       })
       const text = (filtered.content?.[0] as { text: string }).text
@@ -272,7 +272,7 @@ describe("WebSearchTool registration", () => {
           type: "tool-call",
           id: "call-domains-empty",
           name: "WebSearch",
-          input: { query: "python", allowedDomains: ["nowhere.test"] },
+          input: { query: "python", allowed_domains: ["nowhere.test"] },
         },
       })
       expect(empty.content).toEqual([{ type: "text", text: WebSearchTool.NO_RESULTS }])
@@ -284,7 +284,7 @@ describe("WebSearchTool registration", () => {
   const refusals: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
     ["an empty query", { query: "" }, "tool.input-invalid"],
     ["a one-character query", { query: "x" }, "tool.input-invalid"],
-    ["both domain lists", { query: "python", allowedDomains: ["a.test"], blockedDomains: ["b.test"] }, "websearch.invalid"],
+    ["both domain lists", { query: "python", allowed_domains: ["a.test"], blocked_domains: ["b.test"] }, "websearch.invalid"],
   ]
   for (const [label, input, type] of refusals)
     it.effect(`refuses ${label} with ${type} before permission, a form or a provider`, () =>
@@ -310,7 +310,7 @@ describe("WebSearchTool registration", () => {
       const result = yield* executeTool(fixture.registry, {
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-short", name: "WebSearch", input: { query: "go", allowedDomains: ["example.com"] } },
+        call: { type: "tool-call", id: "call-short", name: "WebSearch", input: { query: "go", allowed_domains: ["example.com"] } },
       })
       expect(result.status).toBe("completed")
     }),
@@ -321,9 +321,9 @@ describe("WebSearchTool registration", () => {
       const fixture = yield* setup
       yield* fixture.websearch.select(WebSearch.ID.make("exa"))
       const definition = (yield* toolDefinitions(fixture.registry)).find((tool) => tool.name === "WebSearch")
-      expect(definition?.description).toContain('"Sources:" section')
-      expect(definition?.description).toContain("allowedDomains")
-      expect(definition?.description).toContain("blockedDomains")
+      expect(definition?.description).toContain('"Sources:" list')
+      expect(definition?.description).toContain("allowed_domains")
+      expect(definition?.description).toContain("blocked_domains")
       expect(definition?.description).toContain(String(new Date().getFullYear()))
       const result = yield* executeTool(fixture.registry, {
         sessionID,
@@ -365,7 +365,7 @@ describe("WebSearchTool registration", () => {
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
       )
       expect(bounded.metadata).toMatchObject({ truncated: true })
-      expect(JSON.stringify(bounded.content)).toContain("Reminder: when your reply uses these results")
+      expect(JSON.stringify(bounded.content)).toContain("A reply that relies on these results")
     }),
   )
 

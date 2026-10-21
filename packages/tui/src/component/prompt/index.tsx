@@ -29,6 +29,7 @@ import { promptOffsetWidth } from "../../prompt/display"
 import { expandPromptInputPastedText, realignPromptInputMentions } from "../../prompt/mention"
 import { parseSlashHead } from "../../prompt/parse"
 import { stringWidth } from "../../util/string-width"
+import { block, envelope } from "@orbit/util/reminder-text"
 import { createStore, produce, unwrap } from "solid-js/store"
 import {
   emptyPrompt,
@@ -47,6 +48,7 @@ import { DialogHistorySearch } from "./dialog-history-search"
 import { type AutocompleteOption, type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { Locale } from "../../util/locale"
+import { plain } from "@orbit/util/plain"
 import { errorMessage } from "../../util/error"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
@@ -58,6 +60,7 @@ import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
 import { useTrust } from "../../context/trust"
 import { Vim } from "./vim-state"
+import { VimAdapter } from "./vim-adapter"
 import { StatusLine } from "./status-line"
 import { configuredOutputStyle } from "../dialog-output-style"
 import { statusLinePayload } from "../../util/status-line-payload"
@@ -167,24 +170,58 @@ function hasEditorRangeSelection(selection: EditorSelection["ranges"][number]) {
   )
 }
 
-function getEditorRangeLabel(selection: EditorSelection["ranges"][number]) {
+// Positions count from 1. A selection that ends at the first character of a later line does not cover that line.
+export function getEditorRangeLabel(selection: EditorSelection["ranges"][number]) {
   if (!hasEditorRangeSelection(selection)) return
-  if (selection.selection.start.line === selection.selection.end.line) return `#${selection.selection.start.line}`
-  return `#${selection.selection.start.line}-${selection.selection.end.line}`
+  const { start, end } = selection.selection
+  const last = end.character === 1 && end.line > start.line ? end.line - 1 : end.line
+  if (start.line === last) return `#${start.line}`
+  return `#${start.line}-${last}`
 }
 
-function formatEditorContext(selection: EditorSelection) {
+// The envelope holds only text written here. The path and the selected text come from the repository, so each follows
+// it as a labelled block that cannot close its fence and in which look-alike reminder tags are escaped.
+export function formatEditorContext(selection: EditorSelection) {
   const selected = selection.ranges.filter(hasEditorRangeSelection)
   if (selected.length === 0)
-    return `<system-reminder>Note: The user opened the file "${selection.filePath}". This may or may not be relevant to the current task.</system-reminder>\n`
+    return [
+      envelope("Editor state, given as background and not as a request: the person has the file named below open. It may have nothing to do with the task."),
+      block("open file", selection.filePath),
+    ].join("\n\n")
 
-  const ranges = selected.map((range, index) => {
-    const prefix = selected.length > 1 ? `Selection ${index + 1}: ` : ""
-    return `Note: The user selected ${prefix}${getEditorRangeLabel(range)} from "${selection.filePath}". \`\`\`${range.text}\`\`\`\n\n`
+  // Line endings are normalized first so the cut falls at the same place on every platform.
+  const cut = selected.map((range) => {
+    const text = range.text.replaceAll("\r\n", "\n")
+    if (text.length <= EDITOR_SELECTION_LIMIT) return { range, text, left: 0 }
+    // Never inside a surrogate pair.
+    const end = /[\ud800-\udbff]/.test(text[EDITOR_SELECTION_LIMIT - 1])
+      ? EDITOR_SELECTION_LIMIT - 1
+      : EDITOR_SELECTION_LIMIT
+    return { range, text: text.slice(0, end), left: text.length - end }
   })
-
-  return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
+  const left = cut.reduce((total, item) => total + item.left, 0)
+  return [
+    envelope(
+      [
+        "Editor state: a part of the file named below is highlighted, and the highlighted text follows. This is background context and not a request; it may have nothing to do with the task.",
+        ...(left > 0
+          ? [
+              `The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at the end of the text below ${left === 1 ? "is" : "are"} not shown.`,
+            ]
+          : []),
+      ].join(" "),
+    ),
+    ...cut.map((item, index) =>
+      block(
+        `${selected.length > 1 ? `Selection ${index + 1}: ` : ""}${getEditorRangeLabel(item.range)} of ${selection.filePath}`,
+        item.text,
+      ),
+    ),
+  ].join("\n\n")
 }
+
+/** The most of a selection that reaches the model, as in core and the VS Code chat. */
+const EDITOR_SELECTION_LIMIT = 2000
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
   const head = parseSlashHead(input, /\s/)
@@ -225,8 +262,37 @@ export function Prompt(props: PromptProps) {
   const config = useConfig().data
   const trust = useTrust()
   // With prompt.vim on, Escape leaves insert mode and normal-mode keys move and edit instead of typing.
-  const [vim, setVim] = createSignal<Vim.State>({ mode: "insert" })
+  // The mode, the half-typed command and the unnamed register live as long as the prompt does; a submit leaves them.
+  const [vim, setVim] = createSignal<Vim.State>(Vim.initial)
   const vimNormal = () => config.prompt?.vim === true && vim().mode === "normal"
+  // Normal and visual mode both route keys to the engine and draw the block cursor.
+  const vimCommand = () => config.prompt?.vim === true && (vim().mode === "normal" || Vim.isVisual(vim().mode))
+  const vimLabel = () => {
+    const mode = vim().mode
+    return config.prompt?.vim === true && mode !== "normal" ? mode : undefined
+  }
+  // Visual mode ends before any text is put in from outside, or the textarea would delete the selection first.
+  // A replaced or sent prompt also restarts the record of typed text that `.` repeats.
+  function endVimSelection(replaced: boolean) {
+    if (config.prompt?.vim !== true) return
+    if (Vim.isVisual(vim().mode)) {
+      if (!input.isDestroyed) input.clearSelection()
+      setVim(Vim.endVisual(vim()))
+    }
+    if (replaced) setVim(Vim.restartTyped(vim()))
+  }
+  // A config reload that switches prompt.vim off must not leave a selection nobody can end.
+  createEffect(() => {
+    if (config.prompt?.vim === true || !Vim.isVisual(vim().mode)) return
+    if (input && !input.isDestroyed) input.clearSelection()
+    setVim(Vim.endVisual(vim()))
+  })
+  // The textarea cannot take an undefined style once it has had one, and the block cursor is normal mode's cue, so with
+  // vim on and no cursor configured, insert mode gets a line.
+  const insertCursor = () =>
+    config.cursor ?? (config.prompt?.vim === true ? ({ style: "line", blinking: true } as const) : undefined)
+  // How many native undo steps each normal-mode command took, so that one `u` undoes one whole command.
+  const vimUndo: Array<{ steps: number; text: string }> = []
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
@@ -270,7 +336,7 @@ export function Prompt(props: PromptProps) {
     const file = /^index\.[^./]+$/.test(filename)
       ? [path.basename(path.dirname(value)), filename].filter(Boolean).join("/")
       : filename
-    return `${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`
+    return plain(`${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`)
   })
   const editorFileLabelDisplay = createMemo(() => {
     const file = editorFileLabel()
@@ -590,6 +656,8 @@ export function Prompt(props: PromptProps) {
               (data.location.info()?.project.directory === "/" ? undefined : data.location.info()?.project.directory) ||
               data.location.default().directory ||
               paths.cwd,
+          }).catch((error) => {
+            toast.show({ variant: "warning", message: plain(errorMessage(error)) })
           })
           if (!content) return
           const normalized = normalizePromptContent(content)
@@ -620,7 +688,7 @@ export function Prompt(props: PromptProps) {
                 input.insertText(text + " ")
                 const extmarkId = input.extmarks.create({
                   start,
-                  end: start + promptOffsetWidth(text),
+                  end: start + promptOffsetWidth(text, renderer.widthMethod),
                   virtual: true,
                   styleId: skillStyleId,
                   typeId: promptPartTypeId,
@@ -632,7 +700,7 @@ export function Prompt(props: PromptProps) {
                     const index = skills.length
                     skills.push({
                       id: Skill.ID.make(skill),
-                      mention: { start, end: start + promptOffsetWidth(text), text },
+                      mention: { start, end: start + promptOffsetWidth(text, renderer.widthMethod), text },
                     })
                     draft.extmarkToPart.set(extmarkId, { type: "skill", index })
                   }),
@@ -830,6 +898,55 @@ export function Prompt(props: PromptProps) {
         })
       }
     })
+  }
+
+  const promptPartRanges = () => input.extmarks.getAllForTypeId(promptPartTypeId)
+
+  // One normal-mode key: the engine says what to do, and this applies it to the textarea.
+  function runVim(event: KeyEvent) {
+    const snap = VimAdapter.snapshot(input, promptPartRanges())
+    const result = Vim.step(vim(), event, snap)
+    const wasVisual = Vim.isVisual(vim().mode)
+    setVim(result.state)
+    if (wasVisual && !result.selection) input.clearSelection()
+    // Escape, Enter, an idle arrow and Ctrl chords are the ordinary editor's (and the session interrupt's) to handle.
+    if (result.pass) return false
+    event.preventDefault()
+    applyVim(snap, result)
+    return true
+  }
+
+  function applyVim(snap: Vim.Snapshot, result: Vim.Result) {
+    if (result.undo) {
+      const group = vimUndo.at(-1)
+      if (group && group.text === input.plainText) {
+        vimUndo.pop()
+        for (let step = 0; step < group.steps; step++) input.undo()
+        return
+      }
+      vimUndo.length = 0
+      input.undo()
+      return
+    }
+    const steps = VimAdapter.apply(input, snap, result)
+    if (steps > 0) vimUndo.push({ steps, text: input.plainText })
+    const clip = result.clipboard
+    if (!clip) return
+    if ("write" in clip) {
+      void clipboard.write(clip.write).catch(() => undefined)
+      return
+    }
+    // The clipboard is read asynchronously: the paste lands at the cursor then, unless the prompt changed meanwhile.
+    const before = input.plainText
+    void clipboard
+      .read()
+      .catch(() => undefined)
+      .then((content) => {
+        const text = Vim.clipboardText(content)
+        if (text === undefined || input.isDestroyed || input.plainText !== before || !vimNormal()) return
+        const current = VimAdapter.snapshot(input, promptPartRanges())
+        applyVim(current, Vim.paste(vim(), current, text, clip.read.before, clip.read.count))
+      })
   }
 
   function syncExtmarksWithPromptParts() {
@@ -1033,12 +1150,31 @@ export function Prompt(props: PromptProps) {
         title: "Vim normal mode",
         group: "Prompt",
         run: () => {
-          input.moveCursorLeft()
-          setVim({ mode: "normal" })
+          const snap = VimAdapter.snapshot(input, promptPartRanges())
+          input.cursorOffset = VimAdapter.toOffset(snap.text, Vim.leaveInsert(snap), input.ctx.widthMethod)
+          setVim(Vim.leave(vim()))
         },
       },
     ],
   }))
+
+  // Every key goes to the engine first while a selection is up. Layers that bind keys (the text area's own commands,
+  // prompt history, the session's) would otherwise move or edit the text under the drawn selection. The engine moves
+  // the head or swallows the key; for a chord or Enter it ends the selection and leaves the key to run as it would
+  // from a plain cursor.
+  createEffect(() => {
+    if (config.prompt?.vim !== true || !Vim.isVisual(vim().mode)) return
+    onCleanup(
+      keymap.intercept(
+        "key",
+        ({ event, consume }) => {
+          if (disabled() || store.mode === "shell" || renderer.currentFocusedEditor !== input) return
+          if (runVim(event)) consume()
+        },
+        { priority: 50 },
+      ),
+    )
+  })
 
   Keymap.createLayer(() => {
     return {
@@ -1154,8 +1290,7 @@ export function Prompt(props: PromptProps) {
     context: "prompt",
     priority: 1,
     target: inputTarget,
-    // In Vim normal mode the same key is redo, which the key handler on the textarea runs.
-    enabled: inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined && !vimNormal(),
+    enabled: inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined,
     commands: [
       {
         id: "prompt.history.search",
@@ -1501,7 +1636,7 @@ export function Prompt(props: PromptProps) {
   function pasteText(text: string, virtualText: string) {
     const currentOffset = input.cursorOffset
     const extmarkStart = currentOffset
-    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText)
+    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText, renderer.widthMethod)
 
     input.insertText(virtualText + " ")
 
@@ -1544,13 +1679,8 @@ export function Prompt(props: PromptProps) {
     const attachments = await resolvePastedAttachments(pastedContent, terminalEnvironment.platform)
     if (changed()) return
     if (attachments) {
-      attachments.forEach((attachment) => {
-        if (attachment.type === "text") {
-          pasteText(attachment.content, `[SVG: ${attachment.filename || "image"}]`)
-          return
-        }
-        pasteAttachment(attachment)
-      })
+      attachments.files.forEach(pasteAttachment)
+      if (attachments.rest) input.insertText(attachments.rest)
       return
     }
 
@@ -1719,7 +1849,8 @@ export function Prompt(props: PromptProps) {
       notice={() => {
         if (!config.status_line?.command) return undefined
         if (local.permission.hooks === "disabled") return "Status line off: managed settings turn hooks off"
-        if (local.permission.hooks === "managed_only") return "Status line off: managed settings allow only managed hooks"
+        if (local.permission.hooks === "managed_only")
+          return "Status line off: managed settings allow only managed hooks"
         return undefined
       }}
       interval={() => config.status_line?.interval}
@@ -1735,6 +1866,9 @@ export function Prompt(props: PromptProps) {
         statusLineModel()?.id,
         statusLineModel()?.variant,
         data.location.info(statusLineLocation())?.project.directory,
+        // The line shows the vim mode and the output style, so a change of either asks for a new run.
+        config.prompt?.vim === true ? vim().mode : undefined,
+        configuredOutputStyle(data, statusLineLocation()),
       ]}
       payload={() => {
         const session = props.sessionID ? data.session.get(props.sessionID) : undefined
@@ -1937,7 +2071,7 @@ export function Prompt(props: PromptProps) {
               focusedTextColor={muted() ? theme.text.muted : theme.text.base}
               minHeight={1}
               maxHeight={maxHeight()}
-              cursorStyle={vimNormal() ? { ...config.cursor, style: "block" } : config.cursor}
+              cursorStyle={vimCommand() ? { ...config.cursor, style: "block" } : insertCursor()}
               onContentChange={() => {
                 const value = input.plainText
                 setStore("prompt", "text", value)
@@ -1951,11 +2085,9 @@ export function Prompt(props: PromptProps) {
                   e.preventDefault()
                   return
                 }
-                if (!vimNormal()) return
-                const next = Vim.normal(vim(), e, input)
-                if (!next) return
-                e.preventDefault()
-                setVim(next)
+                if (config.prompt?.vim === true && vim().mode === "insert") setVim(Vim.insertKey(vim(), e))
+                if (!vimCommand()) return
+                runVim(e)
               }}
               onSubmit={() => {
                 if (disabled()) return
@@ -1972,6 +2104,7 @@ export function Prompt(props: PromptProps) {
                 // Normalize line endings at the boundary
                 // Windows ConPTY/Terminal often sends CR-only newlines in bracketed paste
                 // Replace CRLF first, then any remaining CR
+                endVimSelection(false)
                 const normalizedText = decodePasteBytes(event.bytes).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
 
                 // Windows Terminal <1.25 can surface image-only clipboard as an
@@ -1989,8 +2122,23 @@ export function Prompt(props: PromptProps) {
               }}
               ref={(r: TextareaRenderable) => {
                 input = r
+                const setText = r.setText.bind(r)
+                const clear = r.clear.bind(r)
+                const insertText = r.insertText.bind(r)
                 Object.assign(r, {
                   getClipboardText: (text: string) => expandPastedTextPlaceholders(text, store.prompt.pasted),
+                  setText: (text: string) => {
+                    endVimSelection(true)
+                    setText(text)
+                  },
+                  clear: () => {
+                    endVimSelection(true)
+                    clear()
+                  },
+                  insertText: (text: string) => {
+                    endVimSelection(false)
+                    insertText(text)
+                  },
                 })
                 setInputTarget(r)
                 if (promptPartTypeId === 0) {
@@ -2010,6 +2158,7 @@ export function Prompt(props: PromptProps) {
                   return
                 }
                 if (r.button !== 0) return
+                endVimSelection(false)
                 r.target?.focus()
                 const extmark = input.extmarks
                   .getAtOffset(input.cursorOffset)
@@ -2028,6 +2177,7 @@ export function Prompt(props: PromptProps) {
           <box flexDirection="row" flexShrink={0} gap={1} paddingLeft={1}>
             <PromptMetadataRow
               mode={store.mode}
+              vimMode={store.mode !== "shell" && dialog.stack.length === 0 ? vimLabel() : undefined}
               agent={agentLabel()}
               auto={local.permission.mode === "autoaccept"}
               model={promptDisplay().modelLabel}

@@ -1,40 +1,50 @@
-import { Orbit } from "@orbit/client"
+import { Orbit, type OrbitClient } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
 import { json, plain, progress } from "@orbit/flow/plain"
 import { Effect, Option, Schema } from "effect"
 import path from "node:path"
 import { ServerConnection } from "../../../services/server-connection"
-import { bypassRefusal } from "../../../util/managed-bypass"
-import { requireTrust } from "../../../util/trust"
+import { bypassDecision, printBypassNotice } from "../../../util/managed-bypass"
+import { requireTrust, trustedProject } from "../../../util/trust"
 
-// Shared by `orb flow run` and `orb flow resume`: connect, load the workflow file, and drive the run.
-export const execute = Effect.fn("cli.flow.execute")(function* (input: {
+/** The server a flow command asks about trust and runs its agents on, as `--server`, `--standalone` and `--trust` pick it. */
+export const connect = Effect.fn("cli.flow.connect")(function* (input: {
   readonly server: Option.Option<string>
   readonly standalone: boolean
   readonly trust: boolean
-  readonly auto: boolean
-  readonly model: Option.Option<string>
-  readonly maxCost: Option.Option<number>
-  readonly maxTokens: Option.Option<number>
-  readonly file: string
-  readonly input?: Readonly<Record<string, unknown>>
-  readonly resume?: string
 }) {
-  const { run } = yield* Effect.promise(() => import("@orbit/flow"))
-  const file = path.resolve(directory(), input.file)
   const server = yield* ServerConnection.resolve({
     server: Option.getOrUndefined(input.server),
     standalone: input.standalone,
     trust: input.trust,
   })
-  const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+  return Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+})
+
+// Shared by `orb flow run` and `orb flow resume`: load the workflow file and drive the run on the server `connect` gave.
+export const execute = Effect.fn("cli.flow.execute")(function* (
+  client: OrbitClient,
+  input: {
+    readonly trust: boolean
+    readonly auto: boolean
+    readonly model: Option.Option<string>
+    readonly maxCost: Option.Option<number>
+    readonly maxTokens: Option.Option<number>
+    readonly file: string
+    readonly input?: Readonly<Record<string, unknown>>
+    readonly resume?: string
+  },
+) {
+  const { run } = yield* Effect.promise(() => import("@orbit/flow"))
+  const file = path.resolve(directory(), input.file)
   // Before the workflow is loaded, so that a refusal that says no work was done comes before any code of the file runs.
   // It holds the folder that holds the file to the trust the file needs as well, which can be another project's than the
   // folder of the run. For a resumed run the file is the one the repository's run store names.
   const trust = yield* trustOptions(file, "workflow")
   yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
-  const bypass = yield* bypassRefusal(client, directory(), input.auto)
-  if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
+  const project = yield* trustedProject(client, directory())
+  const bypass = yield* bypassDecision(client, directory(), input.auto)
+  printBypassNotice(bypass.notice)
   const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
   const result = yield* Effect.promise(() =>
     run({
@@ -42,9 +52,11 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
       workflow,
       file,
       directory: directory(),
+      trusted: project !== undefined,
+      project,
       input: input.input,
       resume: input.resume,
-      permissions: input.auto ? "auto" : "reject",
+      permissions: bypass.auto ? "auto" : "reject",
       model: Option.getOrUndefined(input.model),
       budget:
         Option.isSome(input.maxCost) || Option.isSome(input.maxTokens)

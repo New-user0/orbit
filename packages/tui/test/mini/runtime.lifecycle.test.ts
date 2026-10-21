@@ -197,6 +197,44 @@ describe("attention in Mini", () => {
     }
   })
 
+  // The footer's open view is what holds the reminder back: wiring `pending` to a constant false sends it anyway.
+  test.each(["before the session ends", "after the reminder is scheduled"] as const)(
+    "an open form view held %s keeps the idle reminder from being sent",
+    async (when) => {
+      const harness = await start("linux", undefined, { notifications: true, idle_reminder: 0.1 })
+      try {
+        harness.app.renderer.emit("blur")
+        const form = () =>
+          harness.lifecycle.footer.event({
+            type: "stream.view",
+            view: {
+              type: "form",
+              request: { id: "form_1", sessionID: "ses_1", title: "Question", fields: [{ key: "a", type: "text" }] },
+            } as never,
+          })
+        if (when === "before the session ends") form()
+        harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+        if (when === "after the reminder is scheduled") form()
+        await Bun.sleep(400)
+        expect(harness.notified.map((item) => item.message)).toEqual(["Session done"])
+
+        // Control: with the view closed the same ending sends the reminder.
+        harness.lifecycle.footer.event({ type: "stream.view", view: { type: "prompt" } })
+        harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+        harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+        await Bun.sleep(400)
+        expect(harness.notified.map((item) => item.message)).toEqual([
+          "Session done",
+          "Session done",
+          "The session has stopped and the next step is yours",
+        ])
+      } finally {
+        harness.lifecycle.footer.destroy()
+        harness.app.renderer.destroy()
+      }
+    },
+  )
+
   test("the idle reminder fires once after the configured seconds and a keypress cancels it", async () => {
     const harness = await start("linux", undefined, { notifications: true, idle_reminder: 0.05 })
     try {
@@ -204,7 +242,7 @@ describe("attention in Mini", () => {
       const done = { type: "session.execution.succeeded", data: { sessionID: "ses_1" } }
       harness.lifecycle.observe?.(done)
       await Bun.sleep(300)
-      expect(harness.notified.map((item) => item.message)).toEqual(["Session done", "Orbit is waiting for your input"])
+      expect(harness.notified.map((item) => item.message)).toEqual(["Session done", "The session has stopped and the next step is yours"])
 
       harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
       harness.lifecycle.observe?.(done)
@@ -212,7 +250,7 @@ describe("attention in Mini", () => {
       await Bun.sleep(300)
       expect(harness.notified.map((item) => item.message)).toEqual([
         "Session done",
-        "Orbit is waiting for your input",
+        "The session has stopped and the next step is yours",
         "Session done",
       ])
     } finally {

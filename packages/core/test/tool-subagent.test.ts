@@ -33,8 +33,10 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Permission } from "@orbit/core/permission"
+import { AgentInstructions } from "@orbit/core/agent/instructions"
 import { SubagentTool } from "@orbit/core/tool/plugin/subagent"
 import { WorkflowTool } from "@orbit/core/tool/plugin/workflow"
+import type { Context } from "@orbit/plugin/effect/plugin"
 import { Tool } from "@orbit/core/tool"
 import { tmpdir } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
@@ -117,8 +119,12 @@ const subagentPluginSupervisor = makeLocationNode({
   layer: Layer.effectDiscard(
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service
-      yield* registerToolPlugin(SubagentTool.Plugin, {}, (name, callback) => hooks.register("tool", name, callback))
-      yield* registerToolPlugin(WorkflowTool.Plugin, {}, (name, callback) => hooks.register("tool", name, callback))
+      // The session hooks are wired for real, so a hook these plugins register reaches the request.
+      const session: Partial<Context["session"]> = {
+        hook: (name, callback) => hooks.register("session", name, callback),
+      }
+      yield* registerToolPlugin(SubagentTool.Plugin, { session }, (name, callback) => hooks.register("tool", name, callback))
+      yield* registerToolPlugin(WorkflowTool.Plugin, { session }, (name, callback) => hooks.register("tool", name, callback))
     }),
   ),
   deps: [Agent.node, Config.node, Model.node, Permission.node, Session.node, Job.node, Tool.node, PluginHooks.node],
@@ -284,6 +290,53 @@ describe("SubagentTool", () => {
     ),
   )
 
+  for (const count of [0, 1, 5])
+    it.live(`sends the static Agent and Workflow descriptions after the session hooks with ${count} startable agents`, () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const session = yield* (yield* Session.Service).create({
+              location: Location.Ref.make({ directory: AbsolutePath.make(dir.path) }),
+            })
+            yield* withSubagent(session.location)
+            const locations = yield* LocationServiceMap.Service
+            yield* Agent.Service.use((agents) =>
+              agents.transform((editor) => {
+                for (let index = 0; index < count; index++)
+                  editor.update(Agent.ID.make(`helper${index}`), (agent) => {
+                    agent.mode = "subagent"
+                    agent.description = `Helper number ${index}`
+                  })
+              }),
+            ).pipe(Effect.provide(locations.get(session.location)))
+            const hooks = yield* PluginHooks.Service.pipe(Effect.provide(locations.get(session.location)))
+            // The hook event is the request about to be sent; a hook that adds the list changes these descriptions.
+            for (const name of ["context", "compaction", "generate"] as const) {
+              const event = {
+                sessionID: session.id,
+                agent: toolIdentity.agent,
+                model: parentModel,
+                system: [],
+                messages: [],
+                tools: {
+                  [SubagentTool.name]: { description: SubagentTool.description, input: { type: "object" } },
+                  [WorkflowTool.name]: { description: WorkflowTool.description, input: { type: "object" } },
+                },
+                options: {},
+              }
+              yield* hooks.trigger("session", name, event as never)
+              expect(event.tools[SubagentTool.name].description).toBe(SubagentTool.description)
+              expect(event.tools[WorkflowTool.name].description).toBe(WorkflowTool.description)
+              expect(JSON.stringify(event.tools)).not.toContain("Helper number")
+            }
+          }),
+        ),
+      ),
+    )
+
   productionIt.live("registers globally while resolving agents from the caller location", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -299,6 +352,18 @@ describe("SubagentTool", () => {
           const locations = yield* LocationServiceMap.Service
           const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
           expect((yield* registry.snapshot()).definitions.map((tool) => tool.name)).toContain(SubagentTool.name)
+          // The agent list lives in `core/agent-guidance`: the definitions are the static module text, whatever agents exist.
+          const definitions = (yield* registry.snapshot()).definitions
+          expect(definitions.find((tool) => tool.name === SubagentTool.name)?.description).toBe(SubagentTool.description)
+          expect(definitions.find((tool) => tool.name === WorkflowTool.name)?.description).toBe(WorkflowTool.description)
+          expect(SubagentTool.description).toContain("roster of startable agents")
+          expect(SubagentTool.name).toBe(AgentInstructions.NAME)
+          expect(
+            definitions
+              .filter((tool) => tool.name === SubagentTool.name || tool.name === WorkflowTool.name)
+              .map((tool) => tool.description)
+              .join("\n"),
+          ).not.toContain("- reviewer")
           expect(
             yield* executeTool(registry, {
               sessionID: parent.id,
@@ -358,7 +423,12 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.live("allows nested subagents up to the configured depth", () =>
+  // A block of a later document hides only the keys it sets: the depth stands past a block about another key.
+  for (const [name, local] of [
+    ["allows nested subagents up to the configured depth", undefined],
+    ["keeps the configured depth past a later block about another key", { experimental: { allow_local_fetch: false } }],
+  ] as const)
+  it.live(name, () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -368,6 +438,8 @@ describe("SubagentTool", () => {
           yield* Effect.promise(() =>
             Bun.write(path.join(dir.path, "orbit.json"), JSON.stringify({ experimental: { subagent_depth: 2 } })),
           )
+          if (local)
+            yield* Effect.promise(() => Bun.write(path.join(dir.path, "orbit.local.json"), JSON.stringify(local)))
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
           const sessions = yield* Session.Service
           const root = yield* sessions.create({ location })
@@ -445,7 +517,11 @@ describe("SubagentTool", () => {
             model: childModel,
           })
           expect((yield* sessions.inbox(child.id)).find((message) => message.type === "user")?.payload.text).toBe(
-            "You are a subagent spawned by another session.\nreview this",
+            "review this",
+          )
+          // The parent agent's words are marked, so a steer into the child is framed as the agent's, not the person's.
+          expect((yield* sessions.inbox(child.id)).find((message) => message.type === "user")?.payload.metadata).toEqual(
+            { origin: "agent" },
           )
 
           const fallback = yield* executeTool(registry, {
@@ -514,7 +590,7 @@ describe("SubagentTool", () => {
             (yield* sessions.inbox(childID)).flatMap((message) =>
               message.type === "user" ? [message.payload.text] : [],
             ),
-          ).toEqual(["You are a subagent spawned by another session.\nreview this", "continue this"])
+          ).toEqual(["review this", "continue this"])
           expect(second.content).toEqual([{ type: "text", text: completedOutput(childID) }])
         }),
       ),
@@ -800,7 +876,10 @@ describe("SubagentTool", () => {
             status: "running",
           })
           expect(settled.metadata).toEqual({ sessionID: childID, status: "running" })
-          expect(settled.content).toEqual([{ type: "text", text: expect.stringContaining(`sessionID: ${childID}`) }])
+          expect(settled.content).toEqual([{ type: "text", text: expect.stringContaining(`Session ${childID}`) }])
+          expect(settled.content).toEqual([
+            { type: "text", text: expect.stringContaining("Take on work the subagent is not covering") },
+          ])
 
           const admission = Array.from(yield* Fiber.join(admitted))[0]
           expect(admission?.data.item.type).toBe("synthetic")
@@ -968,7 +1047,18 @@ describe("SubagentTool in Plan mode", () => {
           status: "completed",
           content: [{ type: "text", text: expect.stringContaining(childText) }],
         })
+        // The brief is the child's first message, with nothing in front of it.
+        const child = (yield* sessions.list({ parentID: parent.id })).data[0]
+        expect((yield* sessions.inbox(child!.id)).find((message) => message.type === "user")?.payload.text).toBe(
+          "scan it",
+        )
+        // A workflow agent's brief is the parent agent's words too, so it is marked like the Agent tool's.
+        expect((yield* sessions.inbox(child!.id)).find((message) => message.type === "user")?.payload.metadata).toEqual({
+          origin: "agent",
+        })
       }),
     ),
+    // A loaded Windows host needs more than the default limit.
+    30_000,
   )
 })

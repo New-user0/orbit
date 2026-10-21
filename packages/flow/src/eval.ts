@@ -1,4 +1,5 @@
 import type { OrbitClient } from "@orbit/client"
+import type { Git } from "./git.js"
 import { run, type RunResult } from "./runner.js"
 import type { CheckOptions, JudgeOptions, Workflow } from "./workflow.js"
 
@@ -41,6 +42,10 @@ export interface EvalOptions {
   readonly suite: EvalSuite
   readonly file: string
   readonly directory: string
+  /** As for `run`: a folder that is not trusted gets no worktree for the tasks. */
+  readonly trusted: boolean
+  /** As for `run`: the folders the trust decision covers, which the repository git uses must stay inside. */
+  readonly project?: Git.Project
   readonly models?: ReadonlyArray<string>
   /** Tasks running at once across all models. Default 1, which suits local models. */
   readonly concurrency?: number
@@ -93,6 +98,8 @@ export async function evaluate(options: EvalOptions): Promise<RunResult & { read
     workflow,
     file: options.file,
     directory: options.directory,
+    trusted: options.trusted,
+    project: options.project,
     input: { models },
     resume: options.resume,
     permissions: options.permissions,

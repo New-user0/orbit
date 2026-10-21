@@ -35,6 +35,7 @@ import { ACPPromise } from "./promise"
 import type { ACPService } from "./service"
 import type { ACPSessions, Attached } from "./sessions"
 import { ACPTranslate } from "./translate"
+import { neutralize } from "@orbit/util/reminder-text"
 
 type Failure = ACPError.Error | RequestError | ACPCatalog.Error
 
@@ -214,7 +215,8 @@ export const make = Effect.fnUntraced(function* (input: {
         input.client.session.synthetic(
           {
             sessionID,
-            text: prompt.synthetic.join("\n\n"),
+            // The editor wrote this text, so a look-alike of an envelope tag in it must not stay live.
+            text: neutralize(prompt.synthetic.join("\n\n")),
             description: "ACP embedded context",
             delivery: "steer",
             resume: false,

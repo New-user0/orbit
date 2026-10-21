@@ -1,7 +1,7 @@
 export * as Shell from "./shell.js"
 
 import path from "path"
-import { Context, Deferred, Duration, Effect, Fiber, Latch, Layer, Schema, Schedule, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Exit, Fiber, Latch, Layer, Schema, Schedule, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { produce } from "immer"
 import { Shell } from "@orbit/schema/shell"
@@ -474,7 +474,14 @@ const layer = () =>
               // release (kill) the process before its exit is observed.
               yield* Deferred.await(command.done).pipe(Effect.catch(() => Effect.void))
             }),
-          ).pipe(Effect.catchTag("AppProcessError", (error) => Deferred.fail(ready, error))),
+          ).pipe(
+            Effect.catchTag("AppProcessError", (error) => Deferred.fail(ready, error)),
+            // Whatever ends this fiber before the command is registered (a defect included) settles `ready`, so the
+            // creator, and its interrupt cleanup below, never wait for a command that will not come. A no-op once done.
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) ? Deferred.failCause(ready, exit.cause) : Effect.void,
+            ),
+          ),
         )
 
         // `list` shows the command before `ready` resolves, so a creator interrupted here would leave
@@ -483,7 +490,7 @@ const layer = () =>
           Effect.onInterrupt(() =>
             Deferred.await(ready).pipe(
               Effect.flatMap((spawned) => removeCommand(spawned.info.id)),
-              Effect.ignore,
+              Effect.ignoreCause,
             ),
           ),
         )

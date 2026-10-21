@@ -41,19 +41,26 @@ import { SessionRunnerModel } from "./session/runner/model.js"
 import { SessionCompaction } from "./session/compaction.js"
 import { SessionTitle } from "./session/title.js"
 import { SessionTurnEnd } from "./session/turn-end.js"
+import { SessionReminders } from "./session/reminders.js"
 import { SessionContext } from "./session/context.js"
 import { Skill } from "./skill.js"
 import { SkillInstructions } from "./skill/instructions.js"
+import { AgentInstructions } from "./agent/instructions.js"
 import { Snapshot } from "./snapshot.js"
 import { InstructionDiscovery } from "./instruction-discovery.js"
+import { InstructionNotes } from "./instruction-notes.js"
 import { InstructionBuiltIns } from "./instructions/builtins.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
 import { SessionInstructions } from "./session/instructions.js"
+import { InstructionTriggers } from "./instruction-triggers.js"
+import { SessionScratchpad } from "./session/scratchpad.js"
 import { McpTool } from "./tool/mcp.js"
 import { ReadToolFileSystem } from "./tool/read-filesystem.js"
 import { Tool } from "./tool.js"
 import { ToolOutput } from "./tool-output.js"
 import { Vcs } from "./vcs.js"
+import { VcsInstructions } from "./vcs/instructions.js"
+import { Instructions } from "./instructions/index.js"
 
 export * as Instance from "./instance.js"
 export { Service, node, type Interface } from "./instance/service.js"
@@ -87,6 +94,7 @@ const nodes = [
   Skill.node,
   InstructionBuiltIns.node,
   InstructionDiscovery.node,
+  InstructionNotes.node,
   FileAccess.node,
   FileMutation.node,
   Formatter.node,
@@ -96,6 +104,7 @@ const nodes = [
   ToolOutput.node,
   Image.node,
   SkillInstructions.node,
+  AgentInstructions.node,
   ReferenceInstructions.node,
   InstructionEntry.node,
   Form.node,
@@ -103,14 +112,18 @@ const nodes = [
   ReadToolFileSystem.node,
   McpTool.node,
   SessionInstructions.node,
+  InstructionTriggers.node,
+  SessionScratchpad.node,
   SessionRunnerModel.node,
   SessionCompaction.node,
   SessionTitle.node,
   SessionTurnEnd.node,
+  SessionReminders.node,
   SessionContext.node,
   Snapshot.node,
   SessionRunnerLLM.node,
   Vcs.node,
+  VcsInstructions.node,
   // Start repository watches only after boot-critical filesystem and Git work.
   LocationWatcher.node,
 ] as const satisfies readonly Node.LocationGraph<never, unknown>[]
@@ -129,9 +142,9 @@ export interface Options {
   // AGENTS.md discovery. Wellknown integration config and host-injected values
   // still apply, and a config value that explicitly names something
   // file-backed (a skill path, an MCP command) is a request, not discovery.
-  // Use-triggered behavior also stays: reading a file still injects nested
-  // AGENTS.md instructions — that is session-time context, not boot-time
-  // population.
+  // Use-triggered project instructions are off too: reading a file injects no nested
+  // instruction files, as `--bare` does. Other use-triggered behavior stays, being
+  // session-time context and not boot-time population.
   readonly discovery?: boolean
   readonly replacements?: LayerNode.Replacements
 }
@@ -146,6 +159,12 @@ export interface Options {
 const vanillaReplacements: LayerNode.Replacements = [
   Config.node.replace(Config.configured({ project: false, global: false })),
   InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: false, global: false })),
+  // A vanilla instance adds no reminders beyond the minimal set, as `--bare` does.
+  SessionReminders.node.replace(SessionReminders.configured(SessionReminders.minimal(SessionReminders.production))),
+  // A vanilla instance carries no reply-language preference, as the minimal prompt has no such section; a `language` the host passes in config is dropped too.
+  InstructionBuiltIns.node.replace(InstructionBuiltIns.configured({ preferences: false })),
+  // A vanilla instance reads nothing about the project it stands on, and the git snapshot is one such read.
+  VcsInstructions.node.replace(Layer.succeed(VcsInstructions.Service, { source: () => Instructions.empty })),
 ]
 
 // One instance is one compiled, fresh copy of the graph standing on a directory.

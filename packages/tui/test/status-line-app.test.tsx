@@ -223,7 +223,16 @@ console.log("n=" + n + " " + JSON.stringify({
     data: { sessionID: session.id },
   } as never)
   await line((row) => row.includes('"status":"running"'))
-}, 40_000)
+  await settle()
+
+  // Visual mode reports `visual`, its linewise form `visual_line`, and each switch asks for a new run.
+  setup.mockInput.pressEscape()
+  await line((row) => row.includes('"vim":"normal"'))
+  setup.mockInput.pressKey("v")
+  await line((row) => row.includes('"vim":"visual"'))
+  setup.mockInput.pressKey("V", { shift: true })
+  await line((row) => row.includes('"vim":"visual_line"'))
+}, 60_000)
 
 // With no model list the location is the only thing the line waits for, so only the watch on it can bring the project
 // directory in: the interval is a minute and no event arrives.
@@ -294,3 +303,58 @@ console.log("p=" + input.project_dir)
   await until("p=null")
   await until(`p=${projectDirectory}`)
 }, 20_000)
+
+// The line shows the prompt's vim mode and the configured output style. Nothing else in this setup asks for a run (the
+// interval is a minute), so only a watch on each of them can bring a change in.
+test("the status line reruns when the vim mode or the output style changes", async () => {
+  await using state = await tmpdir()
+  await using scripts = await tmpdir()
+  const script = path.join(scripts.path, "line.ts")
+  await Bun.write(
+    script,
+    `const input = JSON.parse(await Bun.stdin.text())
+console.log("L mode=" + input.vim_mode + " style=" + input.output_style)
+`,
+  )
+  let style = "concise"
+  await using setup = await createAppFixture({
+    state: state.path,
+    width: 120,
+    config: {
+      animations: false,
+      prompt: { vim: true },
+      status_line: {
+        interval: 60_000,
+        command: `${process.execPath.replaceAll("\\", "/")} ${script.replaceAll("\\", "/")}`,
+      },
+    },
+    fetch: async (url) => {
+      if (url.pathname === "/api/config") return json([{ type: "document", info: { output_style: style } }])
+    },
+  })
+  await setup.ready
+  const until = async (text: string) => {
+    const started = Date.now()
+    while (!setup.captureCharFrame().includes(text)) {
+      if (Date.now() - started > 8_000) throw new Error(`Never saw ${text}:\n${setup.captureCharFrame()}`)
+      await Bun.sleep(50)
+      await setup.renderOnce()
+    }
+  }
+  await until("L mode=insert style=concise")
+
+  setup.mockInput.pressEscape()
+  await until("L mode=normal style=concise")
+  setup.mockInput.pressKey("i")
+  await until("L mode=insert style=concise")
+
+  style = "terse"
+  setup.events.emit({
+    id: "evt_config",
+    created: 3,
+    type: "config.updated",
+    location: { directory },
+    data: {},
+  } as never)
+  await until("L mode=insert style=terse")
+}, 30_000)

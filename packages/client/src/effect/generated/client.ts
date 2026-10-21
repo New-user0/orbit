@@ -16,6 +16,10 @@ import type {
   LocationTrustGetOutput,
   LocationTrustUpdateInput,
   LocationTrustUpdateOutput,
+  LocationInstructionNoteTargetsInput,
+  LocationInstructionNoteTargetsOutput,
+  LocationInstructionNoteAddInput,
+  LocationInstructionNoteAddOutput,
   LocationTrustListOutput,
   LocationTrustRevokeInput,
   LocationTrustRevokeOutput,
@@ -84,6 +88,8 @@ import type {
   SessionInboxCancelOutput,
   SessionInboxUpdateInput,
   SessionInboxUpdateOutput,
+  SessionInstructionsPreviewInput,
+  SessionInstructionsPreviewOutput,
   SessionInstructionsEntryListInput,
   SessionInstructionsEntryListOutput,
   SessionInstructionsEntryPutInput,
@@ -276,6 +282,8 @@ import type {
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
+  ConfigSourcesChangedInput,
+  ConfigSourcesChangedOutput,
 } from "../api/api.js"
 import { ClientError } from "./client-error.js"
 
@@ -333,6 +341,27 @@ const EndpointLocationTrustUpdate = (raw: RawClient["server.location"]) => (inpu
     }).pipe(Effect.mapError(mapClientError)),
   )
 
+const EndpointLocationInstructionNoteTargets =
+  (raw: RawClient["server.location"]) => (input?: LocationInstructionNoteTargetsInput) =>
+    preserveEffect<LocationInstructionNoteTargetsOutput>()(
+      raw["instruction.note.targets"]({ query: { location: input?.["location"] } }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointLocationInstructionNoteAdd =
+  (raw: RawClient["server.location"]) => (input: LocationInstructionNoteAddInput) =>
+    preserveEffect<LocationInstructionNoteAddOutput>()(
+      raw["instruction.note.add"]({
+        query: { location: input["location"] },
+        payload: { scope: input["scope"], text: input["text"] },
+      }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
 const EndpointLocationTrustList = (raw: RawClient["server.location"]) => () =>
   preserveEffect<LocationTrustListOutput>()(raw["trust.list"]({}).pipe(Effect.mapError(mapClientError)))
 
@@ -349,6 +378,9 @@ const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
     update: EndpointLocationTrustUpdate(raw),
     list: EndpointLocationTrustList(raw),
     revoke: EndpointLocationTrustRevoke(raw),
+  },
+  instruction: {
+    note: { targets: EndpointLocationInstructionNoteTargets(raw), add: EndpointLocationInstructionNoteAdd(raw) },
   },
 })
 
@@ -532,6 +564,7 @@ const EndpointSessionPrompt = (raw: RawClient["server.session"]) => (input: Sess
         files: input["files"],
         agents: input["agents"],
         skills: input["skills"],
+        editor: input["editor"],
         metadata: input["metadata"],
         turn: input["turn"],
         delivery: input["delivery"],
@@ -553,6 +586,7 @@ const EndpointSessionCommand = (raw: RawClient["server.session"]) => (input: Ses
         files: input["files"],
         agents: input["agents"],
         skills: input["skills"],
+        editor: input["editor"],
         delivery: input["delivery"],
       },
     }).pipe(Effect.mapError(mapClientError)),
@@ -670,6 +704,15 @@ const EndpointSessionInboxUpdate = (raw: RawClient["server.session"]) => (input:
       payload: { delivery: input["delivery"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
+
+const EndpointSessionInstructionsPreview =
+  (raw: RawClient["server.session"]) => (input: SessionInstructionsPreviewInput) =>
+    preserveEffect<SessionInstructionsPreviewOutput>()(
+      raw["session.instructions.preview"]({ params: { sessionID: input["sessionID"] } }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
 
 const EndpointSessionInstructionsEntryList =
   (raw: RawClient["server.session"]) => (input: SessionInstructionsEntryListInput) =>
@@ -830,6 +873,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
     update: EndpointSessionInboxUpdate(raw),
   },
   instructions: {
+    preview: EndpointSessionInstructionsPreview(raw),
     entry: {
       list: EndpointSessionInstructionsEntryList(raw),
       put: EndpointSessionInstructionsEntryPut(raw),
@@ -1615,7 +1659,14 @@ const EndpointConfigShells = (raw: RawClient["server.config"]) => () =>
 
 const EndpointConfigUpdate = (raw: RawClient["server.config"]) => (input?: ConfigUpdateInput) =>
   preserveEffect<ConfigUpdateOutput>()(
-    raw["config.update"]({ payload: { shell: input?.["shell"], output_style: input?.["output_style"] } }).pipe(
+    raw["config.update"]({
+      payload: { shell: input?.["shell"], output_style: input?.["output_style"], language: input?.["language"] },
+    }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointConfigSourcesChanged = (raw: RawClient["server.config"]) => (input: ConfigSourcesChangedInput) =>
+  preserveEffect<ConfigSourcesChangedOutput>()(
+    raw["config.sources.changed"]({ query: { location: input["location"] }, payload: { paths: input["paths"] } }).pipe(
       Effect.mapError(mapClientError),
     ),
   )
@@ -1625,6 +1676,7 @@ const adaptGroupConfig = (raw: RawClient["server.config"]) => ({
   effective: EndpointConfigEffective(raw),
   shells: EndpointConfigShells(raw),
   update: EndpointConfigUpdate(raw),
+  sources: { changed: EndpointConfigSourcesChanged(raw) },
 })
 
 const adaptClient = (raw: RawClient) => ({

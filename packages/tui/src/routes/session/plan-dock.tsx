@@ -1,28 +1,9 @@
-import type { SessionMessageInfo } from "@orbit/client"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { useData } from "../../context/data"
 import { useTheme } from "../../context/theme"
 import { bodyText } from "../../util/renderer"
 import { SPINNER_FRAMES } from "../../component/spinner-frames"
-import { canonicalToolName, todoItems, toolDisplayMetadata } from "../../util/tool-display"
-
-/** The plan in the latest assistant message that carries one, whichever name its tool call was recorded with. */
-export function planItems(messages: ReadonlyArray<SessionMessageInfo>) {
-  for (const message of messages.toReversed()) {
-    if (message.type !== "assistant") continue
-    // A todo call carries the plan in its input; the task tools report the whole task list in their metadata.
-    const call = message.content.findLast(
-      (part) =>
-        part.type === "tool" &&
-        (canonicalToolName(part.name) === "todo" ||
-          (canonicalToolName(part.name).startsWith("task_") && toolDisplayMetadata(part.state).todos)),
-    )
-    if (call?.type !== "tool") continue
-    if (canonicalToolName(call.name) !== "todo") return todoItems(toolDisplayMetadata(call.state).todos)
-    if (typeof call.state.input !== "string") return todoItems(call.state.input.todos)
-  }
-  return []
-}
+import { latestTodos } from "../../util/tool-display"
 
 /**
  * The session's plan, docked above the prompt: its latest todo call's input or task tool's task list. It opens while work remains and
@@ -32,7 +13,7 @@ export function PlanDock(props: { sessionID: string }) {
   const theme = useTheme()
   const data = useData()
   const [toggled, setToggled] = createSignal<boolean>()
-  const items = createMemo(() => planItems(data.session.message.list(props.sessionID) ?? []))
+  const items = createMemo(() => latestTodos(data.session.message.list(props.sessionID) ?? []))
   const done = createMemo(() => items().filter((item) => item.status === "completed").length)
   const open = () => toggled() ?? done() < items().length
 

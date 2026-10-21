@@ -10,6 +10,8 @@ import { Database } from "./database/database.js"
 import { Worktree } from "@orbit/schema/worktree"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Git } from "./git.js"
+import { GitAccess } from "./git/access.js"
+import { GitLayout } from "./git/layout.js"
 import { AppProcess } from "@orbit/util/process"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Hash } from "@orbit/util/hash"
@@ -270,12 +272,13 @@ const layer = Layer.effect(
       )
     })
 
+    const remoteID = (origin: string | undefined) => {
+      const normalized = origin ? url(origin) : undefined
+      return normalized ? ID.make(Hash.fast(`git-remote:${normalized}`)) : undefined
+    }
+
     const remote = Effect.fnUntraced(function* (repo: Git.Repository) {
-      const origin = yield* git.remote.get(repo)
-      if (!origin) return undefined
-      const normalized = url(origin)
-      if (!normalized) return undefined
-      return ID.make(Hash.fast(`git-remote:${normalized}`))
+      return remoteID(yield* git.remote.get(repo))
     })
 
     function url(input: string) {
@@ -321,6 +324,43 @@ const layer = Layer.effect(
       return main && linked.some((directory) => path.relative(directory, here) === "") ? main.directory : repo.worktree
     })
 
+    // One ID per repository across the trust decision: a folder that is not trusted and names no remote reuses the git
+    // project that Orbit already holds for its main checkout, so what it did before and after trust stays together.
+    const stored = Effect.fnUntraced(function* (canonical: AbsolutePath) {
+      const rows = yield* db
+        .select({ id: ProjectTable.id, vcs: ProjectTable.vcs })
+        .from(ProjectTable)
+        .where(eq(ProjectTable.worktree, canonical))
+        .orderBy(asc(ProjectTable.time_created), asc(ProjectTable.id))
+        .all()
+        .pipe(Effect.orDie)
+      // A row whose ID is the path hash of one of its own checkouts is what Orbit made before trust; a row that is not is
+      // the git project that trust made, and it wins over the older path-hash row, so revoking trust again does not move
+      // a checkout back to the empty project it had before. Which checkout was resolved first decides which path hash the
+      // old row holds, so every directory listed under the row counts, not only this folder's.
+      const git = rows.filter((row) => row.vcs === "git" && row.id !== ID.global)
+      const listed = yield* Effect.forEach(git, (row) =>
+        db
+          .select({ directory: WorktreeTable.directory })
+          .from(WorktreeTable)
+          .where(eq(WorktreeTable.project_id, row.id))
+          .all()
+          .pipe(
+            Effect.orDie,
+            Effect.map((items) => [canonical, ...items.map((item) => item.directory)]),
+          ),
+      )
+      const made = git.filter((row, index) => !listed[index].some((directory) => Hash.fast(`directory:${directory}`) === row.id))
+      // `pretrust` is the oldest row Orbit made before trust: the sessions from before trust sit under it, whichever row wins.
+      const pretrust = git.find((row) => !made.includes(row))
+      return { preferred: (made[0] ?? git[0])?.id, pretrust: pretrust?.id }
+    })
+
+    const known = Effect.fnUntraced(function* (id: ID) {
+      const row = yield* db.select({ id: ProjectTable.id }).from(ProjectTable).where(eq(ProjectTable.id, id)).get().pipe(Effect.orDie)
+      return row !== undefined
+    })
+
     // Mercurial identity uses the cached ID or the first root changeset; remote-derived
     // identity (the git `remote()` path) is a follow-up.
     const hgRoot = Effect.fnUntraced(function* (worktree: AbsolutePath) {
@@ -353,42 +393,113 @@ const layer = Layer.effect(
       const store = AbsolutePath.make(dotHg)
       const trusted = (yield* trust.status(worktree)).trusted
       // A folder that is not trusted does not choose its own ID by shipping `.hg/orbit` (class 5, class 3).
-      const previous = trusted ? yield* cached(store) : undefined
-      const id = previous ?? (trusted ? yield* hgRoot(worktree) : undefined)
+      const cachedID = trusted ? yield* cached(store) : undefined
+      const id = cachedID ?? (trusted ? yield* hgRoot(worktree) : undefined)
+      // The ID the folder had while it was untrusted, so the sessions made then follow it into the trusted project.
+      const earlier = ID.make(Hash.fast(`directory:${worktree}`))
+      const resolved = id ?? earlier
       return {
-        previous,
-        // An untrusted folder is its own project, as a folder without version control is, and not `ID.global`: saved
-        // "always allow" answers are keyed by project ID, so every untrusted folder that shared `global` would share them.
-        id: id ?? (trusted ? ID.global : ID.make(Hash.fast(`directory:${worktree}`))),
+        previous: trusted && earlier !== resolved && (yield* known(earlier)) ? earlier : cachedID,
+        // A folder with no changeset to name it by (untrusted, or hg missing or failing) is its own project, as a folder
+        // without version control is, before and after the grant, and not `ID.global`: saved "always allow" answers are
+        // keyed by project ID, so every such folder that shared `global` would share them.
+        id: resolved,
         directory: worktree,
         vcs: { type: "hg" as const, store },
       }
     })
 
+    // The nearest `.git` or `.hg`. Git passes over a `.git` directory that it does not take for a repository and looks in
+    // the folder above, and stops at a `.git` file that is no good, so a `.git` directory counts when `GitLayout` finds a
+    // layout in it, and the folder named here is the one git uses.
+    const marker = (
+      start: string,
+    ): Effect.Effect<
+      | { readonly type: "git"; readonly holder: AbsolutePath; readonly layout?: GitLayout.Layout }
+      | { readonly type: "hg"; readonly native: AbsolutePath }
+      | undefined
+    > =>
+      Effect.gen(function* () {
+        const native = yield* fs.up({ targets: [".git", ".hg"], start, mode: "first" }).pipe(
+          Effect.map((matches) => matches[0]),
+          Effect.orElseSucceed(() => undefined),
+        )
+        if (!native) return undefined
+        if (path.basename(native) === ".hg") return { type: "hg" as const, native: AbsolutePath.make(native) }
+        const holder = AbsolutePath.make(path.dirname(native))
+        const layout = yield* GitLayout.locate(fs, holder)
+        const above = path.dirname(holder)
+        if (layout || !(yield* fs.isDir(native)) || above === holder) return { type: "git" as const, holder, layout }
+        return yield* marker(above)
+      })
+
     const resolve = Effect.fn("Project.resolve")(function* (input: AbsolutePath) {
       const directory = AbsolutePath.make(yield* fs.resolve(input))
-      const native = yield* fs.up({ targets: [".git", ".hg"], start: directory, mode: "first" }).pipe(
-        Effect.map((matches) => matches[0]),
-        Effect.orElseSucceed(() => undefined),
-      )
-      const repo =
-        native && path.basename(native) === ".git"
-          ? yield* git.repo.discover(AbsolutePath.make(path.dirname(native)))
-          : undefined
+      const found = yield* marker(directory)
+      const holder = found?.type === "git" ? found.holder : undefined
+      const layout = found?.type === "git" ? found.layout : undefined
+      // Git applies the config of the folder it runs in, and a clone chooses that file: it can name a program for git to
+      // run, and a project is resolved when a client opens the folder, before anyone is asked about it (class 1). So git
+      // starts only for a folder that is trusted. The decision is the main checkout's for a linked worktree, as
+      // `ProjectTrust` takes it, and the layout says which that is without asking git. Any other folder is read from its
+      // files, and is its own project when they name no remote, as an untrusted Mercurial folder is. Git follows what the
+      // folder's `.git` names, so once the folder is trusted git is first asked which repository it uses, and is used no
+      // further unless that repository's folders are trusted too (`GitAccess`).
+      const decision = layout?.canonical ?? holder
+      const access: GitAccess.Answer =
+        holder && decision
+          ? yield* GitAccess.check({ fs, trust }, { decision, folders: [holder, decision], used: git.repo.used(holder, holder) })
+          : {}
+      if (holder && access.refused) yield* GitAccess.log(holder, access.refused)
+      const repo = access.repository
+      // A trusted folder that git gives no answer for (git on no PATH, a config or an owner that git refuses), or whose
+      // repository is in a folder that is not trusted, is read from its files as well, as it was before the grant, so that
+      // its project, its folders and the decision that covers them stay what they were (class 3).
+      if (layout && !repo) {
+        return yield* persist({
+          id:
+            remoteID(yield* GitLayout.remote(fs, layout)) ??
+            (yield* stored(layout.canonical)).preferred ??
+            ID.make(Hash.fast(`directory:${layout.worktree}`)),
+          directory: layout.worktree,
+          canonical: layout.canonical,
+          vcs: { type: "git" as const, store: layout.commonDirectory },
+        })
+      }
       if (repo) {
-        const previous = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
-        const id = (yield* remote(repo)) ?? previous ?? (yield* rootCommit(repo))
+        const cachedID = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
+        const id = (yield* remote(repo)) ?? cachedID ?? (yield* rootCommit(repo))
+        // The ID this folder had while it was untrusted (above), so its sessions follow it into the trusted project.
+        const pretrust = layout ? (yield* stored(layout.canonical)).pretrust : undefined
+        const earlier = layout
+          ? (remoteID(yield* GitLayout.remote(fs, layout)) ??
+            pretrust ??
+            ID.make(Hash.fast(`directory:${layout.worktree}`)))
+          : undefined
+        // A repository that git cannot name, with no remote and no commit yet, keeps the name it had before the grant and is
+        // never put in `global`, the project that every such folder would share with its sessions and memory.
+        const named = id ?? earlier ?? ID.global
+        // The sessions follow the repository from the ID it had before (above), or from the one its folder named it by
+        // while it had no name, which a remote added since then no longer leads to. A shipped `.git/orbit` names the ID
+        // but does not drop the sessions made before trust.
+        const [moved] = yield* Effect.filter(
+          [...new Set([earlier, pretrust])].filter(
+            (candidate): candidate is ID => candidate !== undefined && candidate !== named,
+          ),
+          known,
+        )
+        const previous = moved ?? cachedID
         const canonical = repo.gitDirectory === repo.commonDirectory ? repo.worktree : yield* mainCheckout(repo)
         return yield* persist({
           previous,
-          id: id ?? ID.global,
+          id: named,
           directory: repo.worktree,
           canonical,
           vcs: { type: "git" as const, store: repo.commonDirectory },
         })
       }
 
-      const hg = native && path.basename(native) === ".hg" ? yield* hgDiscover(AbsolutePath.make(native)) : undefined
+      const hg = found?.type === "hg" ? yield* hgDiscover(found.native) : undefined
       if (hg) {
         return yield* persist({
           ...hg,

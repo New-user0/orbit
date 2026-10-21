@@ -83,6 +83,7 @@ for (const item of cases) {
       const result = await run({
         client,
         directory,
+        trusted: true,
         file: path.join(directory, "workflow.ts"),
         ...(where === "the run's default" ? { permissions: "auto" as const } : {}),
         workflow: {
@@ -112,6 +113,7 @@ test("answers an auto request with a rejection when the server cannot be asked",
   await run({
     client,
     directory,
+    trusted: true,
     file: path.join(directory, "workflow.ts"),
     workflow: {
       name: "permissions",
@@ -128,6 +130,7 @@ test("leaves a reject node as it was, with the unattended feedback and not the m
   await run({
     client,
     directory,
+    trusted: true,
     file: path.join(directory, "workflow.ts"),
     workflow: { name: "permissions", run: (ctx) => ctx.agent("work", { prompt: "go", worktree: false }) },
   })
@@ -181,7 +184,7 @@ for (const row of yamlRows) {
     expect((await workflowApprovals(file)).map((item) => item.id)).toEqual([row.id])
 
     const { client, replies } = server(async () => ({ permissions: { bypass: false } }))
-    await run({ client, directory, file, workflow: await loadWorkflow(file) })
+    await run({ client, trusted: true, directory, file, workflow: await loadWorkflow(file) })
 
     expect(replies[0]).toMatchObject({ decision: "reject" })
     expect(replies[0]?.message).toContain("managed settings")

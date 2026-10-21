@@ -1,28 +1,17 @@
 import { onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
+import path from "node:path"
 import { Option, Schema, SchemaGetter } from "effect"
+import { IdeLock } from "@orbit/util/ide-lock"
+import { plain } from "@orbit/util/plain"
 import { isRecord } from "../util/record"
 import { useTuiPaths } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useClient } from "./client"
+import { useLog } from "./log"
 import { createCompat } from "./compat"
 import { useData } from "./data"
-import { editorIntegration, editorPort } from "../editor"
-
-const MCP_PROTOCOL_VERSION = "2025-11-25"
-
-const JsonRpcMessageSchema = Schema.Struct({
-  id: Schema.optional(Schema.Union([Schema.Number, Schema.String, Schema.Null])),
-  method: Schema.optional(Schema.String),
-  params: Schema.optional(Schema.Unknown),
-  result: Schema.optional(Schema.Unknown),
-  error: Schema.optional(
-    Schema.Struct({
-      code: Schema.optional(Schema.Number),
-      message: Schema.optional(Schema.String),
-    }),
-  ),
-})
+import { discoverEditors, editorIntegration, editorPort, readLocks, type Editor } from "../editor"
 
 const PositionSchema = Schema.Struct({
   line: Schema.Number,
@@ -74,42 +63,64 @@ const EditorSelectionSchema = Schema.Union([
   }),
 )
 
-const EditorMentionSchema = Schema.Struct({
-  filePath: Schema.String,
-  lineStart: Schema.Number,
-  lineEnd: Schema.Number,
+// The messages of Orbit's IDE bridge, version 1. Every frame is decoded on its own and what does not fit is dropped.
+const BridgeHelloSchema = Schema.Struct({
+  type: Schema.Literal("hello"),
+  version: Schema.Number,
+  editor: Schema.optional(Schema.String),
 })
 
-const EditorServerInfoSchema = Schema.Struct({
-  protocolVersion: Schema.optional(Schema.String),
-  serverInfo: Schema.optional(
-    Schema.Struct({
-      name: Schema.optional(Schema.String),
-      version: Schema.optional(Schema.String),
-    }),
-  ),
+const BridgeSelectionSchema = Schema.Struct({
+  type: Schema.Literal("selection"),
+  filePath: Schema.NullOr(Schema.String),
+  text: Schema.optional(Schema.String),
+  selection: Schema.optional(Schema.Struct({ start: PositionSchema, end: PositionSchema })),
 })
 
-const decodeJsonRpcMessage = Schema.decodeUnknownOption(JsonRpcMessageSchema)
+const BridgeMentionSchema = Schema.Struct({
+  type: Schema.Literal("mention"),
+  filePath: Schema.String.check(Schema.isNonEmpty()),
+  lineStart: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+  lineEnd: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+})
+
+const BridgeFrameSchema = Schema.Union([BridgeHelloSchema, BridgeSelectionSchema, BridgeMentionSchema])
+
 const decodeEditorSelection = Schema.decodeUnknownOption(EditorSelectionSchema)
-const decodeEditorMention = Schema.decodeUnknownOption(EditorMentionSchema)
-const decodeEditorServerInfo = Schema.decodeUnknownOption(EditorServerInfoSchema)
+const decodeFrame = Schema.decodeUnknownOption(Schema.fromJsonString(BridgeFrameSchema))
 
-type JsonRpcMessage = Schema.Schema.Type<typeof JsonRpcMessageSchema>
 export type EditorSelection = Schema.Schema.Type<typeof EditorSelectionSchema>
-export type EditorMention = Schema.Schema.Type<typeof EditorMentionSchema>
+/** A file the person mentioned in the editor, with 1-based inclusive lines when a selection came with it. */
+export type EditorMention = { filePath: string; lineStart?: number; lineEnd?: number }
 export type EditorLabelState = "pending" | "sent" | "none"
-type EditorServerInfo = Schema.Schema.Type<typeof EditorServerInfoSchema>
-
-type EditorConnection = {
-  url: string
-  source: string
-}
 
 export type EditorIntegration = Readonly<{
-  connection?(directory: string): EditorConnection | undefined
+  /** The editor window to connect to, if there is exactly one that fits. */
+  discover?(input: {
+    directory: string
+    lockDirectory: string
+    env: Readonly<Record<string, string | undefined>>
+    log: (line: string) => void
+  }): Editor | undefined
   selection?(directory: string): Promise<unknown>
 }>
+
+/** When to look for a window, how long, and how long to wait between the attempts to get back after a drop. */
+export type EditorTiming = {
+  poll: number
+  window: number
+  delays: readonly number[]
+  /** How long `connect` waits for the editor to say hello before it gives up. */
+  connect: number
+}
+
+// The connect limit is just above the 30 s that a search for the window lasts.
+const defaultTiming: EditorTiming = {
+  poll: 1_000,
+  window: 30_000,
+  delays: [1_000, 2_000, 4_000, 8_000, 16_000],
+  connect: 35_000,
+}
 
 export const { use: useEditorContext, provider: EditorContextProvider } = createSimpleContext({
   name: "EditorContext",
@@ -118,14 +129,19 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
     WebSocketImpl?: typeof WebSocket
     /** Whether other agent products' files may be read. Defaults to what the server reports. */
     compat?: () => boolean
+    /** Connect to an editor window without the port variable or an editor terminal. The person's setting, or `/ide`. */
+    autoConnect?: boolean
+    timing?: Partial<EditorTiming>
   }) => {
     const paths = useTuiPaths()
+    const log = useLog({ component: "editor" })
     const editor: EditorIntegration = props.integration ?? editorIntegration
     // The server may be on another machine, where this process's own directory does not exist: ask about the location
     // the app resolved there.
     const compat =
       props.compat ?? createCompat({ client: useClient(), directory: useData().location.default().directory })
-    const port = editorPort(process.env)
+    const timing = { ...defaultTiming, ...props.timing }
+    const lockDirectory = path.join(paths.state, "ide")
     const zedTerminal = process.env.ZED_TERM === "true" || process.env.TERM_PROGRAM?.toLowerCase() === "zed"
     const mentionListeners = new Set<(mention: EditorMention) => void>()
     const WebSocketImpl = props.WebSocketImpl ?? WebSocket
@@ -133,7 +149,8 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       status: "disabled" | "connecting" | "connected"
       selection: EditorSelection | undefined
       selectionSent: boolean
-      server: EditorServerInfo | undefined
+      /** The display name of the editor, once it has said hello. */
+      server: { name?: string; port?: number } | undefined
     }>({
       status: "disabled",
       selection: undefined,
@@ -143,14 +160,19 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
 
     let socket: WebSocket | undefined
     let closed = false
-    let reconnect: ReturnType<typeof setTimeout> | undefined
-    let attempt = 0
-    let requestID = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // Starting again makes every search and connection of an earlier start stale.
+    let generation = 0
     let zedSelection: Promise<void> | undefined
     let lastZedSelectionKey: string | undefined
     let directory = paths.cwd
     let preserveSelectionOnReconnect = false
-    const pending = new Map<number, string>()
+    // `/ide` chose no editor: nothing looks for one again until it picks one, or Orbit restarts.
+    let released = false
+
+    // The window can be found by itself in an editor's terminal, which has the port or says what it is, and otherwise
+    // only when something asked for it.
+    const gated = () => editorPort(process.env) !== undefined || process.env.TERM_PROGRAM === "vscode" || props.autoConnect === true
 
     const setSelection = (selection: EditorSelection | undefined) => {
       const changed = editorSelectionKey(selection) !== editorSelectionKey(store.selection)
@@ -167,141 +189,186 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       setSelection(undefined)
     }
 
-    const send = (payload: JsonRpcMessage) => {
-      if (!socket || socket.readyState !== 1) return
-      socket.send(JSON.stringify({ jsonrpc: "2.0", ...payload }))
+    // The newest answer replaces the last one, and a link that ends takes its selection with it: a stale one must never
+    // go with the next prompt.
+    const clearLinkSelection = () => {
+      if (store.selection?.source === "websocket") setSelection(undefined)
     }
 
-    const request = (method: string, params?: unknown) => {
-      requestID += 1
-      pending.set(requestID, method)
-      send({ id: requestID, method, params })
+    const find = () =>
+      editor.discover?.({ directory, lockDirectory, env: process.env, log: (line) => log.info(line) })
+
+    const wait = (ms: number, run: () => void) => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(run, ms)
     }
 
-    const connect = () => {
-      if (closed) return
+    // Looks for the window once a poll for the length of the window, and connects to the first pass that finds exactly one.
+    const search = (current: number, elapsed = 0) => {
+      if (closed || current !== generation) return
+      const found = find()
+      if (found) return dial(found, current, 0)
+      if (elapsed >= timing.window) return idle(current)
+      wait(timing.poll, () => search(current, elapsed + timing.poll))
+    }
 
-      const connection = resolveEditorConnection(directory, port, editor.connection)
-      if (!connection) {
-        if (!zedTerminal) {
-          setStore("status", "disabled")
-          scheduleReconnect()
-          return
-        }
-        if (!editor.selection) {
-          setStore("status", "disabled")
-          scheduleReconnect()
-          return
-        }
-        // Zed's database is another tool's file, so it is read only while compatibility is on. The poll keeps running
-        // either way, which is how a change to the switch takes effect.
-        if (!compat()) {
-          lastZedSelectionKey = undefined
-          if (store.selection?.source === "zed") setSelection(undefined)
-          setStore("status", "disabled")
-          scheduleZedPoll()
-          return
-        }
+    // Nothing was found: Zed's database is the other place a selection can come from.
+    const idle = (current: number) => {
+      setStore("status", "disabled")
+      if (zedTerminal && editor.selection) pollZed(current)
+    }
 
-        zedSelection ??= editor
-          .selection(directory)
-          .then((result) => {
-            if (closed || socket || !compat()) return
-            if (!isRecord(result) || result.type === "unavailable") return
-            const decoded = result.type === "selection" ? decodeEditorSelection(result.selection) : Option.none()
-            const selection = Option.getOrUndefined(decoded)
-            const key = editorSelectionKey(selection)
-            if (key !== lastZedSelectionKey) {
-              lastZedSelectionKey = key
-              setSelection(selection)
-              setStore("status", selection ? "connected" : "disabled")
-            }
-          })
-          .catch(() => {
-            // Keep the last known Zed selection for transient polling failures.
-          })
-          .finally(() => {
-            zedSelection = undefined
-          })
-        scheduleZedPoll()
-        return
-      }
-
+    const dial = (
+      found: Editor,
+      current: number,
+      failures: number,
+      /** Asked for by `connect`, which wants to hear how the first attempt ended. */
+      settle?: (result: "connected" | "failed") => void,
+    ) => {
       setStore("status", "connecting")
-      const current = new WebSocketImpl(connection.url)
-      socket = current
+      // The token goes in this header and nowhere else: not the address, not a log line, not the environment.
+      const link = new WebSocketImpl(found.url, { headers: { [IdeLock.header]: found.token } } as never)
+      socket = link
+      let ready = false
+      let stopped = false
 
-      current.addEventListener("open", () => {
-        if (socket !== current) {
-          current.close()
-          return
-        }
-
-        attempt = 0
-        setStore("status", "connected")
-        request("initialize", {
-          protocolVersion: MCP_PROTOCOL_VERSION,
-          capabilities: {},
-          clientInfo: { name: "orbit", version: "0.0.0" },
-        })
+      link.addEventListener("open", () => {
+        if (socket !== link) return link.close()
+        link.send(JSON.stringify({ type: "hello", version: IdeLock.version, pid: process.pid }))
       })
 
-      current.addEventListener("message", (event) => {
-        const message = parseMessage(event.data)
-        if (!message) return
-
-        const selection = message.method === "selection_changed" ? decodeEditorSelection(message.params) : Option.none()
-        if (Option.isSome(selection)) {
-          setSelection({ ...selection.value, source: "websocket" })
+      link.addEventListener("message", (event) => {
+        if (socket !== link) return
+        const frame = parse(event.data, () => log.warn("dropped a frame from the editor that is too large"))
+        if (!frame) return
+        if (frame.type === "hello") {
+          if (frame.version !== IdeLock.version) {
+            stopped = true
+            log.warn("the editor speaks another version of the bridge", { version: frame.version })
+            return link.close()
+          }
+          ready = true
+          // The editor chose its name, so it is escaped before it reaches a person.
+          setStore("server", { name: frame.editor === undefined ? found.name : plain(frame.editor), port: found.port })
+          setStore("status", "connected")
+          settle?.("connected")
           return
         }
-
-        const mention = message.method === "at_mentioned" ? decodeEditorMention(message.params) : Option.none()
-        if (Option.isSome(mention)) {
-          mentionListeners.forEach((listener) => listener(mention.value))
+        // Nothing before the bridge's hello counts.
+        if (!ready) return
+        if ((frame.type === "selection" || frame.type === "mention") && frame.filePath && hostile(frame.filePath)) {
+          // A clone can name its files as it likes, and the name reaches the footer and the prompt.
+          log.warn("dropped a frame whose file name holds control characters")
+          // A refused selection still replaces the stored one, so the previous file's selection never goes with the next prompt.
+          if (frame.type === "selection") setSelection(undefined)
           return
         }
-
-        if (typeof message.id !== "number") return
-
-        const method = pending.get(message.id)
-        if (!method) return
-
-        pending.delete(message.id)
-        if (message.error) return
-
-        const initialize = method === "initialize" ? decodeEditorServerInfo(message.result) : Option.none()
-        if (Option.isSome(initialize)) {
-          setStore("server", initialize.value)
-          send({ method: "notifications/initialized" })
+        if (frame.type === "selection") {
+          if (frame.filePath === null) return setSelection(undefined)
+          // A frame without a range says nothing about what is selected.
+          if (!frame.selection) return
+          const selection = decodeEditorSelection({
+            filePath: frame.filePath,
+            text: frame.text ?? "",
+            selection: frame.selection,
+          })
+          if (Option.isSome(selection)) setSelection({ ...selection.value, source: "websocket" })
           return
+        }
+        if (frame.type === "mention") {
+          if ((frame.lineStart === undefined) !== (frame.lineEnd === undefined)) return
+          if (frame.lineStart !== undefined && frame.lineEnd !== undefined && frame.lineEnd < frame.lineStart) return
+          const mention: EditorMention = { filePath: frame.filePath }
+          if (frame.lineStart !== undefined) mention.lineStart = frame.lineStart
+          if (frame.lineEnd !== undefined) mention.lineEnd = frame.lineEnd
+          mentionListeners.forEach((listener) => listener(mention))
         }
       })
 
-      current.addEventListener("close", () => {
-        if (socket !== current) return
-
+      link.addEventListener("close", (event) => {
+        if (socket !== link) return
         socket = undefined
-        pending.clear()
-        if (closed) return
-
-        setStore("status", "connecting")
-        scheduleReconnect()
+        setStore("server", undefined)
+        clearLinkSelection()
+        if (closed || current !== generation) return
+        if (stopped || (event as { code?: number }).code === IdeLock.closeVersion) {
+          settle?.("failed")
+          return idle(current)
+        }
+        // A window the person picked is not retried when it never said hello: they are told it failed.
+        if (settle && !ready) {
+          settle("failed")
+          return idle(current)
+        }
+        retry(current, ready ? 0 : failures)
       })
     }
 
-    const scheduleReconnect = () => {
-      if (closed) return
-      if (reconnect) clearTimeout(reconnect)
-      attempt += 1
-      const delay = Math.min(1000 * 2 ** (attempt - 1), 10_000)
-      reconnect = setTimeout(connect, delay)
+    // A window that was reloaded has a new port and a new token while the terminal keeps the old port in its environment,
+    // so every attempt reads the lock again. An attempt that finds nothing, or is refused, counts as failed.
+    const retry = (current: number, failures: number) => {
+      if (failures >= timing.delays.length) {
+        log.warn("gave up reconnecting to the editor")
+        return idle(current)
+      }
+      setStore("status", "connecting")
+      wait(timing.delays[failures] ?? timing.poll, () => {
+        if (closed || current !== generation) return
+        const found = find()
+        if (found) return dial(found, current, failures + 1)
+        retry(current, failures + 1)
+      })
     }
 
-    const scheduleZedPoll = () => {
+    const pollZed = (current: number) => {
+      if (closed || current !== generation) return
+      // Zed's database is another tool's file, so it is read only while compatibility is on. The poll keeps running
+      // either way, which is how a change to the switch takes effect.
+      if (!compat()) {
+        lastZedSelectionKey = undefined
+        if (store.selection?.source === "zed") setSelection(undefined)
+        setStore("status", "disabled")
+        return wait(timing.poll, () => pollZed(current))
+      }
+      zedSelection ??= editor
+        .selection!(directory)
+        .then((result) => {
+          if (closed || socket || !compat()) return
+          if (!isRecord(result) || result.type === "unavailable") return
+          const decoded = result.type === "selection" ? decodeEditorSelection(result.selection) : Option.none()
+          const selection = Option.getOrUndefined(decoded)
+          const key = editorSelectionKey(selection)
+          if (key !== lastZedSelectionKey) {
+            lastZedSelectionKey = key
+            setSelection(selection)
+            setStore("status", selection ? "connected" : "disabled")
+          }
+        })
+        .catch(() => {
+          // Keep the last known Zed selection for transient polling failures.
+        })
+        .finally(() => {
+          zedSelection = undefined
+        })
+      wait(timing.poll, () => pollZed(current))
+    }
+
+    const start = () => {
+      generation += 1
+      const current = generation
+      if (timer) clearTimeout(timer)
+      timer = undefined
+      const old = socket
+      socket = undefined
+      old?.close()
       if (closed) return
-      if (reconnect) clearTimeout(reconnect)
-      reconnect = setTimeout(connect, 1000)
+      if (released) return setStore("status", "disabled")
+      if (editor.discover && gated()) {
+        setStore("status", "connecting")
+        return search(current)
+      }
+      if (zedTerminal && editor.selection) return pollZed(current)
+      setStore("status", "disabled")
     }
 
     const reconnectWithDirectory = (nextDirectory?: string) => {
@@ -311,35 +378,24 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       if (sameDirectory) return
 
       directory = resolved
-      attempt = 0
-      pending.clear()
-      if (reconnect) clearTimeout(reconnect)
-      reconnect = undefined
-      if (socket) {
-        const current = socket
-        socket = undefined
-        current.close()
-      }
       setStore("status", "disabled")
       setStore("server", undefined)
-      connect()
+      start()
     }
 
     onMount(() => {
-      connect()
+      start()
 
       onCleanup(() => {
         closed = true
-        if (reconnect) clearTimeout(reconnect)
+        if (timer) clearTimeout(timer)
         socket?.close()
       })
     })
 
     return {
       enabled() {
-        return Boolean(
-          resolveEditorConnection(directory, port, editor.connection) || (zedTerminal && compat() && editor.selection),
-        )
+        return store.status !== "disabled" || Boolean(zedTerminal && compat() && editor.selection)
       },
       connected() {
         return store.status === "connected"
@@ -373,24 +429,68 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       reconnect(directory?: string) {
         reconnectWithDirectory(directory)
       },
+      /**
+       * The editor windows `/ide` can offer: those that hold the session's folder first, then the others, each newest first,
+       * and the port of the window this process is linked to, if any.
+       */
+      list() {
+        const found = discoverEditors({ directory, lockDirectory, env: process.env, log: (line) => log.info(line) })
+        return { matched: found.matched, unmatched: found.unmatched, current: store.server?.port }
+      },
+      /**
+       * Links to the window on `port`, replacing any link and any search that is under way. The lock is read again, because
+       * a window that was reloaded has a new token. It says how the attempt ended: the editor said hello, it refused or closed
+       * before it did, or it stayed silent for longer than `timing.connect`.
+       */
+      connect(port: number) {
+        generation += 1
+        const current = generation
+        released = false
+        if (timer) clearTimeout(timer)
+        timer = undefined
+        const old = socket
+        socket = undefined
+        old?.close()
+        setStore("server", undefined)
+        clearLinkSelection()
+        const found = readLocks(lockDirectory, (line) => log.info(line)).find((lock) => lock.port === port)
+        if (!found) {
+          setStore("status", "disabled")
+          return Promise.resolve<"connected" | "failed" | "timeout">("failed")
+        }
+        return new Promise<"connected" | "failed" | "timeout">((resolve) => {
+          const limit = setTimeout(() => {
+            // Whatever is still trying stops with it: the person was told it timed out.
+            if (current !== generation) return resolve("timeout")
+            generation += 1
+            const stale = socket
+            socket = undefined
+            stale?.close()
+            setStore("status", "disabled")
+            resolve("timeout")
+          }, timing.connect)
+          dial(found, current, 0, (result) => {
+            clearTimeout(limit)
+            resolve(result)
+          })
+        })
+      },
+      /** Closes the link and leaves the editor alone until `connect`, or until Orbit restarts: nothing searches or retries. */
+      disconnect() {
+        generation += 1
+        released = true
+        if (timer) clearTimeout(timer)
+        timer = undefined
+        const old = socket
+        socket = undefined
+        old?.close()
+        setStore("server", undefined)
+        clearLinkSelection()
+        setStore("status", "disabled")
+      },
     }
   },
 })
-
-function resolveEditorConnection(
-  directory: string,
-  port: number | undefined,
-  discover: ((directory: string) => EditorConnection | undefined) | undefined,
-): EditorConnection | undefined {
-  if (port) {
-    return {
-      url: `ws://127.0.0.1:${port}`,
-      source: `env:${port}`,
-    }
-  }
-
-  return discover?.(directory)
-}
 
 export function editorSelectionKey(selection: EditorSelection | undefined) {
   if (!selection) return ""
@@ -406,12 +506,16 @@ export function editorSelectionKey(selection: EditorSelection | undefined) {
   ].join("\0")
 }
 
-function parseMessage(value: unknown) {
-  if (typeof value !== "string") return
+/** Control and format characters (escape sequences, bidi overrides, zero-width spaces) in a file name. */
+function hostile(filePath: string) {
+  // Controls, line separators, bidi controls and zero-width space act on a terminal or reorder text. ZWNJ, ZWJ and the
+  // soft hyphen are ordinary in some scripts' file names, so they pass.
+  return /[\p{Cc}\u200B\u200E\u200F\u061C\u2028-\u202E\u2066-\u2069\uFEFF]/u.test(filePath)
+}
 
-  try {
-    return Option.getOrUndefined(decodeJsonRpcMessage(JSON.parse(value)))
-  } catch {
-    return
-  }
+function parse(value: unknown, dropped: () => void) {
+  if (typeof value !== "string") return
+  if (Buffer.byteLength(value) > IdeLock.frameCap) return void dropped()
+  // A frame that does not fit, such as a type from a later version, is ignored.
+  return Option.getOrUndefined(decodeFrame(value))
 }

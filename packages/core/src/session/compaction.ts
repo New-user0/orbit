@@ -29,9 +29,11 @@ import { SessionEvent } from "./event.js"
 import { SessionHistory } from "./history.js"
 import type { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
+import { SessionReminders } from "./reminders.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
 import { toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
+import { isReminder } from "./reminder-text.js"
 import { toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
 
@@ -185,6 +187,7 @@ export const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const db = (yield* Database.Service).db
     const requests = yield* SessionModelRequest.Service
+    const reminders = yield* SessionReminders.Service
 
     const state = State.create<Settings, Editor>({
       name: "session-compaction",
@@ -210,7 +213,7 @@ export const layer = Layer.effect(
         : calculateCeiling({ ...context.model.limit, context: UNKNOWN_WINDOW }, settings.buffer)
       // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
       const budget =
-        trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context) * SHRINK_STEPS[0])) : cap
+        trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context, reminders.minimal) * SHRINK_STEPS[0])) : cap
 
       const compaction =
         context.model.compaction?.type === "native"
@@ -232,7 +235,7 @@ export const layer = Layer.effect(
       // An encrypted native window estimates as nothing, so wait for a response to measure it.
       const measured = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
       if (measured < messages.findLastIndex(SessionProviderContext.isCheckpoint)) return false
-      return estimateContext(context) >= ceiling
+      return estimateContext(context, reminders.minimal) >= ceiling
     }
 
     /**
@@ -260,7 +263,7 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      const split = splitConversation(withoutReplaced(context.messages), keep)
+      const split = splitConversation(compactable(context.messages), keep)
       if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
 
       const previous = previousCompaction(context.messages)
@@ -312,10 +315,10 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      if (!withoutReplaced(context.messages).some(messageToText)) return yield* Effect.fail(NOTHING_TO_COMPACT)
+      if (!compactable(context.messages).some(messageToText)) return yield* Effect.fail(NOTHING_TO_COMPACT)
       const unsupported = (message: string) =>
         Effect.fail<Failure>({ error: { type: "provider.unsupported-operation", message } })
-      const prepared = yield* prepare(context, withoutReplaced(context.messages), budget, "session")
+      const prepared = yield* prepare(context, compactable(context.messages), budget, "session")
 
       // History is selected before request hooks, so a hook that reroutes the request cannot be honored here.
       const provenance = SessionProviderContext.provenance(context.model)
@@ -492,11 +495,19 @@ export const layer = Layer.effect(
       const sessionID = context.session.id
       const metadataKey = context.model.model.route.providerMetadataKey ?? context.model.model.provider
       const unusable = (error: SessionError.Error) => Effect.fail<Failure>({ error })
+      // A call that failed or was interrupted after the response began was probably billed, though its usage never
+      // arrived: an estimate keeps it from reading as free. A request the provider refused outright billed nothing.
+      let observed = false
+      let reported = false
+      let streamedLength = 0
 
       return llm.stream(request, options).pipe(
         Stream.runFoldEffect(
           (): Streamed => ({ text: "" }),
           (streamed, event): Effect.Effect<Streamed, AIError | Failure> => {
+            if (!LLMEvent.is.providerError(event)) observed = true
+            if (LLMEvent.is.textDelta(event) || LLMEvent.is.reasoningDelta(event)) streamedLength += event.text.length
+            if (LLMEvent.is.stepFinish(event)) reported = true
             if (LLMEvent.is.providerError(event)) {
               if (event.classification === undefined)
                 return unusable({ type: "provider.error", message: event.message })
@@ -549,6 +560,19 @@ export const layer = Layer.effect(
             }
           },
         ),
+        Effect.onError(() =>
+          Effect.suspend(() =>
+            observed && !reported
+              ? spend(
+                  sessionID,
+                  SessionUsage.estimate(context.model.cost, {
+                    input: estimateRequest(request),
+                    output: Token.estimateLength(streamedLength),
+                  }),
+                )
+              : Effect.void,
+          ),
+        ),
       )
     }
 
@@ -566,7 +590,8 @@ export const layer = Layer.effect(
       budget: number,
       webSocket?: "session",
     ) => {
-      const base = transcript(context, messages)
+      // Hints and the editor note belong to the request they were written for; the summary request lowers prompts the way the main request does on this instance.
+      const base = transcript(context, messages, reminders.minimal)
       return requests.compaction({
         session: context.session,
         agent: context.agent.id,
@@ -581,10 +606,13 @@ export const layer = Layer.effect(
 
     /** A request hook supplied the summary itself, so no model call happens. */
     const fromHook = (context: SessionContext.Loaded, supplied: SessionCompactionResult, recent: string) => {
-      const usage = supplied.tokens && {
+      const reported = supplied.tokens && {
         tokens: supplied.tokens,
         cost: SessionUsage.calculateCost(context.model.cost, supplied.tokens),
       }
+      // A hook that reports no tokens ran no model, so there is nothing to record: a record of zero tokens would read
+      // as spend the provider failed to report.
+      const usage = reported && SessionUsage.hasTokens(reported) ? reported : undefined
       return spend(context.session.id, usage).pipe(
         Effect.as<Result>({
           text: supplied.summary,
@@ -665,8 +693,12 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, Database.node, llmClient, SessionModelRequest.node],
+  deps: [Bus.node, Database.node, llmClient, SessionModelRequest.node, SessionReminders.node],
 })
+
+/** What a compaction reads: no replaced attempts and no reminder rows, which are collected again after the checkpoint. */
+const compactable = (messages: ReadonlyArray<SessionMessage.Info>) =>
+  withoutReplaced(messages).filter((message) => !isReminder(message))
 
 /** History loads from the latest completed compaction, so a previous one is always the first message. */
 const previousCompaction = (messages: ReadonlyArray<SessionMessage.Info>) => {
@@ -674,13 +706,18 @@ const previousCompaction = (messages: ReadonlyArray<SessionMessage.Info>) => {
   return first?.type === "compaction" && first.status === "completed" ? first : undefined
 }
 
-const transcript = (context: SessionContext.Loaded, messages: ReadonlyArray<SessionMessage.Info>) =>
+const transcript = (
+  context: SessionContext.Loaded,
+  messages: ReadonlyArray<SessionMessage.Info>,
+  minimal?: boolean,
+) =>
   SessionModelRequest.baseTranscript({
     agent: context.agent.info,
     model: context.model,
     tools: context.tools,
     initial: context.initial,
     messages,
+    minimal,
   })
 
 /**
@@ -778,7 +815,8 @@ const messageToText = (message: SessionMessage.Info): string => {
         .join("\n")
 
     case "synthetic":
-      return `[Synthetic context]: ${message.text}`
+      // Reminders are collected again after the checkpoint, so none is summarized or kept as recent text.
+      return isReminder(message) ? "" : `[Synthetic context]: ${message.text}`
 
     case "skill":
       return `[Skill activated: ${message.name}]\n${message.text}`
@@ -846,24 +884,24 @@ export const recentUserMessages = (
 ) => {
   const users = messages
     .filter((message) => message.type === "user")
-    .map((message) => ({ ...message, skills: undefined }))
+    .map((message) => ({ ...message, skills: undefined, agents: undefined, editor: undefined }))
   const sendable = SessionModelRequest.boundImages(
     SessionModelRequest.unsupportedParts(toLLMMessages(users, model.ref), model.capabilities),
   )
   return sendable.slice(oldestToDrop(sendable, estimateMessage, keep))
 }
 
-export const estimateContext = (context: SessionContext.Loaded) => {
-  const prompt = estimatePrompt(context)
+export const estimateContext = (context: SessionContext.Loaded, minimal?: boolean) => {
+  const prompt = estimatePrompt(context, minimal)
   return prompt.measured + prompt.estimated
 }
 
 /** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
-export const estimatePrompt = (context: SessionContext.Loaded) => {
+export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean) => {
   const messages = withoutReplaced(context.messages)
   const anchorIndex = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
   const anchor = messages[anchorIndex]
-  const base = transcript(context, messages.slice(Math.max(0, anchorIndex)))
+  const base = transcript(context, messages.slice(Math.max(0, anchorIndex)), minimal)
   // TODO: Pass compaction history the runner has already shaped. This and `recentUserMessages` repeat the
   // runner's unsupported-media and image-budget passes; here the image budget only sees images since the anchor,
   // so image-heavy sessions can estimate high.
@@ -911,7 +949,7 @@ const hasMeasuredPrompt = (message: SessionMessage.Info, model: SessionContext.L
   message.tokens !== undefined &&
   message.tokens.input + message.tokens.cache.read + message.tokens.cache.write > 0
 
-const estimateRequest = (request: Pick<LLMRequest, "system" | "tools" | "messages">) =>
+export const estimateRequest = (request: Pick<LLMRequest, "system" | "tools" | "messages">) =>
   request.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
   request.tools.reduce((sum, tool) => sum + estimateTool(tool), 0) +
   request.messages.reduce((sum, message) => sum + estimateMessage(message), 0)

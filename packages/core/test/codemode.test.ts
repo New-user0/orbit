@@ -1019,6 +1019,27 @@ describe("CodeMode fetch addresses", () => {
       yield* settles(`fetch cannot reach 127.0.0.1: it is a loopback address.${hint}`)
     }).pipe(Effect.provide(Config.testLayer())),
   )
+
+  // A block of a later document hides only the keys it sets: a project that sets a depth leaves the person's allowance.
+  const experimental = (info: ConstructorParameters<typeof ConfigExperimental.Info>[0]) =>
+    new Document({ type: "document", info: new Info({ experimental: new ConfigExperimental.Info(info) }) })
+  for (const [name, entries, reached] of [
+    ["a later block without the key", [experimental({ allow_local_fetch: true }), experimental({ subagent_depth: 2 })], true],
+    ["a later block that sets the key", [experimental({ allow_local_fetch: true }), experimental({ allow_local_fetch: false })], false],
+  ] as const) {
+    web.live(`reads the allowance for local servers past ${name}`, () =>
+      Effect.gen(function* () {
+        const { hits, origin } = yield* serve
+        yield* seed(allowAll, { local: false })
+        yield* ConfigWebPlugin.Plugin.effect(host({ event: { subscribe: () => Stream.empty } }))
+        const output = (yield* run(
+          `try { return await (await fetch("${origin}/a")).text() } catch (e) { return e.message }`,
+        )).output.output
+        expect(output === "served").toBe(reached)
+        expect(hits.length).toBe(reached ? 1 : 0)
+      }).pipe(Effect.provide(Config.testLayer([...entries]))),
+    )
+  }
 })
 
 // A request goes to the addresses that it was checked as, and the name only says what it is for. A name is resolved again

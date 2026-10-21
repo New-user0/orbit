@@ -20,6 +20,7 @@ import { ConfigReference } from "@orbit/schema/config/reference"
 import { ConfigExperimental } from "@orbit/schema/config/experimental"
 import { Permission } from "@orbit/schema/permission"
 import { ConfigAgentV1 } from "../v1/config/agent.js"
+import { LegacyAgent } from "./legacy-agent.js"
 import { ConfigAttachmentV1 } from "../v1/config/attachment.js"
 import { ConfigCommandV1 } from "../v1/config/command.js"
 import { ConfigMCPV1 } from "../v1/config/mcp.js"
@@ -138,10 +139,7 @@ export function normalize(input: unknown): Result {
     diagnostics,
   )
 
-  const legacyAgents = mapValues(
-    decodeMap(input.agent, ConfigAgentV1.Info, ["agent"], diagnostics, decodeValue),
-    (value) => canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent(value)),
-  )
+  const legacyAgents = legacyDoor(input.agent, "agent", diagnostics)
   const legacySmallModel = own(input, "small_model")
     ? decodeValue(Schema.String, input.small_model, ["small_model"], diagnostics)
     : undefined
@@ -159,13 +157,82 @@ export function normalize(input: unknown): Result {
       model: migratedSmallModel,
       ...legacyAgents.title,
     }
-  const modeAgents = mapValues(decodeMap(input.mode, ConfigAgentV1.Info, ["mode"], diagnostics, decodeValue), (value) =>
-    canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
-  )
+  const modeAgents = legacyDoor(input.mode, "mode", diagnostics)
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
-  const nativeAgents = decodeMap(input.agents, ConfigAgent.Info, ["agents"], diagnostics, (schema, value, at, found) =>
-    decodeFields(schema, value, at, found, "permissions"),
+  // An entry whose tools is a map of tool names to booleans is written in the legacy v1 style: its legacy fields migrate
+  // and its native fields decode on their own, then the two halves join; a string or a list of tools is native.
+  const named = plainNames(input.agents, ["agents"], diagnostics)
+  // Keys written for another product are set aside with one diagnostic each, in every entry, so none of them reaches the
+  // provider as a request option; a variant beside a model is settled the way the Markdown door settles it.
+  const agentEntries = isRecord(named)
+    ? Object.fromEntries(
+        Object.entries(named).map(([id, entry]) => {
+          if (!isRecord(entry)) return [id, entry]
+          const prepared = LegacyAgent.prepare(entry)
+          prepared.notes.forEach((note) =>
+            diagnostics.push({ kind: "unsupported", path: ["agents", id, note.key], message: note.message }),
+          )
+          return [id, prepared.entry]
+        }),
+      )
+    : named
+  const isLegacyEntry = (entry: unknown): entry is Record<string, unknown> =>
+    isRecord(entry) && isPlainRecord(entry.tools)
+  const entries = isRecord(agentEntries) ? Object.entries(agentEntries) : []
+  // Its legacy half (the map and the keys only that format has) is decoded field by field and migrated; its native half
+  // is decoded on its own and put over the result, so a bad field on either side costs only itself and the deny rules
+  // written beside the map stay.
+  const splits = Object.fromEntries(
+    entries.flatMap(([id, entry]) => (isLegacyEntry(entry) ? [[id, LegacyAgent.split(entry)] as const] : [])),
   )
+  const legacyNative = decodeMap(
+    Object.fromEntries(
+      Object.entries(splits)
+        .filter(([, parts]) => Object.keys(parts.native).length > 0)
+        .map(([id, parts]) => [id, parts.native]),
+    ),
+    ConfigAgent.Info,
+    ["agents"],
+    diagnostics,
+    (schema, value, at, found) => decodeFields(schema, value, at, found, "permissions"),
+  )
+  const legacyDecoded = decodeMap(
+    Object.fromEntries(
+      Object.entries(splits)
+        .filter(([, parts]) => Object.keys(parts.legacy).length > 0)
+        .map(([id, parts]) => [id, parts.legacy]),
+    ),
+    ConfigAgentV1.Info,
+    ["agents"],
+    diagnostics,
+    (schema, value, at, found) => decodeFields(schema, value, at, found),
+  )
+  const nativeAgents = {
+    ...decodeMap(
+      isRecord(agentEntries) ? Object.fromEntries(entries.filter(([, entry]) => !isLegacyEntry(entry))) : agentEntries,
+      ConfigAgent.Info,
+      ["agents"],
+      diagnostics,
+      (schema, value, at, found) => decodeFields(schema, value, at, found, "permissions"),
+    ),
+    ...Object.fromEntries(
+      Object.keys(splits).map((id) => {
+        const legacy = legacyDecoded[id]
+        return [
+          id,
+          canonical(
+            ConfigAgent.Info,
+            LegacyAgent.merge(
+              legacy === undefined
+                ? {}
+                : (ConfigMigrateV1.migrateAgent(legacy as ConfigAgentV1.Info) as Record<string, unknown>),
+              (legacyNative[id] ?? {}) as Record<string, unknown>,
+            ),
+          ),
+        ]
+      }),
+    ),
+  }
   diagnoseAgentUnsupported(input.agent, ["agent"], diagnostics)
   diagnoseAgentUnsupported(input.mode, ["mode"], diagnostics)
   mergeMap(
@@ -216,9 +283,16 @@ export function normalize(input: unknown): Result {
     shell: Info.fields.shell,
     model: Info.fields.model,
     fallback_model: Info.fields.fallback_model,
+    model_aliases: Info.fields.model_aliases,
     output_token_cap: Info.fields.output_token_cap,
+    git_status: Info.fields.git_status,
     default_agent: Info.fields.default_agent,
     output_style: Info.fields.output_style,
+    language: Info.fields.language,
+    system_prompt: Info.fields.system_prompt,
+    system_prompt_file: Info.fields.system_prompt_file,
+    append_system_prompt: Info.fields.append_system_prompt,
+    attribution: Info.fields.attribution,
     sandbox: Info.fields.sandbox,
     share: Info.fields.share,
     enterprise: Info.fields.enterprise,
@@ -236,7 +310,17 @@ export function normalize(input: unknown): Result {
   }
   // Objects whose fields are independent settings: a bad field costs only itself, so `sandbox.enabled` survives a bad
   // `sandbox.write` (class 7).
-  const independent = ["sandbox", "shell_tool", "tool_execution", "websearch", "webfetch", "worktree", "warming"]
+  const independent = [
+    "attribution",
+    "sandbox",
+    "shell_tool",
+    "tool_execution",
+    "websearch",
+    "webfetch",
+    "worktree",
+    "warming",
+    "model_aliases",
+  ]
   Object.entries(nativeAtomic).forEach(([key, schema]) => {
     if (!own(input, key)) return
     const value = independent.includes(key)
@@ -246,8 +330,27 @@ export function normalize(input: unknown): Result {
     overlay(encoded, key, value, [key], diagnostics)
   })
 
-  const instructions = decodeList(input.instructions, Schema.String, ["instructions"], diagnostics, decodeEncoded)
-  if (instructions.length || Array.isArray(input.instructions)) encoded.instructions = instructions
+  // One document gives one replacement: the text wins over the file, as the schema descriptions say. An empty string is
+  // unset, so it conflicts with nothing.
+  if (
+    typeof encoded.system_prompt === "string" &&
+    encoded.system_prompt !== "" &&
+    typeof encoded.system_prompt_file === "string" &&
+    encoded.system_prompt_file !== ""
+  ) {
+    diagnostics.push({
+      kind: "conflict",
+      path: ["system_prompt_file"],
+      message: "retained system_prompt over system_prompt_file",
+    })
+    delete encoded.system_prompt_file
+  }
+
+  const instructionLists = ["instructions", "instructions_exclude"] as const
+  instructionLists.forEach((key) => {
+    const items = decodeList(input[key], Schema.String, [key], diagnostics, decodeEncoded)
+    if (items.length || Array.isArray(input[key])) encoded[key] = items
+  })
 
   return { type: "normalized", encoded, diagnostics }
 }
@@ -627,6 +730,97 @@ function diagnoseProviderUnsupported(value: unknown, path: string[], diagnostics
   })
 }
 
+// An agent name becomes a folder, a file name and a title, so a key that is not a plain name defines no agent and costs
+// only itself.
+// Each entry of a legacy `agent` or `mode` map goes through the same preparation as the entries of `agents`, so a bad
+// tools or permission entry costs only itself and the denies beside it hold.
+// Entries of the legacy agent and mode maps go to the V1 decoder, which reads a model and its variant itself: the variant
+// stays a field beside the model instead of being joined into the model string, and a tier (which holds no variant)
+// loses it rather than turning it into a request option.
+function preparedEntries(value: unknown, path: string[], diagnostics: Diagnostic[], legacy = false) {
+  if (!isRecord(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).map(([id, entry]) => {
+      if (!isRecord(entry)) return [id, entry]
+      const { variant, ...bare } = entry
+      const prepared = LegacyAgent.prepare(legacy ? bare : entry)
+      prepared.notes.forEach((note) =>
+        diagnostics.push({ kind: "unsupported", path: [...path, id, note.key], message: note.message }),
+      )
+      if (!legacy || !("variant" in entry)) return [id, prepared.entry]
+      if (!LegacyAgent.isTier(entry.model)) return [id, { ...prepared.entry, variant }]
+      diagnostics.push({
+        kind: "unsupported",
+        path: [...path, id, "variant"],
+        message: "a model tier takes no variant; ignored it",
+      })
+      return [id, prepared.entry]
+    }),
+  )
+}
+
+// An entry of the `agent` or `mode` map is split like a legacy entry of `agents`: the keys the v1 format owns go to its
+// decoder and migrate, every other key Orbit's schema has is decoded natively, so a `permissions` deny list holds and no
+// native key turns into a provider request option. The `mode` map marks its agents as primary.
+function legacyDoor(value: unknown, door: "agent" | "mode", diagnostics: Diagnostic[]) {
+  const prepared = preparedEntries(plainNames(value, [door], diagnostics), [door], diagnostics, true)
+  // A value that is not a map is reported as a whole; only an absent door is silent.
+  if (value !== undefined && !isRecord(prepared)) invalid([door], diagnostics)
+  const parts = isRecord(prepared)
+    ? Object.fromEntries(
+        Object.entries(prepared).map(([id, entry]) => [
+          id,
+          isRecord(entry) ? LegacyAgent.split(entry, ConfigAgentV1.KNOWN_KEYS) : { legacy: entry, native: {} },
+        ]),
+      )
+    : {}
+  const legacy = decodeMap(
+    Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.legacy])),
+    ConfigAgentV1.Info,
+    [door],
+    diagnostics,
+    (schema, item, at, found) => decodeFields(schema, item, at, found),
+  )
+  const native = decodeMap(
+    Object.fromEntries(
+      Object.entries(parts)
+        .filter(([, part]) => Object.keys(part.native).length > 0)
+        .map(([id, part]) => [id, part.native]),
+    ),
+    ConfigAgent.Info,
+    [door],
+    diagnostics,
+    (schema, item, at, found) => decodeFields(schema, item, at, found, "permissions"),
+  )
+  return Object.fromEntries(
+    [...new Set([...Object.keys(legacy), ...Object.keys(native)])].map((id) => {
+      const half = legacy[id] as ConfigAgentV1.Info | undefined
+      const migrated =
+        half === undefined
+          ? {}
+          : (ConfigMigrateV1.migrateAgent(door === "mode" ? { ...half, mode: "primary" } : half) as Record<
+              string,
+              unknown
+            >)
+      return [
+        id,
+        canonical(ConfigAgent.Info, LegacyAgent.merge(migrated, (native[id] ?? {}) as Record<string, unknown>)) as Record<string, unknown>,
+      ]
+    }),
+  )
+}
+
+function plainNames(value: unknown, path: string[], diagnostics: Diagnostic[]) {
+  if (!isRecord(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).filter(([name]) => {
+      if (ConfigAgent.isName(name)) return true
+      invalid([...path, name], diagnostics)
+      return false
+    }),
+  )
+}
+
 function diagnoseAgentUnsupported(value: unknown, path: string[], diagnostics: Diagnostic[]) {
   if (!isRecord(value)) return
   Object.entries(value).forEach(([name, agent]) => {
@@ -782,7 +976,8 @@ function decodeFields<S extends Schema.Codec<unknown, unknown, never, never>>(
   const result = Object.keys(kept).length === 0 ? undefined : decodeQuiet(schema, kept)
   // An object that fails only because a required field is missing (an empty one, or one with only unknown keys) has no
   // field to drop, so report the object itself rather than losing it silently.
-  if (result === undefined && (Object.keys(kept).length > 0 || diagnostics.length === reported)) invalid(path, diagnostics)
+  if (result === undefined && (Object.keys(kept).length > 0 || diagnostics.length === reported))
+    invalid(path, diagnostics)
   return result
 }
 

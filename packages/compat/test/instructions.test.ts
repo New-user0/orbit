@@ -16,6 +16,17 @@ describe("CompatInstructions.filenames", () => {
   })
 })
 
+describe("CompatInstructions.localFilenames", () => {
+  test("lists the native local file first and the reference vendor's local file last, only while enabled", () => {
+    expect(CompatInstructions.localFilenames(true)).toEqual(["ORBIT.local.md", CompatNames.vendor.localInstructions])
+    expect(CompatInstructions.localFilenames(false)).toEqual(["ORBIT.local.md"])
+  })
+
+  test("shares no name with the shared files, so that the two slots never collide", () => {
+    for (const name of CompatInstructions.localFilenames(true)) expect(CompatInstructions.filenames(true)).not.toContain(name)
+  })
+})
+
 describe("CompatInstructions.rules", () => {
   test("lists the rule and instruction files other products keep only while enabled", () => {
     expect(CompatInstructions.rules(true)).toEqual(foreign)

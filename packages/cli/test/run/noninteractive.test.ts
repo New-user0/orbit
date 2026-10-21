@@ -435,7 +435,14 @@ async function run(input: {
   // The turn options the fake server records instead of the ones it was sent.
   admitTurn?: SessionTurnOptions
 }) {
-  const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+  // A call that no stub covers fails at once and offline. It used to reach DNS for orbit.test, which cost seconds per call and
+  // made the file time out whenever the resolver was slow.
+  const sdk = Orbit.make({
+    baseUrl: "https://orbit.test",
+    fetch: (async (request: RequestInfo | URL) => {
+      throw new Error(`unstubbed request: ${request instanceof Request ? request.url : String(request)}`)
+    }) as unknown as typeof fetch,
+  })
   const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {} }]
   let wake: (() => void) | undefined
   let queued = false
@@ -460,9 +467,11 @@ async function run(input: {
     }
   })()
   spyOn(sdk.event, "subscribe").mockImplementation(() => stream)
+  spyOn(sdk.shell, "list").mockImplementation(() => ok({ data: [] }) as never)
   spyOn(sdk.permission, "list").mockImplementation(() => ok([]) as never)
   spyOn(sdk.permission, "reply").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.session, "interrupt").mockImplementation(() => ok(undefined) as never)
+  spyOn(sdk.session.inbox, "cancel").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.session.form, "list").mockImplementation(
     (request) => ok(input.pendingForms?.filter((item) => item.sessionID === request.sessionID) ?? []) as never,
   )
@@ -2155,6 +2164,25 @@ describe("runNonInteractivePrompt limits and results", () => {
     expect(output.exitCode).toBe(1)
   })
 
+  // FU-M2-043: the prompt is admitted before the echo is checked and the interrupt does nothing for a drain that has
+  // not started, so the prompt itself is withdrawn first.
+  test("a server that does not echo the limits has the prompt withdrawn before the interrupt", async () => {
+    const output = await record({ turn: twoSteps, options, admit: false })
+    const sdk = output.sdk!
+    const prompt = (sdk.session.prompt as Mock<typeof sdk.session.prompt>).mock.calls[0][0]
+    const cancel = sdk.session.inbox.cancel as Mock<typeof sdk.session.inbox.cancel>
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel.mock.calls[0][0]).toEqual({ sessionID: prompt.sessionID as string, inboxID: prompt.id as string })
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(
+      (sdk.session.interrupt as Mock<typeof sdk.session.interrupt>).mock.invocationCallOrder[0],
+    )
+  })
+
+  test("a server that echoes the limits has nothing withdrawn", async () => {
+    const output = await record({ turn: twoSteps, options })
+    expect(output.sdk?.session.inbox.cancel).not.toHaveBeenCalled()
+  })
+
   // The two responses of `twoSteps` as the server projects them, which is where the result takes its usage from.
   const twoStepHistory = history(
     assistant("msg_one", "tool-calls", undefined, undefined, { cost: 0.25, tokens: 10 }),
@@ -2162,6 +2190,64 @@ describe("runNonInteractivePrompt limits and results", () => {
   )
   const oneStepHistory = (cost: number) =>
     history(assistant("msg_one", "tool-calls", undefined, undefined, { cost, tokens: 10 }))
+
+  // FU-M2-078: the step count follows the server's rule, so a reply that its escalation or a resume continued is one
+  // step with what follows it, and a cut-off that called a tool is a step of its own.
+  const notice = (id: string, kind: string): SessionMessageInfo => ({
+    id,
+    type: "synthetic",
+    text: "A notice.",
+    metadata: { notice: kind },
+    time: { created: 2 },
+  })
+  test.each([
+    [
+      "an escalated cut-off",
+      history(
+        assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 }),
+        notice("msg_note", "output-escalation"),
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.2, tokens: 5 }),
+      ),
+      1,
+    ],
+    [
+      "a text-only cut-off and its resume",
+      history(
+        assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 }),
+        notice("msg_note", "output-limit"),
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.2, tokens: 5 }),
+      ),
+      1,
+    ],
+    [
+      "a cut-off that holds a tool part, then a notice",
+      history(
+        {
+          ...assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 }),
+          content: [
+            { type: "text", text: "Part" },
+            { type: "tool", id: "call_1", name: "echo", state: { status: "error", error: { type: "tool.input-truncated", message: "cut off" } }, time: { created: 2, completed: 3 } },
+          ],
+        } as SessionMessageInfo,
+        notice("msg_note", "output-limit"),
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.2, tokens: 5 }),
+      ),
+      2,
+    ],
+    [
+      "a cut-off at the cap",
+      history(assistant("msg_cut", "length", "Part", undefined, { cost: 0.1, tokens: 5 })),
+      1,
+    ],
+  ])("reports %s as the server counts it", async (_name, messages, steps) => {
+    const output = await capture({
+      format: "result",
+      options: { maxSteps: 5 },
+      turn: limitFailure("limit.steps"),
+      messages,
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ usage: { steps } })
+  })
 
   test.each([
     ["limit.steps", "error_max_steps"],
@@ -2208,6 +2294,7 @@ describe("runNonInteractivePrompt limits and results", () => {
     ["limit.steps", "error_max_steps"],
     ["limit.cost", "error_max_cost"],
     ["limit.cost-unknown", "error"],
+    ["limit.tokens-unknown", "error"],
   ])("a %s failure carries the subtype %s on its error line in json and stream-json", async (type, subtype) => {
     for (const format of ["json", "stream-json"] as const) {
       const lines = await capture({ format, turn: limitFailure(type, "Reached it.") })
@@ -2262,6 +2349,7 @@ describe("runNonInteractivePrompt limits and results", () => {
             ["limit.tokens", "error_max_tokens"],
             ["limit.cost", "error_max_cost"],
             ["limit.cost-unknown", "error"],
+            ["limit.tokens-unknown", "error"],
           ] as const
         ).map(([type, subtype]) => ({
           name: type,

@@ -41,6 +41,19 @@ describe("the follow-up register", () => {
     expect([...rows, ...duplicates].filter(loose)).toEqual([])
   })
 
+  test("every open and owner row has 9 cells and every fixed row has 4", () => {
+    const fixedAt = lines.indexOf("## Fixed")
+    const duplicatesAt = lines.indexOf("## Duplicates")
+    const wrong = lines.flatMap((line, index) => {
+      if (!line.startsWith("| FU-")) return []
+      // A cell holds a pipe only as \| ; a stray one adds a cell and pushes the evidence out of its column.
+      const cells = line.replace(/\\\|/g, "").split("|").length - 2
+      const want = index > fixedAt && index < duplicatesAt ? 4 : 9
+      return cells === want ? [] : [`${line.split("|")[1].trim()} has ${cells} cells`]
+    })
+    expect(wrong).toEqual([])
+  })
+
   test("each section's heading counts its rows", () => {
     const headings = lines.flatMap((line, index) => {
       const match = line.match(/^### .* \((\d+)\)$/)

@@ -2,7 +2,6 @@ export * as SubagentTool from "./subagent.js"
 
 import { ToolFailure } from "@orbit/ai"
 import type { Context } from "@orbit/plugin/effect/plugin"
-import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Effect, Predicate, Schema } from "effect"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
@@ -22,16 +21,15 @@ const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,
   status: "running" as const,
   output: [
-    `The subagent is working in the background (sessionID: ${sessionID}). You will be notified automatically when it finishes.`,
-    "DO NOT sleep, poll for progress, ask the subagent for status, or duplicate this subagent's work; avoid working with the same files or topics it is using.",
-    "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
+    `Session ${sessionID} was started detached. Its result arrives by itself as a message, so there is nothing to look up in the meantime.`,
+    "Take on work the subagent is not covering; when none remains, finish the reply with one line naming what is still running.",
   ].join("\n"),
 })
 
 export const Input = Schema.Struct({
   agent: Schema.String.annotate({
     description:
-      "The type of specialized agent to use for this task. If the user asks for a subagent by a name that is not one of the available subagents, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
+      "Which agent should take this job. Your context carries a roster of the agents you may pick from. If the user asks for a subagent by a name that is not one of them, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
   }),
   description: Schema.String.annotate({ description: "A short 3-5 word label for the task, displayed to the user" }),
   prompt: Schema.String.annotate({ description: "The task for the subagent to perform" }),
@@ -45,7 +43,7 @@ export const Input = Schema.Struct({
   }),
   background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress.",
+      "Start the subagent detached and return at once. A notification reports its completion, so no polling is needed.",
   }),
 })
 
@@ -59,8 +57,9 @@ export const description = [
   "The output includes a sessionID you can pass back later to continue that specific conversation with the subagent.",
   "New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
   "Foreground (default) runs the subagent to completion and returns its final response.",
-  "Background mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.",
+  "Background mode (background=true) launches it asynchronously and returns at once; a message reports back when the subagent ends.",
   "Use background only for independent work that can run while you continue elsewhere.",
+  "Pick the agent from the roster of startable agents that your context carries; each entry says what the agent is for and what it can use.",
 ].join("\n")
 
 /** Admission checks and model resolution shared by every tool that spawns subagents. */
@@ -117,7 +116,7 @@ export const spawner = Effect.fn("SubagentTool.spawner")(function* () {
           ),
         )
     }
-    const limit = Config.latest(yield* config.entries(), "experimental")?.subagent_depth ?? 1
+    const limit = Config.experimental(yield* config.entries(), "subagent_depth") ?? 1
     if (depth >= limit)
       return yield* new ToolFailure({
         message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
@@ -242,10 +241,8 @@ export const Plugin = {
               yield* sessions
                 .prompt({
                   sessionID: child.id,
-                  text:
-                    existing === undefined
-                      ? ["You are a subagent spawned by another session.", input.prompt].join("\n")
-                      : input.prompt,
+                  text: input.prompt,
+                  metadata: { origin: "agent" },
                   ...(background && existing === undefined ? { resume: false } : {}),
                 })
                 .pipe(
@@ -315,39 +312,5 @@ export const Plugin = {
         event.input = input
       }),
     )
-
-    const hook = describeAgents(agents, name)
-    yield* ctx.session.hook("context", hook)
-    yield* ctx.session.hook("compaction", hook)
-    yield* ctx.session.hook("generate", hook)
   }),
-}
-
-/** A session hook that lists the subagents the selected agent may spawn in the description of tool `tool`. */
-export function describeAgents(agents: Agent.Interface, tool: string) {
-  return (event: SessionHooks["context"]) =>
-    Effect.gen(function* () {
-      const definition = event.tools[tool]
-      if (!definition) return
-      const selected = yield* agents.resolve(event.agent)
-      if (!selected) return
-      const available = (yield* agents.list())
-        .filter(
-          (agent) =>
-            agent.mode !== "primary" &&
-            !agent.hidden &&
-            Permission.evaluate(name, agent.id, selected.permissions).effect !== "deny",
-        )
-        .toSorted((a, b) => a.id.localeCompare(b.id))
-      if (available.length === 0) return
-      definition.description = [
-        definition.description,
-        "",
-        "Available subagents:",
-        ...available.map(
-          (agent) =>
-            `- ${agent.id}: ${agent.description ?? "This subagent should only be called when explicitly requested."}`,
-        ),
-      ].join("\n")
-    })
 }

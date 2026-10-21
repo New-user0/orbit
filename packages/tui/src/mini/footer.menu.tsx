@@ -5,6 +5,7 @@ import { createEffect, createMemo, createSignal, type Accessor } from "solid-js"
 import { transparent, type RunFooterTheme } from "./theme"
 import { Locale } from "../util/locale"
 import { stringWidth } from "../util/string-width"
+import { plain } from "@orbit/flow/plain"
 import { moveSelection, moveSelectionOffset, reconcileSelection, revealSelectionOffset } from "../ui/select-controller"
 
 export const FOOTER_MENU_ROWS = 8
@@ -162,7 +163,7 @@ export function RunFooterMenu(props: {
       ...props
         .items()
         .filter((item) => item.description)
-        .map((item) => stringWidth(item.display)),
+        .map((item) => stringWidth(plain(item.display))),
     )
     return width === 0 ? 0 : width + 2
   })
@@ -226,7 +227,7 @@ export function RunFooterMenu(props: {
             active() ? props.theme().actionFocusedBg : props.background ? props.theme().shade : transparent
           const footer = () => {
             if (!row.item.footer) return
-            const title = stringWidth(row.item.display)
+            const title = stringWidth(plain(row.item.display))
             const primary = row.item.footerTone && !(row.item.current && row.item.footerTone === "selection")
             return (primary ? Math.min(row.item.icon ? 4 : 8, title) : title) + 1 + stringWidth(row.item.footer) <=
               available()
@@ -236,8 +237,8 @@ export function RunFooterMenu(props: {
           const description = () => {
             if (!row.item.description) return
             const remaining = available() - descriptionColumn() - (footer() ? stringWidth(footer()!) + 1 : 0)
-            if (remaining < Math.min(12, stringWidth(row.item.description))) return
-            return footerMenuText(row.item.description, remaining, props.mono)
+            if (remaining < Math.min(12, stringWidth(plain(row.item.description)))) return
+            return footerMenuText(plain(row.item.description), remaining, props.mono)
           }
           return (
             <box height={1} flexShrink={0} paddingRight={0} flexDirection="row" backgroundColor={background()}>
@@ -267,7 +268,7 @@ export function RunFooterMenu(props: {
                       flexShrink={0}
                     >
                       {footerMenuText(
-                        row.item.display,
+                        plain(row.item.display),
                         available() - (footer() ? stringWidth(footer()!) + 1 : 0),
                         props.mono,
                       )}
@@ -279,7 +280,7 @@ export function RunFooterMenu(props: {
                           wrapMode="none"
                           flexShrink={0}
                         >
-                          {" ".repeat(Math.max(1, descriptionColumn() - stringWidth(row.item.display)))}
+                          {" ".repeat(Math.max(1, descriptionColumn() - stringWidth(plain(row.item.display))))}
                         </text>
                         <text
                           fg={active() ? props.theme().actionFocusedText : props.theme().muted}

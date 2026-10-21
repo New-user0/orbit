@@ -567,6 +567,23 @@ describe("ShellGuard.request", () => {
       expect(asked?.aliases?.["Remove-Item x"]).toEqual(expect.arrayContaining(["del x", "ri x"]))
     }),
   )
+
+  // An alias only one edition defines is a spelling of the cmdlet only there. pwsh 7 always has `fhx`, and Windows
+  // PowerShell 5.1 does not on every host, so there `fhx` is a program. `lp` is Out-Printer only in 5.1 on Windows.
+  for (const [shell, cmdlet, alias, present] of [
+    ["pwsh", "Format-Hex", "fhx", true],
+    ["powershell", "Format-Hex", "fhx", false],
+    ["powershell", "Out-Printer", "lp", win],
+    ["pwsh", "Out-Printer", "lp", false],
+  ] as const)
+    it.live(`${cmdlet} answers to ${present ? "" : "no "}${alias} under ${shell}`, () =>
+      Effect.gen(function* () {
+        const { request: asked } = yield* request(`Get-ChildItem; ${cmdlet} x`, shell)
+        // The control: the fragment has its spellings under both editions.
+        expect(asked?.aliases?.[`${cmdlet} x`]).toContain(`${cmdlet.toLowerCase()} x`)
+        expect(asked?.aliases?.[`${cmdlet} x`]?.includes(`${alias} x`)).toBe(present)
+      }),
+    )
 })
 
 describe("ShellGuard.authorize", () => {

@@ -7,6 +7,14 @@ export default Plugin.define({
     const events = createAttentionEvents({
       attention: context.attention,
       session: (sessionID) => context.data.session.get(sessionID),
+      // The store's lists of open requests, which are read again after a reconnect.
+      // The root itself is listed apart: the family is empty until the root's own info has been registered.
+      pending: (sessionID) =>
+        [context.data.session.root(sessionID), ...context.data.session.family(context.data.session.root(sessionID))]
+          .some(
+            (id) =>
+              (context.data.session.permission.list(id)?.length ?? 0) + (context.data.session.form.list(id)?.length ?? 0) > 0,
+          ),
       toast: (toast) => context.ui.toast.show(toast),
     })
     context.renderer.keyInput.on("keypress", events.keypress)

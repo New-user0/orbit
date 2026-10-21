@@ -1,13 +1,14 @@
 export * as Git from "./git.js"
 
 import path from "path"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath, RelativePath } from "./schema.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { AppProcess } from "@orbit/util/process"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { FileDiff } from "@orbit/schema/file-diff"
+import { GitSubmodules } from "@orbit/util/git-submodules"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
 import { VcsPatch } from "./vcs/patch.js"
 import { gitExecutable } from "./util/git-executable.js"
@@ -52,6 +53,7 @@ export class OperationError extends Schema.TaggedError<OperationError>()("Git.Op
     "list_files",
     "diff",
     "restore",
+    "status",
   ]),
   message: Schema.String,
   directory: Schema.optional(AbsolutePath),
@@ -73,7 +75,18 @@ export class WorktreeError extends Schema.TaggedError<WorktreeError>()("Git.Work
 
 export interface Interface {
   readonly repo: {
+    /**
+     * The repository whose `.git` is in `input` itself. Git is kept from looking in any folder above `input`, so pass
+     * the folder that a trust decision covers, never a folder below it.
+     */
     readonly discover: (input: AbsolutePath) => Effect.Effect<Repository | undefined>
+    /**
+     * The repository that a git started in `directory` works in, as git itself finds it, looking no further up than
+     * `top`: its work tree, its git directory and its common directory, each as a real path. None when git finds no
+     * repository or no work tree there. It runs `rev-parse`, which reads the config it finds but starts no program that
+     * a config names (`GitAccess`).
+     */
+    readonly used: (directory: AbsolutePath, top: AbsolutePath) => Effect.Effect<Repository | undefined>
     readonly clone: (input: {
       remote: string
       directory: AbsolutePath
@@ -94,6 +107,33 @@ export interface Interface {
     readonly branch: (repository: Repository) => Effect.Effect<string | undefined>
     readonly defaultRemoteBranch: (repository: Repository, remote?: string) => Effect.Effect<string | undefined>
     readonly rootCommits: (repository: Repository) => Effect.Effect<readonly string[]>
+    /**
+     * The branch checked out in `directory`; undefined for a detached head. Like every command here that takes a
+     * `directory`, git looks for the repository in it and in the folders above it up to `top` (`directory` when not
+     * given), and never above: pass the folder that the trust decision covers.
+     */
+    readonly current: (directory: AbsolutePath, top?: AbsolutePath) => Effect.Effect<string | undefined>
+    /**
+     * The branch that pull requests usually target, read from the remote-tracking refs of `origin` only: its head, else
+     * `main`, else `master`, else the name `main`. It never contacts the remote.
+     */
+    readonly mainBranch: (directory: AbsolutePath, top?: AbsolutePath) => Effect.Effect<string>
+    /**
+     * The newest `count` commits as `git log --oneline` prints them. Empty when there are none. It reaches config keys
+     * (`gpg.program` when `log.showSignature` is set), so call it only behind `ProjectTrust.trusted()`.
+     */
+    readonly recent: (directory: AbsolutePath, count: number, top?: AbsolutePath) => Effect.Effect<readonly string[]>
+    /** The `user.name` that git resolves in `directory`, undefined when none is set. */
+    readonly userName: (directory: AbsolutePath, top?: AbsolutePath) => Effect.Effect<string | undefined>
+  }
+  readonly status: {
+    /**
+     * `git status --short` run in `directory`, so paths are relative to it. It reaches config keys (`core.fsmonitor`, clean
+     * filters), so call it only behind `ProjectTrust.trusted()`. It takes no optional lock, and a result
+     * longer than `maxBytes` is cut to whole lines. A failure to start git or a non-zero exit is an error: a failed
+     * status must not read as a clean tree.
+     */
+    readonly short: (directory: AbsolutePath, maxBytes: number, top?: AbsolutePath) => Effect.Effect<string, OperationError>
   }
   readonly sync: {
     readonly fetchRemotes: (repository: Repository, input?: { prune?: boolean }) => Effect.Effect<void, OperationError>
@@ -177,22 +217,38 @@ const layer = Layer.effect(
       locks.withLock(repository.gitDirectory)(effect)
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
-      const dotgit = yield* fs.up({ targets: [".git"], start: input, mode: "first" }).pipe(
-        Effect.map((matches) => matches[0]),
-        Effect.orElseSucceed(() => undefined),
-      )
-      if (!dotgit) return undefined
+      if (!(yield* fs.existsSafe(path.join(input, ".git")))) return undefined
 
-      const cwd = path.dirname(dotgit)
-      const result = yield* run(cwd, proc, ["rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel"])
+      const result = yield* run(input, proc, ["rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel"], input)
       const [gitDir, commonDir, topLevel] = result.text.split(/\r?\n/)
       if (!gitDir || !commonDir) return undefined
 
       return new Repository({
-        worktree: AbsolutePath.make(topLevel ? resolvePath(cwd, topLevel) : cwd),
-        gitDirectory: AbsolutePath.make(resolvePath(cwd, gitDir)),
-        commonDirectory: AbsolutePath.make(resolvePath(cwd, commonDir)),
+        worktree: AbsolutePath.make(topLevel ? resolvePath(input, topLevel) : input),
+        gitDirectory: AbsolutePath.make(resolvePath(input, gitDir)),
+        commonDirectory: AbsolutePath.make(resolvePath(input, commonDir)),
       })
+    })
+
+    const used = Effect.fn("Git.repo.used")(function* (directory: AbsolutePath, top: AbsolutePath) {
+      const result = yield* run(
+        directory,
+        proc,
+        ["rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
+        top,
+      )
+      // One path a line, in the order asked. A path with a line break in it gives more lines, and is not taken apart.
+      const lines = result.text.replace(/\n$/, "").split("\n")
+      if (result.exitCode !== 0 || lines.length !== 3) return undefined
+      const real = yield* Effect.forEach(lines, (line) =>
+        fs.realPath(FSUtil.windowsPath(process.platform === "win32" ? line.replace(/\r$/, "") : line)).pipe(
+          Effect.map((found) => AbsolutePath.make(FSUtil.normalizePath(found))),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      )
+      const [worktree, gitDirectory, commonDirectory] = real
+      if (!worktree || !gitDirectory || !commonDirectory) return undefined
+      return new Repository({ worktree, gitDirectory, commonDirectory })
     })
 
     const remote = Effect.fn("Git.remote.get")(function* (repository: Repository, name = "origin") {
@@ -217,19 +273,88 @@ const layer = Layer.effect(
       return result.text.trim() || undefined
     })
 
-    const branch = Effect.fn("Git.history.branch")(function* (repository: Repository) {
-      const result = yield* run(repository.worktree, proc, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    const currentBranch = Effect.fn("Git.history.current")(function* (directory: string, top = directory) {
+      const result = yield* run(directory, proc, ["symbolic-ref", "--quiet", "--short", "HEAD"], top)
       if (result.exitCode !== 0) return undefined
       return result.text.trim() || undefined
+    })
+
+    const branch = Effect.fn("Git.history.branch")((repository: Repository) => currentBranch(repository.worktree))
+
+    const headOf = Effect.fnUntraced(function* (directory: string, remoteName: string, top = directory) {
+      const result = yield* run(directory, proc, ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`], top)
+      if (result.exitCode !== 0) return undefined
+      return result.text.trim().replace(new RegExp(`^refs/remotes/${remoteName}/`), "") || undefined
     })
 
     const remoteHead = Effect.fn("Git.history.defaultRemoteBranch")(function* (
       repository: Repository,
       remoteName = "origin",
     ) {
-      const result = yield* run(repository.worktree, proc, ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`])
+      return yield* headOf(repository.worktree, remoteName)
+    })
+
+    const mainBranch = Effect.fn("Git.history.mainBranch")(function* (directory: AbsolutePath, top = directory) {
+      const head = yield* headOf(directory, "origin", top)
+      if (head) return head
+      for (const name of ["main", "master"]) {
+        const result = yield* run(directory, proc, ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${name}`], top)
+        if (result.exitCode === 0) return name
+      }
+      return "main"
+    })
+
+    const recent = Effect.fn("Git.history.recent")(function* (directory: AbsolutePath, count: number, top = directory) {
+      const env = ceiling(top)
+      if (!env) return []
+      const result = yield* proc
+        .run(
+          ChildProcess.make(
+            gitExecutable,
+            GitSubmodules.skip(["--no-optional-locks", "log", "--oneline", "-n", String(count)]),
+            {
+              cwd: directory,
+              env,
+              extendEnv: true,
+              stdin: "ignore",
+            },
+          ),
+          { maxOutputBytes: SNAPSHOT_OUTPUT_BYTES },
+        )
+        .pipe(Effect.orElseSucceed(() => undefined))
+      // A repository with no commits yet exits non-zero; it has nothing to list.
+      if (!result || result.exitCode !== 0) return []
+      return wholeLines(result.stdout.toString("utf8"), result.stdoutTruncated)
+    })
+
+    const userName = Effect.fn("Git.history.userName")(function* (directory: AbsolutePath, top = directory) {
+      const result = yield* run(directory, proc, ["config", "user.name"], top)
       if (result.exitCode !== 0) return undefined
-      return result.text.trim().replace(new RegExp(`^refs/remotes/${remoteName}/`), "") || undefined
+      return result.text.trim() || undefined
+    })
+
+    const shortStatus = Effect.fn("Git.status.short")(function* (
+      directory: AbsolutePath,
+      maxBytes: number,
+      top = directory,
+    ) {
+      const failed = (message: string, cause?: unknown) =>
+        new OperationError({ operation: "status", directory, message, cause })
+      const env = ceiling(top)
+      if (!env) return yield* failed(unbounded)
+      const result = yield* proc
+        .run(
+          ChildProcess.make(gitExecutable, GitSubmodules.skip(["--no-optional-locks", "status", "--short"]), {
+            cwd: directory,
+            env,
+            extendEnv: true,
+            stdin: "ignore",
+          }),
+          { maxOutputBytes: maxBytes },
+        )
+        .pipe(Effect.mapError((cause) => failed(cause.message, cause)))
+      if (result.exitCode !== 0) return yield* failed(result.stderr.toString("utf8").trim() || "Git status failed")
+      return wholeLines(result.stdout.toString("utf8"), result.stdoutTruncated).join("\n")
     })
 
     const operation = Effect.fnUntraced(function* (
@@ -303,13 +428,8 @@ const layer = Layer.effect(
       yield* operation("reset", repository.worktree, ["reset", "--hard", revision])
     })
 
-    const repositoryArgs = (repository: Repository, args: string[]) => [
-      "--git-dir",
-      repository.gitDirectory,
-      "--work-tree",
-      repository.worktree,
-      ...args,
-    ]
+    const repositoryArgs = (repository: Repository, args: string[]) =>
+      GitSubmodules.skip(["--git-dir", repository.gitDirectory, "--work-tree", repository.worktree, ...args])
 
     const repositoryOperation = Effect.fnUntraced(function* (
       operationName: OperationError["operation"],
@@ -380,12 +500,33 @@ const layer = Layer.effect(
           path.join(input.seed.commonDirectory, "objects") + "\n",
         )
         .pipe(Effect.mapError(operationError("Failed to configure shared Git objects")))
-      yield* fs
-        .copyFile(path.join(input.seed.gitDirectory, "index"), path.join(input.gitDirectory, "index"))
-        .pipe(Effect.ignore)
+      // The folder's index spares the first capture from reading every tracked file again. Git takes an entry whose size
+      // and time match the file as unchanged only when the entry is older than the index file. A copy can be newer than
+      // every entry (on Linux it is), so a file rewritten to the same size within the second the folder's index was
+      // written would be recorded with its committed text. The copy is given the time of the index it came from, cut to the whole
+      // second, so git still reads such a file. That time is read before the copy, so that a later write to the folder's
+      // index can only make the copy look older. Without the time, there is no copy: the first capture reads every file.
+      const seedIndex = path.join(input.seed.gitDirectory, "index")
+      const index = path.join(input.gitDirectory, "index")
+      yield* Effect.gen(function* () {
+        const written = Option.getOrUndefined((yield* fs.stat(seedIndex)).mtime)
+        if (written === undefined) return
+        yield* fs.copyFile(seedIndex, index)
+        const second = new Date(Math.floor(written.getTime() / 1000) * 1000)
+        yield* fs.utimes(index, second, second)
+      }).pipe(
+        Effect.catch(() => fs.remove(index, { force: true })),
+        Effect.ignore,
+      )
       return repository
     })
 
+    // Every snapshot command that takes paths (in the refresh, the comparison and the restore) reads them as names: each
+    // passes `--literal-pathspecs`, except `check-ignore`, which refuses it and is handed each path behind `./` instead
+    // (see `ignored`). Git reads a path as a pattern by default, so a file named `[s]ub`, `*`, `:memo` or `:!x` would also
+    // stand for every path the pattern matches, or for none: restoring that one file would overwrite them or delete it,
+    // leaving it out of a capture would drop them from the index, adding it would add them, and git would walk folders
+    // that nobody listed.
     const refresh = Effect.fn("Git.index.refresh")(function* (input: {
       repository: Repository
       scope: RelativePath
@@ -396,8 +537,8 @@ const layer = Layer.effect(
         repositoryOperation("refresh", input.repository, args).pipe(Effect.map((result) => nuls(result.text)))
       const [tracked, untracked] = yield* Effect.all(
         [
-          list(["diff-files", "--name-only", "-z", "--", input.scope]),
-          list(["ls-files", "--others", "--exclude-standard", "-z", "--", input.scope]),
+          list(["--literal-pathspecs", "diff-files", "--name-only", "-z", "--", input.scope]),
+          list(["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "-z", "--", input.scope]),
         ],
         { concurrency: 2 },
       )
@@ -427,14 +568,22 @@ const layer = Layer.effect(
         yield* repositoryOperation(
           "refresh",
           input.repository,
-          ["rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"],
+          [
+            "--literal-pathspecs",
+            "rm",
+            "--cached",
+            "-f",
+            "--ignore-unmatch",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+          ],
           { stdin: remove.join("\0") + "\0" },
         )
       if (stage.length)
         yield* repositoryOperation(
           "refresh",
           input.repository,
-          ["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"],
+          ["--literal-pathspecs", "add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"],
           { stdin: stage.join("\0") + "\0" },
         )
       return { skipped }
@@ -451,6 +600,10 @@ const layer = Layer.effect(
           ChildProcess.make(
             gitExecutable,
             repositoryArgs(input.repository, [
+              // The config of the repository is the folder's own, and `core.fsmonitor` in it names a program that git runs
+              // whenever it reads the index. Asking whether a path is ignored needs no such program.
+              "-c",
+              "core.fsmonitor=false",
               "check-ignore",
               ...(input.tracked === "keep" ? [] : ["--no-index"]),
               "--stdin",
@@ -461,7 +614,10 @@ const layer = Layer.effect(
               extendEnv: true,
             },
           ),
-          { stdin: input.paths.join("\0") + "\0" },
+          // `check-ignore` refuses `--literal-pathspecs`, and reads a leading `:` as pathspec magic: `:memo` would answer
+          // for `memo`, and `:!x` or `:(icase)x` would stop the command and with it the capture or comparison that asked.
+          // Behind `./` the name keeps its colon, and it is given back with the same `./` in front.
+          { stdin: input.paths.map((file) => `./${file}\0`).join("") },
         )
         .pipe(
           Effect.mapError(
@@ -480,7 +636,9 @@ const layer = Layer.effect(
           directory: input.repository.worktree,
           message: result.stderr.toString("utf8").trim() || "Failed to check ignored paths",
         })
-      return new Set(nuls(result.stdout.toString("utf8")).map((file) => RelativePath.make(file)))
+      return new Set(
+        nuls(result.stdout.toString("utf8")).map((file) => RelativePath.make(file.startsWith("./") ? file.slice(2) : file)),
+      )
     })
 
     const writeTree = Effect.fn("Git.tree.write")(function* (repository: Repository) {
@@ -538,12 +696,26 @@ const layer = Layer.effect(
       // Patch headers have no -z form: unquoted paths keep chunksByFile matching non-ASCII names.
       const [names, numbers, patch] = yield* Effect.all(
         [
-          repositoryOperation("diff", input.repository, ["diff", "--name-status", "-z", ...args]),
-          repositoryOperation("diff", input.repository, ["diff", "--numstat", "-z", ...args]),
+          repositoryOperation("diff", input.repository, [
+            "--literal-pathspecs",
+            "diff",
+            "--name-status",
+            "-z",
+            ...args,
+          ]),
+          repositoryOperation("diff", input.repository, ["--literal-pathspecs", "diff", "--numstat", "-z", ...args]),
           repositoryOperation(
             "diff",
             input.repository,
-            ["-c", "core.quotepath=false", "diff", "--no-ext-diff", `--unified=${input.context ?? 3}`, ...args],
+            [
+              "--literal-pathspecs",
+              "-c",
+              "core.quotepath=false",
+              "diff",
+              "--no-ext-diff",
+              `--unified=${input.context ?? 3}`,
+              ...args,
+            ],
             { maxOutputBytes: VcsPatch.MAX_TOTAL_PATCH_BYTES },
           ),
         ],
@@ -588,6 +760,7 @@ const layer = Layer.effect(
 
     const hasEntry = Effect.fnUntraced(function* (repository: Repository, tree: TreeID, file: RelativePath) {
       const text = (yield* repositoryOperation("restore", repository, [
+        "--literal-pathspecs",
         "ls-tree",
         "-z",
         tree,
@@ -613,7 +786,14 @@ const layer = Layer.effect(
             ([file, tree]) =>
               Effect.gen(function* () {
                 if (yield* hasEntry(input.repository, tree, file)) {
-                  yield* repositoryOperation("restore", input.repository, ["checkout", tree, "--", file])
+                  yield* repositoryOperation("restore", input.repository, [
+                    "--literal-pathspecs",
+                    "checkout",
+                    "--no-recurse-submodules",
+                    tree,
+                    "--",
+                    file,
+                  ])
                   return
                 }
                 yield* fs.remove(path.join(input.repository.worktree, file), { recursive: true, force: true }).pipe(
@@ -641,7 +821,7 @@ const layer = Layer.effect(
       cwd = repository.worktree,
     ) {
       const result = yield* proc
-        .run(ChildProcess.make(gitExecutable, args, { cwd, extendEnv: true, stdin: "ignore" }))
+        .run(ChildProcess.make(gitExecutable, GitSubmodules.skip(args), { cwd, extendEnv: true, stdin: "ignore" }))
         .pipe(
           Effect.mapError(
             (cause) => new WorktreeError({ operation, directory: worktreeDirectory, message: cause.message, cause }),
@@ -705,9 +885,19 @@ const layer = Layer.effect(
     })
 
     return Service.of({
-      repo: { discover, clone, create },
+      repo: { discover, used, clone, create },
       remote: { get: remote },
-      history: { head, branch, defaultRemoteBranch: remoteHead, rootCommits: roots },
+      history: {
+        head,
+        branch,
+        defaultRemoteBranch: remoteHead,
+        rootCommits: roots,
+        current: currentBranch,
+        mainBranch,
+        recent,
+        userName,
+      },
+      status: { short: shortStatus },
       sync: { fetchRemotes: fetch, fetchBranch, checkoutRemoteBranch: checkout, resetHard: reset },
       worktree: { create: worktreeCreate, remove: worktreeRemove, list: worktreeList },
       index: { refresh, ignored },
@@ -730,15 +920,36 @@ interface Result {
   readonly stderr: string
 }
 
-function run(cwd: string, proc: AppProcess.Interface, args: string[]) {
-  return execute(cwd, proc, args).pipe(Effect.orElseSucceed(() => ({ exitCode: 1, text: "", stderr: "" })))
+/**
+ * What keeps a git started in `top` or below it from using a repository above `top` (`GIT_CEILING_DIRECTORIES`). Git
+ * looks for `.git` in the folder it starts in and then in each folder above, and takes the first that it accepts, so a
+ * `.git` that Orbit took for the repository but git passes over would hand the command, with that repository's config,
+ * to a folder above that nobody was asked about (class 1, class 3). None when the folder above `top` cannot be one entry
+ * of git's list, which `path.delimiter` separates: git is then not started.
+ */
+export function ceiling(top: string): Record<string, string> | undefined {
+  const above = path.dirname(top)
+  if (above === top) return {}
+  if (above.includes(path.delimiter)) return undefined
+  return { GIT_CEILING_DIRECTORIES: above }
 }
 
-function execute(cwd: string, proc: AppProcess.Interface, args: string[]) {
+// The message of a command that was not started because `ceiling` has no answer for its folder.
+const unbounded = "Git was not started: the folder above the repository cannot be given to git as its ceiling"
+
+/** A git command in `cwd` that looks for its repository no further up than `top`; one that was not started fails. */
+function run(cwd: string, proc: AppProcess.Interface, args: string[], top?: string) {
+  return execute(cwd, proc, args, top).pipe(Effect.orElseSucceed(() => ({ exitCode: 1, text: "", stderr: "" })))
+}
+
+function execute(cwd: string, proc: AppProcess.Interface, args: string[], top?: string) {
+  const env = top === undefined ? {} : ceiling(top)
+  if (!env) return Effect.succeed({ exitCode: 1, text: "", stderr: unbounded } satisfies Result)
   return proc
     .run(
-      ChildProcess.make(gitExecutable, args, {
+      ChildProcess.make(gitExecutable, GitSubmodules.skip(args), {
         cwd,
+        env,
         extendEnv: true,
         stdin: "ignore",
       }),
@@ -753,6 +964,16 @@ function execute(cwd: string, proc: AppProcess.Interface, args: string[]) {
           }) satisfies Result,
       ),
     )
+}
+
+// Room for 2,000 characters of status at four bytes each, with plenty over, and a bound on a log with a huge subject.
+const SNAPSHOT_OUTPUT_BYTES = 64 * 1024
+
+/** The lines of git output; when it was cut at a byte limit, the last line is dropped because it may be partial. */
+function wholeLines(text: string, truncated: boolean) {
+  const lines = text.split(/\r?\n/)
+  if (truncated) lines.pop()
+  return lines.filter((line) => line.length > 0)
 }
 
 /** Split NUL-terminated git output into its records. */

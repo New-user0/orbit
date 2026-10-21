@@ -1,17 +1,20 @@
 export * as ProjectTrust from "./project-trust.js"
 
 import path from "path"
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Stream } from "effect"
 import type { Entry, Scope } from "@orbit/schema/config"
 import { Trust } from "@orbit/schema/trust"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Bus } from "./bus.js"
 import { Config } from "./config.js"
 import { AgentFile } from "./config/plugin/agent-file.js"
 import { CommandFile } from "./config/plugin/command-file.js"
 import { Fingerprint } from "./config/fingerprint.js"
 import { LinkShare } from "@orbit/util/link-share"
 import { ConfigTrust } from "./config/trust.js"
+import { Git } from "./git.js"
+import { GitAccess } from "./git/access.js"
 import { Location } from "./location.js"
 import { PluginSourceDirectory } from "./plugin/source-directory.js"
 import { Project } from "./project.js"
@@ -96,13 +99,51 @@ export interface Interface {
    */
   readonly leads: (file: string) => Effect.Effect<string>
   /**
+   * Whether an instruction file may import a file: `real` is where the import really leads, and `spelling` is how it was
+   * written. The import must lie inside the folder the session started in or inside a project folder, the first
+   * counted only when it can be trusted for good or is trusted now and the second only when it can be trusted for good,
+   * so a session or project at the home directory or a filesystem root that nobody trusted does not open everything below
+   * it to a downloaded folder's `@~/.ssh/id_rsa`. And `reachable` must accept the
+   * spelling, so an untrusted project supplies only what is inside it.
+   */
+  readonly importable: (spelling: string, real: string) => Effect.Effect<boolean>
+  /**
+   * Whether the folder that holds an instruction file lets it import from outside the folders `importable` accepts, and
+   * the folder a person would trust to make it so (`directory`, unset when no grant made from this session could). Ask it
+   * only after `importable` refused, with the importing file's real path. A file in the project's folders is held by the
+   * project, whose decision is the canonical root's: it opens when that is trusted now and either can be trusted for good
+   * or is the folder the session started in, so a session below the home directory stays bounded even when the home
+   * project is trusted for the session. A file outside them is held by the folder that owns it, found as `trustedAt`
+   * finds an owner, which must be trusted now and able to be trusted for good as well as the project opening: a chain does
+   * not inherit, and the stricter answer wins. Files that the model's reads load never ask this.
+   */
+  readonly outward: (importer: string) => Effect.Effect<{ readonly open: boolean; readonly directory?: string }>
+  /**
    * Whether a file that a config directory, or a root of another product, holds may be read now: its agents, commands,
    * skills and output styles. Any file may while the folder that holds the source is trusted. Until then only a file
    * whose real path is inside the folders that decision covers may, which are the project's for a source in them and
    * the folder around the source for one above them, so that a link in a repository does not carry a file of the user's
-   * into the prompt. A file that is left out is logged once, as a warning that says `config file skipped`.
+   * into the prompt. For a project that is the home directory or a filesystem root those folders are the source's own, the
+   * session's started folder and any folder that can be trusted for good, and a decision for the project does not widen
+   * them. A file that is left out is logged once, as a warning that says `config file skipped`.
    */
   readonly supplies: (source: Source, file: string) => Effect.Effect<boolean>
+  /**
+   * Whether the folder that holds a config source is trusted now, which is what `supplies` asks before it lets a file that
+   * stays inside the folder be read. A source that is not a project's or a local one is the person's own and always is. A
+   * source in the project's folders follows the decision just made, and one above them the decision for the folder that
+   * holds it, as its stamp has it. `supplies` only says that a file may be read: ask this before text that a source holds
+   * speaks for Orbit or for the person, as the opening line of an output style does.
+   */
+  readonly trustedSource: (source: Source) => Effect.Effect<boolean>
+  /**
+   * Whether Orbit may run git in `directory` (the Location's folder when not given): this Location's project is trusted,
+   * and git, asked which repository it works in there without looking above the project's folder, names a work tree, a
+   * git directory and a common directory that this decision covers or whose own folder is trusted (`GitAccess.check`).
+   * Ask it before any git command that can run a program the repository's config names. Git's answer is kept until
+   * trust changes, and the trust of each folder is read at every call. A refusal is logged once.
+   */
+  readonly git: (directory?: string) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ProjectTrust") {}
@@ -120,6 +161,52 @@ const layer = Layer.effect(
     const folders = [...new Set([location.directory, location.project.directory, location.project.canonical])]
     // Those folders as the disk has them, for comparing a real path with them however the Location was reached.
     const real = yield* Effect.forEach(folders, fs.resolve)
+
+    // The repository git works in from each folder that Orbit starts it in, as git answered, until trust changes. The
+    // question runs in a fiber of the layer, so a caller that is interrupted leaves no interrupt behind for the next one.
+    const vcs = yield* Git.Service
+    const bus = yield* Bus.Service
+    const scope = yield* Effect.scope
+    const used = new Map<string, Fiber.Fiber<Git.Repository | undefined>>()
+    // The refusals already logged, so that a refusal is logged once.
+    const refused = new Set<string>()
+    // On the live channel, which the bus makes when it starts. The channel of one event is made by its first subscriber,
+    // and two that start at the same moment can each make one, so that one of them hears nothing.
+    yield* bus.subscribe([Trust.Event.Updated]).pipe(
+      Stream.runForEach(() =>
+        Effect.sync(() => {
+          used.clear()
+          refused.clear()
+        }),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    const repositoryOf = (directory: string) =>
+      Effect.suspend(() => {
+        const known = used.get(directory)
+        if (known !== undefined) return Fiber.join(known)
+        return vcs.repo.used(AbsolutePath.make(directory), AbsolutePath.make(location.project.directory)).pipe(
+          Effect.forkIn(scope),
+          Effect.tap((fiber) => Effect.sync(() => used.set(directory, fiber))),
+          Effect.flatMap(Fiber.join),
+        )
+      })
+
+    // The folders an instruction file may import from, as the disk has them: each project folder that can be trusted for
+    // good, and the folder the session started in when it can be too or is trusted now. The home directory and a
+    // filesystem root cannot be trusted for good and contain everything below them, so they bound nothing until a person
+    // has trusted that folder for the session. A project folder never gets that second way in: a project at home, trusted
+    // for the session, still leaves a session below it bounded by its own folder.
+    const importRoots = Effect.fnUntraced(function* () {
+      const bounded = (folder: string, now: boolean) =>
+        trust.status(folder).pipe(Effect.map((state) => state.persistent || (now && state.trusted)))
+      const projects = yield* Effect.filter(
+        [...new Set([location.project.directory, location.project.canonical])],
+        (folder) => bounded(folder, false),
+      )
+      const started = (yield* bounded(location.directory, true)) ? [location.directory] : []
+      return yield* Effect.forEach([...started, ...projects], fs.resolve)
+    })
 
     // Whether a file is in one of the project's own folders, as against a folder above them.
     const inside = (file: string) => folders.some((folder) => FSUtil.contains(folder, file))
@@ -167,14 +254,37 @@ const layer = Layer.effect(
       return ConfigTrust.reach({ holder, container: source, persistent: (yield* trust.status(holder)).persistent })
     })
 
-    const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
+    const trustedSource = Effect.fn("ProjectTrust.trustedSource")(function* (source: Source) {
       if (source.scope !== "project" && source.scope !== "local") return true
       // The project's own folders follow the decision just made, because a stamp can trail it, and what sits above
       // them follows the decision for the folder that holds it, which only its stamp knows.
-      const own = inside(source.path)
-      if (own ? (yield* trust.status(root)).trusted : source.trusted !== false) return true
-      const roots = yield* boundOf(source.path)
-      if (yield* stays([...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
+      return inside(source.path) ? (yield* trust.status(root)).trusted : source.trusted !== false
+    })
+
+    // The real path of a config folder, as a root, when the folder is not a link out of the one that holds it.
+    const ownFolder = Effect.fnUntraced(function* (folder: string) {
+      const real = yield* fs.resolve(folder)
+      return FSUtil.contains(yield* fs.resolve(path.dirname(folder)), real) ? [real] : []
+    })
+
+    const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
+      // A project that is the home directory or a filesystem root contains everything below it, so being inside it proves
+      // nothing about a link: its config may supply a file from its own config folder, the folder the session started in
+      // and a folder that can be trusted for good, as an import may, and a decision for the project does not widen that.
+      // Only a project's or a local source is bounded this way: the person's own sources (the global config folder, the
+      // home entries, a vendor's user root) and the administrator's are theirs wherever the session starts.
+      const wide =
+        (source.scope === "project" || source.scope === "local") &&
+        inside(source.path) &&
+        (yield* Effect.forEach([location.project.directory, location.project.canonical], (folder) => trust.status(folder))).some(
+          (state) => !state.persistent,
+        )
+      if (!wide && (yield* trustedSource(source))) return true
+      // The config folder stands for itself only where it is a folder of the project's own: one that is a link leads
+      // to wherever its target is, so its real path is not admitted (the import roots are already real).
+      const own = wide ? yield* ownFolder(source.path) : []
+      const roots = wide ? [...(yield* importRoots()), source.path, ...own] : yield* boundOf(source.path)
+      if (yield* stays(wide ? roots : [...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
       if (skipped.has(file)) return false
       skipped.add(file)
       yield* Effect.logWarning("config file skipped", {
@@ -189,22 +299,28 @@ const layer = Layer.effect(
     // the answer is kept by directory until a file under a config root changes: an edit, or a checkout that adds a
     // plugin. It counts what the plugins would read: a file that a link leads out of the folder is not read here either.
     const byDirectory = new Map<string, readonly Trust.Kind[]>()
+    // Counts the clears. A listing that began before one finished after it read files that may have changed, so it is
+    // returned to its caller but not kept (a stale one would hide a plugin that a checkout just added).
+    let generation = 0
     yield* config.changes().pipe(
-      Stream.runForEach(() => Effect.sync(() => byDirectory.clear())),
+      Stream.runForEach(() =>
+        Effect.sync(() => {
+          generation++
+          byDirectory.clear()
+        }),
+      ),
       Effect.forkScoped({ startImmediately: true }),
     )
     const inDirectory = Effect.fnUntraced(function* (directory: string) {
       const known = byDirectory.get(directory)
       if (known !== undefined) return known
+      const started = generation
       // Listing a plugin folder that a link leads to a share would connect to it. Such a folder is not listed: it counts as
       // holding plugins, since nothing is known of what it holds.
       const shared = yield* Effect.filter(PluginSourceDirectory.names, (name) =>
         LinkShare.of(fs, path.join(directory, name)).pipe(Effect.map((found) => found !== undefined)),
       )
-      const plugins =
-        shared.length > 0
-          ? [directory]
-          : yield* PluginSourceDirectory.discover(fs, directory)
+      const plugins = shared.length > 0 ? [directory] : yield* PluginSourceDirectory.discover(fs, directory)
       const supplied = (file: string) => supplies({ path: directory, scope: "project", trusted: false }, file)
       const commands = yield* CommandFile.load(fs, directory, supplied)
       const agents = yield* AgentFile.load(fs, directory, supplied)
@@ -215,10 +331,16 @@ const layer = Layer.effect(
           Object.fromEntries(commands.map((command) => [command.name, command.info])),
           place,
         ).withheld,
-        ...agents.flatMap((agent) => ConfigTrust.sanitize(agent.info, place).withheld),
+        ...agents.flatMap((agent) => [
+          ...ConfigTrust.sanitize(agent.info, place).withheld,
+          // A file under agent/ or agents/ that names an agent which exists is held back whole (`ConfigAgentPlugin`).
+          // Which agents exist depends on the entries before it (the person's own agents included), which are not known
+          // here, so every such file is listed: the stricter answer wins.
+          ...(agent.path !== undefined && AgentFile.defines(directory, agent.path) ? ["permissions" as const] : []),
+        ]),
       ]
       const kinds = Trust.Kinds.filter((kind) => held.includes(kind))
-      byDirectory.set(directory, kinds)
+      if (started === generation) byDirectory.set(directory, kinds)
       return kinds
     })
 
@@ -309,7 +431,9 @@ const layer = Layer.effect(
       return {
         ...state,
         withheld: listed.flat(),
-        changed: [...changed].flatMap(([file, kinds]) => (kinds.length === 0 ? [] : [{ path: AbsolutePath.make(file), kinds }])),
+        changed: [...changed].flatMap(([file, kinds]) =>
+          kinds.length === 0 ? [] : [{ path: AbsolutePath.make(file), kinds }],
+        ),
       } satisfies Trust.Status
     })
 
@@ -357,13 +481,38 @@ const layer = Layer.effect(
             : []
           verdicts.set(entry, { trusted: decided.trusted, withheld: found.flatMap((item) => item.kinds) })
         }
-        return ConfigTrust.allows(entries, file, { roots: folders, trusted: state.trusted, compat: compat.roots, verdicts }, kind)
+        return ConfigTrust.allows(
+          entries,
+          file,
+          { roots: folders, trusted: state.trusted, compat: compat.roots, verdicts },
+          kind,
+        )
       }),
       reachable: Effect.fn("ProjectTrust.reachable")(function* (file) {
         if ((yield* trust.status(root)).trusted) return true
         return yield* stays([...folders, ...real], file)
       }),
       leads: Effect.fn("ProjectTrust.leads")((file) => lead(file)),
+      importable: Effect.fn("ProjectTrust.importable")(function* (spelling, real) {
+        const roots = yield* importRoots()
+        if (!roots.some((folder) => FSUtil.contains(folder, real))) return false
+        if ((yield* trust.status(root)).trusted) return true
+        return yield* stays([...folders, ...(yield* Effect.forEach(folders, fs.resolve))], spelling)
+      }),
+      outward: Effect.fn("ProjectTrust.outward")(function* (importer) {
+        const project = yield* trust.status(root)
+        const top = yield* fs.resolve(root)
+        const start = yield* fs.resolve(location.directory)
+        const reachable = project.persistent || (FSUtil.contains(top, start) && FSUtil.contains(start, top))
+        if (real.some((folder) => FSUtil.contains(folder, importer)))
+          return reachable ? { open: project.trusted, directory: root } : { open: false }
+        const owner = (yield* Project.root(fs, AbsolutePath.make(path.dirname(importer)))) ?? path.dirname(importer)
+        const holder = yield* trust.status(owner)
+        // A home directory or a filesystem root never stands for the files below it, as for config above the project.
+        if (!holder.persistent) return { open: false }
+        if (!reachable) return { open: false }
+        return project.trusted ? { open: holder.trusted, directory: owner } : { open: false, directory: root }
+      }),
       escapes: Effect.fn("ProjectTrust.escapes")(function* (file) {
         if ((yield* trust.status(root)).trusted) return undefined
         const leads = yield* lead(file)
@@ -396,6 +545,16 @@ const layer = Layer.effect(
         }
       }),
       supplies,
+      trustedSource,
+      git: Effect.fn("ProjectTrust.git")(function* (directory = location.directory) {
+        const answer = yield* GitAccess.check({ fs, trust }, { decision: root, folders, used: repositoryOf(directory) })
+        if (answer.repository !== undefined) return true
+        const key = `${directory}\0${answer.refused?.reason}`
+        if (answer.refused === undefined || refused.has(key)) return false
+        refused.add(key)
+        yield* GitAccess.log(directory, answer.refused)
+        return false
+      }),
     })
   }),
 )
@@ -403,5 +562,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [WorkspaceTrust.node, Config.node, Location.node, FSUtil.node],
+  deps: [WorkspaceTrust.node, Config.node, Location.node, FSUtil.node, Git.node, Bus.node],
 })

@@ -25,3 +25,7 @@ yield *
   })
 yield * client.sessions.prompt({ sessionID, prompt: Prompt.make({ text: "Hello" }) })
 ```
+
+## Starting the service
+
+When no server runs, the client can start one with `options.command`, which defaults to `["orb", "serve", "--service"]`. That default names a program without a folder, and the client starts it through `node:child_process` because client runtime code may depend only on Schema and Protocol, so it has no lookup of its own. On Windows a program started by a bare name is looked for in the working folder of the host before `PATH`, so a host that runs in a folder it does not control can start an `orb.exe` that the folder holds. A host on Windows therefore passes an absolute command, for example `["C:/Program Files/Orbit/orb.exe", "serve", "--service"]`, or starts its own process with the environment variable `NoDefaultCurrentDirectoryInExePath` set. This is documented rather than enforced (FU-M1-075; see "Known gaps" in `docs/untrusted-repositories.md`).

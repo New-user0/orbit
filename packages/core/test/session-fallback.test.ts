@@ -26,6 +26,8 @@ import { Tool } from "@orbit/core/tool"
 import { Document, Info } from "@orbit/schema/config"
 import { Effect, Layer, Logger, Schema } from "effect"
 import { testEffect } from "./lib/effect"
+import { noScratchpad } from "./lib/scratchpad"
+import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
 
 const sessionID = SessionSchema.ID.make("ses_fallback_test")
@@ -71,8 +73,10 @@ const it = testEffect(
         Config.node.replace(config),
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(
-          Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty) }),
+          Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty), preferences: () => Effect.succeed(empty) }),
         ),
+        noScratchpad,
+        noVcsSnapshot,
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),

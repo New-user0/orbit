@@ -294,6 +294,33 @@ export function fromPromise(plugin: Plugin) {
               { signal: context.signal },
             )
 
+        // The fields of a plugin's tool, read once. A getter that throws stays a getter that throws, in `fields`, and
+        // `failed` says so; the rest of the fields are plain values.
+        const readFields = <T extends object>(tool: T) => {
+          const fields = {} as T
+          const failed = Object.keys(tool).reduce((failed, key) => {
+            try {
+              Object.defineProperty(fields, key, {
+                value: tool[key as keyof T],
+                enumerable: true,
+                writable: true,
+                configurable: true,
+              })
+              return failed
+            } catch (error) {
+              Object.defineProperty(fields, key, {
+                get: () => {
+                  throw error
+                },
+                enumerable: true,
+                configurable: true,
+              })
+              return true
+            }
+          }, false)
+          return { fields, failed }
+        }
+
         const promiseTool = <T extends Tool.Info>(tool: T) => ({
           ...tool,
           execute: promiseExecutor(tool.execute),
@@ -518,26 +545,38 @@ export function fromPromise(plugin: Plugin) {
                       return tool ? promiseTool(tool) : undefined
                     },
                     namespace: editor.namespace,
-                    add: (tool: Info) =>
-                      editor.add({
+                    add: (given: Info) => {
+                      const read = readFields(given)
+                      // A field that cannot be read goes to the registry as it is. The registry refuses that tool alone,
+                      // with one log line, so the plugin and its other tools carry on.
+                      if (read.failed) return editor.add(read.fields as never)
+                      const tool = read.fields
+                      return editor.add({
                         ...tool,
                         execute: (input, context) => executePromiseTool(tool, input, context),
                         options: effectOptions(tool.options),
                         traits: effectTraits(tool.traits),
                         validate: effectValidate(tool.validate),
-                      }),
+                      })
+                    },
                     update: (id, update) =>
                       editor.update(id, (tool) => {
                         const value: Info = promiseTool(tool)
-                        const read = value.validate
+                        const original = value.validate
                         update(value)
-                        Object.assign(tool, value, {
+                        const read = readFields(value)
+                        if (read.failed) {
+                          // Copy the accessors without calling them; the registry refuses the update and keeps the tool.
+                          Object.defineProperties(tool, Object.getOwnPropertyDescriptors(read.fields))
+                          return
+                        }
+                        Object.assign(tool, read.fields, {
                           output: value.output,
                           options: effectOptions(value.options),
                           traits: effectTraits(value.traits),
                           // A plugin that left validate as it read it back keeps the Effect function it was given, so a
                           // defect or a decline from it passes through instead of becoming a validation failure.
-                          validate: value.validate === read ? tool.validate : effectValidate(value.validate),
+                          validate: value.validate === original ? tool.validate : effectValidate(value.validate),
                           execute: (input: Parameters<Info["execute"]>[0], context: Tool.Context) =>
                             executePromiseTool(value, input, context),
                         })

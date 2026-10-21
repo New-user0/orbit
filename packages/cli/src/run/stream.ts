@@ -18,7 +18,7 @@ import { waitForBackground } from "@orbit/flow/background"
 import {
   GLOBAL_FORM_SESSION_ID,
   contentKey,
-  countedFinishes,
+  stepIDs,
   decodeEscalation,
   decodeNotice,
   echoes,
@@ -872,11 +872,14 @@ export async function runStream(input: StreamInput) {
         throw error
       })
     // An older server drops the fields it does not know, so it would run without the limits that were asked for.
-    if (turn && !echoes(turn, response.payload?.turn))
+    if (turn && !echoes(turn, response.payload?.turn)) {
+      // Withdraw the admitted prompt before the interrupt, which does nothing for a drain that has not started.
+      await input.client.session.inbox.cancel({ sessionID, inboxID: messageID }).catch(() => {})
       await fatal(
         "The server did not accept the limits, fallback model or output schema for this run, so it may be an older version than this client. Update the server, or run without --max-steps, --max-cost, --max-tokens, --fallback-model and --json-schema.",
         "version-mismatch",
       )
+    }
   }
 
   const reply = async (id: string, kind: Pending["kind"], send: (entry: Pending) => Promise<unknown>) => {
@@ -1135,7 +1138,7 @@ function tally(
 function spentFromHistory(messages: SessionMessageInfo[]) {
   const assistants = messages.filter((message) => message.type === "assistant")
   return {
-    steps: assistants.filter((message) => message.finish && countedFinishes.has(message.finish)).length,
+    steps: stepIDs(messages).size,
     cost: assistants.reduce((total, message) => total + (message.cost ?? 0), 0),
     tokens: assistants.reduce(
       (total, message) => ({

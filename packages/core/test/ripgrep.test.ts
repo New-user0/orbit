@@ -14,7 +14,7 @@ const it = testEffect(AppNodeBuilder.build(Ripgrep.node, [Location.node.replace(
 
 describe("Ripgrep", () => {
   for (const hidden of [undefined, false, true]) {
-    for (const limit of hidden ? [10] : [1, 10]) {
+    for (const limit of hidden === false ? [1, 10] : [10]) {
       it.live(`glob honors hidden=${hidden} before limit=${limit}`, () =>
         Effect.gen(function* () {
           const tmp = yield* tmpdirScoped()
@@ -34,9 +34,11 @@ describe("Ripgrep", () => {
           })
 
           expect(files.map((item) => item.path).sort()).toEqual(
-            (hidden ? [".hidden.ts", ".hidden/nested.ts", "src/.hidden.ts", "src/visible.ts"] : ["src/visible.ts"]).map(
-              (file) => RelativePath.make(file),
-            ),
+            // Hidden files are listed unless the call says `hidden: false`.
+            (hidden === false
+              ? ["src/visible.ts"]
+              : [".hidden.ts", ".hidden/nested.ts", "src/.hidden.ts", "src/visible.ts"]
+            ).map((file) => RelativePath.make(file)),
           )
         }),
       )

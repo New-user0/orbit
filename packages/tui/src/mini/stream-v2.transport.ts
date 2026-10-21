@@ -9,6 +9,7 @@ import type {
   SessionMessageUser,
   SessionInboxInfo,
 } from "@orbit/client/promise"
+import { heading, neutralize } from "@orbit/util/reminder-text"
 import { Event } from "@orbit/schema/event"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { blockerStatus, pickBlockerView } from "./session-data"
@@ -246,7 +247,10 @@ async function prepareInitialFile(file: RunFilePart, readTextFile?: StreamInput[
   const content = file.url.startsWith("data:")
     ? Buffer.from(file.url.slice(file.url.indexOf(",") + 1), "base64").toString("utf8")
     : await (readTextFile?.(file.url) ?? Promise.reject(new Error("Local text file acquisition is unavailable")))
-  return { type: "text" as const, text: `<file name="${file.filename}">\n${content}\n</file>` }
+  return {
+    type: "text" as const,
+    text: `<file name="${heading(file.filename)}">\n${neutralize(content)}\n</file>`,
+  }
 }
 
 function promptFileMention(part: PromptFilePart) {

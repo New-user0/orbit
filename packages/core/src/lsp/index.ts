@@ -62,12 +62,21 @@ export const BUILT_IN: readonly Server[] = [
 export interface Interface {
   /**
    * Diagnostics for each file that has a language server, keyed by absolute path. With `save`, each server is also told
-   * its file was saved; only edits that reached the disk say so, so a read-only query never does.
+   * its file was saved; only edits that reached the disk say so, so a read-only query never does. With `background`, a
+   * file whose server is not running yet is not waited for: the start, the read, the sync and the save go on in the
+   * Location's scope and the file comes back with an empty list, to be read later through `current`. A server that is
+   * already running is waited for briefly, as without it.
    */
   readonly diagnostics: (
     files: readonly string[],
-    options?: { readonly save?: boolean },
+    options?: { readonly save?: boolean; readonly background?: boolean },
   ) => Effect.Effect<Record<string, Diagnostic[]>>
+  /**
+   * The last diagnostics each of these files was published, from servers that are already running. It never starts a
+   * server, syncs a file or waits, and gives nothing while the folder is not trusted. The caller passes only files that
+   * were synced before, which already passed the trust check for their own folder.
+   */
+  readonly current: (files: readonly string[]) => Effect.Effect<Record<string, Diagnostic[]>>
   /** Sends a request about a file to its language server. The document is added to the params. */
   readonly request: (method: string, file: string, params: Record<string, unknown>) => Effect.Effect<unknown, Error>
   /**
@@ -93,8 +102,12 @@ const layer = Layer.effect(
     const trust = yield* ProjectTrust.Service
     const spawner = yield* ChildProcessSpawner
     const git = yield* Git.Service
+    const scope = yield* Effect.scope
     // One start attempt per server; a server that fails to start stays off until the Location reloads.
     const clients = new Map<string, Promise<LspClient.Client | undefined>>()
+    // The servers that finished starting, so a read of what they published never starts or waits for one.
+    // Each one keeps the extensions it was chosen for, so `current` answers without reading config or scanning PATH.
+    const running = new Map<string, { readonly client: LspClient.Client; readonly extensions: readonly string[] }>()
     yield* Effect.addFinalizer(() =>
       Effect.promise(() =>
         Promise.all(
@@ -128,9 +141,11 @@ const layer = Layer.effect(
       return [...custom, ...builtIn]
     })
 
-    const client = Effect.fn("Lsp.client")(function* (file: string) {
-      const server = (yield* servers()).find((item) => item.extensions.includes(path.extname(file).toLowerCase()))
-      if (!server) return undefined
+    const serverFor = Effect.fnUntraced(function* (file: string) {
+      return (yield* servers()).find((item) => item.extensions.includes(path.extname(file).toLowerCase()))
+    })
+
+    const start = Effect.fnUntraced(function* (server: Server) {
       const pending =
         clients.get(server.id) ??
         // The settings' `env` sits under the server's own variables.
@@ -145,12 +160,22 @@ const layer = Layer.effect(
           ),
           root: location.project.directory,
           spawner,
-        }).catch((error: unknown) => {
-          console.warn(`language server ${server.id} failed to start`, error)
-          return undefined
         })
+          .then((started) => {
+            running.set(server.id, { client: started, extensions: server.extensions })
+            return started
+          })
+          .catch((error: unknown) => {
+            console.warn(`language server ${server.id} failed to start`, error)
+            return undefined
+          })
       clients.set(server.id, pending)
       return yield* Effect.promise(() => pending)
+    })
+
+    const client = Effect.fnUntraced(function* (file: string) {
+      const server = yield* serverFor(file)
+      return server ? yield* start(server) : undefined
     })
 
     // A server reads the configuration near the file it is told about, and several of them run it, so a file outside the
@@ -172,8 +197,10 @@ const layer = Layer.effect(
         return yield* new Error({ message: "Language servers stay off until this folder is trusted." })
       if (!(yield* allowed(file)))
         return yield* new Error({ message: "Language servers stay off for a file whose folder is not trusted." })
-      const target = yield* client(file)
-      if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+      const server = yield* serverFor(file)
+      if (!server)
+        return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+      // The size and the read come before the server starts, so a file it would refuse never starts one.
       const size = yield* fs.stat(file).pipe(
         Effect.map((info) => Number(info.size)),
         Effect.orElseSucceed(() => 0),
@@ -184,17 +211,28 @@ const layer = Layer.effect(
         })
       const text = yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
       if (text === undefined) return yield* new Error({ message: `Cannot read ${file}.` })
+      const target = yield* start(server)
+      if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+      const failed = (cause: unknown) =>
+        new Error({
+          message: `${target.id} could not answer: ${String(cause)}`,
+          ...(isRecord(cause) && typeof cause.code === "number" ? { code: cause.code } : {}),
+        })
+      // The document is sent once. Only the request is retried, so a retry never sends the text again.
+      const uri = yield* Effect.tryPromise({ try: () => target.open(file, text), catch: failed })
       return yield* Effect.tryPromise({
-        try: () =>
-          document
-            ? target.request(method, file, text, params)
-            : target.open(file, text).then(() => target.send(method, params)),
-        catch: (cause) =>
-          new Error({
-            message: `${target.id} could not answer: ${String(cause)}`,
-            ...(isRecord(cause) && typeof cause.code === "number" ? { code: cause.code } : {}),
-          }),
+        try: () => target.send(method, document ? { textDocument: { uri }, ...params } : params),
+        catch: failed,
       }).pipe(Effect.retry({ schedule: retrySchedule, while: (error) => error.code === CONTENT_MODIFIED }))
+    })
+
+    // Starts the file's server if needed, sends the file and waits briefly for what the server publishes.
+    const check = Effect.fnUntraced(function* (file: string, options?: { readonly save?: boolean }) {
+      const target = yield* client(file)
+      const text = target ? yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined)) : undefined
+      if (!target || text === undefined) return []
+      const items = yield* Effect.promise(() => target.diagnostics(file, text, options).catch(() => []))
+      return [[file, items] as const]
     })
 
     return Service.of({
@@ -206,17 +244,31 @@ const layer = Layer.effect(
             (file) =>
               Effect.gen(function* () {
                 if (!(yield* allowed(file))) return []
-                const target = yield* client(file)
-                const text = target
-                  ? yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
-                  : undefined
-                if (!target || text === undefined) return []
-                const items = yield* Effect.promise(() => target.diagnostics(file, text, options).catch(() => []))
-                return [[file, items] as const]
+                const server = options?.background ? yield* serverFor(file) : undefined
+                if (server === undefined || running.has(server.id)) return yield* check(file, options)
+                // A cold start can take many seconds. It goes on in the Location's scope, which stops it with the
+                // Location, and the caller reads the result later through `current`.
+                yield* check(file, options).pipe(Effect.ignoreCause, Effect.forkIn(scope))
+                return [[file, [] as Diagnostic[]] as const]
               }),
             { concurrency: "unbounded" },
           )
           return Object.fromEntries(found.flat())
+        },
+        Effect.orElseSucceed(() => ({})),
+      ),
+      current: Effect.fn("Lsp.current")(
+        function* (files) {
+          if (!(yield* trust.trusted())) return {}
+          const found = files.flatMap((file) => {
+            const extension = path.extname(file).toLowerCase()
+            const items = [...running.values()]
+              .filter((entry) => entry.extensions.includes(extension))
+              .map((entry) => entry.client.current(file))
+              .find((published) => published !== undefined)
+            return items === undefined ? [] : [[file, items] as const]
+          })
+          return Object.fromEntries(found)
         },
         Effect.orElseSucceed(() => ({})),
       ),
@@ -228,9 +280,10 @@ const layer = Layer.effect(
       }),
       ignored: Effect.fn("Lsp.ignored")(
         function* (files) {
-          // git runs in this folder's repository, so the folder has to be trusted first.
-          if (!(yield* trust.trusted())) return new Set<string>()
-          const repository = yield* git.repo.discover(location.directory)
+          // git runs in this folder's repository, so the folder has to be trusted first, and it is the repository in the
+          // project's folder, which the decision covers, never one above it or one that its `.git` names elsewhere.
+          if (!(yield* trust.git(location.project.directory))) return new Set<string>()
+          const repository = yield* git.repo.discover(location.project.directory)
           if (!repository || files.length === 0) return new Set<string>()
           // git reports the real worktree, while results use the Location's own spelling (a junction, a link or a
           // subst drive). The worktree is re-spelled the way the Location spells it, so a path anywhere in the

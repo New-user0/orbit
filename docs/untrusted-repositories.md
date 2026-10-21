@@ -80,12 +80,286 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Server** (`packages/core`):
 
+- `InstructionNotes.add` (`packages/core/src/instruction-notes.ts`, served at `POST /api/location/instructions/note`)
+  appends a bullet to the project or local instruction file, so it writes into the folder a repository supplied. It reads
+  only the one file it is about to append to, and only after the checks. A candidate that is a link to a network share is found by reading links only (`LinkShare.of`); it counts as there, is
+  never resolved, statted or read, is listed as not enabled and is refused as `outside`, trusted or not. A candidate whose place cannot be
+  followed (a loop of links, or a `resolve` that fails) is found when `resolve` fails, is listed the same way and is refused
+  (proof: the "cannot be resolved" rows of `test/instruction-notes.test.ts`; removing the `catchCause` fails them). The target is the file the loader reads in that
+  scope (the loader's own exclusion, `ProjectTrust.reachable` and wide-project link filters, in the loader's order; the link
+  filter is `ConfigInstructionFile.leadsOut`, shared with the loader, and a file it drops is listed as not enabled and
+  refused as `outside`; proof: the "a project at the home folder" rows of `test/instruction-notes.test.ts`, which need
+  links and so run on Linux or with Developer Mode), asked of the spelling the
+  walk builds, never of a real path alone. While the project is untrusted, `ProjectTrust.escapes` and `reachable` on that
+  spelling refuse a file that leads outside (a link to a file, a dangling link) as
+  `outside`, before any write and again under the file's lock (a link swapped in between); the GET listing reports such a
+  file, and one that `instructions_exclude` drops, as not enabled, by its spelled name. A note for a file that
+  `instructions_exclude` drops is `excluded`, with no second file made beside it. A new `ORBIT.local.md` is kept out of git
+  through the repository's own `info/exclude` only, and only for a Location whose project is a git one, asked at the project
+  root the Location resolved and never by walking up (a Mercurial project nested in a repository gets no step, and no git
+  process starts for it): `GitLayout.locate` must report `verified` (the nine forged layouts of `git-forged.ts` get no line
+  and at most one log line), `info` and `exclude` must not be links (an `exclude` that links to a file outside the git
+  directory, or dangles, gets no line and one warning, trusted or not, with a plain file as the control: the "when
+  info/exclude is" rows; mutation: dropping the `exclude` term of the link check fails the four link rows), the exclude file's folder must
+  stay inside the verified common directory, and no git process starts while the folder is untrusted (the "already
+  ignored" question is asked of git, with fsmonitor off, only once it is trusted). A failure of that step is logged and
+  keeps the note. The text is the person's own and is not filtered; an import token in it meets the import gate when the
+  file loads. Proof: `test/instruction-notes.test.ts`, `server/test/instruction-note.test.ts`.
+- `system_prompt_file` in `PromptConfigPlugin` (`packages/core/src/plugin/prompt-config.ts`) reads a UTF-8 file into
+  `system[0]` of each request of the main thread, so `ConfigTrust` withholds the key (kind `settings`) from an untrusted
+  project or local document, and the gate is the config's own, at each request. The loader also refuses, for every
+  document, a target that `LinkShare.isShare` names (two separators: `\\host\share`, `//host/share`, `\\?\UNC\`; or a
+  rooted `\??\` NT spelling such as `\??\UNC\`, also behind a dot segment such as `\x\..\??\UNC\`: the predicate tests
+  the spelling as written and as normalized), before any file system call, and a path that reaches a share through a
+  link (`LinkShare.blocked`; pinned by the link test in `test/plugin/prompt-config.test.ts`). The same predicate answers
+  for the trust fingerprint, `{file:}` reach and `ConfigTrust.inside`, and `test/link-share.test.ts` pins each NT
+  spelling against `of`, `ofSync`, `blocked` and `scan` with no file system call. `PromptConfigPlugin.promptKeys` reads
+  `system_prompt`, `append_system_prompt` and `system_prompt_file` only from documents of scope user (or no scope), flag
+  and managed, so a project, local or remote document never supplies them, trusted or not, and nothing ranks against
+  the person's value. `system_prompt` and `append_system_prompt` stay `inert` in `ConfigTrust` for that reason, as
+  `compatibility` does: withholding them would list `settings` in the trust prompt for keys a grant never applies. The
+  core rules follow a replacement. A drive letter mapped to a share is not detected (follow-up). Proof: the scope table
+  in `test/plugin/prompt-config.test.ts` ("system prompt keys by scope"), `test/config/trust.test.ts`,
+  `test/config/config-trust.test.ts`. The same text can arrive as `agents.<id>.system`, because an agent with a prompt
+  of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system`, `description` (the text of the agent listing) and `initial_prompt` from
+  a document of a folder that is not trusted, and records no `source` from it, when the agent is not the folder's
+  alone: it exists already, or a trusted document or agent file names it. That second test is made before any entry
+  is applied, because the flag scope (`--agents`, `--settings`, `ORBIT_CONFIG`, `ORBIT_CONFIG_CONTENT`) and the managed
+  document rank after the project, so an agent only they define does not exist yet when the project's entry comes up;
+  an agent file of such a folder for one of those names is skipped whole. An agent that only the folder defines keeps
+  its prompt. Trust status cannot tell the two apart, so `ConfigTrust` reports `system`, `description`, plain
+  `initial_prompt` and `disallowed_tools` of an `orbit.json` agent entry as `permissions` (the stricter answer, as for
+  the files under `agents/`), the trust question opens for such a folder, and the plugin logs one line for each entry it
+  holds back. Proof: the "lists orbit.json for agent" rows of `test/project-trust.test.ts`; for the scope order, the
+  flag and managed rows (an `orbit.json` entry and an `agents/` file) of `test/config/agent-untrusted-system.test.ts`
+  and "an agent the person defines in a scope above the project" in `test/project-trust.test.ts`, over the real loader.
+- `language` and `output_style` in the config: text that steers every reply (a reply language, a named style whose file
+  is looked up by name). The last entry wins, so a project's value would outrank the person's own. `ConfigTrust`
+  withholds both (kind `settings`) from an untrusted project or local document, the person's value stays in force, and
+  the project's applies after the folder is trusted. Proof: the `language` and `output_style` rows of
+  `test/config/trust.test.ts`.
 - `hg` in `Project.resolve` (`hg log`) and in the Mercurial VCS provider (`hg branch`, `status`, `diff`, which the
   terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
   each command, so none is started while the folder is untrusted. The provider answers an empty branch, status and
   diff and reloads on `Trust.Event.Updated`; `Project.resolve` names an untrusted folder by its path, not `global`,
-  whose saved approvals every such folder would share. Proof: `test/project-hg-trust.test.ts`,
-  `test/vcs-hg-trust.test.ts`.
+  whose saved approvals every such folder would share, and so a trusted one that Mercurial gives no first changeset for.
+  Proof: `test/project-hg-trust.test.ts`, `test/vcs-hg-trust.test.ts`, and the Mercurial row of "Project.resolve keeps a
+  folder's project across the grant when git or Mercurial cannot name it" in `test/project-git-trust.test.ts`.
+- `git` in `Project.resolve` (`rev-parse`, `remote get-url`, `rev-list`, `worktree list`), in the Git VCS provider (`status`,
+  `diff`, `reflog show`, which the terminal UI asks for on connect) and in the location watcher (`rev-parse`): git applies
+  the folder's own `.git/config` (its includes, `.gitattributes` and hooks), and a clone chooses all of them. They name
+  programs for git to run (`git help config`, `gitattributes`, `githooks`): `core.fsmonitor`, `core.hooksPath` and
+  `.git/hooks` when git reads the index or updates a ref, the `filter.<driver>.clean` and `diff.<driver>.textconv` that
+  `.gitattributes` selects when `status` or `diff` reads a file, `diff.external`, `gpg.program` when `reflog show`
+  verifies a commit that carries a signature, `core.sshCommand` and `credential.helper` for a remote, `core.pager` for a
+  terminal, and what an include names.
+  - `Project.resolve` and the provider start no git for a folder until `WorkspaceTrust` trusts it, and the watcher starts
+    none for any folder. The decision is the main checkout's for a linked worktree, as `ProjectTrust` takes it. A trusted
+    folder gets its git once git says that the repository it uses there lies in trusted folders (the `GitAccess` bullet
+    below).
+  - `Project.resolve` reads `.git` and the shared `config` itself (`GitLayout`, `packages/core/src/git/layout.ts`). It
+    opens only what git wrote for the folder: its own `.git` directory, or the entry that its repository keeps for a linked
+    worktree, which names the folder back. To tell the two apart it reads the pointer and, in the directory the pointer
+    names, the `commondir` and `gitdir` files (each a regular file of at most 4 KiB, never through a share), and
+    opens nothing else there until the entry names the folder back
+    (`packages/core/test/git-layout.test.ts`, "reads only the pointer and the commondir and gitdir of the entry it names").
+    A `.git` that is a link, a submodule or separate git directory, and a layout that names another repository's
+    directories, make the folder that holds them a project of its own, and the directories they name are not read
+    further. Trusting that folder does not let git follow them: git is asked first where they lead (the `GitAccess`
+    bullet below). A `.git` directory names the project
+    only when git would take it for a repository: its `HEAD` names a ref under `refs/` or holds a commit ID, and `objects`
+    and `refs` are directories beside it, or in the directory that its `commondir` names, where nothing else is asked
+    about and a share is not looked at (`test/git-layout.test.ts`, "never touches a share that a .git directory's
+    commondir names"). Git goes on to the repository above any other `.git` directory, and so does `Project.resolve`, so
+    the folder the person is asked about is the one git uses (`test/git-passed-over.test.ts`, "Project.resolve names the
+    repository that git uses", the shapes that git passes over: seven, six on Windows; `test/git-layout.test.ts`). `HEAD`
+    is matched as the bytes git reads, so a byte order mark in front of `ref:` is not skipped as a text decoder skips it,
+    and `objects` and `refs` must be folders that can be searched, as git asks of both: a `HEAD` that starts with a byte
+    order mark, and an `objects` folder of mode 000 (outside Windows, for an account other than root), are two of those
+    shapes. Where Orbit cannot tell exactly what git does it passes over more: a `HEAD` that is a link or is over 4 KiB
+    (`test/git-layout.test.ts`, the "passes over" rows). A `.git` file that is no good ends the search. A read that fails,
+    is blocked (a share), is over its limit (4 KiB for a pointer, 1 MiB for the config) or does not parse is "not there",
+    never an error, and each folder is judged alone (class 7). The project is named by the remote URL in that config as
+    written, which `git remote get-url` gives a trusted folder too unless an include or `url.<base>.insteadOf` rewrites it,
+    and by the folder's path when there is none (a trusted folder uses its first commit, and keeps the path's name when it
+    has none). A trusted folder that git gives no answer for (git on no PATH, a config or an owner that git refuses) is
+    read from these files as it was before the grant, so the next resolve names the same project, folders and decision
+    (`test/project-git-trust.test.ts`, "Project.resolve keeps a folder's project across the grant when git or Mercurial
+    cannot name it"). The provider answers an empty
+    branch, status, diff and review base, and reloads on `Trust.Event.Updated`. The watcher finds `HEAD` from the same
+    files.
+  - Snapshot (the undo snapshot of each session step, `packages/core/src/snapshot.ts`): while the folder is not trusted it
+    starts no git at all, neither in the folder nor in Orbit's own snapshot directory. `Snapshot.capture` returns no
+    snapshot, so undo is unavailable for those steps as it is in a folder without git, and one log line for each Location
+    says why; comparing or restoring a snapshot that the session took while the folder was trusted fails with "The
+    folder is not trusted". The first capture after a grant works as in any trusted folder, with no reload. The reason:
+    every git command a snapshot runs applies config that the clone chooses, the folder's own and that of each nested
+    repository git looks into while it walks the work tree, even when the command runs from a git directory of Orbit's.
+    That config names programs (`core.fsmonitor`, hooks, the drivers that `.gitattributes` picks) and files or shares to
+    open (`include.path`, alternates, a `.git` file that says `gitdir: \\host\share\repo`, a `.git` folder whose
+    `commondir` names a share). M4 verification rounds 2 to 6 captured untrusted folders from a git directory of Orbit's
+    behind narrower guards, and each round found another way past them: a `.gitignore` negation that named a withheld
+    nested folder back, a file named like a pattern for it (`[s]ub`), and top-level folders that the scan for nested
+    `.git` entries did not enter although git walks them (`git~2`, and outside Windows `.GIT`, `git~1` and `.git.`).
+    Register row FU-M4-r6-nested-undo carries that design. Proof: `test/snapshot-untrusted-git.test.ts`, where git's
+    trace (`GIT_TRACE2`) shows no process in any untrusted row: "Snapshot starts no git while the folder is not trusted"
+    (a folder whose config names a file system monitor, an include and alternates gets no snapshot, starts no git and
+    no program, and logs one line; comparing and restoring the snapshots of a trusted session fail and start no git; the
+    trusted control captures, compares and restores, and leaves out what `.gitignore` names), "Snapshot starts no git
+    program of a repository nested in an untrusted folder" (three keys) and the submodule row, each with a plain-git
+    control, "Snapshot runs no attribute driver of the person's config for an untrusted folder's files" (a clean filter,
+    a textconv program, and an LFS pointer against a local server, skipped where `git lfs` is missing, each with a
+    trusted control that runs the driver or reaches the host), and "Snapshot reaches no share, and starts no git, in an
+    untrusted folder that holds a .git entry naming one" (four spellings of the entry; four negations, each beside a
+    file named `[s]ub`, and also `*` and `s*` outside Windows; a `.git` file below a top-level folder `git~2`, and on
+    Linux below `.GIT`, `git~1` and `.git.`; on Windows a watcher polls the DNS cache for the whole run, and a plain open
+    of a second unique name is the control that it sees such lookups; the trusted controls capture and restore, and on
+    Windows git then looks the share up). Also `test/snapshot-trust.test.ts` (each key of `test/fixture/git-keys.ts`:
+    no snapshot, no git, no program) and `test/snapshot-trust-transition.test.ts` (a grant partway through a session).
+    Mutations: letting the capture go on while the folder is not trusted fails every untrusted capture row; taking the
+    trust check out of the comparison and the restore fails their row; dropping the log line fails the rows that count
+    it; asking the trust store once when the service starts, instead of at each capture, fails the transition row.
+    A nested repository is a gitlink in Orbit's own index once a trusted folder records it, and the comparison of the
+    index with the work tree passes `--ignore-submodules=all` (`GitSubmodules.skip`, the submodule bullet below);
+    without it git starts a status inside the nested repository with the config that repository ships. The
+    nested-repository and submodule rows also run the Git service by itself over the folder, whose first capture records
+    the gitlink, and find nothing started inside it. Mutation: `GitSubmodules.skip` leaving `--ignore-submodules=all`
+    off the `diff-files` of `Git.index.refresh` fails those four rows.
+    The refresh (`diff-files`, `ls-files`, `rm`, `add`), the comparison (`diff`) and the restore (`ls-tree`,
+    `checkout`) pass `--literal-pathspecs`. `check-ignore`, which the refresh and the comparison ask to leave out what
+    the folder ignores, refuses that flag, so it is handed each path behind `./`, which keeps a leading `:` part of the
+    name. So in every folder a name that git would read as a pattern stands for that one file or folder: the rows of
+    "Snapshot reads a file name that git would take for a pattern as a name" put such a name (`[s]ub`, and `*` and `s*`
+    outside Windows) beside a file or folder `sub` that it matches. Restoring and comparing the file leave `sub` alone, a
+    capture records no large `sub` beside it, a capture that leaves it out because it is large keeps a recorded `sub`,
+    and a session started in a folder of that name records and restores only that folder's files. On Windows, where
+    `[s]ub` stands for no file inside `sub`, a session started in `[s]ub` does not walk a folder `sub` whose `.git` names
+    a share (DNS cache). Outside Windows a file named `:memo`, `:(top)memo`, `:(icase)memo` or `:!memo`, with no `memo`
+    beside it, is captured, listed and restored, and so are the first two when the folder ignores `memo`; on every
+    platform `check-ignore` answers for each of those four spellings as a name. Mutations: the flag removed from the
+    restore's `checkout`, from the comparison's `diff`, from the `add` or from the `rm` fails the matching rows, and
+    removed from the `ls-files` it fails the walk row on Windows and the session rows for `*` and `s*` on Linux; removed
+    from the restore's `ls-tree` it fails all six leading-colon rows on Linux; paths handed to `check-ignore` without
+    `./` fail the rows with an ignore rule, the `:(icase)memo` and `:!memo` rows and the four direct rows.
+    The first capture of a trusted folder starts from a copy of the folder's own index, which tells git which tracked
+    files have not changed. Git reads a file again when its entry is from the second the index was written or later, so
+    the copy is given the time of that index, cut to the whole second; a copy that is newer than every entry would let a
+    file rewritten to the same size in that second be recorded, and restored, with its committed text. Proof: "Snapshot
+    captures a tracked file rewritten in the second its folder's index was written" (times set on the file and the
+    index, so the row runs on every platform; a rewrite a second later is the control). Mutations: giving the copy the
+    current time fails the row; a plain copy fails it on Linux, where the copy is new, and not on Windows, where it keeps
+    the time of the index it copies.
+  - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
+    `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
+    folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
+    and `gpg.program` when `log.showSignature` is set, as the Gates paragraph says. While the folder is untrusted
+    `Worktree.list` answers the main checkout from files and `Worktree.create` and `Worktree.remove` are refused with
+    `DirectoryUnavailableError` (`test/worktree-untrusted-git.test.ts`, with a trusted control). In a trusted folder they
+    run `git worktree add` and `remove` when a person or the model asks, which runs hooks and filters of the folder (task
+    `agents-extensibility-28`).
+  - A grant covers the project's folder and not the folders above it, so no git that Orbit starts for a Location looks
+    for a repository above that folder: `Git.ceiling` gives git `GIT_CEILING_DIRECTORIES` set to the folder above it.
+    `VcsInstructions` hands the project's folder to `status.short` and `history`, the provider's commands carry it, and
+    `Git.repo.discover` looks only in the folder it is given, which `Project.resolve`, `Lsp.ignored`, `InstructionNotes`,
+    Snapshot and `WorktreeGit` give as the folder the decision covers. Without it, a `.git` in that folder that git passes
+    over would hand the command to the repository above, with that repository's config. A project whose folder above has
+    the list separator in its path (`;` on Windows, `:` elsewhere) cannot be bounded this way and gets no git. Proof:
+    `test/git-passed-over.test.ts` (the shapes that git passes over, each with the git snapshot, the provider,
+    `Lsp.ignored`, the undo snapshot, the worktree list, a new worktree, `discover` and `Project.resolve` run for a
+    Location that names the folder, after a grant of the folder; controls where the folder's own repository is opened and
+    where the repository above is opened once it is trusted; and the `Git.ceiling` rows) and its rows in
+    `test/instruction-notes.test.ts`. Mutations: `Git.ceiling` answering `{}` fails the rows of the git snapshot, the
+    provider, `Lsp.ignored`, the undo snapshot and `discover` (git opens the repository above, if only to say which
+    repository it uses); with the `HEAD`-only check of `GitLayout` restored as well, the rows of `Project.resolve`, of the
+    worktree list and a new worktree, and of `InstructionNotes` fail too, all but the `commondir` shape's, whose layout
+    that check leaves unverified.
+  - The ceiling does not help where the folder's `.git` leads git elsewhere, because git follows it without walking up: a
+    `.git` file that names another git directory (as a submodule's does), a `.git` directory whose `commondir` names one,
+    a `.git` that is a link or junction. Git then applies the config and hooks of the repository it lands in. So before
+    Orbit's own git does anything in a trusted folder that can start a program, git is asked which work tree, git
+    directory and common directory it would use there (`Git.repo.used`: `rev-parse` under the ceiling, which starts no
+    program that a config names), and nothing more runs unless each of the three lies in the folders of the Location's
+    decision or in a folder trusted in its own right: the nearest folder at or above it that holds `.git` or `.hg`, or
+    the directory itself (`GitAccess.check`, `packages/core/src/git/access.ts`). A linked worktree that its repository
+    lists goes on once its main checkout is trusted, and a submodule once the repository around it is. Otherwise the
+    folder has no repository for Orbit's git, and a log line, `git not used for this folder`, names the folder to trust.
+    `ProjectTrust.git` asks it for a Location before the git snapshot, the provider, `Lsp.ignored` and the undo snapshot
+    (its capture and comparison) start git; it keeps git's answer until trust changes, reads the trust of each
+    folder at every call, and logs a refusal once (`test/git-trust-change.test.ts`: for the provider and `Lsp.ignored`,
+    a revoke of the folder after a call that ran git, and a revoke of the repository above a granted folder whose `.git`
+    leads there, start no further git; a trust event makes git be asked again and the refusal be logged again, and
+    until one the kept answer stands. Mutations: answering yes for a folder for good once it has fails the four revoke
+    rows; a `trust.updated` subscription that no longer clears the kept answers and refusals fails the last row).
+    `Project.resolve` and `WorktreeGit` (a list or a new worktree) ask
+    `GitAccess.check` themselves, and a trusted folder that it refuses keeps the project that its files name, as before
+    the grant. The flow runner asks in `Git.root` of `packages/flow`, more strictly: the three must lie in the run's
+    folder or the project's folders as the server resolved them, which `orb flow run`, `orb eval` and `orb flow clean`
+    pass (`trustedProject` in `packages/cli/src/util/trust.ts`), and every git it starts has a ceiling of its own
+    (`Git.git`). Proof: `test/git-passed-over.test.ts`, "git that Orbit starts for a trusted folder does not follow its
+    .git into an untrusted repository" (four shapes: a `.git` file that names the git directory above, a `.git` directory
+    whose `commondir` names it, a `.git` junction or link to it, and a `.git` file that names a submodule's directory in
+    the repository above holding that repository's config; each with the git snapshot, the provider, `Lsp.ignored`, the
+    undo snapshot and a comparison, the worktree list, a new worktree, `discover` and `Project.resolve`, first checked
+    with a plain git that uses the directories above; no planted program runs, no git but `rev-parse` starts, and one log
+    line names the repository above; controls: each surface goes on once the repository above is trusted too, and the
+    snapshot and the provider run its program, and a linked worktree goes on once its main checkout is trusted),
+    `packages/flow/test/git-passed-over.test.ts` (the same four shapes and three that git passes over, with runs in the
+    repository itself and in a linked worktree as controls, and rows for the ceiling of `Git.git`), and
+    `packages/cli/test/flow.test.ts` and `flow-verify.test.ts` (`orb flow clean` stops in a folder whose `.git` leads
+    elsewhere; `orb flow run`, `orb eval` and `orb flow clean` in a folder inside a repository use that repository).
+    Mutations: `GitAccess.check` taking git's answer whatever folders it names fails the rows of every surface that goes
+    past the question (all but `discover`); logging every refusal fails the provider's four; `Git.root` of the flow doing
+    the same fails its four rows; dropping the ceiling of `Git.git` fails its rows; matching `HEAD` as decoded text fails
+    the byte order mark row of `test/git-layout.test.ts` and that shape's row of "Project.resolve names the repository
+    that git uses".
+  - Git also looks inside submodules. To tell whether the folder of a gitlink changed, `git status`, `git diff` against
+    the work tree, `git checkout` of a branch, `git add` and the `git stash create` that `git merge` runs first start
+    another git in that folder, which goes wherever the folder's `.git` points and applies the config and attributes of
+    the repository there. `GitAccess` asks about the repository of the folder Orbit works in, not about its gitlinks, so
+    in a trusted repository whose gitlink has a `.git` naming a repository that nobody trusted, that repository's file
+    system monitor and clean filter ran (M4 verification round 9). Every git that Orbit starts now goes through
+    `GitSubmodules.skip` (`packages/util/src/git-submodules.ts`), in the `Git` service, the Git provider and `Git.git` of
+    the flow runner: it puts `-c diff.ignoreSubmodules=all` before the command, which the porcelain commands read, and
+    `--ignore-submodules=all` after `status`, `diff`, `diff-files` and `diff-index`, which plumbing obeys as well and an
+    `ignore` in `.gitmodules` cannot overrule. `git add` takes neither: the undo snapshot's refresh names the paths it
+    adds, and `Git.commit` of the flow runner leaves each gitlink of the index out by name. `Git.merge` gives each
+    submodule that `.gitmodules` names `ignore = all` on the command line (`GitSubmodules.pinned`), which outranks
+    `.gitmodules` in the `git stash create` of `git merge`. The repository cache's `git checkout` of a branch is kept out
+    by the setting alone, which an `ignore` in `.gitmodules` overrules; it checks out only clones that Orbit made, where
+    no gitlink has a `.git`. Git still reads the `HEAD` of a gitlink's repository inside the process that compares it,
+    which starts no program; what else that read opens is not tested (register row FU-M4-r9-gitlink-read). Proof:
+    `test/git-gitlink.test.ts` (the git snapshot, the provider, `Lsp.ignored`, the undo snapshot, the worktree list, a new
+    worktree and the cache's checkout, for a gitlink that names the commit the repository above has checked out, and all
+    but the checkout again with `ignore = none` in `.gitmodules`; a plain `git status` in the folder runs the program
+    first; no git process works in the gitlink, no program runs, and what the snapshot and the provider show as changed
+    leaves the gitlink out; controls: the repository above runs its program once it is trusted itself) and
+    `packages/flow/test/git-gitlink.test.ts` (`Git.dirty`, `Git.commit`, a conflicting `Git.merge`, `Git.diff` and a
+    whole run, each without and with `ignore = none` for a submodule whose name holds `=`). Mutations: `GitSubmodules.skip`
+    returning its arguments fails the core rows of the snapshot, the provider, the undo snapshot and the checkout, and
+    every flow row but the commit's; leaving out `--ignore-submodules=all` fails the `ignore = none` rows of the snapshot,
+    the provider and the flow (all but the commit's) and both rows of the undo snapshot; leaving out
+    `-c diff.ignoreSubmodules=all` fails the checkout row; `Git.commit` without the gitlinks fails both commit rows;
+    `Git.merge` without the settings per submodule, or with them given as `-c`, fails the merge's `ignore = none` row.
+  - Proof: `test/project-git-trust.test.ts` (one row for each of eleven keys, a linked worktree, and every layout of
+    `test/fixture/git-forged.ts`), `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts` ("finds the git
+    directory without git"), `test/git-layout.test.ts`, `test/snapshot-trust.test.ts`, `test/worktree-untrusted-git.test.ts` and `test/git.test.ts`. Each row
+    plants a program that the config names, which records its runs, and carries the plain git command that runs it as the
+    control (all but `core.pager`, which git runs only for a terminal that no test has); git's own trace (`GIT_TRACE2`)
+    says whether any git started.
+- The git snapshot of a session (`VcsInstructions`, `packages/core/src/vcs/instructions.ts`): `status --short`, `log
+--oneline`, `config user.name` and the refs of `origin` run in the session's folder, and git applies that folder's
+  config to them (`core.fsmonitor`, `include.path`, `gpg.program` with `log.showSignature`), with no `-c` override of
+  those keys (its one `-c` keeps git out of submodules, the submodule bullet above). The
+  source asks `ProjectTrust.trusted()` first at every read, whatever else it knows, and starts no git for a folder that is
+  not trusted, and before it captures it asks `ProjectTrust.git` whether the repository git uses there lies in trusted
+  folders (the `GitAccess` bullet above). A snapshot that a session holds is removed at the next step when trust is taken away, and one is captured
+  once when trust is granted, as a durable update. A repository is told by `Location.vcs`, which `Project.resolve` reads
+  from files, never by `Git.repo.discover`, which starts `git rev-parse`. `git_status` is a filter in `ConfigTrust` that keeps
+  only `false`, as does the agent `context`: the later document wins, so a folder above a trusted project could
+  otherwise switch the snapshot back on over the person's own `false` (`test/config/config-trust.test.ts`,
+  `test/config/trust.test.ts`). Proof: `test/session-context-vcs.test.ts` (an untrusted run with `core.fsmonitor` planted
+  leaves no marker and no git in the trace, a trusted control writes the marker, and a revoke starts no git),
+  `test/git-snapshot.test.ts`, `test/vcs-instructions.test.ts`.
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
   `ConfigTrust.sanitize`, as `ConfigTrust.classification` says. Proof: `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
@@ -149,7 +423,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   - `hooks` and `mcp` of a directory: the front matter `hooks` of its skills and agents, and `mcp_servers` of its agents
     (`fingerprint.test.ts`). Nothing runs them yet; `ProjectTrust.allows(file, kind)` is what hooks-21 and
     agents-extensibility-9 ask (`project-trust.test.ts`).
-  - A digest that cannot be read: `fingerprint.test.ts`, `workspace-trust-records.test.ts`.
+  - A digest that cannot be read: `fingerprint.test.ts`, `workspace-trust-records.test.ts`. A value that comes to more than
+    4,000,000 values and characters, or nests 1,000 levels deep, is not written out (`Fingerprint.canonical`, class 7): that
+    kind of that source is `unreadable`, with one warning (`test/config/front-matter-aliases.test.ts`, the
+    `Fingerprint.canonical` rows of its child process and the "Fingerprint answers unreadable" row). A skill or agent file
+    whose front matter `ConfigMarkdown` refuses for its aliases carries nothing, and the load logs one "config file
+    skipped" line for it (the "untrusted project whose agent and skill files are aliased" rows of the same file).
   - What the digests read is bounded (class 1, 4 and 6) by the folders that `ProjectTrust.supplies` holds the config to:
     the project's own folders (the Location's directory, the project's directory and its canonical root) for a source
     inside the project, and `ConfigTrust.reach` for a source above it. `Config.observe`, `ProjectTrust.allows`,
@@ -202,8 +481,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   folders are ones only an administrator (root, or on Windows a member of Administrators) can create or add a file to;
   Windows uses Program Files, not ProgramData, because a standard user can create and write under ProgramData and
   what they put there would run as every other user (owner decision 2026-10-10, "Program Files (Recommended)"; no ACL
-  check is built, and an `ORBIT_MANAGED_DIR` that a user can write is the user's own choice), and no project file can name its location (the override is the server's environment or
-  `ServerOptions.managed.directory`); a config `env` cannot set `ORBIT_MANAGED_DIR` or the other `ORBIT_*` control names
+  check is built), and no project file can name its location (the override is the server's environment, in a run from
+  source only, or `ServerOptions.managed.directory`). The released CLI replaces the one read of `ORBIT_MANAGED_DIR`
+  (`ManagedPath.override`) with `undefined` at build time, so no person's environment can move the policy folder of an
+  organization there (`packages/cli/script/managed-define.ts`, `packages/cli/test/managed-define.test.ts`); a config `env` cannot set `ORBIT_MANAGED_DIR` or the other `ORBIT_*` control names
   for the programs Orbit starts either (`EnvConfig.isReserved`, pinned in `env.test.ts`). A repository file cannot write the `managed` key: `ConfigNormalize` drops it
   with a diagnostic. An empty or relative override is refused with one log line and the per-OS default applies
   (`ManagedPath.directory` and `ManagedSettings`), so the working folder is never read. Each file and each entry decodes
@@ -224,9 +505,229 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/command-shell.test.ts`.
 - Agent, command, skill, compat skill and output style files: `ProjectTrust.supplies` for the path, `ConfigMarkdown` for
   the text, `ConfigTrust.sanitize` and `sanitizeCommands` for what they may say. Proof: `project-trust.test.ts`,
-  `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`.
+  `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`. When the project is the home folder or a filesystem root,
+  `supplies` holds a project's or a local source to its own config folder and the folder the session started in, trusted
+  for the session or not, because everything below home is inside the project
+  (class 4): the "holds a config directory below a project at home to its own folder" rows of `project-trust.test.ts`
+  (mutation: the pre-fix bound fails both). The config folder's own real path counts only when the folder is not a link out
+  of the folder that holds it: the "holds a config folder that is a link out" rows (mutation: admitting the real path of
+  the config folder whatever it is fails the 2 home rows). The bound never applies to the person's own sources, which are
+  the user scope (the global config folder, the home entries, a vendor's user root) or the administrator's, wherever the
+  session starts: the "does not hold the person's own sources when the project is home" rows (mutation: computing the
+  bound for every scope fails 3 of the 4 rows, and the 2 end-to-end rows of `test/supplies-home.test.ts` in `packages/cli`).
+- What a style and a skill may say to the model (class 8, prompt form): reading is the entry above, and it lets the text
+  of a folder that is not trusted reach the prompt, so two things limit what that text is taken for. An output style from
+  such a folder goes last under its own heading but does not replace the prompt's opening line, which says what the agent
+  is for: `OutputStylePlugin` asks `ProjectTrust.trustedSource` at each request, the question `supplies` starts from (a
+  source that is not a project's or a local one is the person's own, one in the project's folders follows the decision
+  just made, one above them follows its own stamp). No style removes "Harness" or "Consent", where
+  the rule about who can approve an action stands before the style's text. A skill's instructions are followed for the
+  task it was loaded for, and the prompt says that a skill's claim of an earlier approval does not count. Whether a
+  project's styles and skills should reach the prompt before the folder is trusted is the owner's open question. Proof:
+  `test/plugin/output-style.test.ts` (six places a style can come from, three spellings of the key, before a grant, after
+  one and after a revoke, the clone's claim of approval as the body), `test/project-trust.test.ts` (`trustedSource`),
+  `test/session-system-prompt.test.ts` and `test/plugin/optimize.test.ts` (the sentences about approval), and
+  `test/plugin/output-style-overlays.test.ts` (the default prompt and the five full model overlays, not the local-model prompt or the main-family block, under a style with no
+  `keep-coding-instructions` key and one that sets it false: the approval sentence comes before the style's heading).
+- A folder's `attribution` text (class 8, prompt form): `ConfigTrust` withholds it whole (kind `settings`) from an
+  untrusted project or local document, because a project's field outranks the person's, `""` included; once the folder
+  is trusted `resolveAttribution` ranks the scopes as before. Proof: the attribution rows of
+  `test/config/config-trust.test.ts` and `test/config/trust.test.ts`. It reaches `system[0]` in the git section as an indented literal
+  block, line for line, split on every line separator (`\n`, `\r\n`, `\r`, U+2028, U+2029), so no line can open a
+  top-level section that an output style would cut at. Proof: `test/plugin/prompt-config.test.ts` (the separator table)
+  and `test/session-system-prompt.test.ts`.
 - Instruction files (`AGENTS.md`, `ORBIT.md`): `ProjectTrust.reachable`, asked by `ConfigInstructionPlugin` and
-  `SessionInstructions`. Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`.
+  `SessionInstructions`. Both then process every file with `ConfigInstructionFile.parse` (class 11). Its front matter is
+  taken off by `ConfigMarkdown.split`, which finds the delimiter lines and parses and evaluates nothing, so a `---js`
+  opener is not front matter and its text is kept as written, and a bare block is removed whatever it holds. Its comment
+  blocks are found by a scanner that reads the file once, line by line, because the block lexer of a Markdown library
+  takes seconds on a list item of a few thousand lines, and a clone chooses the file before anyone has trusted it.
+  U+2028 and U+2029 do not end a line there, and the expressions that read a fence opener or a list item to the end of
+  its line take them like any other character; so does the retry of `ConfigMarkdown.sanitize` with a lone CR, U+2028 or
+  U+2029 in a front matter line. `ConfigMarkdown` also no longer calls gray-matter's own reader, whose test for a block
+  of comments started again from each line start in a run of empty lines (class 7). Before, one such line of 100 KB
+  after a run of fence markers or spaces, in an `AGENTS.md` or in a rule's front matter, held the instruction pass of a
+  project that is not trusted for tens of seconds, and 100 KB of empty lines in a rule's front matter for seconds.
+  Proof: the line separator rows of the two "on hostile input" tests of `test/config/instruction-file.test.ts` and the
+  "front matter line or block" rows of `test/config/instruction-rules.test.ts` and `test/config/markdown.test.ts` (child
+  processes with a deadline, against controls of letters), and the "long run of markers, spaces or empty lines" rows of
+  `test/instruction-discovery.test.ts` (the pass of a project that is not trusted, against a control). Dropping the `s`
+  flag of `fenceOpening`, of `listItem` or of the line match in `sanitize`, or reading through gray-matter's reader
+  again, fails them.
+  `ConfigInstructionPlugin` also asks `ProjectTrust.importable` of a walk file and a rule file whose real path is not the
+  file itself while the project is home or a filesystem root (which contain everything below them), trusted or not: a link may
+  lead out of the folder the session started in only to a folder the person has trusted, and only when the session started at
+  that home or root folder and that folder is trusted for the session (`ProjectTrust.outward`; class 4). Proof, for the
+  exception: the "loads a file that an instruction file linked to a trusted outside folder imports, with the session at the
+  home folder" row of `test/instruction-discovery.test.ts` (mutation: ignoring the `outward` answer in `ConfigInstructionFile.leadsOut` fails it). Proof for
+  the bound: the "keeps a link in a wide project from leading out"
+  rows of `test/instruction-discovery.test.ts` (home and root projects, untrusted and trusted for the session, a shared, a
+  local and two rule spellings, an ssh key and a credentials file, with plain controls; mutation: skipping the check fails 34
+  rows). A rules folder that is a link is the same hole with plain files inside it, so the scan asks the gate of every folder
+  with the path the walk built for it, not only of a link to a file (class 4): the "linked to a folder sends nothing from it"
+  rows of the same file (a linked subfolder of `.orbit/rules`, `.orbit/rules` itself, `.orbit` itself, a subfolder linked to
+  home itself, and the vendor's rules folder; home and root projects, untrusted and trusted for the session; mutation: asking
+  the folder without its spelling fails none of the 20 rows alone, because the `supplies` bound refuses the same links, and fails all 20 with the `supplies` bound of f7f7e010 restored: each guard is enough, so the rows pin the two together). The note target asks the same filter (the "two names for one slot" rows of
+  `test/instruction-notes.test.ts`, which run where a link to a file can be made; mutation: dropping the `leadsOut` term of the
+  survivors filter fails them on Linux).
+  `instructions_exclude` names files to leave out. Exclusion only removes files, and comes before `reachable` in both
+  readers. `SessionInstructions` (the files a read brings, found by `InstructionTriggers`) asks `ProjectTrust.importable`
+  on the file's real path just before it reads it instead, so a nested file that a link leads out of the project's
+  folders sends nothing in a trusted project as well, and a session at the home folder has no root until that folder is
+  trusted. A filesystem root is treated the same way by `ProjectTrust`, but no test here pins a session started at one
+  (FU-M4-44). Proof: `test/session-instructions.test.ts` ("a symlink to, trusted or not", "InstructionTriggers"). A
+  project's or local file's list is withheld while the folder is not trusted (`ConfigTrust`, kind `settings`): the lists
+  of every scope are added up, so a repository's would hide the user's own files from the model. One pass follows at most
+  256 import tokens (`MAX_IMPORTS`) over all the files of it, with one warning, because each token costs a walk of its path
+  and a clone chooses how many a file holds and how many files it imports (class 15 on a bound of time; proof: 'follows no
+  more import tokens in one file than the cap' and 'in one pass than the cap, however many files hold them' in
+  `test/config/instruction-file.test.ts`, which count the paths asked about, not seconds; mutation: following every token
+  fails the first, 10,002 asked against 256, and the cap per file alone fails the second; across the separate loads of a
+  refresh, the "looks up no more import tokens in one pass than the cap, spread over the walk's files and rule files" row
+  of `test/instruction-discovery.test.ts`, which an allowance per load fails).
+  Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`,
+  `test/config/instruction-file.test.ts` (the hostile inputs run in a child process with a deadline) and
+  `test/config/trust.test.ts`.
+- Local variants (`ORBIT.local.md`, and the reference vendor's local name with compatibility on) are repository-supplied
+  files like any shared file: they are looked up in every walked folder, with a slot of their own beside the shared names
+  (`ConfigInstructionFile.pick`), and meet the same `reachable` gate, the same exclusion and the same imports. Proof: the
+  "keeps a project's imports inside the project until its holder is trusted" block of
+  `test/instruction-discovery.test.ts` (a local name that is a link out, and an import outside from a local file, each
+  trusted and not, with the label `local` on the file and on what it imports) and the "does not inject ORBIT.local.md
+  when it is a symlink out of the project" rows of `test/session-instructions.test.ts` (the lazy read).
+- The managed instruction file (`ORBIT.md` in the folder the `ManagedSettings` snapshot was read from): the folder is
+  the administrator's, so the file loads whatever the project's trust decision is and `instructions_exclude` never
+  applies to it or to what it imports. Its imports inside the project load as a project file's do; an import outside the
+  project waits for the project itself to be trusted, and a refused one is an import warning for the project root
+  (class 1, 3, 7). A file that is there and cannot be read makes the source unavailable, so policy text already admitted
+  stays. Proof: the "loads the managed instruction file" block of `test/instruction-discovery.test.ts`.
+- Rule files (`rules` folders: `<folder>/.orbit/rules` in each folder of the walk, the vendor's `rules` folder in a root of
+  another product while compatibility is on, `rules` in the config folder, and `rules` beside the managed file; read by
+  `ConfigInstructionRules.scan` and loaded by `ConfigInstructionPlugin` and, for the folders a read passes through, by
+  `InstructionTriggers` and `SessionInstructions`; classes 1, 4, 6, 7, 11 and 14). The scan opens nothing before the gate:
+  a network spelling, or a link that leads to one, is refused without disk access (`ProjectTrust.leads`), and the loader's
+  own check of whether a rules folder is there to watch skips such a folder before it stats it (proof: the "never stats,
+  lists or watches a share that a rules folder of the project links to" rows of `test/instruction-discovery.test.ts`,
+  Orbit's and the other product's rules folder, trusted and untrusted, Windows with link rights; mutation: dropping the
+  share term of that check fails both), a folder is
+  entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
+  `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
+  a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
+  through, of `ProjectTrust.importable`, or for a rule of a folder above the project (never one inside it), `reachable` and `supplies` again
+  on where it leads now. So a rules folder, a subfolder or a file that is a link out of the project is skipped alone,
+  trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
+  A project or personal rule that cannot be read costs only itself, with one warning that names it; the administrator's rules
+  fail closed (proof: the "a managed rule that answers nothing keeps the admitted instructions" and "a managed rule that fails keeps
+  the admitted instructions" rows of `test/instruction-discovery.test.ts`, with a readable control; mutation: dropping the
+  managed check in `rules()` fails both). The same holds for a project's or a local instruction file of the walk
+  (`AGENTS.md`, `ORBIT.local.md`, the other product's names): one that answers nothing or fails to read is left out with one
+  warning that names it, and the next name of its slot in that folder takes its place (proof: the "a shared instruction
+  file that answers nothing" rows and their siblings, which are shared, local and shared with a second name, untrusted and
+  trusted, with a readable control, in `test/instruction-discovery.test.ts`; mutation: returning the source as unavailable
+  from `readSlot` again fails 12 of them). The administrator's file still fails closed (proof: the "reports an unavailable
+  source" and "lists no files for an agent" rows of `server/test/session-instructions.test.ts`, with "leaves an unreadable
+  project ORBIT.md out" and "keeps the source available when a rescan cannot read a project file" as the controls;
+  mutation: `managedSource` answering `nothing` for an unreadable file fails the two). No list of `instructions_exclude` drops an administrator's rule, at the start (the "excludes the rules of the person
+  and the project ... and never the administrator's" row of `test/instruction-discovery.test.ts`) or when a read brings in
+  one that waits (the "injects an administrator's waiting rule that a user list excludes" rows and their project siblings
+  in `test/session-instructions.test.ts`, with the person's rule under the same list as the control; mutation: dropping
+  the managed term of the exclusion check in `SessionInstructions.load` fails all four). One scan lists at most 256 rule files and compiled globs are kept. One read of a
+  file looks at no more than 256 rule files over all the folders it passes through, with one warning (proof: 'looks at no
+  more rule files in one read than the budget, over all the folders it passes through' in `test/session-instructions.test.ts`;
+  mutation: raising `MAX_RULES_PER_READ` fails it), and the rules of one read share one set of handled files, so a file that
+  many rules import is walked once per read (proof: 'opens a file that many rules import once in a read, not once per rule';
+  mutation: a set of its own per rule fails it, 201 opens against 2). `InstructionTriggers` keeps what a folder listed
+  for a short while and until a rescan, so a second read of the same folder lists nothing again (proof: 'does not list a
+  nested rules folder again on the next read, until a rescan'; mutation: `CACHE_MILLIS = 0` fails it; the ageing out itself has
+  no test; the rule files themselves are opened again on every read), and `ConfigInstructionRules.scan` asks the gate of a
+  folder and of a file reached through a link, not of a plain file in a folder the gate accepted (proof: the "does not ask
+  it of a plain file" row of `test/config/instruction-rules.test.ts`). Two more budgets bound part of what a pass costs
+  (class 15). The import allowance is the pass's (FU-M4-r5-pass-budget): one pass follows at most `MAX_IMPORTS` (256)
+  import tokens over every file of it, the instruction files of the walk, the rule files of every folder and what they
+  import, with one warning, and remembers a missing target and an importer's refused one so that a token written again
+  costs nothing (proof: the "in one pass than the cap, however many files hold them" and "does not walk a missing target
+  again" rows of `test/config/instruction-file.test.ts`, counting the paths asked in one load; mutation: the cap per file
+  alone fails both; and the "looks up no more import tokens in one pass than the cap, spread over the walk's files and
+  rule files" row of `test/instruction-discovery.test.ts`, which counts the lookups of one untrusted refresh over five
+  files of 256 missing imports each; mutation: a fresh allowance for each `ConfigInstructionFile.load` call fails it, 1,280
+  lookups against 256). The folder budget is a scan's, not the pass's: one scan of a rules folder enters at most
+  `MAX_FOLDERS` (256) folders, empty ones included, with one warning (proof: the "enters at most MAX_FOLDERS folders" row
+  of `test/config/instruction-rules.test.ts`, counting the `leads`, `isDir` and gate calls over 2,048 empty folders;
+  mutation: the scan without the budget fails it), but a refresh scans two rules folders (Orbit's, and the other
+  product's while compatibility is on) in every folder from the one the session started in up to the project root, each
+  with a budget of its own. So a clone that fills each of them with empty subfolders still delays the first request of a
+  session started a few levels down (about 28 s on Windows with 400 empty subfolders in every rules folder of four
+  levels, against 3 s for a plain clone). That is open as FU-M4-r2-rule-scan: it needs a crafted clone, costs time only
+  (no code runs and nothing is sent), and its fix is one folder budget for the pass, shared as `visited` is. A pass is a
+  refresh, a read of the folders on the way, or a request for note targets. What is left unbounded is the number of
+  passes: a watcher, config or trust event, or a read after the 30 seconds a listing is kept, runs one more, each within
+  the import allowance and the folder budget of each scan. The reference walks nested rules folders on every read in the
+  same way and has no such cap (they are Orbit's own limits). A rule or
+  instruction file of a read that fails to read for another reason (a file another program holds open) costs only itself,
+  with one warning (proof: the "still hands over the other nested files of a read when ... fails to read" rows of
+  `test/session-instructions.test.ts`).
+  The person's and the administrator's rules are theirs: only the network refusal applies. The `paths` key is read only
+  from the block `ConfigMarkdown.split` finds, only by `ConfigMarkdown.parse` (YAML, never evaluated; a block that
+  does not parse makes the rule unconditional, with one debug line), and a pattern only chooses when text the folder
+  already supplies is shown: it never names a file to read. Patterns match the path from the base, both real, with
+  `FSUtil.contains` on the two real paths deciding containment (`ConfigInstructionFile.ruleMatches`); the number and
+  the length of patterns are capped, and so is the work of reading them (class 7): a block whose YAML aliases come to
+  more than its text is refused before `paths` is read (`ConfigMarkdown.Oversized`, class 7 below) and its rule waits and
+  matches no read, and within what the text allows, the comma split and the brace expansion of one rule draw on one
+  allowance, spent on what they read and build whether it is kept, empty or refused, so braces that spell out nothing
+  stop as a list of kept patterns does, and a rule that had kept nothing by then waits and matches no read (proof: the
+  "work allowance" rows of `test/config/instruction-rules.test.ts`, a child process with a deadline over aliased, empty,
+  refused, comma-only, over-long and short-part values, where the aliased rows are refused when the block is read;
+  counting kept patterns only, as before, costs each of the two rows written out that keep nothing 0.6 to 0.9 seconds
+  of processor time; the "keeps what it had kept" row of the same file, where two aliases that the text allows spend
+  the allowance after two patterns are kept and two thousand are refused whole; and the "keeps a rule whose paths" rows
+  of `test/instruction-discovery.test.ts`, the instruction pass of a project trusted and not, and the "injects no nested
+  rule whose paths keep nothing" row of `test/session-instructions.test.ts`, a read below a nested rules folder, where a
+  rule of empty spellings, written out or through aliases, waits instead of applying; that each step of the expansion
+  pays too, and not the split alone,
+  is pinned by the "charges each step of brace expansion" row of `test/config/instruction-rules.test.ts`, where two
+  parts of 340 empty groups spend the allowance before a later pattern is read and one part does not, and deleting the
+  charge in `expandBraces` reads the later pattern in both). Compiling a pattern strips its trailing slashes in one pass from the
+  end: an expression such as `/\/+$/` is tried again at each slash of a run that another character follows, and 64 rule
+  files whose spellings ended that way held each read below their folder for 17 to 29 seconds on Windows (proof: the
+  "strips the run that ends a pattern or an import token" row of `test/config/instruction-rules.test.ts`, a child
+  process with a deadline over rules, `!` rules and the matcher of a read against controls of letters, and the "end in a
+  long run" row of `test/session-instructions.test.ts`, reads below such folders against a folder of letters; putting
+  the expression back fails both). `ruleMatches` (class 7) matches rule paths with Bun's glob matcher, whose time grows with the path and the pattern and cannot blow up, and matches nothing for a path over 1,024 characters or 32 segments, because a repository writes both the pattern and the file name (proof: the "bounded time" row of `test/config/instruction-rules.test.ts`, a child process with a deadline, over a path whose file is named `b` so that no hostile pattern matches early; restoring the old `ignore` matcher fails the rows at seconds each, Bun.Glob passes). The file is looked at again, by where it leads now, when it is injected. Proof: the
+  "loads rule files" block of `test/instruction-discovery.test.ts`, `test/config/instruction-rules.test.ts`
+  and the "rules that wait for a matching read" block of `test/session-instructions.test.ts` (the swapped-link rows,
+  trusted and not, and the network decoy).
+- `@path` imports in instruction files (`ConfigInstructionFile.imports` and `load`, called by `ConfigInstructionPlugin`
+  and `SessionInstructions`; class 1, 4, 5, 6 and 7). A token is hostile input: it is found by one linear pass over the
+  lines (no Markdown library), the underscores that close an emphasis before it are stripped in one pass from the end
+  (an expression there made an instruction file of 200,000 underscores after `_@` hold a read below it for 39 seconds
+  on Windows; proof: the import row of "strips the run that ends a pattern or an import token" in
+  `test/config/instruction-rules.test.ts` and the `underscores` row of "end in a long run" in
+  `test/session-instructions.test.ts`), and a token with a control character is dropped alone, never joined into a
+  path. For each
+  import, before it is statted, resolved, read or watched: a network spelling (`//host/share`, `\\host\share`) is
+  refused without any disk access, in every scope; `ProjectTrust.leads` gives the real path, which names a link to a
+  share as the share without opening it, and that real path is what is checked and read. A project file's import must
+  really lie (real paths, whatever the trust decision) inside a project folder that can be trusted for good, or inside the folder
+  the session started in when that folder can be or is trusted now; the home directory and a filesystem root can count only once a person trusts them for the session, and then only as the folder the session started in, so a session or repository at `~` that nobody trusted does not open the home
+  folder to a downloaded folder's `@~/.ssh/id_rsa` (`ProjectTrust.importable`), and be accepted by
+  `ProjectTrust.reachable`. An import that fails that rule is skipped with one `ImportWarning` per importer and target
+  unless the folder that holds the importing file opens it (`ProjectTrust.outward`, asked only after `importable` refused,
+  and kept for one pass). A file in the project's folders is held by the project, the canonical root's decision and not
+  the folder the session started in, so a grant for a subfolder opens nothing and a linked worktree follows its
+  repository; it opens when that is trusted now and can be trusted for good, or is the folder the session started in, so a
+  session below `~` stays bounded even when the home project is trusted for the session. A file outside the project's
+  folders (one above it, or one a trusted file brought in) is held by the folder that owns it (found as `trustedAt`
+  finds an owner), which must be trusted now and able to be trusted for good, and the project must open as well; a home
+  directory or a filesystem root never holds. A chain does not inherit: what `~/team/rules.md` imports waits for
+  `~/team`. The warning carries the `directory` whose trust would lift it, unset when no grant made from this session
+  could. A user-level file's import is gated by the network refusal alone, and the network refusal holds in every scope,
+  trusted or not. Files the model's reads load later never import outside the project, even when it is trusted. `instructions_exclude` is asked before the file is opened, a name outside the text extensions and
+  a NUL in the text are refused, and a missing target, a folder or a pipe is skipped silently. The watch set is the real
+  path of each import that was read, and nothing refused is ever subscribed. The managed and local files have their own
+  rows above; the managed file's imports from outside wait for the project to be trusted. Proof: the `imports` and `load` blocks of
+  `test/config/instruction-file.test.ts`, the "follows @imports", "keeps a project's imports inside the project until its holder is trusted" and "lets a trusted
+  holder import from outside the project" blocks of `test/instruction-discovery.test.ts`, and `test/session-instructions.test.ts`, whose "home folder" blocks pin the repository-at-home row.
 - Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
   reads the file before any permission is asked, so it reads only when `resolve` reports no `externalDirectory`: a link
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
@@ -245,8 +746,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
-  working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
-  `packages/util/test/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
+  working folder. It skips an empty or relative `PATH` entry such as `.`, so the working folder is reached only through
+  an absolute entry that names it (a child handed a relative entry is in Known gaps). Proof:
+  `packages/util/test/which.test.ts`, `test/ripgrep-binary.test.ts` (including a ripgrep that only a `.` entry reaches,
+  which every search reports as not found), `test/util/git-executable.test.ts`.
 - The PowerShell parser host (`packages/core/src/shell/powershell-parse.ts`): Orbit asks PowerShell's own parser what a
   command does and reads a summary of the syntax tree. The host is `pwsh`, then `powershell` on Windows, found with
   `which` (never the working folder; nothing on `PATH` is no host) and started by its full path through
@@ -286,7 +789,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   is `unknown` (no emulation) outside macOS. The emulator itself reads no file; the caller that wires it (shell-safety-15b) adds
   its own rows. Proof: `test/shell-analysis/sed.test.ts` (`SedScript.flavor`: one process per shell and `PATH`, the arguments,
   working folder and environment, the exit, failure and hang rows).
-- Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, `node` or `uvx` as the command of an
+- Programs that Orbit starts by a bare name (`hg`, `node` or `uvx` as the command of an
   MCP server, the pager's `cmd /c more`): on Windows Bun's spawn, Node's, cross-spawn and `cmd.exe` look in the working
   folder before `PATH` for a bare name, unless the process that starts it has `NoDefaultCurrentDirectoryInExePath`.
   Every Orbit process sets it in its own environment first (`ProgramLookup.install()` in
@@ -304,12 +807,34 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   shell as a path outside a working folder that holds decoys of it. Its mutation: with `ProgramLookup` no longer setting
   the variable, the formatter row and the `cmd` rows fail; the PowerShell and Git Bash rows pass either way, since
   neither shell searches the working folder. `pwsh` is skipped where it is not installed, and a built-in formatter is not
-  covered. The bare `git` fallback has no
-  test of its own (see Known gaps).
+  covered. `git` is not started by a bare name on Windows: when `which` finds none, `gitExecutable` is a path in `System32`
+  that is not there (`resolveGitExecutable` in `packages/core/src/util/git-executable.ts`), because the library under the
+  spawner also resolves a name itself, with and without an extension, and starts the interpreter that the `#!` line of a
+  file called `git` in the working folder names, which the variable does not stop. `test/util/git-executable.test.ts` starts
+  the Git service in a process of its own, under Bun and under Node bundled for it, with git on no PATH, and plants a
+  `git.exe`, a `git.bat`, a `git.cmd` and a file called `git` with a `#!` line, each alone in a folder, with a control that
+  each one runs when started the way that finds it, and one that the `git` of PATH runs and the folder's does not. Its
+  mutation: with the bare name back, the two rows for the file with no extension fail. Linux has a decoy row of its own.
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
 - Code Mode `fetch`: `PermissionWeb.request` for every hop, then `AddressGuard.check`. Proof: `test/codemode.test.ts`,
   `packages/util/src/address-guard.test.ts`.
+- The session scratchpad (`SessionScratchpad`, `packages/core/src/session/scratchpad.ts`): the folder `sessions/<key>` in
+  Orbit's temporary folder, which the baseline names as the place for the model's temporary files, which a drain makes
+  before its first step and which goes with its session. It reads nothing that a folder supplies. The key is the ID of the
+  session that the lineage goes back to, and a client chooses that ID (`POST /api/session` takes `id` and `parentID`, and a
+  fork names its source), so it names a folder only when it is `ses_` and letters, digits and underscores (class 5): any
+  other ID gives no folder, no section of the baseline, no allow and no removal, and making the folder says so once, with
+  the characters of the ID that act on a terminal written out (class 9). A link where the folder should be is logged and
+  left alone, and a deletion removes a link as a link. The allow that lets an agent edit there without a question
+  (`Agent.scratchpad`) is Orbit's own (class 4: it never decides a place that a link of an untrusted project leads out
+  to), is cut to the folder of the session that asks (`Agent.narrowScratchpad`), sits before the person's rules so that
+  their deny wins, and decides a call only where the real place of the call is in that folder too (`decide` in
+  `Permission`), so a link inside the folder that points out is decided by the rules for the place it points to. Proof:
+  `test/session-scratchpad.test.ts` (the hostile IDs as the ID, the parent and the fork source, each with a marker where the
+  ID would name a folder, and a control), `test/permission-scratchpad.test.ts` (the sessions of a lineage, the hostile IDs,
+  the links and the Windows spellings, with the plain file in the folder as the control),
+  `test/session-scratchpad-baseline.test.ts` and the `scratchpad` rows of `test/session-runner.test.ts`.
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 
@@ -317,6 +842,29 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `replay`, `resume`, `show`, `trace`, `watch` and `run`): SQLite at `.orbit/runs.db` of the repository. It is not
   code, and `flow ls` runs before a trust answer, so the gate is class 6: a store whose path leads through a link to a
   share is refused without being opened. Proof: `packages/flow/test/store-share.test.ts`.
+- The flow runner's git (`run` and `evaluate` in `packages/flow`: root, exclude, head, dirty check, worktrees, commits,
+  merges, review diff), which reads the index and applies `core.fsmonitor`, clean filters and hooks of the clone: class 1,
+  gated on `trusted`, which `orb flow run` and `orb eval` take from the server after `requireTrust` and `replay` sets to
+  false (class 12). In a trusted folder the runner uses the repository only when git says that its work tree, git
+  directory and common directory lie in the run's folder or the project's folders that the server resolved, and logs
+  one line when they do not (`Git.root`; the `GitAccess` bullet above). Proof: `packages/cli/test/trust.test.ts`, rows
+  per key and door; the refusals that say "in a trusted folder" (a worktree agent, a team in a worktree, a merge):
+  `packages/flow/test/runner-untrusted.test.ts`; `packages/flow/test/git-passed-over.test.ts`. The
+  base commit is taken from the store of a resumed run only where git may run. Proof: "a resume in an untrusted folder
+  takes no worktree from the run store for the review diff of a verify node" in
+  `packages/flow/test/runner-resume-untrusted.test.ts` (the store names a folder outside whose `core.fsmonitor` writes a
+  marker, and a base commit; no marker, and its trusted control writes one).
+- What a resumed run takes from the store (classes 1, 5 and 12): the worktree that a reused verify iteration's checks
+  and reviewer work in, the session a reused team turn continues, the base commit and the default model. `orb flow resume`, `orb eval --resume` and `orb flow replay` refuse a folder that is not trusted, before
+  they open the store (`requireTrust` with `strict: "recorded"`; `eval` reports it through `reportRunError`, as JSON
+  under `--format json`). No other door resumes a stored run: the terminal UI's `/runs` dialog and the VS Code Runs view
+  only read the store and hand a resume to `orb flow resume`, and the server, ACP and the SDK do not load
+  `@orbit/flow`. The runner itself, for a caller that resumes with `trusted: false`, takes no worktree, no session ID
+  and no base commit from the store. Proof: `packages/cli/test/trust.test.ts`, the rows for a run store that the clone
+  ships (a recorded verify iteration whose worktree is a folder outside the clone holding a secret: refused with no model
+  request, git or read, and a `--trust` control that reads it), the rows that refuse before the store is opened, and the
+  rows for a server older than workspace trust; `packages/flow/test/runner-resume-untrusted.test.ts` (the reviewer's folder, the check's
+  folder, a team member's session and the review diff, each with a trusted control).
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
@@ -384,6 +932,26 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Terminal UI** (`packages/tui`):
 
+- The editor locks: `readLocks` and `discoverEditors` (`src/editor.ts`) read `<state>/ide/<port>.lock`, a folder that Orbit
+  owns and a clone does not supply. Each file is capped (`IdeLock.lockCap`), must be a plain file named digits and
+  `.lock`, and is decoded with a schema (version 1, a pid that is a positive integer, a port that equals the name, absolute
+  workspace folders, a token of the shared shape, which is checked before the value goes into a header). A bad file costs
+  one log line, once per file and change, never quotes the file, and never stops a good sibling; a lock whose pid is gone
+  is skipped, and the terminal UI never deletes a lock. A workspace folder holds the session folder by real path
+  (`FSUtil.contains` on `realpathSync.native` of both, NFC), so a link, a shared prefix or a dangling link cannot make a
+  window match; a network or device spelling is compared as written and never read from disk. The editor's name goes
+  through `plain`. A selection or mention frame whose file name holds a control character, a line or paragraph separator, a bidi
+  control or a zero-width space is dropped whole with one log line, since a clone can name its files as it likes; a
+  refused selection also clears the stored one, so the previous file's selection never goes with the next prompt. The
+  joiners ZWNJ and ZWJ and the soft hyphen are ordinary in some scripts' file names, so they pass (the trade-off: the
+  footer and prompt show them as written). The footer label goes through `plain` as a second guard for the Zed source,
+  whose names do not pass this check; that guard is not pinned by a test yet, so it is a defence in depth and not a claim.
+  A frame over `IdeLock.frameCap` is dropped.
+  Proof: `test/context/editor.test.tsx` (the hostile-name and frame-cap rows) and `test/editor-bridge-app.test.tsx` (the
+  drawn footer and prompt). The token goes into the `x-orbit-ide-token` header and nowhere else. Proof: `test/editor.test.ts` (the
+  discovery rows), `test/context/editor.test.tsx` (a real server: header, hello, ignored frames, reconnect that reads the
+  lock again, no connection without the port, `TERM_PROGRAM=vscode` or `autoConnect`).
+
 - Custom themes (`discoverThemes`, called by the terminal UI's theme provider and by Mini when they mount): a JSON file
   per theme, read from `<folder>/.orbit/themes` of every folder above the working folder, before any trust answer. It is
   data, not code, so trust does not gate it; the class 6 rule does: a name that is, or leads through a link to, a share
@@ -403,6 +971,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
+- Agent, skill and command names and descriptions that a folder supplies: the TUI agent and skill dialogs, the `@` and `/` autocomplete and every Mini menu (`RunFooterMenu` in `src/mini/footer.menu.tsx`, the single render site for the Mini `/` and `@` composer) draw them through `plain`. Proof: `test/component/dialog-listings.test.tsx`, `test/prompt/autocomplete-hostile.test.tsx`, `test/mini/footer.view.test.tsx` (hostile row beside a trusted one).
 - Message bodies on the session screen and in Mini: `bodyText` and `outputText` (`src/util/renderer.ts`),
   `entryBody` (`src/mini/entry.body.ts`) and `permissionPresentation` (`src/util/permission.ts`). Proof: one
   table-driven `captureCharFrame` test on the real components, each with a hostile row and a trusted control row that
@@ -447,6 +1016,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 **VS Code extension** (`packages/vscode`, which runs in VS Code's extension host: not an Orbit process, and shared with
 every other extension):
 
+- The IDE bridge (`src/ide-bridge.ts`): a WebSocket server on `127.0.0.1` (the literal, never a name), port 0, with a
+  4 KiB frame limit, that accepts an upgrade only with the token in the `x-orbit-ide-token` header (constant-time compare,
+  answer 401, one log line that never holds a token; the token is never read from the URL). The token lives in a lock file
+  written with mode 0600 in a 0700 folder, by temporary file and rename (retried on EPERM, EBUSY and EACCES while a reader
+  holds the lock; the temporary file is removed when it still fails), and is never put in the environment (only the
+  port is). It makes no outbound connection and starts no program (`orb` included). `orbit.ideBridge.enabled` has
+  machine scope and is read from the user's own settings only, and the extension stays off in an untrusted VS Code
+  workspace. At start it removes only version 1 locks whose pid is gone. Proof: `test/ide-bridge.test.ts` and
+  `test/manifest.test.ts` (the setting's decision row, the command's gate row, the scan of the doors).
+
 - Whether the folder is trusted, and the question before work starts: `Controller` asks the server for the folder's
   trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
   command, starter and button that sends a prompt ends in. `send` asks the person, once per folder, before a session
@@ -487,6 +1066,45 @@ every other extension):
   and `test/manifest.test.ts`.
 - Config above the project: named, with no command, because a grant goes to the project's folder and not always to the
   one that holds it. Proof: `test/trust-text.test.ts`, `test/trust.test.ts` ("names config above the project").
+
+**Built-in commands of the terminal UI** (`/ide`, `/terminal-setup`, `/agents` create and edit, and the route they use):
+
+- `/ide` lists the locks in the state folder that `readLocks` accepts, so nothing is read from a project folder; the name
+  and folders an editor chose reach the dialog and its toasts written out: the lock's name is escaped where the lock is
+  read, the name in the editor's hello where it arrives, and the toasts escape names and the session folder once more with
+  `plain`. The tests pin what is drawn, not each of those calls: the toast draws every message through `bodyText`
+  (`packages/tui/src/ui/toast.tsx`), so the toast's own `plain` is a second guard that no row pins alone, and the drawn
+  row pins the two together. `connect` reads the chosen window's lock
+  again and dials `127.0.0.1` with the token in the one header; a window that never says hello is not retried and ends
+  with a timeout. `/ide open` finds the editor's program with `which` (PATH only) and starts it through cross-spawn with
+  the folder as its only argument, never through a shell. Proof: `test/context/editor-ide.test.tsx`,
+  `test/component/dialog-ide.test.tsx` ("without control characters"), `test/builtin-commands.test.tsx` (the toast of
+  `/ide open` with an escape sequence in the editor's name and in the session folder), `test/context/editor-ide.test.tsx`
+  (the names in the lock and in hello), `test/editor-program.test.ts` (a `code.cmd` and
+  `code.exe` decoy in the working folder, with `NoDefaultCurrentDirectoryInExePath` removed, and the control).
+- `/terminal-setup` starts no program. It reads and writes one file of the person's own editor, never of a project: the
+  keybindings file of the editor's user folder. A file that does not parse as a list (errors counted, not only a wrong
+  type), one that holds the binding already, and one that binds Shift+Enter in the terminal to something else are left as
+  they were and leave no backup; an edit is backed up first, under a name that never replaces an earlier backup, and a
+  failed backup writes nothing. Remote editors (the git helper or `PATH` lies in the folder an editor keeps its server in,
+  which `CompatEditors` names) are not written. The path goes through `plain`, in the confirm dialog and in the outcome toast, and so does the reason a
+  write failed. Proof: `test/util/terminal-setup.test.ts` and `test/component/terminal-setup.test.tsx` (the five outcomes
+  with an escape sequence in the path and the reason, and the confirm dialog drawn with one in `APPDATA`; replacing every
+  `plain` of `terminal-setup.tsx` fails all six rows).
+- `/agents` create writes `<config directory>/agents/<name>.md` from the TUI process, only when the server is on this
+  machine. The name passes `ConfigAgent.isName` and the 3-to-50 rule, so it is one segment; every value is written as a
+  JSON string (a valid YAML scalar), so no text of the person's adds a key or ends the front matter. Before anything is
+  made, for a project, the nearest existing folder of the target is resolved on disk and must lie inside the real
+  project root (`FSUtil.contains` on two real paths), and again once the folder exists; the file's own path is looked at
+  with `lstat` first (any entry refuses the write, and a link, a dangling one included, is `escapes`, because Windows
+  creates the target of a dangling link under `wx`), then opened exclusive (`wx`), so nothing is overwritten. Errors block the save. Proof:
+  `test/util/agent-file.test.ts` (a junction at `.orbit/agents` and at `.orbit`, a file link at the path to a missing and to an existing outside file, the existing file, the hostile
+  descriptions, every refused name), `test/component/dialog-agent-create.test.tsx`.
+- `config.sources.changed` takes at most 100 paths of at most 4096 characters, keeps those that are absolute, exist and
+  whose real path lies inside the real path of a user, project or local config directory entry, and passes them to
+  `Config.notify`, which reports them to `changes()` and reloads nothing. A forged path costs at most one more rebuild of
+  the owners that read those sources. Proof: `packages/server/test/config-sources.test.ts`,
+  `packages/core/test/config/notify.test.ts`.
 
 **Build** (`packages/cli/script`):
 
@@ -660,14 +1278,15 @@ and its data twins (commands, approvals, agents) at once.
   comment on `execute` in `packages/flow/src/yaml.ts` and the one in `evaluate` (`packages/flow/src/eval.ts`) name the
   lists.
 - Hand the lists to the gate with `trustOptions(file, kind)`, which `flow run`, `flow resume` and `eval` share. Replay
-  answers from the recording, so it is held only for a module and contacts no server for a YAML file.
+  answers from the recording, so the file is held only for a module. A resume and a replay go on from the run store, so
+  they need the folder they run in trusted before anything else (`strict: "recorded"`, class 5).
 - Print the file's text with its control characters written out (class 9).
 
 **How to test:**
 
 - A marker command in a `check` node, in the `checks` of a `verify` node and in the `checks` of a suite task, in an
   untrusted folder that holds nothing else back. Assert refused, marker absent and the model never asked. The `--trust`
-  control writes the marker, and a replay is not held up and contacts no server.
+  control writes the marker, and a replay in a trusted folder is not held up by the commands.
 - A gate-versus-runner test. Run the real runner and `evaluate` against a client that records every agent, approval and
   command it is asked to use, and require each one to be in the gate's list (`packages/flow/test/agents.test.ts`). Feed
   awkward shapes through both: anchors, merge keys, `__proto__`, duplicate keys, tags, flow style, quoted keys,
@@ -710,8 +1329,14 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
   answer for the Location's project, so do not key trust by a path you did not resolve.
 - Config above the project follows the decision for its holder (`ConfigTrust.holder`, `ConfigTrust.covered`).
   `Trust.Withheld.directory` is the folder whose trust lifts an entry, and the refusal advice must name it.
-- `Project.resolve` counts the main checkout only when `git worktree list` also lists this folder, so a `.git` file
-  cannot borrow another repository's identity.
+- `Project.resolve` counts the main checkout only when its repository also lists this folder, so a `.git` file cannot
+  borrow another repository's identity or trust. For a folder that is not trusted, `GitLayout.locate` decides from
+  files: the `.git` file has to name an entry directly under the `worktrees` of the `commondir` that the entry names, and
+  the entry's `gitdir` file has to name this very `.git` (the back-link's folder is resolved and `.git` joined to it, so a
+  `.git` that is a link cannot stand for another's). For a trusted one it is `git worktree list`. The trust decision for a
+  linked worktree is its main checkout's, and any other layout leaves the folder its own canonical folder, so a clone
+  that names a trusted repository gets none of its trust (`test/git-layout.test.ts`, `test/project-git-trust.test.ts`:
+  every layout of `test/fixture/git-forged.ts` with the victim trusted, and a worktree that git added as the control).
 - In a command, `trustRefusal` looks up an existing `--session` and checks that session's folder, and asks about the
   folder that holds the workflow file as well (`holderRefusal` words that refusal). A server's trust mode comes from
   `ServerProcess.trustOptions(mode, env)` in `packages/cli/src/server-process.ts` (the background service never follows
@@ -720,6 +1345,10 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
   now" when another folder comes into view. The plugin gate asks about the folder the UI was started in
   (`TrustProvider directory={cwd}` in `packages/tui/src/app.tsx`), and `trust.startup.above` carries the folders above
   the project that the server holds back.
+- Orbit's own git in a trusted folder follows what the folder's `.git` names, so its repository is decided by asking git
+  which work tree, git directory and common directory it would use, never by a copy of git's rules for finding one:
+  `ProjectTrust.git` for a Location, `GitAccess.check` for `Project.resolve` and `WorktreeGit`, and `Git.root` for the
+  flow runner. Each of the three must lie in a folder whose decision is trusted.
 - When the components disagree, take the stricter answer and log it.
 
 **How to test:**
@@ -810,6 +1439,13 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 - Compare with `FSUtil.contains(parent, child)`, which uses `path.relative` and so ignores case on win32, only on two
   paths that are already real: a path that `fs.resolve` returned for something that exists, or a folder that you
   resolved first. Never `===`, `startsWith` or `!==` on two paths.
+- Removing a folder that Orbit made inside the repository is the reverse case: resolve the repository, name the folder
+  under its real path, and refuse when any part below the repository is a link (`lstat`), rather than resolving the
+  folder itself. A clone can ship `.orbit/worktrees/<run>` as a link, and the real path of the run's folder is then
+  wherever the link leads, so the worktrees found "inside" it, and the folder that `rm` takes, are the person's.
+  `Git.clean` does this for `.orbit`, `.orbit/worktrees` and the run's folder and removes nothing, branches included,
+  when one is a link (`packages/flow/test/git.test.ts`, "a run whose folder is reached through a link is left alone
+  with everything it leads to", and the `orb flow clean` row in `packages/cli/test/flow.test.ts`).
 - A name that becomes a file name is one plain name (the output style rule in
   `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
   `packages/core/src/tool/plugin/memory.ts`).
@@ -879,15 +1515,16 @@ the store.
 - `Git.clean` and `Git.worktree` refuse anything that is not one plain name (`PLAIN_NAME`, `runFolder`) before
   `git worktree remove` or `add`, `rm` or `branch -D`, and `Git.worktree` refuses a node named `.`, `..` or empty
   (`packages/flow/src/git.ts`). A `*` in an ID would otherwise become a ref pattern that matches other runs' branches.
-  Take the shape check as the model and not the rest of `Git.clean`, which keeps the entries of `git worktree list` with
-  `directory.startsWith(prefix + path.sep)`, the string comparison that class 4 forbids. It compares paths that git
-  printed with a folder that `runFolder` has already made safe, so it is harmless today, but do not copy it.
-  `@orbit/flow` does not depend on `@orbit/util`, so its follow-up is a `path.relative` check, not `FSUtil.contains`
-  (Known gaps).
+  `Git.clean` then keeps the entries of `git worktree list` whose real path is inside the run's folder, compared with
+  `path.relative`, and leaves the run alone when that folder is reached through a link (class 4).
 - For every identifier in a change, say where it comes from: the runner, the person, or a file that a clone can ship.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust
   step, or a shape check that makes the action safe whatever the store says.
+- A folder or a session ID that a store records is a place to act in, not only a name: a resumed run reviews, checks
+  and prompts there. So `orb flow resume`, `orb eval --resume` and `orb flow replay` refuse an untrusted folder before
+  they open the store, and the runner with `trusted: false` takes neither from it (M4 round 6; the narrower check that
+  would let a resume run untrusted is a Known gap).
 
 **How to test:**
 
@@ -912,7 +1549,8 @@ the store.
 **Rule:** Only `http:` and `https:` URLs reach `fetch`. Every request that a repository or a script can influence asks
 permission per hop, as `webfetch` does, then passes `AddressGuard.check`, then connects to the address that was checked,
 with the name kept only in `Host` and SNI. A name that resolves to nothing, fails to resolve or answers with names is
-refused.
+refused. One exception, the owner's of 2026-10-19: `webfetch` through a configured proxy sends the name to the proxy
+(see the first Known gap on `webfetch` and a proxy).
 
 **Why:** Code Mode `fetch` lets a script choose the method and the headers of its request. One approval of an origin
 then reached other hosts by redirect, loopback, the LAN or a cloud metadata endpoint (credentials), in spellings that a
@@ -1007,11 +1645,12 @@ one table covers every spelling.
     `trustOptions`, `load` and `resume` use before `requireTrust`) with a file linked to it, and controls.
   - `packages/core/test/link-share-bounds.test.ts`: the work the checks do (folders listed, links read) and a child
     process with a deadline.
-  Mutations: `LinkShare.scan` entering a link entry without asking fails the nested rows of `share-roots.test.ts`;
-  taking the check out of `discoverThemes` or `Store.at` fails the rows of their files; reverting `LinkShare` and
-  `FSUtil.up` to the walk that starts again from the root at every hop fails three rows of `link-share-bounds.test.ts`.
-  Not covered, and still a gap: the terminal UI's plugin folders, the VS Code diff view (another process), the native
-  watcher, and the git calls that `orb flow` makes in the folder before it opens the store.
+    Mutations: `LinkShare.scan` entering a link entry without asking fails the nested rows of `share-roots.test.ts`;
+    taking the check out of `discoverThemes` or `Store.at` fails the rows of their files; reverting `LinkShare` and
+    `FSUtil.up` to the walk that starts again from the root at every hop fails three rows of `link-share-bounds.test.ts`.
+    Not covered, and still a gap: the terminal UI's plugin folders, the VS Code diff view (another process), the native
+    watcher. (The git calls of the flow runner are a different class: they wait for trust, see the Known gaps on
+    `orb flow run`.)
 
 **Review questions:**
 
@@ -1056,6 +1695,20 @@ against a service that was started before the upgrade (#18, #22). The pattern re
 - Put a time limit on every check that a UI waits for. The terminal UI's trust reads time out after two seconds and keep
   the last answer (`packages/tui/src/context/trust.tsx`).
 - `ConfigTrust.classification` is exhaustive at compile time, and a field it does not know is held back.
+- Bound what a parsed value comes to, not only its text. YAML keeps an alias as one more reference to the node its
+  anchor names, so a few hundred bytes can stand for billions of values, or for a value that holds itself, and every
+  reader that copies or serializes the value pays for each reference: the round 11 audit measured about 2 GB for a
+  492-byte agent file when the folder of a project that was not trusted was fingerprinted. `ParsedSize.within`
+  (`packages/util/src/parsed-size.ts`) walks a value with every alias followed, counting each value and the characters
+  of each string and key, and stops at the allowance or 1,000 levels deep. `ConfigMarkdown.read` refuses front matter that comes to more than its text and
+  10,000 (`ConfigMarkdown.Oversized`), for all its readers at once, and `parse` does not retry such a block as text;
+  `read` in `packages/flow/src/load.ts` refuses a YAML workflow or suite the same way, which Bun's parser lets through
+  when the alias repeats a long string or a node holds itself; and `Fingerprint.canonical` has an allowance of its own.
+  Proof: `packages/core/test/config/front-matter-aliases.test.ts` (a child process with a deadline and a memory bound over
+  the agent, skill and command readers, `parseOption`, `Fingerprint.directory` and `Fingerprint.canonical`, at levels 6
+  to 8 against an alias-free control; the `ParsedSize.within` and `ConfigMarkdown` rows; an untrusted project whose agent
+  and skill files are aliased), the rule rows named in "Where each surface is gated", and the alias rows of
+  `packages/flow/test/load.test.ts`.
 
 **How to test:**
 
@@ -1073,6 +1726,8 @@ against a service that was started before the upgrade (#18, #22). The pattern re
 - Is every setting that validates actually enforced, or does it warn once that it is not?
 - Is a switch parsed the way its siblings are (`1` and `true`)?
 - Is there a time limit on every check that a UI waits for?
+- Can a value that this code copies, walks or serializes come to more than the text it was read from, through YAML
+  aliases or a node that holds itself?
 
 ### 8. Permission widening through agent, mode, default, scope-order and approval-display choices
 
@@ -1121,7 +1776,9 @@ runs" is a permission.
   step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
   receives a migrated `small_model`, and `side`, and in every command) and an agent's `steps` are
   `withhold("providers")`.
-  `fallback_model`, `output_token_cap` and `shell_tool` (its timeouts are a budget; `test/config/shell-tool.test.ts` pins it)
+  `fallback_model`, `output_token_cap`, `shell_tool` (its timeouts are a budget; `test/config/shell-tool.test.ts` pins it),
+  `media`, `tool_output` and `compaction` (they set how much each paid request carries; the "keeps an untrusted folder
+  from setting" rows in `test/config/trust.test.ts` pin them)
   are withheld the same way (`test/config/trust.test.ts` pins each of the others). Never
   classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets
@@ -1168,6 +1825,15 @@ runs" is a permission.
   they search goes through the Read rules first (`FileAccess.authorizeRead`), and a Read deny of `*.env` covers a Grep
   of `.env`. A rule matches the name a file has on disk: on Windows `FileAccess.resolve` turns every spelling of a file
   into that name before a rule sees it (class 4).
+- An agent file under `agent/` or `agents/` defines its agent: it replaces an earlier definition of the id and rebuilds
+  it from a default that allows everything. Therefore an untrusted file of that kind never replaces or tunes an agent
+  that exists (its prompt included), and `ProjectTrust.status` lists `permissions` for every such file, not only for
+  the ids Orbit ships, because which ids exist depends on entries the status cannot see. A file under `mode/` or
+  `modes/` is not covered by this rule. Proof: `core/test/config/agent-definition.test.ts` ("an untrusted folder": "holds a
+  definition file in `agent`/`agents`/ back whole when it names a shipped agent, whatever keys it carries", its trusted
+  control, and "applies the same keys from `mode`/`modes`/, where an untrusted file only tunes" with "a trusted
+  `mode`/`modes`/ file tunes build and keeps its rules, and stays primary"; "logs one line for held-back entry text to the configured logger" for the log line) and
+  `core/test/project-trust.test.ts` ("lists every file under `agent`/`agents`/ as held back, whatever it names", with its trusted control).
 
 **How to test:**
 
@@ -1370,6 +2036,16 @@ first, and the spawner installs it again and gives it to every child. It is half
 starts `cmd.exe` by its full path and passes `ProgramLookup.environment(undefined)`, and a test plants a decoy for it,
 with a control run. The earlier holes took four fix commits in three rounds, and the executables three more.
 
+**In M4:** the decoy test that the bare `git` fallback lacked (register FU-M1-012) found a member that no `.exe`, `.bat` or
+`.cmd` decoy reaches. cross-spawn on Windows resolves a bare name with its own lookup, which starts in the working folder
+of the child whatever the variable says, first with the extensions of `PATHEXT` and, when that finds nothing, with none.
+For a file it finds that starts with `#!`, it starts the interpreter the line names, with the file as its argument. A folder
+that held nothing but a file called `git` with `#!/usr/bin/env node` on its first line therefore ran that file, under Bun and
+under Node, wherever the Git service asked git something while git was on no `PATH` (`Project.resolve`, Snapshot, the
+worktree listing). A `git.exe` beside it hides the file, because the first lookup finds the `.exe` and the spawn of the
+bare name then fails, which is why the decoys of the other kinds never showed it. The fallback is no longer a bare name.
+The same lookup serves every other bare name that is on no `PATH` (Known gaps).
+
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
 first started the server inside the repository, audit what the process resolves from its start folder before any trust
 check: modules, packages, native libraries, executables, and what each lookup that finds a program does (a library's,
@@ -1393,8 +2069,8 @@ kind in turn.
   from the npm cache with `resolveModule`. A plain file path no longer loads: write a `file:` URL.
 - Find an executable with `which` in `packages/util/src/which.ts` and with nothing else. It feeds `gitExecutable`,
   `RipgrepBinary`, `ShellSelect`, the built-in formatters and language servers, the sandbox tool and the Azure CLI
-  check. It reads `PATH`, then Orbit's own `bin` folder, and never the working folder, unless `PATH` itself names it,
-  for example with a relative entry such as `.`, which resolves against it (Known gaps). It looks at each `PATH` entry
+  check. It reads `PATH`, then Orbit's own `bin` folder, and never the working folder, unless an absolute `PATH` entry
+  names it; a relative entry such as `.` is skipped (a child's own search is in Known gaps). It looks at each `PATH` entry
   by its full name, because the npm `which` package that it wraps searches `process.cwd()` first on Windows and has no
   option to skip it. An empty `PATH` entry, which a shell reads as the current folder, is skipped on every platform, a
   quoted entry is read without its quotes, `PATHEXT` and the executable bit apply as before, and a name that already has
@@ -1437,9 +2113,12 @@ kind in turn.
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
 - One member of the class stays partly open: a child that is handed a `PATH` with a relative entry still searches it (see
-  Known gaps). Two more rest on `ProgramLookup.install()` alone,
-  with no test of their own: the bare `git` fallback and the terminal UI's external editor.
-  Known gaps lists each with its task. A change must not widen one.
+  Known gaps). The terminal UI's external editor used to rest on `ProgramLookup.install()` alone and now has a test of its
+  own (Known gaps, "The external editor"). Another is open for a bare name that is on no `PATH`: cross-spawn resolves it in the working folder, with and without an
+  extension, and starts the interpreter that the `#!` line of the file it finds names (Known gaps). Known gaps lists each
+  with its task. A change must not widen one.
+- Do not hand the spawner a bare name that `which` could not find. `gitExecutable` does not: on Windows a git that is on
+  no `PATH` becomes a path that is not there, and the call fails as it fails for a git that is not installed.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
@@ -1532,9 +2211,14 @@ gray-matter's default engines, or a marker test per reader written with the spec
 
 **How to comply:**
 
-- `ConfigMarkdown.parse` and `ConfigMarkdown.parseOption` (`packages/core/src/config/markdown.ts`) are the only callers
-  of gray-matter. Its `engines.javascript` throws "JavaScript front matter is not supported", and `parseOption` returns
-  `undefined` so that the reader skips the file:
+- `ConfigMarkdown.parse` and `ConfigMarkdown.parseOption` (`packages/core/src/config/markdown.ts`) are the only readers
+  of front matter. They find the block where gray-matter 4 finds it and hand it only to gray-matter's YAML engine
+  (js-yaml with its safe schema) or to `JSON.parse`, never to gray-matter's own reader or its engine table. A `js` or
+  `javascript` opener, in any case, throws "JavaScript front matter is not supported", any other language is refused
+  too, and so is a block whose aliases come to more than its text (`ConfigMarkdown.Oversized`, class 7), and
+  `parseOption` returns `undefined` so that the reader skips the file (proof, besides the marker rows below:
+  the "reads every file as gray-matter does" row of `test/config/markdown.test.ts`, which compares data, text and
+  refusals with gray-matter's reader on generated files):
 
   ```ts
   const markdown = ConfigMarkdown.parseOption(content)
@@ -1545,9 +2229,16 @@ gray-matter's default engines, or a marker test per reader written with the spec
   `packages/core/src/config/plugin/`, `OutputStylePlugin` (`packages/core/src/plugin/output-style.ts`) and
   `ProjectTrust.status`, which reads through the first two. JavaScript front matter is refused in every config
   directory, the user's own included.
+- An instruction file is a reader of front matter too, and it does not parse it at all. `ConfigInstructionFile.parse`
+  cuts a block off with `ConfigMarkdown.split`, which looks only for delimiter lines. A reader that needs the block, such
+  as the `paths` of a rule file, takes the span that `split` returns and parses that through `parseOption`, so that one
+  splitter decides what front matter is. A file whose first line carries a language after the dashes is not front
+  matter, and its text is kept as written: nothing evaluates it, and it is the same instruction
+  text that Orbit already loads from that folder.
 - For a new parser or file format, read its default engines, tags, caches and what it loads on its own. A spec's claim
   that a file kind is "just text" is a claim to verify against the parser, not to assume. Workflow YAML is read with
-  `Bun.YAML.parse` and JSON with `Bun.file().json()`, and neither evaluates anything.
+  `Bun.YAML.parse` and JSON with `Bun.file().json()`, and neither evaluates anything; a YAML file whose aliases come to
+  more than its text is refused (class 7).
 
 **How to test:**
 
@@ -1558,6 +2249,12 @@ gray-matter's default engines, or a marker test per reader written with the spec
   `packages/core/test/config/markdown.test.ts`.
 - The control: the unprotected parser runs the file. Parse the same content three times and compare, to catch the cache
   bug.
+- For instruction files the same spellings are written through `ConfigInstructionFile.parse`, `ConfigInstructionPlugin`
+  and `SessionInstructions` (`test/config/instruction-file.test.ts`, `test/instruction-discovery.test.ts`,
+  `test/session-instructions.test.ts`). The marker is absent, the text of a tagged opener is kept as written instead of
+  the file being skipped, and a bare block is removed, one with CRLF line endings through all three and one that holds
+  a `!!js/function` tag through `parse`. The control is `gray-matter` without the guard, which writes the marker for the
+  JavaScript spellings (`coffee` has no engine in it, so that row has no control).
 
 **Review questions:**
 
@@ -1816,11 +2513,20 @@ These come from how M1 and M2 were run, and they apply to any change in this are
 Not fixed in M1. Each entry is a place where the promise at the top of this page does not hold yet, or rests on a
 decision that is still open. Do not claim otherwise in docs or in a PR, and do not widen one. An entry that names a task
 is carried by it, and one that names none has no task yet: give it one. An entry reads `Accepted by the owner until
-<task>` once the owner has said so in writing. None does yet, so until one does, a change that touches that surface
-fixes it or asks.
+<task>` once the owner has said so in writing. The owner's rules of 2026-10-14 ("What ever reference is doing") and
+2026-10-18 ("same as free-code-main repo does", "reference decides") count as that writing for the gaps the reference
+decided to accept: FU-M1-013, FU-M1-026, FU-M1-050, FU-M1-080 and FU-M1-088. The first two have an entry below that says
+so; the other three have no entry, and their register rows record the acceptance. Any other entry is not accepted, so a
+change that touches that surface fixes it or asks.
 
 The program-wide register of every follow-up, these gaps included, with each one's carrier and status, is [follow-ups.md](follow-ups.md).
 
+- **A drive letter mapped to a share is not told from a local drive by an import.** A trusted project's `@Z:/x.md` on a
+  mapped network drive is read, where it was always refused before the outside rule, and an untrusted repository's one is
+  still resolved and statted before `allow` refuses it (9b order). Unmapped `\\server` and `//server` spellings are
+  refused before any disk access. Carried by `permissions-3a` as FU-M3-003; see "A share named before anyone is asked" below.
+  Accepted by the owner until `permissions-3a` (FU-M1-026): the reference treats a drive letter as an ordinary path. A
+  word that a shell builds as it runs stays with `shell-safety-12`.
 - **Fingerprints stop short of three things.** The skill and agent directories of other products' roots
   are not digested, so a hook added to a skill there is not asked about, and no consumer of those hooks exists yet:
   hooks-21 must digest them before it runs one. The modules that a plugin's entry file imports are not digested
@@ -1862,35 +2568,59 @@ The program-wide register of every follow-up, these gaps included, with each one
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
   holds only without a leading wildcard. The review of #3 left it to the owner: change what such a pattern matches, or
   say so in the note.
-- **The `webfetch` tool and a proxy.** `webfetch` now asks per hop, passes `AddressGuard.check` and connects to the checked
-  address, as Code Mode `fetch` does. A user-configured proxy still sees that address and not the name; the owner has yet to decide.
+- **The `webfetch` tool and a proxy (the owner's exception, 2026-10-19, FU-M1-008).** `webfetch` asks per hop and, for a
+  request that goes direct, passes `AddressGuard.check` and connects to the checked address, as Code Mode `fetch` does.
+  The proxy is the first of `https_proxy`, `HTTPS_PROXY`, `http_proxy` and `HTTP_PROXY` that holds an `http:` or `https:`
+  address, for a URL of either scheme (the reference's selection). When `NO_PROXY` does not name the host, the request is
+  sent to the proxy for the host name, as the reference does, and Orbit resolves and checks nothing: the proxy decides
+  where it connects, so a cloud metadata address named by a host is the proxy's to refuse. A literal address, `localhost`
+  and a name under `.localhost` never take the exception; other names that resolve to a loopback address (such as
+  `ip6-localhost`) do, so a proxy on the same machine could reach the person's loopback for them, as the reference's
+  would. When `NO_PROXY` names the host, Orbit pins the request to the checked address and the runtime applies its own
+  proxy variables to that address: the request still goes through the proxy, as the address, unless `NO_PROXY` lists the
+  address too. It is not a direct connection, which the reference makes (FU-M4-r3-no-proxy). Code Mode `fetch` keeps the
+  rule without the exception. Proof: `test/tool-webfetch.test.ts` (the name reaches a recorded proxy target and no
+  lookup runs; five rows pin that the request is handed to `fetch` for the checked address with no `proxy` option in
+  the `NO_PROXY` and malformed-proxy spellings, which a mock cannot show connecting directly; the order of the four
+  variables and the same proxy for both schemes in `proxyFor`; a metadata name without a proxy, and a literal address
+  and `localhost` with one, are still refused).
 - **A terminal UI plugin that first appears above the folder** while the UI runs is imported with no `config.updated` or
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
   starts a run without `requireTrust`. Nothing calls it except an import-boundary test, so it is dormant. Whoever wires
   it in calls `requireTrust` first. It and `runNonInteractive({ auto })` also select the mode that skips permission prompts
-  without the managed-settings check that the command handlers make (`bypassRefusal`), so whoever wires them in adds it too.
+  without the managed-settings check that the command handlers make (`bypassDecision`), so whoever wires them in adds it too.
 - **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
   `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
   cannot tell a trust refusal from any other failure of a command.
-- **The bare `git` fallback.** When `which` finds no git on Windows, `gitExecutable` falls back to the bare name `git`. That goes through the
-  spawner, which sets the variable before it launches. The spawner's tests run under Bun, and the core also runs under
-  Node, where only the launcher's test shows that Node's own spawn honors the variable, so a test that plants a
-  `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).
+- **A bare name that is on no `PATH`.** On Windows cross-spawn resolves a bare name itself, in the working folder of the
+  child first, with the extensions of `PATHEXT` and then with none, and starts the interpreter that the `#!` line of a file
+  it finds names. `NoDefaultCurrentDirectoryInExePath` does not reach that lookup. `gitExecutable` no longer hands it a
+  bare name (class 10; the control row of `test/util/git-executable.test.ts` shows cross-spawn running such a file),
+  but `hg` does (only for a trusted folder, since `Project.resolve` and the Mercurial provider start none otherwise) and
+  so does `az` (the token command of the Azure provider, started in the folder that the server runs in). The fix is in the
+  spawner: find the program with `which` and fail for a name that is not found. It changes what a relative `PATH` entry
+  of a child does, which is the owner's question above. Register row FU-M4-001, task `sweep`.
+- **`@orbit/client` starts a bare `orb` on Windows.** With no `options.command` the client starts `["orb", "serve",
+"--service"]` through `node:child_process`, so a host on Windows whose working folder holds an `orb.exe` can start that
+  one. The client may depend only on Schema and Protocol, so it cannot use `which`. Documented, not enforced
+  (FU-M1-075): the client README tells a host to pass an absolute command or to set `NoDefaultCurrentDirectoryInExePath`.
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
   `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
   a program in the working folder that way (`util.which` in `packages/util/test/which.test.ts`). A child that is handed a
   `PATH` with an explicit relative entry still searches it: a hand probe with Bun 1.4.2 on Windows had `cmd.exe` run a
   project `.cmd` through a `.` entry even with `NoDefaultCurrentDirectoryInExePath` set (no test pins this). That needs the person's own `PATH` or the person's own config to name
   the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).
-- **The external editor.** `openEditor` in `packages/tui/src/editor.ts` starts `$VISUAL` or `$EDITOR` with `shell: true`
-  on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and
-  `node:child_process` passes the live environment, so the `cmd.exe` has `NoDefaultCurrentDirectoryInExePath` and a
-  `vim.bat` that a repository ships is not found before `PATH` (measured with Bun 1.4.2 on Windows), but no test starts
-  the editor against a decoy (task `clients-ux-14`). `openFile` in the same file, which the `/keybindings` command uses,
-  does not share this: it finds the editor with `which`, starts it by the path it found through cross-spawn, and a
-  Windows test plants a decoy of the same name in the working folder (`test/editor.test.ts`). `openEditor` can take the
-  same route.
+  Accepted by the owner (FU-M1-013, 2026-10-18): the reference hands a child the person's `PATH` as it is, and no task
+  carries it.
+- **The external editor** is fixed (FU-M1-014, task `clients-ux-14`). `openEditor` and `openFile` in
+  `packages/tui/src/editor.ts` share one launcher: the editor is found with `which` on `PATH` alone, started by the path
+  that was found through cross-spawn with `ProgramLookup.environment(undefined)` and no shell, so a `code.cmd`,
+  `vim.bat` or `code.exe` in the folder it runs in is not the one that runs. It calls cross-spawn directly and not the
+  spawner, which sets `windowsHide` on every child and so would hide an editor the person has to see. Proof:
+  `test/editor.test.ts` "starts the prompt editor from PATH and never a code.cmd, code.exe or vim.bat in the folder it
+  runs in" (Windows; decoys, a control that runs each decoy by its path, and `NoDefaultCurrentDirectoryInExePath` deleted
+  first). A value that needs `cmd.exe` no longer starts (upgrading notes).
 - **VS Code, more than one folder.** The chat works in one folder, the one in view when it first connected, and its
   trust question and banner are about that folder. The Runs view and the terminals follow the editor in view, so in a
   workspace of several folders they can act in another one. What they start gates itself in its own process
@@ -1901,10 +2631,14 @@ The program-wide register of every follow-up, these gaps included, with each one
   terminals) is not exercised by any test or by a recorded manual run. The logic behind it is in `Controller`,
   `trust.ts` and `program.ts`, which are tested. That includes the refetch of the model list when the trust check starts
   to answer after a restart of an old service. No task yet.
-- **A string comparison in `Git.clean`.** It keeps the entries of `git worktree list` with
-  `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
-  that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
-  check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
+- **Resuming a run in a folder that is not trusted** (M4 round 6, register row FU-M4-r6-resume-store). `orb flow
+  resume`, `orb eval --resume` and `orb flow replay` refuse such a folder before they open its run store, because a store
+  that a clone ships decides where a resumed run's reviewer and checks work and which sessions its team continues
+  (`packages/cli/test/trust.test.ts`, the rows for a run store that the clone ships). Letting them run there again needs a
+  narrower check: accept a stored worktree only when it is the folder `Git.worktree` makes for that repository, run and
+  node, accept a team member's session only when the run made it, and take no default model or eval models from the
+  store, since the owner withholds the choice of a model from an untrusted folder. In a trusted folder a resumed run
+  still takes all of these from the store as it records them. No task yet.
 - **Build checks.** `verifyArtifact` fails the build on an import or a `require` of a `#` name in the forms Bun writes in an unsplit build (`import("#x")`, `import"#x"`, `from"#x"`, `__require("#x")` and a call through the minified `import.meta.require` alias)
   (`packages/cli/test/verify-artifact.test.ts`), and `provider-compiled.test.ts` and `pdf-compiled.test.ts` import the
   autoload options instead of copying them. The alias set covers the whole file, so a minifier that reuses the alias name for another call could fail the build wrongly, and a `splitting: true` build, where a chunk imports the alias from an earlier or later chunk, is not covered and has no test. It still does not fail the build on a stray bare name: a text scan of the
@@ -1937,15 +2671,49 @@ The program-wide register of every follow-up, these gaps included, with each one
   bundled client reads `metadata.queued`.
 - **Shared approvals.** A project's ID comes from its remote URL, so a folder that names the same remote shares the
   saved "always allow" approvals.
-- **Git in the folder.** Orbit runs git in a folder to resolve its project, and git applies that folder's own
-  `.git/config`, which can name programs for git to run. `shell-safety-18` carries the read-only `.git/hooks` and
-  `.git/config` of the shell sandbox. The git calls of `Project.resolve` before the folder is trusted have no task yet:
-  give them one (a project's identity can be read from files, without running git). Fingerprints do not cover `.git`.
-  Mercurial is not part of this gap: neither `Project.resolve` nor the Mercurial VCS provider starts an `hg` in a
-  folder that `WorkspaceTrust` does not trust (`packages/core/test/project-hg-trust.test.ts` and
-  `test/vcs-hg-trust.test.ts`, each with a trusted control that does start it), because `hg` loads the `[extensions]`
-  and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
-- **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
+- **Git in the folder.** Git applies the config of the folder it runs in (`.git/config`, its includes, `.gitattributes`
+  and the hooks), which can name programs for git to run. `Project.resolve`, the Git VCS provider and the location
+  watcher start no git in a folder that `WorkspaceTrust` does not trust, and read its files instead (`GitLayout`;
+  `test/project-git-trust.test.ts`, `test/vcs-git-trust.test.ts`, `test/filesystem/watcher.test.ts`, each with a trusted
+  control and with the plain git command of each key as the proof that the key is live). The undo snapshot starts no git at all while the folder is not trusted, so those steps have no undo (`test/snapshot-untrusted-git.test.ts`, `test/snapshot-trust.test.ts`), and the worktree list (`test/worktree-untrusted-git.test.ts`) starts none in the folder's own repository. The read calls
+  of the `Git` service run only behind those gates: `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes`,
+  `VcsInstructions` and the snapshot check trust first, none of them lets git look for a repository above the folder
+  that was trusted (`test/git-passed-over.test.ts`), and the repository cache works only in Orbit's own clones
+  (`test/worktree-untrusted-git.test.ts`, `test/lsp-ignored.test.ts`, the "starts no git process in an untrusted folder"
+  row of `test/instruction-notes.test.ts`, `test/session-context-vcs.test.ts`). In a trusted folder `status.short` reaches
+  `core.fsmonitor` and clean filters, and `history.recent` reaches `gpg.program` when `log.showSignature` is set
+  (`test/git.test.ts`; a fact about the commands and git versions the tests ran with, 2.52
+  on Windows and the container's on Linux). Orbit's git starts no git inside a submodule, so in a trusted repository a
+  gitlink whose `.git` names a repository that is not trusted runs none of that repository's programs
+  (`test/git-gitlink.test.ts`, `packages/flow/test/git-gitlink.test.ts`). What remains: `Worktree.create` and `Worktree.remove` through a strategy other than the git one,
+  and the worktree tools of the model, which run `git worktree add` and `remove` in a trusted folder and so run its hooks and filters of the
+  folder (`agents-extensibility-28`); the shell sandbox's `.git/hooks` and `.git/config` (`shell-safety-18`); read-only
+  git in the shell tool (`shell-safety-12`); the `orb flow` commands that open the run store (`ls`, `show`, `cost`, `trace`,
+  `approve`, `watch` and `clean`), which asked git for the repository root with no trust check, and `clean` removed
+  worktrees with it (register row FU-M4-002, fixed: `clean` asks `requireTrust` first and the readers find the root from the files),
+  and `orb flow run`, `resume`, `replay` and `orb eval`, which started git in the folder for its root, head, changes,
+  worktrees, commits and merges, so that `core.fsmonitor`, a clean filter or a hook of an untrusted clone ran
+  (fixed: `run` and `evaluate` take `trusted`, the commands pass the answer of the server after `requireTrust` and `replay`
+  passes false, and with it false the runner starts no git and finds the run store from the files; since round 6
+  `resume` and `replay` refuse an untrusted folder before they open the store;
+  `packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and `hooks/post-checkout`, each with a
+  trusted control; the tasks of an eval still run agents, whose sessions take no undo snapshot while the folder is not trusted); a repository with no config of its own, which shows no
+  branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
+  for hooks and stdio MCP servers below); fingerprints, which do not cover `.git`; and the question that decides whether
+  a trusted folder's git may follow its `.git` elsewhere (`Git.repo.used` and `Git.root` of the flow, which run `rev-parse`):
+  git reads the config of the repository it lands in, includes and all, before Orbit has decided anything about that
+  repository, so it can open a file or a share that an include there names. A project is still named by the remote URL in the folder's config, which a
+  clone can write (Shared approvals, above). Mercurial was never part of this gap: neither `Project.resolve` nor the
+  Mercurial VCS provider starts an `hg` in a folder that `WorkspaceTrust` does not trust
+  (`packages/core/test/project-hg-trust.test.ts` and `test/vcs-hg-trust.test.ts`, each with a trusted control that does
+  start it), because `hg` loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
+- **The hooks of the person's own git config during a snapshot** (M4 round 3 re-check; closed in round 7). The hooks of
+  a global or system `core.hooksPath`, and `init.templateDir`, ran while an untrusted folder was captured from Orbit's
+  own git directory, with the folder as the working directory. An untrusted folder now gets no snapshot and no git at
+  all (the Snapshot entry of the inventory), so they no longer run there; in a trusted folder they run as for any git
+  command the person starts.
+- **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4). The `@path` imports
+  of prompts-context-9b do not wire it; it stays unread and its guard waits for whichever task wires it.
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.
 - **No list of known failures.** The repository holds no list of the tests that are known to fail or to be flaky. M1's
@@ -2037,6 +2805,28 @@ The program-wide register of every follow-up, these gaps included, with each one
   owner call on how a user-scope document shows as withheld. `orb -p` already refuses an untrusted folder; `orb run`
   without `--trust` now runs no hook and starts no stdio server. The owner has not yet said whether headless runs keep
   the reference's implicit trust for hooks.
+
+- **Envelope look-alikes are escaped at the sinks `reminder-text.ts` is called from, and at no others.** While a request
+  is lowered, `ReminderText.neutralize` escapes the opening bracket of a `<system-reminder>` or `<system-update>` tag in
+  tool results and tool errors (local and MCP, including a wrapped error's response body, and a text or JSON file in a result, such as an MCP resource: its base64 data URL is decoded, escaped and encoded again, while images and PDFs stay byte for byte), text and directory
+  attachments (an ACP editor's embedded text resource is sent as one; a text file from `orb run -f`, stream-json `files` or Mini's initial files is escaped inline) and an attached file's location, the Code Mode
+  tool listing (MCP tool descriptions; baseline and updates), a tool result's text parts together (an adapter joins them
+  with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
+  command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
+  `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text. The clients that send editor context as a hidden message escape it before
+  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat writes the selected text, and the terminal UI the path and the selection,
+  into a fenced block after their envelope (VS Code keeps its escaped one-line file name, language and problem messages inside it), and ACP escapes the assistant-audience text it submits.
+  Synthetic messages are
+  recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
+  Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`
+  (most rows build each message through its real producer; the nested instruction file row writes the message by hand),
+  `session-reminder-files.test.ts` (a text file in a tool result, 12 spellings, compiled for two provider adapters, with an image control; the name of a PDF in a Read result and in an attachment, 12 spellings, compiled for three provider adapters, with an untagged control), `skill/instructions-budget.test.ts` and `agent-instructions-fields.test.ts` (the agent and skill listings), `session-reminder-joins.test.ts` (the request bodies of two chat-completions adapters, one joining parts with nothing and one with a line break), `codemode/instructions.test.ts`, the ACP subprocess
+  row in `prompt-content.subprocess.test.ts`, the end-to-end case in `session-shell.test.ts`, `mcp-instructions.test.ts` and
+  `instruction-discovery.test.ts`. Not covered (register row FU-M4-36): the reference listing, the descriptions of direct MCP tools (`codemode: false`), the text of a
+  plugin-supplied system part, host-supplied instruction entries, a hosted tool's provider-format result, and the opaque
+  window of a native compaction; instruction text the person chose to run (an activated skill's body, command templates, MCP prompt commands); image and PDF bytes, which cannot be escaped; Unicode spellings of the tag are FU-M4-38. A new sink that puts text from a file or a
+  tool into a request needs the same call and a row in that table.
 
 ## Review checklist
 

@@ -69,6 +69,11 @@ const withTools = <A, E, R>(
         ),
         Permission.node.replace(
           permissionLayer({
+            // A deny of the person's rules, decided without a question.
+            denied: (input) =>
+              Effect.succeed(
+                input.resources.some((resource) => Permission.evaluate(input.action, resource, rules).effect === "deny"),
+              ),
             assert: (input) =>
               Effect.sync(() => {
                 assertions?.push(input)
@@ -98,7 +103,7 @@ const call = (name: "Glob" | "Grep", input: unknown) => ({
 
 describe("search tools", () => {
   for (const hidden of [undefined, false, true]) {
-    for (const limit of hidden ? [10] : [1, 10]) {
+    for (const limit of hidden === false ? [1, 10] : [10]) {
       it.live(`glob honors hidden=${hidden} before limit=${limit}`, () =>
         Effect.gen(function* () {
           const tmp = yield* tmpdirScoped()
@@ -115,9 +120,11 @@ describe("search tools", () => {
                 registry,
                 call("Glob", { pattern: "**/*.ts", limit, ...(hidden === undefined ? {} : { hidden }) }),
               )
-              const expected = hidden
-                ? [".hidden.ts", ".hidden/nested.ts", "src/.hidden.ts", "src/visible.ts"]
-                : ["src/visible.ts"]
+              // Hidden files are listed unless the call says `hidden: false`.
+              const expected =
+                hidden === false
+                  ? ["src/visible.ts"]
+                  : [".hidden.ts", ".hidden/nested.ts", "src/.hidden.ts", "src/visible.ts"]
 
               expect(result.status).toBe("completed")
               expect(result.output).toHaveLength(expected.length)
@@ -161,7 +168,7 @@ describe("search tools", () => {
               const grepText = grep.content?.[0]?.type === "text" ? grep.content[0].text : ""
               expect(globText.split("\n")).toHaveLength(FileSystem.DEFAULT_SEARCH_LIMIT + 2)
               expect(globText).toEndWith(
-                `(Results are truncated: showing first ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Consider using a more specific path or pattern.)`,
+                `(The list stops at ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Search a narrower folder or use a tighter pattern to see the rest.)`,
               )
               expect(FileSystem.DEFAULT_GREP_LIMIT).toBe(250)
               expect(grepText).toStartWith("Found 250 matches\n")
@@ -921,7 +928,7 @@ describe("search tools", () => {
     }),
   )
 
-  it.live("glob lists the most recently modified files first", () =>
+  it.live("glob lists the oldest files first", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
       yield* Effect.promise(async () => {
@@ -936,14 +943,111 @@ describe("search tools", () => {
       })
       yield* withTools(tmp.path, (registry) =>
         Effect.gen(function* () {
-          const result = yield* executeTool(registry, call("Glob", { pattern: "*.ts" }))
+          const result = yield* executeTool(registry, call("Glob", { pattern: "**/*.ts" }))
           expect(result.output).toEqual([
-            { path: "new.ts", type: "file" },
-            { path: "middle.ts", type: "file" },
             { path: "old.ts", type: "file" },
+            { path: "middle.ts", type: "file" },
+            { path: "new.ts", type: "file" },
           ])
         }),
       )
     }),
   )
+
+  // FU-M3-305: the listing includes what .gitignore names, and leaves out what the person's Read rules deny.
+  it.live("glob lists a file that .gitignore names, and a hidden one", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(tmp.path, ".git"))
+        await Bun.write(path.join(tmp.path, ".gitignore"), "ignored.ts\nbuild/\n")
+        await Bun.write(path.join(tmp.path, "ignored.ts"), "x\n")
+        // A file inside an ignored folder is only listed when the search itself ignores no ignore file.
+        await Bun.write(path.join(tmp.path, "build", "inside.ts"), "x\n")
+        await Bun.write(path.join(tmp.path, ".dotfile.ts"), "x\n")
+        await Bun.write(path.join(tmp.path, "plain.ts"), "x\n")
+      })
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const result = yield* executeTool(registry, call("Glob", { pattern: "**/*.ts" }))
+          expect((result.output as ReadonlyArray<{ path: string }>).map((entry) => entry.path).sort()).toEqual([
+            ".dotfile.ts",
+            path.join("build", "inside.ts"),
+            "ignored.ts",
+            "plain.ts",
+          ])
+        }),
+      )
+    }),
+  )
+
+  for (const row of [
+    { name: "a Read deny leaves a denied file unlisted", rules: readRuleForGlob("*.env", "deny"), listed: false },
+    { name: "a Read ask leaves it listed", rules: readRuleForGlob("*.env", "ask"), listed: true },
+    { name: "no rule leaves it listed (control)", rules: [] as Permission.Ruleset, listed: true },
+  ] as const)
+    it.live(`glob: ${row.name}`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* Effect.promise(async () => {
+          await Bun.write(path.join(tmp.path, ".env"), "API_KEY=SECRET-MARKER\n")
+          await Bun.write(path.join(tmp.path, "notes.md"), "notes\n")
+        })
+        const assertions: Permission.AssertInput[] = []
+        yield* withTools(
+          tmp.path,
+          (registry) =>
+            Effect.gen(function* () {
+              const result = yield* executeTool(registry, call("Glob", { pattern: "*" }))
+              const names = (result.output as ReadonlyArray<{ path: string }>).map((entry) => entry.path).sort()
+              expect(names).toEqual(row.listed ? [".env", "notes.md"] : ["notes.md"])
+              expect(JSON.stringify(result)).not.toContain("SECRET-MARKER")
+              // Nobody is asked about the files that are left out: the one question is the search folder's own.
+              expect(assertions.filter((item) => item.action === "Read").map((item) => item.resources)).toEqual([["."]])
+            }),
+          assertions,
+          true,
+          row.rules,
+        )
+      }),
+    )
+
+  it.live("glob fills the limit with readable files when a denied one is among the first", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(async () => {
+        for (const [file, time] of [
+          ["a.env", 1_000_000],
+          ["b.env", 2_000_000],
+          ["c.ts", 3_000_000],
+          ["d.ts", 4_000_000],
+        ] as const) {
+          await Bun.write(path.join(tmp.path, file), "x\n")
+          await fs.utimes(path.join(tmp.path, file), new Date(time), new Date(time))
+        }
+      })
+      yield* withTools(
+        tmp.path,
+        (registry) =>
+          Effect.gen(function* () {
+            const result = yield* executeTool(registry, call("Glob", { pattern: "*", limit: 2 }))
+            expect(result.output).toEqual([
+              { path: "c.ts", type: "file" },
+              { path: "d.ts", type: "file" },
+            ])
+            expect(result.metadata).toEqual({ count: 2, truncated: false })
+          }),
+        undefined,
+        true,
+        readRuleForGlob("*.env", "deny"),
+      )
+    }),
+  )
 })
+
+function readRuleForGlob(resource: string, effect: "deny" | "ask"): Permission.Ruleset {
+  return [
+    { action: "*", resource: "*", effect: "allow" },
+    { action: "Read", resource, effect },
+  ]
+}

@@ -9,7 +9,7 @@ import {
   partPath,
   type SessionRow,
 } from "../../../src/routes/session/grouping/session"
-import { planItems } from "../../../src/routes/session/plan-dock"
+import { latestTodos } from "../../../src/util/tool-display"
 import { reduceSessionRows } from "../../../src/routes/session/rows"
 
 const model = { id: "model", providerID: "provider" }
@@ -267,10 +267,10 @@ test("the plan dock finds a plan recorded under the old or the reference tool na
   })
   const expected = [{ content: "ship", status: "pending" as const }]
   for (const name of ["todo", "TodoWrite"])
-    expect(planItems([assistant("a", [withInput(name, { todos: expected })])])).toEqual(expected)
+    expect(latestTodos([assistant("a", [withInput(name, { todos: expected })])])).toEqual(expected)
   for (const name of ["task_create", "TaskCreate", "TaskUpdate", "TaskList"])
-    expect(planItems([assistant("a", [withTodos(name)])])).toEqual(expected)
-  expect(planItems([assistant("a", [withTodos("Read")])])).toEqual([])
+    expect(latestTodos([assistant("a", [withTodos(name)])])).toEqual(expected)
+  expect(latestTodos([assistant("a", [withTodos("Read")])])).toEqual([])
 })
 
 test("questions stand alone at every level and end an activity run", () => {

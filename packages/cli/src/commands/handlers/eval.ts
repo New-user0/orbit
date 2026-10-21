@@ -1,36 +1,44 @@
-import { Orbit } from "@orbit/client"
-import { Service } from "@orbit/client/effect/service"
 import { json, plain, progress } from "@orbit/flow/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
-import { ServerConnection } from "../../services/server-connection"
-import { bypassRefusal } from "../../util/managed-bypass"
-import { requireTrust } from "../../util/trust"
-import { directory, trustOptions } from "./flow/execute"
+import { bypassDecision, printBypassNotice } from "../../util/managed-bypass"
+import { errorMessage } from "../../util/error"
+import { requireTrust, trustedProject, trustRefusal } from "../../util/trust"
+import { connect, directory, trustOptions } from "./flow/execute"
 
 export default Runtime.handler(
   Commands.commands.eval,
   Effect.fn("cli.eval")(function* (input) {
     const { evaluate, loadSuite, openStore, summarize } = yield* Effect.promise(() => import("@orbit/flow"))
     const file = path.resolve(directory(), input.suite)
-    const server = yield* ServerConnection.resolve({
-      server: Option.getOrUndefined(input.server),
-      standalone: input.standalone,
-      trust: input.trust,
-    })
-    const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+    const client = yield* connect(input)
+    const resume = Option.getOrUndefined(input.resume)
+    // A resumed eval goes on from a run that the folder's run store records, models included, and the store is a file
+    // that a clone ships, so the folder has to be trusted before the store is opened (classes 1, 5 and 12). The refusal,
+    // or a trust request that fails, is reported as `orb run` reports one: under --format json as its JSON error on
+    // stdout, and otherwise as text on stderr, with exit status 1 either way.
+    const stopped =
+      resume === undefined
+        ? undefined
+        : yield* trustRefusal(client, directory(), { grant: input.trust, strict: "recorded" }).pipe(
+            Effect.catch((error) => Effect.succeed(errorMessage(error))),
+          )
+    if (stopped !== undefined) {
+      const { reportRunError } = yield* Effect.promise(() => import("../../run/run"))
+      return reportRunError({ format: input.format === "json" ? "json" : "default" }, stopped)
+    }
     // Before the suite is loaded, so that a refusal that says no work was done comes before any code of the file runs.
     // It holds the folder that holds the file to the trust the file needs as well, which can be another project's than
     // the folder of the run.
     const trust = yield* trustOptions(file, "suite")
     yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
-    const bypass = yield* bypassRefusal(client, directory(), input.auto)
-    if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
+    const project = yield* trustedProject(client, directory())
+    const bypass = yield* bypassDecision(client, directory(), input.auto)
+    printBypassNotice(bypass.notice)
     const suite = yield* Effect.tryPromise({ try: () => loadSuite(file), catch: (cause) => cause })
-    const resume = Option.getOrUndefined(input.resume)
     // A resumed eval compares the models it started with.
     const recorded = resume
       ? yield* Effect.promise(async () => {
@@ -54,9 +62,11 @@ export default Runtime.handler(
           suite,
           file,
           directory: directory(),
+          trusted: project !== undefined,
+          project,
           models,
           concurrency: Option.getOrUndefined(input.concurrency),
-          permissions: input.auto ? "auto" : "reject",
+          permissions: bypass.auto ? "auto" : "reject",
           resume,
           log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
         }),

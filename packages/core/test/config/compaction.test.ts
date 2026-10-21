@@ -10,6 +10,7 @@ import { SessionCompaction } from "@orbit/core/session/compaction"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { Session } from "@orbit/core/session"
 import { Agent } from "@orbit/core/agent"
@@ -47,6 +48,7 @@ const it = testEffect(
         }),
       ),
       Config.node.replace(config),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
     ]),
   ),
 )

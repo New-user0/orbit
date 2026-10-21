@@ -38,6 +38,13 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "Permission.Request" })
 export interface Request extends Schema.Schema.Type<typeof Request> {}
 
+export const Mode = Schema.Literals(["default", "accept-edits", "plan", "bypass", "dont-ask", "auto"]).annotate({
+  identifier: "Permission.Mode",
+  description:
+    "How permission requests are decided: default asks, accept-edits allows file edits, plan is read-only, bypass allows everything, dont-ask refuses what would be asked, auto lets a classifier decide",
+})
+export type Mode = typeof Mode.Type
+
 export const Reply = Schema.Literals(["once", "always", "reject"]).annotate({ identifier: "Permission.Reply" })
 export type Reply = typeof Reply.Type
 

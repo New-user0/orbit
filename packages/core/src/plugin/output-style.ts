@@ -9,51 +9,65 @@ import path from "path"
 import { Config } from "../config.js"
 import { ConfigMarkdown } from "../config/markdown.js"
 import { ProjectTrust } from "../project-trust.js"
+import { SessionSystemPrompt } from "../session/system-prompt.js"
+import { PromptConfigPlugin } from "./prompt-config.js"
+import { SubagentPromptPlugin } from "./subagent-prompt.js"
 import type { PluginInternal } from "./internal.js"
 
 /**
  * Output styles change how the agent talks, not what it can do. The `output_style` config names a built-in style or a
  * Markdown file in an `output-styles` directory of any Orbit config directory or, while compatibility is enabled, of
- * another agent product's root; the file's body is appended to the system prompt. Frontmatter
- * `keep-coding-instructions: false` also drops the coding sections of Orbit's default prompt, for styles meant for
- * work other than writing code.
+ * another agent product's root; the file's body is appended to the system prompt. A style drops the coding sections of
+ * Orbit's default prompt (`SessionSystemPrompt.CODING_SECTIONS`) unless its frontmatter sets
+ * `keep-coding-instructions` to `true` (a boolean or the string `"true"`); a missing key, `false` and any other value
+ * drop them. The built-in styles keep them. While a style applies, the prompt's opening line (`SessionSystemPrompt.INTRO`)
+ * is replaced by one that points at the style; a prompt that does not begin with that line keeps its own.
  *
  * The name is one file name, so a repository's config cannot make it climb out of the directory, and a file in a
  * directory whose folder is not trusted is read only when its real path is inside that folder (`ProjectTrust.supplies`).
+ * Reading it is all that gate allows: a style from a folder that is not trusted still goes last in the prompt under its
+ * own heading, but it does not replace the opening line, because that line says what the agent is for and would pass the
+ * clone's text off as Orbit's. The folder is asked at each request (`ProjectTrust.trustedSource`), so a grant or a revoke
+ * takes effect at once. Every kind of style leaves the sections that govern approvals as they are.
  */
 
 interface Style {
   readonly name: string
   readonly body: string
   readonly keepCodingInstructions: boolean
+  /** Whether the folder that holds the style is trusted. A built-in style is Orbit's own. */
+  readonly trusted: boolean
 }
 
 const BUILT_IN: Record<string, Style> = {
   explanatory: {
     name: "Explanatory",
+    trusted: true,
     keepCodingInstructions: true,
     body: [
-      "While you work, help the user understand the codebase and your choices.",
-      "- Before or after a meaningful change, add a short insight: why this approach fits this codebase, what pattern it follows, or what trade-off it makes. Mark each one with a line that reads `Insight:`.",
-      "- Prefer insights specific to this project over general programming advice.",
-      "- Keep insights to two or three sentences, and do not let them crowd out the work itself.",
+      "While you work, teach the user how this repository is put together and why you chose your approach.",
+      "- Write short teaching notes about why the code here is shaped the way it is, and about the reasons behind your own choices. Start each note with `Design note:` and keep it in the conversation, never in a file.",
+      "- A note is about this codebase and this change, not about programming in general, and it takes a few sentences.",
+      "- The notes do not count against the length limits given earlier. The work itself still comes first.",
     ].join("\n"),
   },
   learning: {
     name: "Learning",
+    trusted: true,
     keepCodingInstructions: true,
     body: [
-      "The user wants to learn by doing, so share the work with them.",
-      "- For small, self-contained pieces that teach something (a function body, a condition, a test case), stop and ask the user to write them. Leave a clearly marked `TODO(human)` in the code, explain what it needs to do and why it matters, and wait for them.",
-      "- Do the surrounding work yourself so the user's part stays focused.",
-      "- After the user contributes, review it kindly and explain anything worth knowing.",
-      "- Add short `Insight:` notes about the codebase and your choices, as in the explanatory style.",
+      "The user learns by writing part of the code, so hand them a piece of it.",
+      "- Pick one small piece of a larger change, a few lines, where deciding is instructive. Routine code you write yourself.",
+      "- Ask in two steps. First place a single `ORBIT:YOURS` comment in the source where their code goes. Then tell them the file, what the code around it does and the trade-off to weigh, name the spot by the code around it rather than a line number, and pause until they answer.",
+      "- Fold what they send into the change, and tie it in one sentence to how the rest of the code works. Do not compliment or grade the piece.",
+      "- Also use the design notes of the explanatory style: start each with `Design note:`, keep them in the conversation, and tie them to this codebase.",
     ].join("\n"),
   },
 }
 
-// Sections of the default prompt about writing code, dropped for styles that replace coding work.
-const CODING_SECTIONS = ["Doing tasks", "Code style", "Verification"]
+/** Takes the place of `SessionSystemPrompt.INTRO` while a style applies. */
+export const STYLED_INTRO =
+  "You are Orbit. You help the user in the way the output style at the end of this prompt describes, using the tools you are given."
 
 export const Plugin = define({
   id: "orbit.prompt.output-style",
@@ -85,10 +99,12 @@ export const Plugin = define({
         if (content === undefined) continue
         const markdown = ConfigMarkdown.parseOption(content)
         if (!markdown) continue
+        const keep = markdown.data["keep-coding-instructions"]
         return {
           name: typeof markdown.data.name === "string" ? markdown.data.name : name,
           body: markdown.content.trim(),
-          keepCodingInstructions: markdown.data["keep-coding-instructions"] !== false,
+          keepCodingInstructions: keep === true || keep === "true",
+          trusted: yield* trust.trustedSource(source),
         } satisfies Style
       }
       yield* Effect.logWarning("output style not found", { name })
@@ -96,17 +112,44 @@ export const Plugin = define({
 
     const hook = (event: SessionHooks["context"]) =>
       Effect.gen(function* () {
+        // A side query keeps the text its caller wrote.
+        if (PromptConfigPlugin.sideQuery(event)) return
         const name = Config.latest(yield* config.entries(), "output_style")
         if (!name || name === "default") return
+        // A style is for the conversation with the person; a subagent reports to another agent.
+        if (yield* SubagentPromptPlugin.subagent(ctx, event.sessionID)) return
         const system = event.system[0]
         if (!system) return
         const style = yield* load(name)
         if (!style) return
-        const base = style.keepCodingInstructions ? system.text : withoutSections(system.text, CODING_SECTIONS)
+        // Sections are cut from Orbit's own text only. While the cut runs, each piece the person wrote is swapped for a
+        // token that is a heading line of its own: it starts a chunk, which no coding-section name matches, and it ends the
+        // section before it. A token is put back by its heading line whether or not the newline in front of it survived
+        // (that newline belongs to the chunk before, which the cut may have dropped), with the blank line that separated
+        // the piece, or none at the start of the text.
+        const pieces = SessionSystemPrompt.personal.get(event) ?? []
+        const token = (index: number) => `# \u0000personal${index}\u0000`
+        const sections = style.keepCodingInstructions
+          ? system.text
+          : pieces.reduce(
+              (text, piece, index) =>
+                text.replace(new RegExp(`\n*${token(index)}`), (_found, at: number) => (at === 0 ? "" : "\n\n") + piece),
+              withoutSections(
+                pieces.reduce((text, piece, index) => text.replace(piece, () => `\n${token(index)}`), system.text),
+                SessionSystemPrompt.CODING_SECTIONS,
+              ),
+            )
+        const base =
+          style.trusted && sections.startsWith(SessionSystemPrompt.INTRO)
+            ? `${STYLED_INTRO}${sections.slice(SessionSystemPrompt.INTRO.length)}`
+            : sections
         event.system[0] = { ...system, text: `${base}${STYLE_HEADING}${style.name}\n${style.body}` }
       }).pipe(Effect.catch(() => Effect.void))
 
+    // Compaction and generate requests carry the same system[0] as the main request, so they reuse its cached prefix.
     yield* ctx.session.hook("context", hook)
+    yield* ctx.session.hook("compaction", hook)
+    yield* ctx.session.hook("generate", hook)
   }),
 } satisfies PluginInternal.InternalPlugin)
 

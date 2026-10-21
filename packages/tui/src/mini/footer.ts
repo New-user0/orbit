@@ -597,6 +597,11 @@ export class RunFooter implements FooterApi {
     this.applyHeight()
   }
 
+  /** Whether a permission request or a form is on screen, or waits in a subagent's tab. */
+  public hasPending(): boolean {
+    return this.view().type !== "prompt" || this.subagent().permissions.length + this.subagent().forms.length > 0
+  }
+
   private reportActivity(): void {
     this.options.onActivity?.(
       this.view().type !== "prompt" ? "needs input" : this.state().phase === "running" ? "working" : undefined,

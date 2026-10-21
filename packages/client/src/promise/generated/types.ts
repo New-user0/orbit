@@ -26,6 +26,21 @@ export type TrustKind =
   | "network"
   | "settings"
 
+export type InstructionNoteTarget = {
+  scope: "user" | "project" | "local"
+  path: string
+  exists: boolean
+  enabled: boolean
+  loaded: boolean
+}
+
+export type InstructionNoteAdded = {
+  scope: "user" | "project" | "local"
+  path: string
+  created: boolean
+  loaded: boolean
+}
+
 export type TrustGrant = { directory: string; time: number; via: string }
 
 export type LocationPublicRef = { directory: string }
@@ -39,6 +54,65 @@ export type ProviderTransport = "http" | "websocket"
 export type AgentColor = string
 
 export type PermissionEffect = "allow" | "deny" | "ask"
+
+export type AgentModelTier = "inherit" | "small" | "large"
+
+export type PermissionMode = "default" | "accept-edits" | "plan" | "bypass" | "dont-ask" | "auto"
+
+export type McpProtocol = "legacy" | "auto" | "2026-07-28"
+
+export type ConfigHooksCommand = {
+  type: "command"
+  command: string
+  shell?: "bash" | "powershell"
+  async?: boolean
+  async_rewake?: boolean
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksPrompt = {
+  type: "prompt"
+  prompt: string
+  model?: string | { providerID: string; model: string; variant?: string }
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksAgent = {
+  type: "agent"
+  prompt: string
+  model?: string | { providerID: string; model: string; variant?: string }
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksHttp = {
+  type: "http"
+  url: string
+  headers?: { [x: string]: string }
+  allowed_env_vars?: Array<string>
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksHttpPolicy = { allowed_urls?: Array<string>; allowed_env_vars?: Array<string> }
+
+export type AgentMemory = "user" | "project" | "local"
+
+export type AgentIsolation = "worktree"
+
+export type AgentContext = { instructions?: boolean; git_status?: boolean }
+
+export type ConfigScope = "remote" | "user" | "project" | "local" | "flag" | "managed"
 
 export type PluginSource =
   | { type: "builtin" }
@@ -98,6 +172,8 @@ export type PromptBase64 = string
 export type PromptFileSource = { type: "inline" } | { type: "uri"; uri: string }
 
 export type PromptMention = { start: number; end: number; text: string }
+
+export type PromptEditorContext = { path: string; selection?: { start: number; end: number; text: string } }
 
 export type SessionTurnOutput = { schema: { [x: string]: JsonValue }; attempts?: number }
 
@@ -183,6 +259,24 @@ export type SessionActive = { type: "running" }
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
 
 export type SessionInboxCompactionPayload = {}
+
+export type InstructionStatusFile = {
+  path: string
+  kind: "managed" | "user" | "project" | "local"
+  chars: number
+  importedBy?: string | undefined
+  paths?: Array<string> | undefined
+}
+
+export type InstructionStatusWarning = {
+  path: string
+  type: "size" | "import-untrusted" | "import-external"
+  message: string
+  chars?: number | undefined
+  limit?: number | undefined
+  target?: string | undefined
+  directory?: string | undefined
+}
 
 export type InstructionEntryKey = string
 
@@ -446,55 +540,6 @@ export type WebSearchProvider = { id: string; name: string }
 
 export type WebSearchResult = { url: string; title?: string; content?: string; time: { published?: number } }
 
-export type ConfigScope = "remote" | "user" | "project" | "local" | "flag" | "managed"
-
-export type ConfigHooksCommand = {
-  type: "command"
-  command: string
-  shell?: "bash" | "powershell"
-  async?: boolean
-  async_rewake?: boolean
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksPrompt = {
-  type: "prompt"
-  prompt: string
-  model?: string | { providerID: string; model: string; variant?: string }
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksAgent = {
-  type: "agent"
-  prompt: string
-  model?: string | { providerID: string; model: string; variant?: string }
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksHttp = {
-  type: "http"
-  url: string
-  headers?: { [x: string]: string }
-  allowed_env_vars?: Array<string>
-  timeout?: number
-  status_message?: string
-  once?: boolean
-  if?: string
-}
-
-export type ConfigHooksHttpPolicy = { allowed_urls?: Array<string>; allowed_env_vars?: Array<string> }
-
-export type McpProtocol = "legacy" | "auto" | "2026-07-28"
-
 export type ConfigWorktree = { directory: string }
 
 export type ConfigModelCapabilities = { tools?: boolean; input?: Array<string>; output?: Array<string> }
@@ -564,6 +609,44 @@ export type ConfigProviderSettings = {
 } & { [x: string]: JsonValue | null }
 
 export type PermissionRule = { action: string; resource: string; effect: PermissionEffect }
+
+export type AgentMcpServer =
+  | string
+  | {
+      [x: string]:
+        | {
+            type: "local"
+            command: Array<string>
+            cwd?: string
+            environment?: { [x: string]: string }
+            disabled?: boolean
+            codemode?: boolean
+            timeout?: { startup?: number; catalog?: number; execution?: number }
+            protocol?: McpProtocol
+          }
+        | {
+            type: "remote"
+            url: string
+            transport?: "streamable-http" | "sse"
+            headers?: { [x: string]: string }
+            oauth?:
+              | {
+                  client_id?: string
+                  client_secret?: string
+                  scope?: string
+                  callback_port?: number
+                  redirect_uri?: string
+                  auth_server_metadata_url?: string
+                }
+              | false
+            disabled?: boolean
+            codemode?: boolean
+            timeout?: { startup?: number; catalog?: number; execution?: number }
+            protocol?: McpProtocol
+          }
+    }
+
+export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHooksAgent | ConfigHooksHttp
 
 export type PluginInfo = { id?: string; source: PluginSource; features: PluginFeatures; state: PluginState }
 
@@ -659,6 +742,12 @@ export type SessionInboxCompaction = {
   type: "compaction"
   payload: SessionInboxCompactionPayload
   delivery: SessionInboxDelivery
+}
+
+export type InstructionStatus = {
+  files: Array<InstructionStatusFile>
+  warnings: Array<InstructionStatusWarning>
+  available: boolean
 }
 
 export type InstructionEntryInfo = { key: InstructionEntryKey; value: JsonValue }
@@ -1796,8 +1885,6 @@ export type WorktreeList = Array<WorktreeDirectory>
 
 export type VcsInfo = { provider?: string; branch: VcsBranch }
 
-export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHooksAgent | ConfigHooksHttp
-
 export type TrustStatus = {
   directory: string
   trusted: boolean
@@ -1843,6 +1930,8 @@ export type ProviderInfo = {
 
 export type PermissionRuleset = Array<PermissionRule>
 
+export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksHook> }
+
 export type SessionRevertStaged = {
   id: string
   created: number
@@ -1876,6 +1965,7 @@ export type SessionMessageUser = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
+  editor?: PromptEditorContext
   turn?: SessionTurnOptions
   delivery?: SessionInboxDelivery
   type: "user"
@@ -1886,6 +1976,7 @@ export type SessionInboxUserPayload = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
+  editor?: PromptEditorContext
   metadata?: { [x: string]: JsonValue }
   turn?: SessionTurnOptions
 }
@@ -1895,6 +1986,7 @@ export type SessionInboxUserPayload1 = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
+  editor?: PromptEditorContext
   metadata?: { [x: string]: any }
   turn?: SessionTurnOptions
 }
@@ -1950,6 +2042,13 @@ export type SessionCompactionEnded = {
   }
 }
 
+export type SessionInstructionsPreview = {
+  status: InstructionStatus
+  initial?: string | undefined
+  update?: string | undefined
+  blocked?: Array<string> | undefined
+}
+
 export type SessionForked = {
   id: string
   created: number
@@ -1961,6 +2060,7 @@ export type SessionForked = {
     sessionID: string
     parentID: string
     boundary: SessionForkBoundary
+    baseline?: { [x: string]: string }
     instructions?: { [x: string]: string }
     instructionEntries?: InstructionEntrySnapshot
   }
@@ -2065,8 +2165,6 @@ export type ReferenceInfo = {
   source: ReferenceSource
 }
 
-export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksHook> }
-
 export type ModelInfo = {
   id: string
   modelID: string
@@ -2074,6 +2172,7 @@ export type ModelInfo = {
   canonical?: string
   family?: string
   name: string
+  knowledge?: string
   compatibility?: ModelCompatibility
   package?: string
   settings?: ModelSettings
@@ -2086,20 +2185,6 @@ export type ModelInfo = {
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   limit: { context: number; input?: number; output: number }
-}
-
-export type AgentInfo = {
-  id: string
-  name: string
-  model?: ModelRef
-  request: ProviderRequest
-  system?: string
-  description?: string
-  mode: "subagent" | "primary" | "all"
-  hidden: boolean
-  color?: AgentColor
-  steps?: number
-  permissions: PermissionRuleset
 }
 
 export type SessionPermissions = {
@@ -2154,63 +2239,63 @@ export type SessionCreated = {
   }
 }
 
-export type SessionInboxUser = {
-  id: string
-  sessionID: string
-  time: { created: number }
-  type: "user"
-  payload: SessionInboxUserPayload
-  delivery: SessionInboxDelivery
-}
-
-export type SessionInboxItem =
-  | { type: "user"; payload: SessionInboxUserPayload1; delivery: SessionInboxDelivery }
-  | { type: "synthetic"; payload: SessionInboxSyntheticPayload1; delivery: SessionInboxDelivery }
-  | { type: "compaction"; payload: SessionInboxCompactionPayload; delivery: SessionInboxDelivery }
-  | { type: "move"; payload: SessionInboxMovePayload1; delivery: SessionInboxDelivery }
-
-export type SessionMessageAssistantTool = {
-  type: "tool"
+export type AgentInfo = {
   id: string
   name: string
-  displayName?: string
-  executed?: boolean
-  providerState?: SessionMessageProviderState
-  providerResultState?: SessionMessageProviderState
-  state:
-    | SessionMessageToolStateStreaming
-    | SessionMessageToolStateRunning
-    | SessionMessageToolStateCompleted
-    | SessionMessageToolStateError
-  time: { created: number; ran?: number; completed?: number }
+  model?: ModelRef
+  request: ProviderRequest
+  system?: string
+  description?: string
+  mode: "subagent" | "primary" | "all"
+  hidden: boolean
+  color?: AgentColor
+  steps?: number
+  permissions: PermissionRuleset
+  modelTier?: AgentModelTier
+  effort?: string
+  tools?: { allow?: Array<string>; deny?: Array<string> }
+  permissionMode?: PermissionMode
+  mcpServers?: Array<AgentMcpServer>
+  hooks?: {
+    SessionStart?: Array<ConfigHooksMatcher>
+    SessionEnd?: Array<ConfigHooksMatcher>
+    Setup?: Array<ConfigHooksMatcher>
+    UserPromptSubmit?: Array<ConfigHooksMatcher>
+    PreToolUse?: Array<ConfigHooksMatcher>
+    PostToolUse?: Array<ConfigHooksMatcher>
+    PostToolUseFailure?: Array<ConfigHooksMatcher>
+    PermissionRequest?: Array<ConfigHooksMatcher>
+    PermissionDenied?: Array<ConfigHooksMatcher>
+    Stop?: Array<ConfigHooksMatcher>
+    StopFailure?: Array<ConfigHooksMatcher>
+    SubagentStart?: Array<ConfigHooksMatcher>
+    SubagentStop?: Array<ConfigHooksMatcher>
+    TaskCreated?: Array<ConfigHooksMatcher>
+    TaskCompleted?: Array<ConfigHooksMatcher>
+    TeammateIdle?: Array<ConfigHooksMatcher>
+    Notification?: Array<ConfigHooksMatcher>
+    PreCompact?: Array<ConfigHooksMatcher>
+    PostCompact?: Array<ConfigHooksMatcher>
+    Elicitation?: Array<ConfigHooksMatcher>
+    ElicitationResult?: Array<ConfigHooksMatcher>
+    ConfigChange?: Array<ConfigHooksMatcher>
+    InstructionsLoaded?: Array<ConfigHooksMatcher>
+    CwdChanged?: Array<ConfigHooksMatcher>
+    FileChanged?: Array<ConfigHooksMatcher>
+    WorktreeCreate?: Array<ConfigHooksMatcher>
+    WorktreeRemove?: Array<ConfigHooksMatcher>
+    disabled?: boolean
+    managed_only?: boolean
+    http?: ConfigHooksHttpPolicy
+  }
+  skills?: Array<string>
+  initialPrompt?: string
+  memory?: AgentMemory
+  background?: boolean
+  isolation?: AgentIsolation
+  context?: AgentContext
+  source?: { scope: ConfigScope; path?: string; plugin?: string }
 }
-
-export type SessionMessageCompaction =
-  | SessionMessageCompactionRunning
-  | SessionMessageCompactionCompleted
-  | SessionMessageCompactionFailed
-
-export type SessionMessageAssistantTool1 = {
-  type: "tool"
-  id: string
-  name: string
-  displayName?: string
-  executed?: boolean
-  providerState?: SessionMessageProviderState1
-  providerResultState?: SessionMessageProviderState1
-  state:
-    | SessionMessageToolStateStreaming
-    | SessionMessageToolStateRunning1
-    | SessionMessageToolStateCompleted1
-    | SessionMessageToolStateError1
-  time: { created: number; ran?: number; completed?: number }
-}
-
-export type FormFields = [FormField, ...Array<FormField>]
-
-export type CredentialValue = CredentialOAuth | CredentialKey
-
-export type FormFields2 = [FormField1, ...Array<FormField1>]
 
 export type ConfigEntry =
   | {
@@ -2225,9 +2310,18 @@ export type ConfigEntry =
         env?: { [x: string]: string }
         model?: string | { providerID: string; model: string; variant?: string }
         fallback_model?: string | { providerID: string; model: string; variant?: string }
+        model_aliases?: {
+          small?: string | { providerID: string; model: string; variant?: string }
+          large?: string | { providerID: string; model: string; variant?: string }
+        }
         output_token_cap?: number
+        git_status?: boolean
         default_agent?: string
         output_style?: string
+        language?: string
+        system_prompt?: string
+        system_prompt_file?: string
+        append_system_prompt?: string
         update?: "disable" | "notify" | "auto"
         share?: "manual" | "auto" | "disabled"
         enterprise?: { url?: string }
@@ -2235,7 +2329,8 @@ export type ConfigEntry =
         permissions?: PermissionRuleset
         agents?: {
           [x: string]: {
-            model?: string | { providerID: string; model: string; variant?: string }
+            model?: string | { providerID: string; model: string; variant?: string } | string
+            effort?: string
             request?: { headers?: { [x: string]: string }; body?: { [x: string]: JsonValue } }
             system?: string
             description?: string
@@ -2243,8 +2338,51 @@ export type ConfigEntry =
             hidden?: boolean
             color?: string
             steps?: number
+            max_turns?: number | string
             disabled?: boolean
             permissions?: PermissionRuleset
+            tools?: string | Array<JsonValue> | null
+            disallowed_tools?: string | Array<JsonValue> | null
+            permission_mode?: PermissionMode
+            mcp_servers?: Array<JsonValue>
+            hooks?: {
+              SessionStart?: Array<ConfigHooksMatcher>
+              SessionEnd?: Array<ConfigHooksMatcher>
+              Setup?: Array<ConfigHooksMatcher>
+              UserPromptSubmit?: Array<ConfigHooksMatcher>
+              PreToolUse?: Array<ConfigHooksMatcher>
+              PostToolUse?: Array<ConfigHooksMatcher>
+              PostToolUseFailure?: Array<ConfigHooksMatcher>
+              PermissionRequest?: Array<ConfigHooksMatcher>
+              PermissionDenied?: Array<ConfigHooksMatcher>
+              Stop?: Array<ConfigHooksMatcher>
+              StopFailure?: Array<ConfigHooksMatcher>
+              SubagentStart?: Array<ConfigHooksMatcher>
+              SubagentStop?: Array<ConfigHooksMatcher>
+              TaskCreated?: Array<ConfigHooksMatcher>
+              TaskCompleted?: Array<ConfigHooksMatcher>
+              TeammateIdle?: Array<ConfigHooksMatcher>
+              Notification?: Array<ConfigHooksMatcher>
+              PreCompact?: Array<ConfigHooksMatcher>
+              PostCompact?: Array<ConfigHooksMatcher>
+              Elicitation?: Array<ConfigHooksMatcher>
+              ElicitationResult?: Array<ConfigHooksMatcher>
+              ConfigChange?: Array<ConfigHooksMatcher>
+              InstructionsLoaded?: Array<ConfigHooksMatcher>
+              CwdChanged?: Array<ConfigHooksMatcher>
+              FileChanged?: Array<ConfigHooksMatcher>
+              WorktreeCreate?: Array<ConfigHooksMatcher>
+              WorktreeRemove?: Array<ConfigHooksMatcher>
+              disabled?: boolean
+              managed_only?: boolean
+              http?: ConfigHooksHttpPolicy
+            }
+            skills?: string | Array<JsonValue> | null
+            initial_prompt?: string
+            memory?: AgentMemory
+            background?: boolean | "true" | "false"
+            isolation?: AgentIsolation
+            context?: AgentContext
           }
         }
         snapshots?: boolean
@@ -2307,6 +2445,7 @@ export type ConfigEntry =
         media?: {
           image?: { auto_resize?: boolean; max_width?: number; max_height?: number; max_base64_bytes?: number }
         }
+        attribution?: { commit?: string; pr?: string }
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
         shell_tool?: { timeout?: number; max_timeout?: number }
         tool_output?: { max_lines?: number; max_bytes?: number }
@@ -2361,6 +2500,7 @@ export type ConfigEntry =
           }
         }
         instructions?: Array<string>
+        instructions_exclude?: Array<string>
         references?: {
           [x: string]:
             | string
@@ -2426,6 +2566,64 @@ export type ConfigEntry =
       }
     }
   | { type: "directory"; path: string; scope?: ConfigScope; trusted?: boolean; withheld?: Array<TrustKind> }
+
+export type SessionInboxUser = {
+  id: string
+  sessionID: string
+  time: { created: number }
+  type: "user"
+  payload: SessionInboxUserPayload
+  delivery: SessionInboxDelivery
+}
+
+export type SessionInboxItem =
+  | { type: "user"; payload: SessionInboxUserPayload1; delivery: SessionInboxDelivery }
+  | { type: "synthetic"; payload: SessionInboxSyntheticPayload1; delivery: SessionInboxDelivery }
+  | { type: "compaction"; payload: SessionInboxCompactionPayload; delivery: SessionInboxDelivery }
+  | { type: "move"; payload: SessionInboxMovePayload1; delivery: SessionInboxDelivery }
+
+export type SessionMessageAssistantTool = {
+  type: "tool"
+  id: string
+  name: string
+  displayName?: string
+  executed?: boolean
+  providerState?: SessionMessageProviderState
+  providerResultState?: SessionMessageProviderState
+  state:
+    | SessionMessageToolStateStreaming
+    | SessionMessageToolStateRunning
+    | SessionMessageToolStateCompleted
+    | SessionMessageToolStateError
+  time: { created: number; ran?: number; completed?: number }
+}
+
+export type SessionMessageCompaction =
+  | SessionMessageCompactionRunning
+  | SessionMessageCompactionCompleted
+  | SessionMessageCompactionFailed
+
+export type SessionMessageAssistantTool1 = {
+  type: "tool"
+  id: string
+  name: string
+  displayName?: string
+  executed?: boolean
+  providerState?: SessionMessageProviderState1
+  providerResultState?: SessionMessageProviderState1
+  state:
+    | SessionMessageToolStateStreaming
+    | SessionMessageToolStateRunning1
+    | SessionMessageToolStateCompleted1
+    | SessionMessageToolStateError1
+  time: { created: number; ran?: number; completed?: number }
+}
+
+export type FormFields = [FormField, ...Array<FormField>]
+
+export type CredentialValue = CredentialOAuth | CredentialKey
+
+export type FormFields2 = [FormField1, ...Array<FormField1>]
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
 
@@ -2961,6 +3159,20 @@ export type LocationTrustUpdateInput = {
 
 export type LocationTrustUpdateOutput = TrustStatus
 
+export type LocationInstructionNoteTargetsInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type LocationInstructionNoteTargetsOutput = { data: Array<InstructionNoteTarget> }["data"]
+
+export type LocationInstructionNoteAddInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+  readonly scope: { readonly scope: "user" | "project" | "local"; readonly text: string }["scope"]
+  readonly text: { readonly scope: "user" | "project" | "local"; readonly text: string }["text"]
+}
+
+export type LocationInstructionNoteAddOutput = { data: InstructionNoteAdded }["data"]
+
 export type LocationTrustListOutput = Array<TrustGrant>
 
 export type LocationTrustRevokeInput = { readonly directory: { readonly directory: string }["directory"] }
@@ -3347,6 +3559,10 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly editor?: {
+            readonly path: string
+            readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+          }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -3694,6 +3910,10 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly editor?: {
+            readonly path: string
+            readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+          }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -4041,6 +4261,10 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly editor?: {
+            readonly path: string
+            readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+          }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -4382,6 +4606,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4410,6 +4638,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4438,6 +4670,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4466,6 +4702,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4494,6 +4734,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4505,6 +4749,38 @@ export type SessionPromptInput = {
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["skills"]
+  readonly editor?: {
+    readonly id?: string | null
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly agents?: ReadonlyArray<{
+      readonly name: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly skills?: ReadonlyArray<{
+      readonly id: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
+    readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
+    }
+    readonly delivery?: ("steer" | "queue") | null
+    readonly resume?: boolean | null
+  }["editor"]
   readonly metadata?: {
     readonly id?: string | null
     readonly text: string
@@ -4522,6 +4798,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4550,6 +4830,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4578,6 +4862,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4606,6 +4894,10 @@ export type SessionPromptInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly metadata?: { readonly [x: string]: JsonValue }
     readonly turn?: {
       readonly maxSteps?: number
@@ -4640,6 +4932,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["name"]
   readonly text: {
@@ -4659,6 +4955,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["text"]
   readonly files?: {
@@ -4678,6 +4978,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["files"]
   readonly agents?: {
@@ -4697,6 +5001,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["agents"]
   readonly skills?: {
@@ -4716,8 +5024,35 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["skills"]
+  readonly editor?: {
+    readonly name: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly agents?: ReadonlyArray<{
+      readonly name: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly skills?: ReadonlyArray<{
+      readonly id: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
+    readonly delivery?: ("steer" | "queue") | null
+  }["editor"]
   readonly delivery?: {
     readonly name: string
     readonly text: string
@@ -4735,6 +5070,10 @@ export type SessionCommandInput = {
       readonly id: string
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
+    readonly editor?: {
+      readonly path: string
+      readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
   }["delivery"]
 }
@@ -4885,6 +5224,10 @@ export type SessionInboxUpdateInput = {
 }
 
 export type SessionInboxUpdateOutput = void
+
+export type SessionInstructionsPreviewInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionInstructionsPreviewOutput = { data: SessionInstructionsPreview }["data"]
 
 export type SessionInstructionsEntryListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
@@ -6954,8 +7297,28 @@ export type ConfigEffectiveOutput = ConfigEffective
 export type ConfigShellsOutput = Array<ConfigShellOption>
 
 export type ConfigUpdateInput = {
-  readonly shell?: { readonly shell?: string | null; readonly output_style?: string | null }["shell"]
-  readonly output_style?: { readonly shell?: string | null; readonly output_style?: string | null }["output_style"]
+  readonly shell?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+  }["shell"]
+  readonly output_style?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+  }["output_style"]
+  readonly language?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+  }["language"]
 }
 
 export type ConfigUpdateOutput = void
+
+export type ConfigSourcesChangedInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+  readonly paths: { readonly paths: ReadonlyArray<string> }["paths"]
+}
+
+export type ConfigSourcesChangedOutput = void

@@ -6,7 +6,7 @@ import { ShellReadOnly } from "../../src/shell/readonly"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import { currentDirectoryOnPath, plant } from "../fixture/decoy"
 import { tmpdir } from "../fixture/tmpdir"
-import { bash, linux, powershell, pwsh, pwshLinux, windows } from "./helper"
+import { bash, linux, powershell, pwsh, pwshLinux, SHELL_START, windows } from "./helper"
 import { toolNotReadOnly as psNotReadOnly, toolPlatform, toolReadOnly as psReadOnly } from "./powershell-cases"
 
 // git, gh, docker and dotnet (shell-safety-5). Every row is pure: no program is started. A false read-only verdict is a
@@ -386,6 +386,68 @@ describe("the working folder cannot supply the program (class 10)", () => {
     expect(bash("git status", linux({ env: { PATH: ".:/usr/bin" } })).readOnly).toBe(false)
     expect(bash("git status", linux({ env: { PATH: "/usr/bin" } })).readOnly).toBe(true)
   })
+
+  // FU-M3-180: an empty entry of a Windows Path never makes bash or Windows PowerShell 5.1 search the working folder.
+  test.each([
+    ["a trailing empty entry", "C:\\Windows\\System32;", true],
+    ["an empty entry between", "C:\\Windows\\System32;;C:\\Windows", true],
+    ["a leading empty entry", ";C:\\Windows\\System32", true],
+    ["a dot beside an empty entry", "C:\\x;.;", false],
+    ["a dot-relative entry", "C:\\x;.\\bin", false],
+    ["a relative entry", "C:\\x;bin;", false],
+  ])("Windows Path with %s", (_, value, readOnly) => {
+    expect(bash("ls", windows({ env: { Path: value } })).readOnly).toBe(readOnly)
+  })
+
+  test("a POSIX PATH with an empty entry is not read-only", () => {
+    expect(bash("ls", linux({ env: { PATH: "/usr/bin::/bin" } })).readOnly).toBe(false)
+    expect(bash("ls", linux({ env: { PATH: "/usr/bin:" } })).readOnly).toBe(false)
+    expect(bash("ls", linux({ env: { PATH: "/usr/bin:/bin" } })).readOnly).toBe(true)
+  })
+
+  // The probe that the rule rests on: Git's bash, given a Path with empty entries, drops them.
+  const gitBash = (() => {
+    if (process.platform !== "win32") return undefined
+    const git = Bun.which("git")
+    if (!git) return undefined
+    // git.exe is in `cmd` or `bin`, or below `mingw64`, beside or two levels above the `usr` folder.
+    return ["..", path.join("..", "..")]
+      .map((up) => path.resolve(path.dirname(git), up, "usr", "bin", "bash.exe"))
+      .find((candidate) => Bun.file(candidate).size > 0)
+  })()
+  ;(gitBash ? test : test.skip)("Git Bash drops the empty entries of a Windows Path", () => {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"))
+    const result = Bun.spawnSync([gitBash!, "-c", 'printf %s "$PATH"'], {
+      env: { ...env, Path: "C:\\Windows\\System32;;C:\\Windows;" },
+    })
+    const entries = result.stdout.toString().split(":")
+    expect(entries.length).toBeGreaterThan(0)
+    expect(entries).not.toContain("")
+  }, SHELL_START)
+
+  // The other half of the probe: Windows PowerShell 5.1 does not look in the working folder for an empty entry either, and
+  // does for a dot (the control). The decoy is a real program, so a run shows in its record.
+  const powershell51 = process.platform === "win32" ? Bun.which("powershell") : undefined
+  ;(powershell51 ? test : test.skip)("Windows PowerShell 5.1 ignores the empty entries of a Windows Path", async () => {
+    await using tmp = await tmpdir()
+    const ran = await plant(tmp.path, "zzdecoy")
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !["path", "nodefaultcurrentdirectoryinexepath"].includes(key.toLowerCase())),
+    )
+    const system = path.dirname(powershell51!)
+    const run = (value: string) =>
+      Bun.spawn([powershell51!, "-NoProfile", "-NonInteractive", "-Command", "zzdecoy"], {
+        cwd: tmp.path,
+        env: { ...env, Path: `${system};${value}` },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      }).exited
+    await run(";;")
+    expect(await ran()).toEqual([])
+    await run(".")
+    expect(await ran()).toHaveLength(1)
+  }, SHELL_START)
 
   const onWindows = process.platform === "win32" ? describe : describe.skip
   const inspect = (command: string, ctx: ShellAnalysis.Context) =>

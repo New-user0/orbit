@@ -1,3 +1,4 @@
+import type { SessionMessageInfo } from "@orbit/client"
 import { ToolNames } from "@orbit/schema/tool-names"
 
 // The views are written against the names and input fields the tools had before they took the reference interface,
@@ -60,6 +61,27 @@ export function todoItems(value: unknown): TodoItem[] {
     if (status !== "pending" && status !== "in_progress" && status !== "completed") return []
     return [{ content: entry.content, status }]
   })
+}
+
+/**
+ * The plan in the latest assistant message that carries one, whichever name its tool call was recorded with. The plan dock
+ * and `/todos` both read it here, so they never disagree.
+ */
+export function latestTodos(messages: ReadonlyArray<SessionMessageInfo>) {
+  for (const message of messages.toReversed()) {
+    if (message.type !== "assistant") continue
+    // A todo call carries the plan in its input; the task tools report the whole task list in their metadata.
+    const call = message.content.findLast(
+      (part) =>
+        part.type === "tool" &&
+        (canonicalToolName(part.name) === "todo" ||
+          (canonicalToolName(part.name).startsWith("task_") && toolDisplayMetadata(part.state).todos)),
+    )
+    if (call?.type !== "tool") continue
+    if (canonicalToolName(call.name) !== "todo") return todoItems(toolDisplayMetadata(call.state).todos)
+    if (typeof call.state.input !== "string") return todoItems(call.state.input.todos)
+  }
+  return []
 }
 
 export type WorkflowAgent = {

@@ -17,11 +17,13 @@ import { SessionEvent } from "../event.js"
 import { SessionInbox } from "../inbox.js"
 import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
+import { SessionReminders } from "../reminders.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionOutput } from "../output.js"
 import { SessionMessage } from "../message.js"
 import { SessionSchema } from "../schema.js"
+import { SessionScratchpad } from "../scratchpad.js"
 import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
@@ -84,6 +86,8 @@ const outputRecovery = Effect.fnUntraced(function* (db: Database.Interface["db"]
         eq(SessionMessageTable.session_id, sessionID),
         eq(SessionMessageTable.type, "synthetic"),
         gt(SessionMessageTable.seq, sql`(${normalEnd})`),
+        // Only the runner's own notices count; a client's synthetic message carries a delivery.
+        sql`json_extract(${SessionMessageTable.data}, '$.delivery') IS NULL`,
       ),
     )
     .get()
@@ -106,8 +110,10 @@ const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
+    const scratchpad = yield* SessionScratchpad.Service
     const title = yield* SessionTitle.Service
     const turnEnd = yield* SessionTurnEnd.Service
+    const reminders = yield* SessionReminders.Service
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -128,6 +134,9 @@ const layer = Layer.effect(
       yield* plugins.awaitActivation
       yield* settleStaleCompactions(sessionID)
       yield* settleStaleToolCalls(sessionID)
+      // Once, before the first step, so the folder that the baseline names is there when the model first writes to it.
+      const session = yield* store.get(sessionID)
+      if (session) yield* scratchpad.ensure(session)
 
       const advanceToStep = Effect.fn("SessionRunner.advanceToStep")(() =>
         Effect.uninterruptibleMask((restore) =>
@@ -239,6 +248,7 @@ const layer = Layer.effect(
                   if (promoted > 0) step = 1
                   return {
                     _tag: "Ready" as const,
+                    selection: selected,
                     context: yield* loadSelected(selected, (yield* SessionTurn.current(db, sessionID)).fallback),
                   }
                 }),
@@ -252,7 +262,7 @@ const layer = Layer.effect(
       while (true) {
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
-        const stopped = yield* runStep(next.context, step)
+        const stopped = yield* runStep(next.context, next.selection, step)
         // A turn that stops at the agent's step allowance never reaches the turn-end checks, so it is checked here.
         if (stopped === "limited") yield* requireOutput(next.context, yield* SessionTurn.current(db, sessionID))
         continuing = stopped === "continue" || (stopped === "ended" && (yield* endTurn(next.context)))
@@ -357,13 +367,14 @@ const layer = Layer.effect(
     const turnLimit = Effect.fnUntraced(function* (
       loaded: SessionContext.Loaded,
       turn: SessionTurn.Current["options"],
+      continuing?: SessionMessage.ID,
     ) {
       // A catalog entry with no price is a tier-less $0, which would let the turn spend without bound.
       const priced = loaded.model.cost.some((cost) => cost.tier === undefined && (cost.input > 0 || cost.output > 0))
       const own =
         !turn || (turn.maxSteps === undefined && turn.maxCost === undefined && turn.maxTokens === undefined)
           ? undefined
-          : SessionTurn.exceeded(turn, yield* SessionTurn.usage(db, loaded.session.id, turn), priced)
+          : SessionTurn.exceeded(turn, yield* SessionTurn.usage(db, loaded.session.id, turn, continuing), priced)
       // A subagent carries no turn options of its own, so the turn it works for limits it too.
       return own ?? (yield* SessionTurn.ancestorLimit(db, loaded.session.id, priced))
     })
@@ -373,7 +384,11 @@ const layer = Layer.effect(
       context.load(fallback ? { ...selected, session: { ...selected.session, model: fallback } } : selected)
 
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
-    const runStep = Effect.fn("SessionRunner.runStep")(function* (first: SessionContext.Loaded, step: number) {
+    const runStep = Effect.fn("SessionRunner.runStep")(function* (
+      first: SessionContext.Loaded,
+      firstSelection: SessionContext.Selection,
+      step: number,
+    ) {
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
       let retry = yield* SessionRunnerRetry.make(bus, sessionID)
@@ -381,6 +396,11 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      let selection = firstSelection
+      // Durable reminders are collected once per logical step. Retries, a fallback switch, an incomplete-stream
+      // continuation, an output-limit escalation and a resume all resend the step's request, so they keep the flag; a
+      // compaction moves the epoch the reminders were collected into, so it clears it.
+      let collected = false
       // The notice is the durable record that the turn moved, so a drain that reloads or restarts keeps the fallback.
       const switchToFallback = Effect.fnUntraced(function* (
         outcome: { readonly overloaded: boolean },
@@ -405,21 +425,31 @@ const layer = Layer.effect(
       while (true) {
         const current = yield* SessionTurn.current(db, sessionID)
         // Reuse boundary preparation once; retries refresh context without delivering more input.
-        const loaded =
+        const before =
           initial ??
-          (yield* prepareContext(sessionID).pipe(
-            Effect.flatMap((selected) => loadSelected(selected, current.fallback)),
-          ))
+          (yield* Effect.gen(function* () {
+            selection = yield* prepareContext(sessionID)
+            return yield* loadSelected(selection, current.fallback)
+          }))
         initial = undefined
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
-        const limit = yield* turnLimit(loaded, current.options)
+        const limit = yield* turnLimit(before, current.options)
         if (limit) return yield* new StepFailedError({ error: limit })
-        const output = yield* outputFor(loaded, current)
-        const compacted = yield* compaction.compact({ reason: "auto", context: loaded })
+        const output = yield* outputFor(before, current)
+        const compacted = yield* compaction.compact({ reason: "auto", context: before })
         if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
         if (compacted.status === "completed") {
           assistantMessageID = SessionMessage.ID.create()
+          collected = false
           continue
+        }
+        // After compaction has settled, so the reminders land in the epoch the request is made in. The reload applies
+        // the turn's fallback, or a turn that moved to its fallback model would snap back to the session's.
+        let loaded = before
+        if (!collected) {
+          collected = true
+          if (yield* reminders.collect({ loaded: before, step }))
+            loaded = yield* loadSelected(selection, current.fallback)
         }
         const recovery = yield* outputRecovery(db, sessionID)
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
@@ -432,6 +462,8 @@ const layer = Layer.effect(
           tools: loaded.tools,
           initial: loaded.initial,
           messages: loaded.messages,
+          insertions: yield* reminders.derive(loaded, step),
+          minimal: reminders.minimal,
         })
         const prepared = yield* context.request.primary({
           session: loaded.session,
@@ -447,7 +479,7 @@ const layer = Layer.effect(
           toolChoice: handInOnly ? { type: "tool", name: SessionOutput.NAME } : stepLimitReached ? "none" : undefined,
           output: output && { validator: output.validator, schema: output.schema, only: handInOnly },
           webSocket: "session",
-          inputTokens: SessionCompaction.estimatePrompt(loaded),
+          inputTokens: SessionCompaction.estimatePrompt(loaded, reminders.minimal),
           outputTokenCap: loaded.outputTokenCap,
           outputEscalated: recovery.escalated,
         })
@@ -489,19 +521,16 @@ const layer = Layer.effect(
             // A finished response is not an overload, so it restarts the count of overloads in a row.
             overloads = 0
             // Fail with the limit now, also at the cap; a note left behind would reach the next prompt's request.
-            const limit = yield* turnLimit(loaded, current.options)
+            // A text-only cut-off that the escalation or a resume continues is one logical step with what follows, so it
+            // is not a step yet; a cut-off that holds a tool part, or one at the cap, is.
+            const limit = yield* turnLimit(
+              loaded,
+              current.options,
+              outcome.needsContinuation || recovery.streak >= MAX_OUTPUT_RECOVERIES ? undefined : assistantMessageID,
+            )
             if (limit) return yield* new StepFailedError({ error: limit })
             // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
             if (recovery.streak >= MAX_OUTPUT_RECOVERIES) return "limited" as const
-            // A text-only resume never reaches the step boundary, so a waiting steered message would sit behind up to
-            // three requests. Return now: the boundary delivers it and its user message starts a fresh streak.
-            if (
-              !outcome.needsContinuation &&
-              (yield* SessionInbox.list(db, sessionID)).some(
-                (item) => item.type === "user" && item.delivery === "steer",
-              )
-            )
-              return "ended" as const
             // The first cut-off of a reply that ran no tool, under the runner's own lowered cap, retries the same
             // request at the model's maximum before any resume. A hosted tool call counts: repeating it reruns and
             // rebills it. The notice replaces the cut-off attempt, which later requests leave out.
@@ -523,6 +552,9 @@ const layer = Layer.effect(
             assistantMessageID = SessionMessage.ID.create()
           }),
           Retry: Effect.fnUntraced(function* (outcome) {
+            // Spend recorded for the failed attempt can pass a limit; fail now, before a fallback or continuation notice.
+            const limit = yield* turnLimit(loaded, current.options)
+            if (limit) return yield* new StepFailedError({ error: limit })
             if (yield* switchToFallback(outcome, loaded, current)) {
               // The draft from the failed attempt sits before the notice; a new one keeps the notice ahead of the fallback's answer.
               assistantMessageID = SessionMessage.ID.create()
@@ -531,6 +563,9 @@ const layer = Layer.effect(
             yield* retry.wait({ decision: outcome.decision, error: outcome.error, assistantMessageID })
           }),
           Continue: Effect.fnUntraced(function* (outcome) {
+            // Spend recorded for the failed attempt can pass a limit; fail now, before a fallback or continuation notice.
+            const limit = yield* turnLimit(loaded, current.options)
+            if (limit) return yield* new StepFailedError({ error: limit })
             if (!(yield* switchToFallback(outcome, loaded, current)))
               yield* retry.wait({ decision: outcome.decision, error: outcome.error, assistantMessageID })
             yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: CONTINUE_AFTER_INCOMPLETE_STREAM })
@@ -538,6 +573,7 @@ const layer = Layer.effect(
           }),
           Compacted: Effect.fnUntraced(function* () {
             recoverOverflow = false
+            collected = false
             assistantMessageID = SessionMessage.ID.create()
           }),
           RecoverFull: Effect.fnUntraced(function* () {
@@ -624,8 +660,10 @@ export const node = makeLocationNode({
     SessionStore.node,
     SessionCompaction.node,
     Plugin.node,
+    SessionScratchpad.node,
     SessionTitle.node,
     SessionTurnEnd.node,
+    SessionReminders.node,
     Snapshot.node,
     ToolOutput.node,
     Database.node,

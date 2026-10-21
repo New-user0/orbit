@@ -14,6 +14,7 @@ import { SideQuery } from "@orbit/core/side-query"
 import { Document, Info } from "@orbit/schema/config"
 import { Tool } from "@orbit/core/tool"
 import { WebFetchTool } from "@orbit/core/tool/plugin/webfetch"
+import { proxyFor } from "../src/tool/web-pin"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Image } from "@orbit/core/image"
 import { testEffect } from "./lib/effect"
@@ -1249,6 +1250,110 @@ describe("WebFetchTool address guard and pinning", () => {
     }),
   )
 
+  // The owner's exception (2026-10-19, FU-M1-008): through a configured proxy the request is for the name.
+  const withProxyEnvironment = <A, E, R>(values: Record<string, string>, effect: Effect.Effect<A, E, R>) => {
+    const names = ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"]
+    const saved = names.map((name) => [name, process.env[name]] as const)
+    return Effect.sync(() => {
+      names.forEach((name) => delete process.env[name])
+      Object.assign(process.env, values)
+    }).pipe(
+      Effect.andThen(effect),
+      Effect.ensuring(
+        Effect.sync(() =>
+          saved.forEach(([name, value]) => (value === undefined ? delete process.env[name] : (process.env[name] = value))),
+        ),
+      ),
+    )
+  }
+
+  it.effect("sends the name to a configured proxy and resolves nothing itself", () =>
+    withProxyEnvironment(
+      { HTTPS_PROXY: "http://proxy.test:3128" },
+      Effect.gen(function* () {
+        reset()
+        const registry = yield* Tool.Service
+
+        yield* run(registry, { url: "https://example.com/x", prompt: "q" })
+        expect(requests[0]?.url).toBe("https://example.com/x")
+        expect(requests[0]?.headers.host).toBeUndefined()
+        expect(requests[0]?.init).toMatchObject({ redirect: "manual", proxy: "http://proxy.test:3128/" })
+        expect(requests[0]?.init).not.toHaveProperty("tls")
+        expect(lookups).toEqual([])
+      }),
+    ),
+  )
+
+  const P = "http://proxy.test:3128"
+  for (const [label, values] of [
+    ["a NO_PROXY entry for the host", { HTTPS_PROXY: P, NO_PROXY: "example.com" }],
+    ["a NO_PROXY entry for its domain", { HTTPS_PROXY: P, NO_PROXY: ".example.com,other.test" }],
+    ["a NO_PROXY of *", { HTTPS_PROXY: P, NO_PROXY: "*" }],
+    ["a NO_PROXY entry for its port", { HTTPS_PROXY: P, NO_PROXY: "example.com:8443" }],
+    ["a proxy value that is not an http address", { HTTPS_PROXY: "socks5://proxy.test:1080" }],
+  ] as const) {
+    it.effect(`pins the checked address with ${label}`, () =>
+      withProxyEnvironment(
+        values,
+        Effect.gen(function* () {
+          reset()
+          const registry = yield* Tool.Service
+
+          yield* run(registry, { url: "https://example.com:8443/x", prompt: "q" })
+          expect(requests[0]?.url).toBe(`https://${publicAddress}:8443/x`)
+          expect(requests[0]?.init).not.toHaveProperty("proxy")
+          expect(lookups).toEqual(["example.com"])
+        }),
+      ),
+    )
+  }
+
+  // The reference takes one proxy for every URL, from the first of these that is set, the lowercase spelling first.
+  for (const [label, values, url, proxy] of [
+    ["only HTTP_PROXY, for an https: page", { HTTP_PROXY: P }, "https://example.com/x", `${P}/`],
+    ["only HTTPS_PROXY, for an http: page", { HTTPS_PROXY: P }, "http://example.com/x", `${P}/`],
+    ["an https_proxy before an http_proxy", { http_proxy: "http://other.test:1", HTTPS_PROXY: P }, "https://example.com/x", `${P}/`],
+  ] as const) {
+    it.effect(`sends the name to the proxy of ${label}`, () =>
+      withProxyEnvironment(
+        values,
+        Effect.gen(function* () {
+          reset()
+          const registry = yield* Tool.Service
+
+          yield* run(registry, { url, prompt: "q" })
+          // An http: page is upgraded to https: before it is sent.
+          expect(requests[0]?.url).toBe("https://example.com/x")
+          expect(requests[0]?.init).toMatchObject({ proxy })
+          expect(lookups).toEqual([])
+        }),
+      ),
+    )
+  }
+
+  it.effect("still refuses a metadata address, with and without a proxy configured", () =>
+    Effect.gen(function* () {
+      reset()
+      addresses = { "meta.example": ["169.254.169.254"] }
+      const registry = yield* Tool.Service
+
+      // No proxy: the name resolves to a metadata address and nothing is sent.
+      expect(yield* run(registry, { url: "https://meta.example/x", prompt: "q" })).toMatchObject({
+        status: "error",
+        error: { type: "webfetch.refused" },
+      })
+      // A proxy: a literal address and a loopback name are not sent to it either.
+      yield* withProxyEnvironment(
+        { HTTPS_PROXY: "http://proxy.test:3128", HTTP_PROXY: "http://proxy.test:3128" },
+        Effect.gen(function* () {
+          for (const url of ["http://169.254.169.254/latest", "https://[fd00:ec2::254]/x", "http://localhost/x"])
+            expect(yield* run(registry, { url, prompt: "q" })).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
+        }),
+      )
+      expect(requests).toEqual([])
+    }),
+  )
+
   it.effect("sends nothing for a file: URL", () =>
     Effect.gen(function* () {
       reset()
@@ -1258,6 +1363,31 @@ describe("WebFetchTool address guard and pinning", () => {
       expect(lookups).toEqual([])
     }),
   )
+})
+
+// The reference takes one proxy for every URL from the first variable that is set, the lowercase spelling first. A test
+// of the environment itself cannot tell the two spellings apart on Windows, where variable names ignore case.
+describe("proxyFor", () => {
+  const url = new URL("https://example.com/x")
+  const proxy = (value: string) => `http://${value}.test:3128/`
+  test.each([
+    ["the lowercase https spelling first", { https_proxy: proxy("a"), HTTPS_PROXY: proxy("b"), http_proxy: proxy("c"), HTTP_PROXY: proxy("d") }, proxy("a")],
+    ["the uppercase https spelling second", { HTTPS_PROXY: proxy("b"), http_proxy: proxy("c"), HTTP_PROXY: proxy("d") }, proxy("b")],
+    ["the lowercase http spelling third", { http_proxy: proxy("c"), HTTP_PROXY: proxy("d") }, proxy("c")],
+    ["the uppercase http spelling last", { HTTP_PROXY: proxy("d") }, proxy("d")],
+  ])("takes %s for an https: page", (_label, environment, expected) => {
+    expect(proxyFor(url, environment)).toBe(expected)
+    // The same proxy serves an http: page.
+    expect(proxyFor(new URL("http://example.com/x"), environment)).toBe(expected)
+  })
+
+  test("takes none when nothing is set, when NO_PROXY names the host, or for a literal address and localhost", () => {
+    const environment = { HTTPS_PROXY: proxy("a") }
+    expect(proxyFor(url, {})).toBeUndefined()
+    expect(proxyFor(url, { ...environment, no_proxy: "example.com" })).toBeUndefined()
+    for (const target of ["https://127.0.0.1/", "https://[::1]/", "https://localhost/", "https://app.localhost/"])
+      expect(proxyFor(new URL(target), environment)).toBeUndefined()
+  })
 })
 
 describe("WebFetchTool URL checks", () => {
@@ -1830,11 +1960,11 @@ describe("WebFetchTool verbatim hosts", () => {
       yield* run(registry, { url: "https://other.example/long", prompt: "q" })
       const unlisted = lastQuery().system
 
-      expect(listed).toContain("sample code")
+      expect(listed).toContain("code samples")
       expect(listed).not.toContain("125 characters")
       expect(unlisted).toContain("125 characters")
-      expect(unlisted).not.toContain("sample code")
-      expect(unlisted).toContain("legality")
+      expect(unlisted).not.toContain("code samples")
+      expect(unlisted).toContain("is legal")
     }),
   )
 })

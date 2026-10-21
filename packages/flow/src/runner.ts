@@ -31,6 +31,23 @@ export interface RunOptions {
   /** The workflow file, recorded so `orb flow resume` can load it again. */
   readonly file: string
   readonly directory: string
+  /**
+   * Whether the folder is trusted. The VCS applies the config a repository ships (`core.fsmonitor`, clean filters, hooks)
+   * to the commands it runs there, so in a folder that is not trusted the run starts no such process and works as it does
+   * outside a repository: no worktrees, commits, merges, base commit (a base kept in the run store is ignored too, so no
+   * review diff) or dirty check. The run store is found from the files. A resume there takes no folder and no session ID
+   * from the store either: the checks and the reviewer of a reused verify iteration work in the run's folder, and a team
+   * member whose turn is reused opens a new session for its next one. The commands refuse to resume or replay in such a
+   * folder anyway; this holds for a caller that does not.
+   */
+  readonly trusted: boolean
+  /**
+   * The project of `directory` as the server resolved it, whose folders the trust decision covers. In a trusted folder git
+   * looks for the repository no further up than the project's folder, and the run uses it only when its work tree, git
+   * directory and common directory are all inside these folders or `directory` (`Git.root`). Without it git looks only
+   * in `directory` itself.
+   */
+  readonly project?: Git.Project
   readonly input?: Readonly<Record<string, unknown>>
   /** Resume this run: completed nodes whose inputs are unchanged return their recorded result. */
   readonly resume?: string
@@ -82,11 +99,19 @@ const REJECTED =
   "This workflow runs unattended and does not approve actions that need permission. Continue without this action, or explain what you would need."
 
 export async function run(options: RunOptions): Promise<RunResult> {
-  const repository = await Git.root(options.directory)
-  const home = repository ?? path.resolve(options.directory)
+  const log = options.log ?? (() => {})
+  const found: { readonly root?: string; readonly outside?: string } = options.trusted
+    ? await Git.root(options.directory, options.project)
+    : {}
+  // The repository git would use keeps its config or hooks in a folder that the decision does not cover: the run works as
+  // it does in a folder that is not trusted.
+  if (found.outside !== undefined) log(`! git is not used: ${found.outside} is outside the trusted folder`)
+  const repository = found.root
+  // Whether git may run here: the folder is trusted, and so is every folder of the repository that git uses.
+  const versioned = options.trusted && found.outside === undefined
+  const home = repository ?? Git.holder(options.directory) ?? path.resolve(options.directory)
   if (repository) await Git.exclude(repository)
   const store = Store.at(home)
-  const log = options.log ?? (() => {})
   // The title stays in the user's session database and is shown by `orb session list` and the terminal UI, which set it
   // as the title of the window. The workflow's name and the node IDs are text from a file that a clone brings along.
   const title = (node: string) => plain(`${options.workflow.name} · ${node}`)
@@ -99,13 +124,14 @@ export async function run(options: RunOptions): Promise<RunResult> {
   const input = previous?.input ?? source?.input ?? options.input ?? {}
   // Worktrees branch from the commit the run started at, so a resumed node starts from the same code.
   // A replay creates no worktrees, so it has no base.
-  const base = source
-    ? undefined
-    : previous
-      ? (store.events(id).find((event) => event.type === "run.started")?.data.base as string | undefined)
-      : repository
-        ? await Git.head(repository)
-        : undefined
+  // A stored base is used only where git may run: the store is a file that a clone ships, and the review diff would
+  // start git in the folder the store names.
+  const base =
+    source || !repository
+      ? undefined
+      : previous
+        ? (store.events(id).find((event) => event.type === "run.started")?.data.base as string | undefined)
+        : await Git.head(repository)
   // A resume keeps the budget and default model the run was started (or last resumed) with unless it sets new ones.
   const setting = (key: "budget" | "model") =>
     store
@@ -218,7 +244,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
     const agentOptions = { ...requested, model: requested.model ?? defaultModel }
     const worktree = within.directory === undefined && (agentOptions.worktree ?? repository !== undefined)
     if (worktree && !source && (!repository || !base))
-      throw new Error(`${node}: worktree agents need a git repository with a commit`)
+      throw new Error(
+        `${node}: worktree agents need a git repository with a commit${versioned ? "" : " in a trusted folder"}`,
+      )
     const key = hash({
       prompt: agentOptions.prompt,
       model: agentOptions.model,
@@ -342,7 +370,10 @@ export async function run(options: RunOptions): Promise<RunResult> {
     claim(used, node)
     if (source) return fromRecording(node).result as unknown as CheckResult
     store.append(id, node, "node.started", { command: checkOptions.command })
-    const result = await shell(checkOptions.command, checkOptions.in?.worktree ?? home, checkOptions.timeout)
+    // On a resume `in` can be a result reused from the run store, a file a clone ships, so its worktree is a folder the
+    // store names. Only a repository in a trusted folder has worktrees; anywhere else the check runs where the run does.
+    const directory = (repository ? checkOptions.in?.worktree : undefined) ?? home
+    const result = await shell(checkOptions.command, directory, checkOptions.timeout)
     store.append(
       id,
       node,
@@ -401,7 +432,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
                 onError: "continue",
                 prompt: await reviewPrompt(verifyOptions.prompt, judge.criteria, work, base),
               },
-              { directory: work.worktree ?? home },
+              // As for a check: a reused iteration's worktree comes from the run store.
+              { directory: (repository ? work.worktree : undefined) ?? home },
             )
           : undefined
       if (review) add(review)
@@ -458,7 +490,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
       readonly permissions: "reject" | "auto"
       readonly timeout?: number
     },
-  ): Promise<Attempt> => {
+  ): Promise<Attempt & { readonly reused?: boolean }> => {
     claim(used, node)
     const key = hash({ ...input, permissions: undefined })
     if (source) return fromRecording(node, key).result as unknown as Attempt
@@ -466,7 +498,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
     if (done?.status === "succeeded" && done.key === key) {
       store.append(id, node, "node.reused", { key, result: done.result })
       log(`= ${node} (recorded)`)
-      return done.result as unknown as Attempt
+      return { ...(done.result as unknown as Attempt), reused: true }
     }
     store.append(id, node, "node.started", { key })
     log(`> ${node}`)
@@ -515,7 +547,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
       throw new Error(`${node}: the team needs members, and its lead must be one`)
     const worktree = teamOptions.worktree ?? repository !== undefined
     if (worktree && !source && (!repository || !base))
-      throw new Error(`${node}: a team in a worktree needs a git repository with a commit`)
+      throw new Error(
+        `${node}: a team in a worktree needs a git repository with a commit${versioned ? "" : " in a trusted folder"}`,
+      )
     const place = worktree && repository && base && !source ? await Git.worktree(repository, id, node, base) : undefined
     const directory = place?.directory ?? home
     store.append(id, node, "node.started", { members: names, lead })
@@ -561,7 +595,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
         state.failure = result.error
         return false
       }
-      sessions.set(name, result.session)
+      // A reused turn's session ID comes from the run store, so in a folder that is not trusted the member's next turn
+      // opens a session of its own instead of prompting the one the store names.
+      if (options.trusted || !result.reused) sessions.set(name, result.session)
       const reply = parse(result.text)
       for (const note of reply.notes) {
         board[note.key] = note.text
@@ -655,7 +691,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
       if (replayed.status === "failed") throw new Error(`${node}: ${String(replayed.error?.message ?? "failed")}`)
       return replayed.result as unknown as MergeResult
     }
-    if (!repository) throw new Error(`${node}: merging needs a git repository`)
+    if (!repository)
+      throw new Error(`${node}: merging needs a git repository${versioned ? "" : " in a trusted folder"}`)
     const branches = results.flatMap((result) =>
       result.status === "succeeded" && result.branch ? [result.branch] : [],
     )
@@ -752,9 +789,12 @@ export async function run(options: RunOptions): Promise<RunResult> {
   }
 }
 
-/** The run store for `directory`: the one at its repository root, or in the directory itself outside git. */
+/**
+ * The run store for `directory`: the one at its repository root, or in the directory itself outside a repository. The
+ * root is found from the files, so that reading a store starts no git in a folder that is not trusted.
+ */
 export async function openStore(directory: string) {
-  return Store.at((await Git.root(directory)) ?? path.resolve(directory))
+  return Store.at(Git.holder(directory) ?? path.resolve(directory))
 }
 
 // A reviewer gets the task and the diff in its prompt, so it needs no tools and cannot change the work it judges.

@@ -33,7 +33,8 @@ project's `orbit.json` or `orbit.local.json` cannot set it in either direction.
 
 With the switch off, Orbit no longer loads skills from `.agents/skills` or another product's directory, reads that
 product's output styles and hook settings, or loads its instruction file, and `/init` stops asking the agent to read
-other products' rule files. The system prompt now names only `ORBIT.md` and `AGENTS.md` as instruction files.
+other products' rule files. The system prompt then named only `ORBIT.md` and `AGENTS.md` as instruction files; it
+now names none (see "The base system prompt is rewritten, with a fixed list of sections").
 
 **Affects:** people who turn the switch off while still relying on skills, output styles or hooks kept only in those
 places, and code built on `@orbit/core`: the config service's `compatibility()` method is now `compat()`, which
@@ -94,6 +95,95 @@ names, and to stop Orbit reading that product's settings files and `.mcp.json`, 
 above, which also stops it loading that product's skills, output styles and instruction files. If a repository's
 `.mcp.json` should not start servers for you, turn compatibility off, or move the servers you want into `orbit.json`.
 
+### Snapshots, worktree lists and `orb flow` start no git in a folder that is not trusted
+
+A repository's own config can name programs for git to run and files or network shares for it to open, so Orbit starts
+git in a repository only once its folder is trusted. Until then a session takes no undo snapshot: the steps it runs
+before you trust the folder cannot be undone, as in a folder without git, comparing or restoring a snapshot from a time
+when the folder was trusted fails with "The folder is not trusted", and Orbit's log says once why there is no snapshot.
+The first step after you trust the folder takes a snapshot again, without a restart (`snapshot-untrusted-git.test.ts`,
+`snapshot-trust.test.ts`, `snapshot-trust-transition.test.ts`). A snapshot needs git, and git applies the config of
+the folder and of any repository nested in it, so there is no partial snapshot either. Meanwhile the list of worktrees
+shows only the folder's main checkout, and adding or removing a worktree is refused. `orb flow clean` now stops in a
+folder that is not trusted, and takes `--trust` (for that run only) and `--server` like `orb flow run`. `orb flow run`
+and `orb eval` start no git in a folder that is not trusted either: they work as they do outside a repository, with no
+worktrees, no commits, no merges, no base commit, no check for uncommitted changes and no diff for a reviewer, so a
+node that asks for a worktree, a team in a worktree, or a `merge`, fails and says that the folder is not trusted. Add
+`--trust` (for that run only) to `flow run` or `eval`, or trust the folder, to get them back. `orb flow resume`,
+`orb eval --resume` and `orb flow replay` do not run in such a folder at all (see "`orb flow resume`, `orb eval --resume`
+and `orb flow replay` need a trusted folder" under Clients). The other `orb flow` commands find the repository root
+from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and
+`hooks/post-checkout`, and the rows for a run store that a clone ships; `packages/flow/test/runner-untrusted.test.ts`
+for the failures). A repository with no remote is named by its path until it is
+trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
+`project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
+path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
+grant, before the folder was opened again, can be restored (`snapshot-trust-restart.test.ts`). Saved "always allow"
+answers stay with the old ID, so Orbit asks again.
+
+### Orbit's git stays inside the folder you trusted
+
+Git takes a `.git` directory for a repository only when it holds `objects` and `refs` and a `HEAD` that names a branch
+or a commit; it goes on past any other `.git` directory to the repository in a folder above, and uses that repository's
+config. Orbit used to take such a folder for a repository of its own and ask whether to trust it, and once you did, the
+git snapshot, the Git provider and the ignore check of language server results ran git in the repository above, which
+nobody had trusted. Orbit now names the repository above as the project, as git does, so the trust question is about the
+folder git will work in, and every git that Orbit starts for a session looks for a repository no further up than the
+project's folder. A `.git` directory whose `HEAD` is a link is passed over too. On a computer where the folder above a
+project has `;` (Windows) or `:` (elsewhere) in its path, git cannot be told to stop there, so Orbit starts no git for that
+project (`git-passed-over.test.ts`, `git-layout.test.ts`).
+
+### Orbit's git does not follow a `.git` into a repository you have not trusted
+
+A folder's `.git` can send git to another repository: a `.git` file that names another git directory, as a submodule's
+does, a `.git` directory whose `commondir` names one, or a `.git` that is a link or a junction. Git then applies that
+repository's config and hooks. Orbit used to treat such a folder as a project of its own and, once you trusted it, ran
+git there with the other repository's config, so a program that repository named ran although nobody had trusted it.
+Now, once you trust the folder, Orbit first asks git which work tree, git directory and common directory it would use,
+and runs nothing more unless each of them lies in a folder that is trusted. Until then the folder gets no git snapshot,
+no branch, changes or diff from the Git provider, no undo snapshot, no ignore check of language server results, no
+worktree list and no new worktree, and a line in Orbit's log names the folder to trust. A linked worktree that its
+repository lists works once its main checkout is trusted, and a submodule once the repository around it is. `orb flow
+run` and `orb eval` use no git there, as in a folder outside a repository, and say so once; `orb flow clean` stops and
+says why (`git-passed-over.test.ts`, `packages/flow/test/git-passed-over.test.ts`, `packages/cli/test/flow.test.ts`).
+In a folder inside a repository, the runs of `orb flow run` and `orb eval` still take their worktrees from the repository,
+whose folder the server names as the project. A `.git` directory whose `HEAD` starts with a byte order mark, or whose
+`objects` or `refs` folder cannot be searched, is passed over now, as git passes over it (`git-layout.test.ts`).
+
+**Affects:** people who open a submodule, or a folder whose `.git` leads into another repository, without trusting that
+repository.
+
+**What to do:** Trust the repository that the folder's `.git` leads to as well, or open that repository instead.
+
+### Orbit's git no longer looks inside submodules
+
+To find out whether a submodule changed, git starts a second git in the submodule's folder, and that git applies the
+config of whatever repository the folder's `.git` names. In a repository you trusted, a submodule folder whose `.git`
+named a repository you had not trusted, such as the clone around it, let that repository's file system monitor or clean
+filter run when Orbit took the git snapshot or asked the Git provider for changes, and when `orb flow` checked the
+checkout for uncommitted changes, committed an agent's work, merged it or gave a reviewer its diff. Now no git that Orbit
+starts looks inside a submodule. The git snapshot, the Git provider and `orb flow`'s check for uncommitted changes and
+review diff no longer report a submodule as changed, and the commit that `orb flow` makes of an agent's work does not
+stage submodules (`git-gitlink.test.ts`, `packages/flow/test/git-gitlink.test.ts`).
+
+**Affects:** people whose repositories have submodules and who relied on the git snapshot, the Git provider or
+`orb flow` to show or commit a change in one.
+
+**What to do:** Check submodules with git itself, for example `git status` or `git submodule status` in the shell, and
+commit a submodule's new commit yourself.
+
+### A repository that git or Mercurial cannot name keeps its project once trusted
+
+Orbit names a project by what git or Mercurial says about it once you trust the folder, and some repositories get no
+answer. A git repository with no commit and no remote, and a Mercurial folder with no changeset or with no `hg`
+installed, used to move into the shared `global` project at the grant, taking along the sessions and memory notes made
+before it; they now keep the project named by their folder. A trusted git repository that git cannot read at all (git not
+on PATH, a config line git rejects, or a folder that git refuses because another account owns it) used to become a plain
+folder named by the subfolder you started in, so the sessions made before the grant were left behind and the next start
+asked about that subfolder again; it is now named from its `.git` files as it was before the grant, with the same folders
+and the same trust decision (`project-git-trust.test.ts`, "Project.resolve keeps a folder's project across the grant when
+git or Mercurial cannot name it"; `project.test.ts`).
+
 ### A project's config waits for its folder to be trusted
 
 The settings in a project's `orbit.json` and `orbit.local.json`, and in the hook settings and `.mcp.json` that other
@@ -101,10 +191,12 @@ agent products keep there, used to apply the moment Orbit opened the folder. The
 folder is trusted. Until then Orbit keeps what cannot run code, spend money or reach the network, and leaves out the
 rest:
 
-- **Left out whole:** `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
-  `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
-  `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, and `disabled` on an agent, whose
-  entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's own rules
+- **Left out whole:** `language`, `output_style`, `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
+  `providers`, `env`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
+  `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, the budgets `media`, `tool_output`, `compaction` and `shell_tool`,
+  `attribution`, `system_prompt_file`, `instructions_exclude` and `model_aliases`, and `disabled` on an agent, whose
+  entry goes with it. So are an agent's `effort`, `max_turns`, `tools`, `permission_mode`, `mcp_servers`, `hooks`,
+  `skills`, `memory` and `isolation`. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's own rules
   come after yours and win: which agent a session starts as, which agent runs a command, and which agents the model
   may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as the
   session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key that
@@ -115,9 +207,12 @@ rest:
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
-  10 or less, so a repository cannot raise the limit above 10.
-- **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
-  `tool_output`, `compaction`, and the fields of an agent that only describe it.
+  10 or less, so a repository cannot raise the limit above 10. `webfetch` is left out when its `verbatim_hosts` list is
+  not empty (an empty list is kept). `git_status` keeps only `false`, and an agent's `context` loses `instructions` in
+  both directions and keeps only `git_status: false`, so a repository can turn the snapshot off but never back on over
+  your own choice. An agent's `initial_prompt` is dropped when it starts with `/`.
+- **Kept as written:** everything else, such as `username`, `snapshots` and `watcher`, and the fields of an agent that
+  only describe it, except that a folder that is not trusted cannot rewrite the description or initial prompt of an agent that already exists.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
 `{file:path}` reference is read only when it names a file inside the project's folder, not through a link that leaves
@@ -241,7 +336,10 @@ While a folder is untrusted, `ConfigTrust` takes these out of its config documen
 files, keeps the rest of each entry, and reports the `providers` kind as withheld: the top-level `model`, the `model`
 and `steps` of every agent (so also `agents.title.model`, which `small_model` migrates to, and `agents.side.model`,
 which pins the model of side queries), and the `model` of every command. Orbit uses your own settings instead.
-Trusting the folder restores them. The config has no other field that picks a model, a provider or a budget today.
+Trusting the folder restores them. The top-level `fallback_model`, `output_token_cap`, `shell_tool`, `media`,
+`tool_output` and `compaction` are withheld the same way: the last three set how much each paid request carries (image
+size, the length of tool output, and when and how a conversation is compacted), so a repository no longer sets them
+until its folder is trusted. Your own values for them stand meanwhile.
 
 A workflow or suite file in an untrusted folder can no longer pick a model either. `orb flow run`, `flow resume` and
 `eval` stop, with the usual untrusted-folder message and exit 1, before any model is asked, when a YAML or JSON file sets
@@ -256,7 +354,7 @@ A folder whose only config is one of these now counts as holding config back. Th
 the others) stop in it with the usual untrusted-folder message and exit 1, and the terminal UI and VS Code show the
 trust prompt, which lists the `providers` kind.
 
-**Affects:** a repository that sets `model`, an agent's `model` or `steps`, or a command's `model` in its own
+**Affects:** a repository that sets `model`, an agent's `model` or `steps`, a command's `model`, `media`, `tool_output` or `compaction` in its own
 `orbit.json` or in a file of its `.orbit` directory, until its folder is trusted.
 
 **What to do:** Nothing for your own config. To use a repository's model settings, run `orb trust` in it, or set them in
@@ -268,8 +366,11 @@ An organization can now put settings in a folder that only an administrator can 
 `managed-settings.json`, then the `managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux,
 `/Library/Application Support/Orbit` on macOS and `%ProgramFiles%\Orbit` on Windows (`C:\Program Files\Orbit` when that
 variable is unset). Windows does not use `%ProgramData%`, because a standard user can create and write under it.
-`ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it), and
-`orb debug paths managed` prints the one in use. Objects merge by key, lists of independent entries (permissions,
+In a run from source, `ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it).
+The released `orb` binary ignores that variable: its build replaces the one place that reads it, so no environment
+can move an organization's policy folder (pinned by `packages/cli/test/managed-define.test.ts`); an application that
+embeds the server picks the folder with `ServerOptions.managed.directory`. `orb debug paths managed` prints the one in
+use. Objects merge by key, lists of independent entries (permissions,
 policies, instructions, plugins, restriction lists) concatenate and lose their repeats, and any other value takes the
 later file's: a `command` argument list, a tiered `cost`, a model, and a whole entry of `mcp.servers`, `lsp`,
 `formatter`, `references` and `commands` (each entry is one definition, so a later `url` never keeps an earlier
@@ -288,8 +389,8 @@ checked, and neither is a key that another variant of the same value knows (`hea
 the managed files by name and each problem it found. The permission rules and restrictions go to the policy service,
 which enforces them (see "Managed permission rules, hook limits and the bypass switch are enforced").
 
-**Affects:** machines that already have a file at one of those paths, and people who run a server with
-`ORBIT_MANAGED_DIR` set.
+**Affects:** machines that already have a file at one of those paths, and people who run a server from source with
+`ORBIT_MANAGED_DIR` set. A released `orb` no longer honours the variable.
 
 **What to do:** Nothing unless your organization manages Orbit.
 
@@ -308,13 +409,15 @@ managed `agents.<name>.permissions` gives an agent now apply to that agent too; 
   "always" reply as "once". The built-in rules of the agents stay.
 - `disable_hooks` runs no declarative hook, and `managed_hooks_only` runs only the hooks of managed settings. The managed file's own `hooks.disabled` and `hooks.managed_only` mean the same.
 - `disable_bypass_permissions` makes `orb`, `orb run`, `orb -p`, `orb loop`, `orb flow run`, `orb flow resume` and
-  `orb eval` refuse `--auto`, `--yolo` and `--dangerously-skip-permissions`. A workflow or suite node whose
+  `orb eval` ignore `--auto`, `--yolo` and `--dangerously-skip-permissions`: the command prints one notice and goes on
+  without the mode, so it keeps asking, and a question that nothing can answer is declined (headless runs reject it).
+  Managed asks and denies still apply. The notice goes to stderr, except under `--format json` and `stream-json`, which
+  print it as a `{"type":"warning",...}` line on stdout. A workflow or suite node whose
   `permissions` is `auto` (including a team member's) has its requests rejected, with the managed message as feedback.
   The terminal interface keeps asking for permission and shows a notice when auto-accept was requested. A server that
-  cannot say whether bypass is allowed counts as refusing it.
+  cannot say whether bypass is allowed gets the same treatment: the mode is ignored, with a notice. (An earlier build
+  stopped these commands with an error; the rows of `test/managed-bypass.test.ts` pin the new behaviour.)
 - `GET /api/config/effective` also reports `permissions: { bypass, always }`, so clients can read these switches.
-- `orb flow clean` now compares a worktree's folder with the run's folder the way the platform compares paths, so a
-  run is cleaned up when the repository path is spelled with other case on Windows.
 
 Bypass is refused by the clients until a durable permission mode in the server reads the managed settings itself.
 
@@ -472,6 +575,128 @@ in a folder you have not trusted.
 
 **What to do:** Export the variable in the environment you start Orbit from instead.
 
+### Instruction files lose their comments and front matter, and `instructions_exclude` skips files
+
+Every instruction file (`ORBIT.md`, `AGENTS.md`, and the file of another product that compatibility reads) now goes
+through one step before the model reads it, whether a session loads it when it starts or a read of a file in its folder
+finds it later:
+
+- **Comments.** An HTML comment that stands at the top level of the file, on a line of its own and indented by at most
+  three spaces, is removed, a comment that runs over several lines included. A comment inside fenced or indented code,
+  inside a sentence or an inline code span, or inside a list item, a quote or another HTML block is text and stays. Text
+  after the closing marker on its line stays, and so does a comment that is never closed. A file with a comment loses
+  its CRLF line endings in what the model reads.
+- **Front matter.** A block at the top of the file is removed whatever it says and is never read as code: the first line
+  is exactly three dashes, spaces after them allowed, and the block ends at the next such line. A first line with
+  anything after the dashes, such as `---js`, or with more dashes is not front matter, and the text stays as written.
+- **Empty files.** A file with nothing left (empty, only comments, only front matter) adds nothing. It used to load as a
+  heading with no text. In a folder with several instruction names the first one present still wins, so an empty
+  `ORBIT.md` does not hand its place to `AGENTS.md`.
+- **Size.** A file of more than 40,000 characters, counted after the two steps above, is recorded as a warning and is
+  still sent whole. The warning never reaches the model, and no client shows it yet.
+- **`instructions_exclude`.** A new list of glob patterns or absolute paths of instruction files that Orbit does not
+  load. A pattern is matched against the whole absolute path of the file, written with forward slashes, and `*` also
+  matches names that start with a dot. The match is case-sensitive, except for a drive letter. A pattern with no folder in
+  it, such as `AGENTS.md`, matches nothing, and neither does one that starts with `~`, which is not expanded, so write
+  `**/third_party/**/AGENTS.md` to skip a folder's file wherever the project lives. The lists of your settings, the
+  project's, the local file's, the flag's and the organization's are added up. An excluded file is not read at all, and
+  the next name in its folder takes its place. A project's or local file's list is ignored until its folder is trusted,
+  because it would otherwise let a repository hide your own instruction files from the model.
+
+A session that already has instruction files with comments or front matter gets one instruction update at its next
+boundary, because what is stored for it is now the text that is left. Changing only a comment, or only the front
+matter, of a loaded file starts no update.
+
+**Affects:** anyone whose instruction files hold comments or front matter, including a file that opens with a rule line,
+some text and another rule line (the text between them is now front matter and goes); sessions that were running
+during the upgrade; and code that implements `InstructionDiscovery`, which has a new `warnings()` method and a `warn`
+method on its editor.
+
+**What to do:** Nothing for most setups. Keep a note for the model out of a comment, and start a file that needs a
+leading rule line with a heading. Add `instructions_exclude` to your own config to skip instruction files that you do
+not want the model to read.
+
+### An agent file defines its agent, and an agent definition has more keys
+
+A Markdown file under `agent/` or `agents/` in a config directory used to be merged field by field into an agent of
+the same name, so a file named `explore.md` kept the rules of the built-in explore agent. It now defines the agent: it
+replaces whatever an earlier entry made of that name, built-ins included, and nothing of the earlier definition
+survives, its permission rules included. To tune a built-in, put the changes under `agents.<id>` in `orbit.json`, which
+still merges field by field, in entry order. Files under `mode/` and `modes/` still tune, and so does a file named
+`plan`, so Plan mode keeps its read-only limits. Replacing a hidden system agent (`title`, `compaction`, `summary`,
+`side`) gives exactly what the file says: the agent is not hidden and has no small model unless the file says so. A file
+under `agent/` or `agents/` that names no `mode` now gets `all`, so the model may start it as a subagent and a person
+may run it as the main agent; a file under `mode/` or `modes/` stays `primary`.
+
+An agent file or `agents.<id>` entry can set `model` (also `inherit`, `small` or `large`, which `model_aliases` and the
+default model resolve later), `effort`, `tools` and `disallowed_tools` (a string or a list; a `*` in `tools` means every
+tool, and a `*` in `disallowed_tools` denies every tool), `permission_mode`, `mcp_servers`, `hooks`, `max_turns` (an
+alias of `steps`), `skills`, `initial_prompt`, `memory` (`user`, `project` or `local`), `background`, `isolation`
+(`worktree`) and `context` (`instructions` and `git_status`; a folder that is not trusted can only turn the git snapshot off). `orbit.json` also accepts
+`model_aliases` with `small` and `large`. These keys are stored and shown by `agent.list` and `agent.get`; what they do
+when an agent runs lands with later changes. A field with a bad value is dropped with a log line or a diagnostic and
+the agent still loads. An agent whose `tools` is a map of tool names to booleans is still read in the legacy v1
+style: the map and the keys only that style has (`temperature`, `top_p`, `prompt` (in a Markdown file the body stays the prompt and a front matter `prompt` is ignored), `options`, `maxSteps`, `permission`)
+are read as before, while every key Orbit's own schema has, `model`, `steps` and `permissions` included, is read
+natively beside it. A field with a bad value on either side is dropped with a diagnostic (or a log line, in a Markdown
+file) at its own path, and the rest of the agent, its deny rules included, still loads, and so does the rest of a tools map, a `permission` object or a `permissions` list when one entry in it is bad (that entry alone is dropped, named at `tools.<name>`, `permission.<key>` or `permissions.<n>`). A pattern object under `question`, `websearch` or `doom_loop`, which take one action only, is such an entry too, and the same per-entry handling applies to the top-level `agent` and `mode` maps of `orbit.json`: the keys the v1 format owns (`model`, `variant`, `steps`, `permission`, a `tools` map and the like) are read in that style, and every other key Orbit's schema has, `permissions` and `disallowed_tools` included, is read natively and never forwarded to the provider as a request option, so a tools map there no longer drops the denies of `build`, `plan` or `explore`. A folder that is not trusted adds its `disallowed_tools` to the list that is there instead of replacing it. A `variant` beside a model is
+joined to it, and beside a model tier it becomes the effort, in `orbit.json` and Markdown alike. A `name` key in a file is
+ignored (the path names the agent). The camelCase spellings of these keys (`disallowedTools`, `permissionMode`,
+`mcpServers`, `maxTurns`, `initialPrompt`) are not read in Orbit's own folders; each one is reported once, naming the
+snake_case key to use.
+
+An agent name must be plain: segments separated by `/`, each starting with a letter or digit and holding only letters,
+digits, `.`, `_` and `-`, not ending with `.`, and not a Windows device name such as `nul` or `con`. A file or an
+`agents`, `agent` or `mode` key with another name defines no agent and is reported.
+
+In a folder that is not trusted, a file under `agent/` or `agents/` no longer changes an agent that exists, or one that
+a trusted config names in any scope, a flag or managed one included: it is held back whole, and the folder is listed as holding back permissions for every such file, because which names exist depends on the entries before it, the person's own agents included.
+Trusting the folder applies it. The file may still define a new agent, cut down to the keys that are safe: `context`,
+`background`, `disallowed_tools`, `system`, `description`, `color` and an `initial_prompt` that is plain text. The keys
+that choose a model, a budget, tools, a mode, a memory scope, servers, hooks, skills or isolation, and an
+`initial_prompt` that starts with a slash command, wait for trust, and so does `model_aliases` in `orbit.json`.
+
+**Affects:** people who keep an agent file named after a built-in or after an agent in another entry, relying on it
+to add to that agent; repositories that ship such a file; clients that read `agent.list` or `agent.get`, whose agents
+gain optional fields.
+
+**What to do:** Move the changes to a built-in into `agents.<id>` in `orbit.json`, or keep the file and copy the rules
+you still want into it. Rename an agent whose name is not plain.
+
+### Subagents get a task-worker prompt, and Explore leaves out the instruction files and the git snapshot
+
+A session that runs as a subagent (it has a parent and is not a fork of the main conversation) used to start from the
+main conversation's prompt when its agent had no prompt of its own, and was sent a fixed "you are a subagent" line
+before the task. It now starts from a shorter task-worker prompt that tells it to finish the brief, state its
+assumptions because nobody can answer, and end with a report. Every subagent, one with a prompt of its own included,
+also gets a few reporting notes (absolute paths, no emojis, no colon before a tool call). The model overlays, the output
+style, `system_prompt` and `append_system_prompt` do not apply to a subagent; the git section still does. A prompt of
+your own for an agent can now hold the `${ORBIT_TOOL_GUIDANCE}` placeholder, which is filled with the guidance for the
+tools the agent has. The task text is the child's first message, with nothing in front of it.
+
+The `agents.<id>.context` keys now work. Explore ships with `instructions: false` and `git_status: false`, so it no
+longer sees the project instruction files, the memory index or the git snapshot taken when the session began. Explore
+has no shell tool, so it cannot ask git for the branch or the status either. Files in a subfolder that it reads still
+bring their instruction file. A session that switches to such an agent is told once that the earlier instructions no
+longer apply.
+
+**Affects:** people whose Explore searches relied on conventions in `AGENTS.md` or on the branch name, and agents in `all`
+mode that run as children, which now get the task-worker prompt.
+
+**What to do:** Set `"agents": { "explore": { "context": { "instructions": true } } }` (or `"git_status": true`) in
+`orbit.json` to bring either back. Setting one key leaves the other at the built-in value.
+
+A folder that is not trusted cannot switch the instruction files off: `"instructions": false` in its `orbit.json` or
+agent files is dropped, because it would hide your own instruction files and memory index from the agent, as the
+withheld `instructions_exclude` does. `"instructions": true` is dropped too: a later document wins, so it would switch
+the files back on over your own `false` (and over Explore's default). `"git_status": true` is dropped for the same reason,
+and `"git_status": false` is kept. Trust the folder to use the switches.
+
+A prompt of your own for an agent has its `${ORBIT_TOOL_GUIDANCE}` placeholder filled from the tools the model is
+actually offered: on a PowerShell session the line reads PowerShell, and a model that loses Edit and Write gets no line
+for them. Your own words around the placeholder stay as written. Workflow subagents also get the brief alone as their
+first message.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -514,6 +739,42 @@ who lose them until Orbit's IDE bridge ships, and people who turn compatibility 
 
 **What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
 not. Leave compatibility on if you want Zed's selection in the TUI.
+
+### The TUI finds VS Code through Orbit's own bridge
+
+The Orbit extension for VS Code now starts a bridge when the window opens (it needs a trusted workspace). The bridge
+listens on `127.0.0.1` on a random port, writes a lock file with that port and a token into the `ide` folder of Orbit's
+state folder (`~/.local/state/orbit/ide`, or under `XDG_STATE_HOME`), and sets `ORBIT_EDITOR_SSE_PORT` in the
+terminals of the window. The terminal UI reads the lock, connects with the token in an `x-orbit-ide-token` header and shows
+the file and selection you are working in. The new command **Orbit: Mention Selection in Terminal** puts an `@` reference
+to the file, with the selected lines, into the prompt of a connected terminal UI. The setting `orbit.ideBridge.enabled`
+(on by default, user settings only) turns the bridge off.
+
+Two things stop working. `ORBIT_EDITOR_SSE_PORT` alone no longer connects the TUI to a WebSocket server: there must be a
+lock under `ide` that names that port and holds a token, and the messages are Orbit's own (`hello`, `selection` and
+`mention`), so a custom editor server that spoke the old JSON-RPC message names is not understood. Outside the terminal of
+VS Code (no `ORBIT_EDITOR_SSE_PORT`, and `TERM_PROGRAM` not `vscode`) the TUI no longer looks for an editor on its own.
+`Env.session()` also withholds every `ORBIT_EDITOR_*` variable from the managed server and from session shells.
+
+**Affects:** TUI users who point `ORBIT_EDITOR_SSE_PORT` at their own editor server, and VS Code users, who get the
+connection without setting anything.
+
+**What to do:** use the Orbit extension for VS Code; set `orbit.ideBridge.enabled` to `false` if you do not want the
+listener. An editor plugin of your own writes a version 1 lock to `ide/<port>.lock` and speaks the message set.
+
+### The prompt editor is started without a shell
+
+`$VISUAL` and `$EDITOR` for the prompt editor (the editor command of the prompt and Mini) are now found on `PATH` and started by the path
+that was found, with no shell, as `/keybindings` already did. On Windows a program of the same name in the folder you work
+in (`code.cmd`, `vim.bat`, `code.exe`) is no longer run in place of your editor. An editor value that relied on `cmd.exe`
+no longer starts: a builtin such as `start /wait notepad`, `%VAR%` expansion, or a program found only in the current
+folder. A value of exactly `code` or `subl` now gets `--wait`, so the prompt waits until the file is closed. A missing
+editor is reported as "Cannot find the editor ... on PATH".
+
+**Affects:** Windows users whose `VISUAL` or `EDITOR` is a shell builtin, uses `%VAR%`, or names a program that is not on
+`PATH`.
+
+**What to do:** give the full path of the editor, quoted if it has spaces, or put it on `PATH`.
 
 ### `orb -p` sends a message and prints the answer
 
@@ -598,7 +859,9 @@ plugins and nothing to say so. A folder that holds nothing back runs as before, 
 server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`), except that a workflow or suite
 that is a TypeScript or JavaScript module, that defines shell commands, that names an agent, or, for a workflow, that
 sets `permissions: auto`, needs a trusted folder either way (see "`orb flow` and `orb eval` need a trusted folder to run
-a workflow or suite's code, commands, approvals or agents" under Clients).
+a workflow or suite's code, commands, approvals or agents" under Clients), and so do `orb flow resume`,
+`orb eval --resume` and `orb flow replay` (see "`orb flow resume`, `orb eval --resume` and `orb flow replay` need a
+trusted folder" under Clients).
 `orb flow` and `orb eval` import a workflow or suite module only after the check, because importing it runs its code.
 `orb acp` cannot stop, because the editor chooses the folders, so it writes a warning to stderr about the folder it
 started in.
@@ -738,8 +1001,9 @@ something back, and not otherwise.
 calls no model and connects to no server. It now makes the check for a module. To ask, it connects to a server, which
 for the background service starts it when it is not running, and it takes `--standalone`, `--server` and `--trust` as
 the other `orb flow` commands do. A replay answers every node from the recording, runs no command, asks no model and
-opens no session, so a YAML workflow is not stopped for the commands, approvals or agents it defines, and replaying one
-still connects to no server.
+opens no session, so a YAML workflow is not stopped for the commands, approvals or agents it defines. A replay of one
+still connects to a server, because it reads the run store, which needs the folder trusted (see "`orb flow resume`,
+`orb eval --resume` and `orb flow replay` need a trusted folder" below).
 
 These commands ask the background service as it is, without replacing one that is older than the client, so a service
 that was started before an upgrade and not restarted can lack the trust routes. They used to go ahead with a warning on
@@ -757,14 +1021,42 @@ is not trusted, through the background service, which is the default: they now e
 holds no project config.
 That is nearly every eval, because nearly every suite has checks. The same commands against a server that is older than
 workspace trust, such as a background service that was not restarted after the upgrade, now exit with status 1 whether
-or not the folder is trusted. A replay of a module workflow now connects to a server, and starts the background service
-if that is the server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or
-against a server that trusts the folder, are not affected.
+or not the folder is trusted. A replay now connects to a server, and starts the background service if that is the
+server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or against a server
+that trusts the folder, are not affected.
 
 **What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
 `ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service
 restart`). Look over a workflow or suite that you did not write, and the commands, nodes and agents that the refusal
 lists, before you trust the folder that holds it, because trusting the folder lets it run.
+
+### `orb flow resume`, `orb eval --resume` and `orb flow replay` need a trusted folder
+
+The run store, `.orbit/runs.db`, is a file in the repository, so a clone can ship one with any run in it, and a
+resumed run goes on from what the store records for it: the worktree that a verify node's reviewer and checks work in,
+the session that a team member continues, and the base commit of the review diff. A store in an untrusted clone could
+point a reviewer at any folder on the computer, `C:\` or `/` included, and the reviewer could read a file there and send
+it to your model provider.
+
+`orb flow resume`, `orb eval --resume` and `orb flow replay` now stop in a folder that is not trusted, whatever the
+folder holds back and whatever the workflow or suite defines, before they open the run store. They say that the folder
+is not trusted and that the command goes on from a run that the folder's run store records, give `orb trust` and
+`--trust` as the ways to go on, and exit with status 1. `orb eval --resume --format json` prints the refusal on stdout
+as the JSON error that `orb run --format json` prints. A server that cannot say whether the folder is trusted, because
+it is older than workspace trust, stops them as well. To ask, `orb flow replay` now always connects to a server, for a
+YAML workflow too, and one it cannot reach stops it. `orb flow run` and `orb eval` without `--resume` are not affected.
+The flow runner, for a caller that resumes in such a folder anyway, takes no worktree, no session ID and no base commit
+from the store: the checks and the reviewer of a reused verify iteration work in the folder of the run, no review diff
+runs git in a folder the store names, and a team member whose turn is reused opens a new session for its next one.
+(`packages/cli/test/trust.test.ts`: the rows for a run store that the clone ships, each with a `--trust` control, the
+rows that refuse before the store is opened, and the rows for a server older than workspace trust;
+`packages/flow/test/runner-resume-untrusted.test.ts`, which has a row for the review diff.)
+
+**Affects:** scripts and CI that resume or replay a run in a folder that is not trusted, including a run they started
+there themselves: they now exit with status 1.
+
+**What to do:** trust the folder with `orb trust`, or pass `--trust` to the one command, or set
+`ORBIT_TRUST_PROJECT=1` and `--standalone` in CI.
 
 ### `orb flow` treats the run store of a repository as untrusted text
 
@@ -1121,8 +1413,8 @@ as a model fallback, appear in the same way once those features land.
 
 `ctrl+r` in the prompt of the terminal UI now opens a search over the prompts you sent before. The list narrows as you
 type, shows prompts sent from the current directory first, then the closest match, then the newest, and Enter loads the choice into the
-prompt with its mode and mentions. With `prompt.vim` on, `ctrl+r` in normal mode is still redo. The command is
-`prompt.history.search`.
+prompt with its mode and mentions. With `prompt.vim` on, `ctrl+r` opens it in normal mode too (normal mode has no
+redo key; the `input.redo` binding still redoes). The command is `prompt.history.search`.
 
 Renaming a session no longer has a key of its own in a session: `session.rename` now has no default key, and the
 session list's rename action is the new `dialog.session.rename`, still `ctrl+r`, in the `session-list` place. `/rename`
@@ -1296,7 +1588,7 @@ folder rather than naming its file.
 terminal is blurred or its focus is unknown, between frames (right after the next frame while an animation keeps the
 renderer running). A subagent's permission or form rings it too, since a person must answer; a subagent finishing does
 not. `attention.idle_reminder` is a number of seconds (default 60, larger values are capped at 86400, 0 turns it off): once a top-level
-session has finished, the reminder "Orbit is waiting for your input" comes after that many seconds with no key
+session has finished, the reminder "The session has stopped and the next step is yours" comes after that many seconds with no key
 pressed, no new run started and no permission or form pending. It is sent only while the terminal reports that it is
 blurred (never for a terminal whose focus is unknown), only when notifications, sound or the bell are on, and once per
 idle period. The window title was
@@ -1375,6 +1667,101 @@ The status line command used to run as soon as the terminal UI opened, in the fo
 **Affects:** people with a `status_line` command, in particular under organization-managed hook restrictions and on Windows.
 
 **What to do:** Nothing, unless your script printed several lines and relied on only the first showing.
+
+### The VS Code chat sends the file you have open, and any selected text, as hidden context
+
+Each message you type in the Orbit chat now carries the path of the file you last worked in (a file on disk, not an
+untitled buffer or a diff) and, when you have text selected there, the selected lines and up to 2000 characters of the
+text. It reaches the model as a hidden message right before yours, marked as editor context and not as an instruction; the
+chat shows only a muted line under your message when a selection went with it. A chip above the prompt names the file and
+the selected lines before you send; click it to leave them out of that message. A second chip appears when the file has
+errors or warnings; it starts off, and clicking it sends a short summary of them (at most 4000 characters) with that
+message. After you send, the file chip hides until you open another file or change the selection, and the problems chip
+goes off again. The selection is no longer pasted into the text of your message. The Ask, Explain and Fix commands and
+starters work as before.
+
+New setting `orbit.context.includeOpenFile` (default `true`) sets whether the file chip starts on. Only your user
+settings count; a workspace cannot set it. Nothing checks your read permission rules for the file before its path or
+selected text is sent (see FU-M4-35 in the follow-up register).
+
+**Affects:** VS Code users.
+
+**What to do:** Nothing, or set `orbit.context.includeOpenFile` to `false` in your user settings to start with the chip
+off.
+
+### Vim keys in the prompt: counts, operators, text objects, registers and an insert label
+
+With `prompt.vim` on, normal mode now understands counts (`3w`, `2dd`, `5x`, up to 10000), the operators `d`, `c` and
+`y` with the motions `h j k l w b e W B E 0 ^ $ gg G` (and `gj`, `gk` for display rows), the text objects `iw aw iW aW`
+and the inner and around forms of quotes, backticks, `()`, `[]`, `{}` and `<>`, and the commands `dd cc yy D C Y s S x X
+r ~ J p P o O i I a A >> <<` and `u`. There is one unnamed register that lives as long as the prompt does and is never
+written to disk; `"+` before a yank, delete or paste goes through the system clipboard (`"+p` pastes only a text
+clipboard, and CRLF becomes LF). Prompt parts (file and agent mentions, pasted-text summaries, images) are never cut in
+half by a motion or an operator. One `u` undoes one whole command, such as `3dd`.
+
+In insert mode a muted `-- INSERT --` label starts the row under the prompt; normal mode shows no label and uses the
+block cursor. Escape in insert mode no longer moves the cursor left when it is at the start of a line. Escape in normal
+mode clears a half-typed command and still reaches the interrupt of a running session; Enter submits from either mode;
+the arrow keys act as `h j k l` while a count or operator is pending. If you set no `cursor` and use `prompt.vim`, the
+insert cursor is a line (before, switching back to insert mode failed). The status line command is run again when the
+vim mode or the configured output style changes.
+
+In a few places Orbit follows Vim's documented behaviour: `d$`/`D`/`C` (they stop at the line break), the linewise
+operators (`dj`, `dk`, `dG`, `dgg` take whole lines), `d0`, counted `x`, `r` and `~` (they stay on the line), `dw` at the
+end of a line, `cw` on the last letter of a word, and `a` at the end of a line.
+
+**Affects:** people who set `prompt.vim` to `true`, and status line commands that show the vim mode or output style.
+
+**What to do:** Nothing.
+
+### Vim keys in the prompt: visual mode, `.`, finds and `%`
+
+With `prompt.vim` on, normal mode gains four things.
+
+- **Visual mode.** `v` starts a characterwise selection and `V` a linewise one; the same letter leaves, the other letter
+  switches. Move the head with the normal motions, the finds, `%`, the arrow keys (also with Shift) and Backspace, which
+  moves the head left and deletes nothing; Delete, Home and End do nothing. `o` swaps the ends. `d`, `c` and `y` act on
+  the selection, and `>` and `<` shift every line it touches (a count before them is the number of levels). `"+` before
+  an operator uses the system clipboard. Escape leaves and is not passed on, so it does not interrupt a running session;
+  the next Escape does. Enter submits and ends the selection. Other keys (`p x s r ~ J u i a`, `gv`) do nothing in
+  visual mode yet, so `viw` ignores the `i` and moves the head one word. A Ctrl, Alt or Super chord (Ctrl+D,
+  Ctrl+W, Ctrl+Z, Alt+F and so on) ends the selection and then does what it does elsewhere, from a plain cursor, so
+  Ctrl+V ends it and pastes. The row under the prompt shows `-- VISUAL --` or `-- VISUAL LINE --`. The selection is
+  drawn with the editor's own selection colour.
+- **Finds.** `f`, `F`, `t` and `T` take the next key as the character to look for (a digit, a space and an emoji
+  included), with a count for the Nth one; `;` repeats the last find and `,` runs it the other way. `df-`, `ct,` and `yF.`
+  work as operators. Parts such as file mentions never match and are never split.
+- **`%`** jumps to the partner of the first `( ) [ ] { }` from the cursor to the end of its line, and `d%`, `c%` and
+  `y%` act on the span. A count before `%` does nothing.
+- **`.`** repeats the last change: an operator with a motion, object or find, `dd`, `x`, `r`, `~`, `>>`, `J`, `o`, a
+  visual operator, or the text you typed in insert mode. It is kept in memory only. `2dd` then `.` deletes two more lines.
+
+In these places Orbit departs from Vim: text typed after `cw` or `o` replaces
+that command for `.` (so `.` inserts the text and does not change a word), a yank is repeated too, a count typed before
+`.` is dropped, `;` after a `t` whose target is next to the cursor stays put, `dF-` and `dT-` include the character under
+the cursor, and finds cross line breaks. The record of typed text starts again when a prompt is sent or its text is
+replaced, so `.` never re-types a sent prompt.
+
+The status line command's `vim_mode` is now also `visual` and `visual_line`.
+
+**Affects:** people who set `prompt.vim` to `true`, and status line commands that read `vim_mode`.
+
+**What to do:** Nothing. A status line script that expects only `insert` and `normal` should accept the two new values.
+
+### `orb flow clean` finds a run by the repository's real path and leaves a linked run folder alone
+
+`orb flow clean` used to match the worktrees that git lists against the run's folder as you spelled the repository's
+path, so on Windows a path with other case, or with the 8.3 short name of one of its folders (a temporary folder under
+`C:\Users\RUNNER~1`, say), found nothing: the run's worktree stayed and deleting its branch failed. It now takes the
+repository by its real path. The run's folder is named under that path and is not itself resolved, and when
+`.orbit`, `.orbit/worktrees` or the run's folder is a link or a junction, the command removes nothing for that run, not
+even its branches, and prints one line naming the link. Before, such a link could lead clean to a folder outside
+`.orbit/worktrees` and have it remove a worktree of yours there, with work you had not committed.
+
+**Affects:** people who run `orb flow clean` from a path spelled with other case or a short name, and repositories in
+which one of those folders is a link.
+
+**What to do:** nothing. If clean names a link, remove the link and run it again.
 
 ## Permissions
 
@@ -1543,7 +1930,8 @@ read as a drive. Read, Write, Edit, NotebookEdit, Patch and LSP refuse it, and s
 `workdir` and the folder of a `cd`. A part of a path that is an 8.3 short name is named by its long name, trailing
 periods and spaces are dropped as Windows drops them, and a `\\?\` or `\\.\` prefix is read as the plain path, so your
 rules see `.env` and `new.sh`, and an approval names the file by its own name. An 8.3 name whose long name cannot be
-told is refused with `file.spelling` as well.
+told is refused with `file.spelling` as well, and so is a part of that form that exists in a folder Orbit cannot list
+(a part that is not there stays as it is; pinned by `test/tool-windows-spelling.test.ts`).
 
 **Affects:** Windows users with rules for file names, and shell commands that change their location to a PowerShell
 drive such as `HKLM:`, which now fail. Code that matches on a failed tool call's `error.type` can see `file.spelling`.
@@ -1586,9 +1974,17 @@ Grep and Glob asked their own rules about the pattern only, so a Read deny of `*
 which sent the file's lines to the model. Both now ask your Read rules about the path they search, as a Read of that
 path would, before they ask about the pattern: a Read deny of `*.env` refuses a Grep of `.env`, a Read deny of a folder
 refuses a Glob of it, and a Read ask asks about the path. A search of a folder does not yet hold each file it finds to
-your Read rules, so a Grep of `.` still reads a `.env` in it unless a rule covers the folder.
+your Read rules, so a Grep of `.` still reads a `.env` in it unless a rule covers the folder. A Glob does hold them: it
+leaves out of its list every file that a Read deny of yours matches, decided without asking (a Read ask does not remove
+a file), and the files left out do not count against the limit.
 
-**Affects:** people with Read rules that ask or deny. With a Read ask that covers the searched path, a search now asks
+A Glob also lists differently now. It lists hidden files unless the call says `hidden: false`, lists files that
+`.gitignore` names, sorts the files by modification time with the oldest first (it was the newest first), and stops at
+100 files unless `limit` says otherwise. The tool description and the system prompt no longer say "most recently modified
+first". Pinned by `test/tool-search.test.ts`.
+
+**Affects:** people with Read rules that ask or deny, and prompts or plugins that relied on the order or on the omission
+of hidden and ignored files. With a Read ask that covers the searched path, a search now asks
 about the path as well as about the pattern, and an agent whose rules allow Grep or Glob but deny Read can no longer
 search.
 
@@ -1680,8 +2076,12 @@ scanner found, and the folder question held the folders the scanner found.
 - A statement with no command, such as `> file`, and a PowerShell statement that is not a pipeline of commands (an
   assignment, an expression such as `[IO.File]::WriteAllText(...)`, an `if`, a loop, a function) is asked about by its own
   text. Before, its resources were empty and it ran under any `shell *` ask rule. A saved grant for the commands inside it does not cover it.
-- For input Orbit can analyse, a person's `Read` and `Edit` deny rules now stop a shell command that names the file, and
-  a deny anywhere in a call (the shell request, the folder question, a path rule) blocks it before any question is shown. A
+- For input Orbit can analyse, a person's `Read` and `Edit` deny rules now stop a shell command that names the file as a
+  literal operand or target: `cat secret.txt` and `cp secret.txt copy.txt` for a `Read` deny, and a redirect target
+  (`> out`), `tee out` and the output file of a read-class command (`sort -o out`, `uniq f out`, `find . -fprint out`,
+  `tree -o out`, `sed -n 'w out'`) for an `Edit` deny, in both scanner modes (`test/tool-shell.test.ts`,
+  `test/shell-guard.test.ts`). A file that a command reaches in another way is not covered yet: see the caveat under
+  "What to do". A deny anywhere in a call (the shell request, the folder question, a path rule) blocks it before any question is shown. A
   `!` span of a slash command counts with the others: a deny on any span of the template blocks it before a question about
   the first. Plan mode's own deny of every edit is not such a rule: a command in Plan mode is still asked about, as it always
   was, and only an `Edit` deny of your own stops it. `New-PSDrive` is an ordinary PowerShell command that is asked about
@@ -1701,7 +2101,9 @@ now also carries `findings`.
 **What to do:** Approve the folder once, or add an `external_directory` allow for it. Write an allow rule for the commands you
 mean, such as `Bash printf *`. Until the follow-up that makes these asks unliftable (shell-safety-12), a broad allow rule
 (the default `* *` allow included) still lifts a statement with no command and input Orbit cannot read, because it matches
-every resource of the request.
+every resource of the request. It also still lifts a target that is built when the command runs
+(`Remove-Item (Join-Path ...)`) and a read through a glob, a .NET call or a nested shell, even when a `Read` deny names
+the file: the deny meets only the files that Orbit can name before the command runs.
 
 ### A PowerShell command spelled as a path to a location cmdlet is asked about
 
@@ -1791,7 +2193,7 @@ An IPv4 address in the managed `denied_domains` list now also denies its mapped 
 
 ### One bad field no longer drops its agent entry or its settings object
 
-In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry (`color`, `model`, `steps`, `mode`, or one rule in its `permissions`) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
+In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry, or in an entry of the older `agent` and `mode` maps (`color`, `model`, `steps`, `mode`, `description`, `options`, or one entry of its `permission` object or `tools` map) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
 
 **Affects:** anyone with a typo in one of these entries, administrators most of all; `orb doctor` lists each skipped field.
 
@@ -1804,6 +2206,18 @@ When the global config, data or temporary folder is reached through a link, Orbi
 **Affects:** people whose config, data or temporary folder is a link and who wrote rules about it.
 
 **What to do:** Nothing.
+
+### `fhx` is a program under Windows PowerShell 5.1, and so is `lp` under PowerShell 7 on Windows
+
+Orbit used to read `fhx` as `Format-Hex` in every PowerShell, and `lp` as `Out-Printer` in every PowerShell on Windows.
+Some builds of Windows PowerShell 5.1 have no `fhx` (the Windows Server 2025 image of GitHub's runners is one), and
+PowerShell 7 on Windows has no `lp`. A shell without the alias runs whatever program of that name it finds on PATH, so
+Orbit now reads `fhx` as `Format-Hex` only under PowerShell 7 and `lp` as `Out-Printer` only under Windows PowerShell
+5.1. Elsewhere each is an unknown program: `fhx` under 5.1 is no longer read-only and is asked about.
+
+**Affects:** people on Windows PowerShell 5.1 who run `fhx`.
+
+**What to do:** Write `Format-Hex` in full under Windows PowerShell 5.1 to keep it read-only.
 
 ## Plugins and SDK
 
@@ -2226,9 +2640,11 @@ that finishes with `stop` or `tool-calls` and after a new message from you. A co
 cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
 `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
 no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
-an incomplete stream's continuation does; the allowance is bounded. A text-only cut-off is not resumed when a steered
-message from you is already waiting: that message is delivered at once and starts a new count. A steer that arrives
-during a resume waits for at most the three resumes.
+an incomplete stream's continuation does; the allowance is bounded. A text-only cut-off is always resumed first, also
+when a steered message from you is waiting: the resume request does not carry that message, and the message is
+delivered after the resumed reply, at the next step boundary (a change from the build before this one, which delivered
+it at once instead of resuming; pinned by `test/session-runner.test.ts`). A steer that arrives during a resume waits for
+at most the three resumes, and a steer withdrawn during the cut-off leaves the reply resumed, not left unfinished.
 
 **Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
 session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
@@ -2315,7 +2731,9 @@ session's messages but are left out of every later request, token estimate, comp
 whose copy of the note names the copied attempt. The larger limit lasts until a response ends normally. While it lasts,
 `session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction does not end it, and
 a stretch escalates at most once however often it compacts. A `session.context` hook that changes or removes the
-output limit keeps the limit it chose, and a request already at the model's maximum is not repeated.
+output limit keeps the limit it chose, and a request already at the model's maximum is not repeated. A steered message
+that is waiting does not skip the repeat: the repeated request does not carry it, and it is delivered after the reply
+(pinned by `delivers a waiting steer after the escalated retry` in `test/session-runner.test.ts`).
 
 **Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
 
@@ -2336,8 +2754,10 @@ output envelope, which count failed steps and subagents' steps, so `steps` can e
 `limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
 turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags
 of a printed run. If the server does not echo the limits back, because it is an older version that drops fields it does
-not know, the run asks the server to interrupt its session and fails with a version error. That interruption does
-nothing for a session that is idle or not yet running, so on such a server the prompt can still run without its limits.
+not know, the run first withdraws the prompt it sent from the server's inbox, then asks the server to interrupt the
+session, and fails with a version error. Withdrawing the prompt is what stops it on a session whose run has not
+started, where an interruption alone does nothing. A prompt that the server already delivered is not withdrawn, and
+only the interruption stops it (pinned by `test/run/noninteractive.test.ts` and `test/run/stream-limits.test.ts`).
 
 Any message that the runner marks with `metadata.notice` and a description, such as the switch to the fallback model,
 now prints a warning line, or a `{"type":"notice","notice":...,"message":...}` line with `--format json` and
@@ -2423,7 +2843,7 @@ from the reply (a fenced or bare JSON answer in prose is not an answer). Other c
   JSON, so pass a file there.
 - `ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES` (1 to 20) sets `attempts` for the prompts of a run; any other value is a usage error.
 - A failed run reports the new subtype `error_max_structured_output_retries` for the attempt limit, and `reason:
-  "invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
+"invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
   attempts and its own result line.
 - An older server refuses a request that carries `turn.output`, and a server that drops it fails the run; neither falls
   back to parsing text.
@@ -2434,6 +2854,299 @@ matched the old `The answer was not valid JSON.` error, and schemas that were no
 
 **What to do:** Pass the schema as `--json-schema` (or `turn.output`) and read `structured_output` from the result or
 from the accepted `StructuredOutput` call; make the schema an object schema; update an older server.
+
+### A turn with step, cost or token limits tells the model what is left
+
+A turn that sets `maxSteps`, `maxCost` or `maxTokens` now carries a hidden budget reminder on every step. It lists,
+for each limit the turn set, what is used and what is left, and says that the turn stops without a reply when a limit
+is reached. From 90 % of a limit, or on the last step, it asks for the final answer instead of new work. A turn that
+asked for a structured answer is told to hand it in through `StructuredOutput`, and with a step limit it is asked to
+do so with two steps left, because an accepted hand-in needs one more request to close the turn. The figures are the
+ones the limit check reads, so they include subagent and background spend. Nothing in the text comes from a file.
+Subagents, turns without limits and `orb run --bare` get none. Before this, the model was not told about a limit and
+the turn ended without an answer.
+
+**Affects:** anyone who sets turn limits. Each step sends a few more input tokens, and the stored history holds one more
+hidden row per step. Clients do not show it.
+
+**What to do:** Nothing.
+
+### Undo takes a file named like a pattern as that one file
+
+Session snapshots, and the undo that restores from them, now hand every path to git as a name. Git used to read a file
+name such as `[s]ub` (or `*` and `s*`, which Windows does not allow) as a pattern, so undoing a change to that file also
+put back every file the pattern matched, such as `sub`, and the diff of that file listed them too. A capture that left
+such a file out because it was too large dropped the files it matched from the snapshot, and one that recorded it also
+recorded a large file it matched. A session started in a folder with such a name now records only that folder: outside
+Windows a folder named `s*` also took in the files of a folder `sub` beside it, and on Windows git looked inside `sub`
+for a repository of its own (`snapshot-untrusted-git.test.ts`, "Snapshot reads a file name that git would take for a
+pattern as a name").
+
+A name that starts with `:`, which only systems other than Windows allow, is a name too. Git read `:memo` and
+`:(top)memo` as `memo`, so undoing a change to such a file deleted it when there was no `memo`, and a folder that
+ignored `memo` left the file out of its snapshots. A capture or comparison that met a file named `:(icase)memo` or
+`:!memo` failed.
+
+**Affects:** folders that hold files or folders whose names git would read as a pattern.
+
+**What to do:** Nothing.
+
+### Undo keeps an edit made in the second git last wrote the folder's index
+
+Orbit's first snapshot of a folder starts from a copy of the folder's own git index. On Linux the copy used to be newer
+than every entry in it, so git took a tracked file that was rewritten to the same size within the second its index was
+last written as unchanged: the snapshot held the committed text, and undoing the next step put that text back instead
+of the edit. The copy now has the time of the index it came from, and git reads such a file again
+(`snapshot-untrusted-git.test.ts`, "Snapshot captures a tracked file rewritten in the second its folder's index was
+written").
+
+**Affects:** people on Linux who edit a tracked file within a second of a git command in a folder that Orbit has not
+taken a snapshot of before.
+
+**What to do:** Nothing.
+
+## Prompts and instructions
+
+What the model is told about itself and the place it works in.
+
+### The model learns its shell, its system, its knowledge cutoff and a scratchpad folder
+
+The environment block of the baseline now names the shell that the shell tool runs and the version of the operating
+system (`Windows 11 Pro 10.0.26200`, `Darwin 24.6.0`, `Linux 6.8.0-45-generic`). The platform line gives the usual name
+beside the system's own value, such as `Windows (win32)`. On Windows a Unix shell such as Git Bash is marked as one, with
+a reminder to write Unix syntax. A directory that is a linked git worktree is named as one, with the folder of the main
+checkout, and the model is told to stay out of it. The line that told the model to prefer Orbit's temporary folder over
+`/tmp` is gone.
+
+The model's identity part adds a `Knowledge cutoff` line (a month and a year) for a model whose entry in the model
+catalog has one. The cutoff is read from the catalog Orbit already uses, the bundled one unless you configured a mirror,
+and nothing is fetched to find it. A model that the catalog has no cutoff for gets no line. `Model.Info` has a new
+optional `knowledge` field (`YYYY-MM`), so the generated client changed too.
+
+Each session has a scratchpad: the folder `sessions/<ID of the session its lineage goes back to>` in Orbit's temporary
+folder. The name goes back one level only: a subagent uses its parent's folder, a fork uses its source's folder, and a fork of a subagent or of a fork uses the folder of the session it came from. The baseline names the folder and says the same for every session, so an exact fork repeats its parent's system parts. Resolving the whole lineage is deferred by the plan's appendix (`FU-M4-r3-scratch`). The baseline names it and tells the model to
+keep its temporary files there instead of in the system temp folder. Orbit makes it when a run starts. Every agent that
+may edit files (not Plan, whose mode denies `Edit *`, so its writes there still ask until permissions-7) may edit in the folder of the session that asks without a question, and only where the real place of the
+file is in that folder (a link inside it that leads elsewhere is decided by where it leads), and your own rules for the
+folder still win. The folder is removed when its session is deleted, unless a fork of that session is left. A session
+whose ID is anything but `ses_` followed by letters, digits and underscores gets none of this.
+
+A session that exists already is told once, at its next step, that its environment changed and what the scratchpad is.
+
+**Affects:** every session (the baseline text changes), SDK and client callers that read `Model.Info`, and plugins that
+edit the model catalog.
+
+**What to do:** Nothing.
+
+### A session starts with a snapshot of the git repository
+
+In a trusted git folder, the baseline of a session now carries a snapshot of the repository taken once: the current
+branch, the main branch (from `origin`'s head or its `main` or `master`, else `main`), the git user name, the short
+status (cut at 2,000 characters, with a note when it is longer) and the last five commits. The text says it is a
+snapshot and is not updated, and a status that cannot be read leaves the snapshot out rather than reporting a clean tree.
+A subagent sees its parent's snapshot, and a fork keeps its session's. The snapshot starts no git in a folder that is not
+trusted. If a folder is trusted partway through a session, the next step adds one snapshot, worded as taken partway
+through; if trust is taken away, the next step tells the model the snapshot no longer applies. `orb run --bare` keeps
+the snapshot; an embedded instance that boots with `discovery: false` has none.
+
+Set `"git_status": false` in any config scope to turn it off. A folder that is not trusted may set only `false`:
+its `true` is dropped, because the later document wins and a folder above a trusted project would otherwise turn the
+snapshot back on against your own `false`. The generated client types gain the optional `git_status` boolean in `Config.Info`.
+
+**Affects:** every session in a git folder (the baseline text and its size change; a prompt cache for an existing
+session is unaffected until its next step), and SDK callers that read `Config.Info`.
+
+**What to do:** Nothing, or set `git_status` to `false` to keep git state out of the prompt.
+
+### `@path` in an instruction file loads that file
+
+An instruction file (`ORBIT.md`, `AGENTS.md`, another product's file when compatibility is on) can now pull in other
+files by writing `@path` in its text: `@./docs/style.md`, `@docs/style.md`, `@~/notes/mine.md` or an absolute path. The
+file is added to the instructions as a block of its own right after the file that named it, and its own `@path` lines are
+followed to a depth of five files, each file once. The `@path` text stays where it was written. Nothing is imported from
+inside a code span, a code block, an HTML block or comment, the target of a link or after a backslash, and a name with a
+`#` is cut there (`@./guide.md#setup` imports `./guide.md`). A target that is not there, is a folder, is not a text file
+(by its extension; a name with none counts) or holds a NUL character is skipped without a word, so prose such as `@team`
+costs nothing. `instructions_exclude` applies to imports as to any file, and an imported file is watched, so editing it
+updates the instructions of a running session. Files that the model's reads load later import only from inside the
+project, whether or not it is trusted.
+
+A file in a project whose folder is not trusted imports only files that really lie inside the folder you started in or
+inside the project: a path that leaves it, or a link that leads out, is skipped (once the folder is trusted, a later note
+below lets it import from outside). The skipped target is
+recorded as a warning that no client shows yet. The home folder and a filesystem root are never counted as the project, and
+count only once a person trusts them for the session, and then only as the folder the session started in, so an untrusted
+session started in `~` imports nothing from below it, and a session started below `~` is held to its own folder. Your own global file may
+import any path that is not a network path. A path that names a network share is never opened.
+
+**Affects:** anyone whose instruction files already contain text like `@something` that names a file, which is now sent
+to the model, and anyone who puts secrets in files next to their instructions.
+
+**What to do:** Nothing for most setups. Write `\@name` or put the text in a code span to keep a name from being read as
+an import, or list the file in `instructions_exclude`.
+
+### An untrusted folder no longer sets your reply language or output style
+
+`language` and `output_style` in a project's `orbit.json` (or `orbit.local.json`) used to win over your own value,
+because the last entry wins. In a folder you have not trusted, Orbit now holds both back and your own value stays in
+force; the trust prompt lists them under `settings`. When you trust the folder, the project's values apply after the
+usual reload. The same goes for a project's `language` that asks the model to ignore your setting.
+
+**What to do:** Nothing. If a project's language or style is wanted, trust the folder with `/trust` or `orb trust`, or
+put the value in your own config.
+
+### Editor context from the VS Code chat, the terminal UI and ACP keeps selected text out of the reminder
+
+The editor context that these clients send with a message used to put the file path and the selected text inside the
+reminder envelope itself, so a selection that held a reminder tag could close the envelope and write a fake one. Now the
+selected text always follows the envelope in a labelled fenced block whose fence the text cannot close, and a look-alike
+tag in it is escaped. The terminal UI puts the path in that block too. The VS Code chat keeps the file name, its language
+and any problem messages on one line inside the envelope, with every `<` and `>` in them escaped, so no tag can be formed
+there. The terminal UI now cuts a selection at 2,000 characters, as the VS Code chat and the core note already did, and its envelope says how many characters were left out (before, the whole selection up to the editor bridge's 100,000-character cap was sent). Text that an ACP editor marks for the
+assistant is escaped the same way. The reminder tags are written as `&lt;system-reminder>` in what the model sees. The
+rules are shared in `packages/util/src/reminder-text.ts`.
+
+**What to do:** Nothing.
+
+### Text that looks like a reminder is escaped in the listed places that carry a file or a tool's text
+
+Orbit now has a reminder framework: model-facing context that the harness adds beside the conversation, stored as hidden
+`session.synthetic` rows (`metadata.reminder.kind`) or worked out each time a request is built. No built-in reminder is
+added by this change; later changes add producers. A reminder holds harness text in a `<system-reminder>` envelope, and
+anything it quotes from a file or a tool follows in a labelled fenced block outside the envelope.
+
+The base prompt has always said that a `<system-reminder>` or `<system-update>` block comes only from Orbit. To make that
+true, Orbit now writes the opening bracket of such a tag as `&lt;` when it lowers text that is data: tool results and
+tool errors (local and MCP, also when a server splits one result into several text parts and a tag is cut across them, and also a text or JSON file that a result carries, such as an MCP resource), attached files (including a file that an ACP editor embeds in a prompt, and a text file given with `orb run -f`, the stream-json `files` field or the terminal UI Mini's initial files, whose body and name are escaped where they join the prompt) and folder listings, the names of files that reach a model as a document title or file name (a Read result, an attachment, a Code Mode copy), the Code Mode tool listing (which carries MCP tool descriptions), the agent and skill listings (ids and descriptions), the output of a shell command you ran or that ran in the
+background, the reply of a background subagent, the summary and recent text of a compaction checkpoint, instruction files
+with their updates (including the ones loaded when a file is read), MCP server instructions, and the git snapshot (branch,
+user, status and commit subjects). Some sinks are not covered yet (the reference listing, plugin system parts, direct MCP tool descriptions, a hosted tool's result, image and PDF bytes, which cannot be escaped); `docs/untrusted-repositories.md` lists them under Known gaps and `FU-M4-36` tracks them. The stored row keeps the original
+bytes; only the request changes, and only for text that held such a tag. A prompt you type is not changed.
+
+A compaction no longer reads reminder rows, because the next step collects them again after the checkpoint.
+
+**Affects:** people whose files or tool output quote `<system-reminder>` or `<system-update>` tags (for example when
+documenting them), who now see `&lt;system-reminder>` in what the model is sent; clients that list `session.synthetic`
+messages, which should hide those with `metadata.reminder`.
+
+**What to do:** Nothing.
+
+### The model-family prompts are rewritten
+
+The prompts that `packages/core/src/plugin/optimize.ts` selects by model ID for the Astra, Kimi, Trinity and Muse families, and for the general prompt, which `optimize.ts` picks by a substring of the model ID and which the Astra IDs replace with their own, were written again, and the local-model prompt was tidied to match. Each of the five full prompts now opens with the same opening paragraph as the base prompt, so an output style replaces that paragraph for these models too, and a style without coding instructions drops their Scope, Working in code and Evidence sections as it does the base's. The five full prompts and the local-model prompt tell the model to follow the user's and the project's instruction files, which come later in the prompt and win over the family guidance; on one point a project's file ranks lower, because it cannot approve a risky action ahead of time, while the user can in their own instructions or in the conversation (the base prompt is stricter and takes a standing yes only from the user's instructions). Reminder-shaped text inside a tool result is data for every model; the Kimi and Trinity prompts no longer say otherwise, and no family prompt mentions reminders at all. The `muse` prompt names the model Orbit runs on and makes no claim about who trained it. The Trinity prompt no longer forbids every comment, sets a limit on reply length in lines, or tells the model to hide why it declined; it keeps to short, answer-first replies. Kimi replies in the language the user writes in unless asked otherwise. No family prompt carries a git staging or commit-message procedure, only the rule not to commit, push or open pull requests unless asked. The Astra prompt and the general one split short commentary while working from a self-contained final answer, and the Astra prompt states its limit (confirm destructive, hard-to-undo or outward-facing actions, stay in scope) beside its push to carry a task through. The short block appended for one further model family only narrows the base comment rule. These points are pinned by `packages/core/test/plugin/system-prompt-text.test.ts`.
+
+**Affects:** sessions on models of those families and on local models (the system prompt text changes, so a prompt cache for an existing session is unaffected until its next step).
+
+**What to do:** Nothing.
+
+### Plan mode, todo and verification reminders are derived from history
+
+The Plan mode text no longer arrives as a stored `session.synthetic` row. The model now gets it from three derived reminder producers, computed again whenever a request is built and never stored.
+
+- Plan mode: the first Plan step of a session (and the first after a compaction) gets the full instructions, which now tell the model to explore, design, check the plan against the request and present it through `ExitPlanMode`. After that a reminder comes back only once five prompts have passed since the last one; every fifth is the full text and the rest are one short paragraph. A child session running as the Plan agent gets a shorter subagent text. The first step that is not in Plan mode gets one note that Plan mode has ended. A person who returns to Plan mode within five prompts of the last reminder gets no new reminder until that point, because a leave resets the full and short cycle but not the five-prompt wait. When a plan was approved earlier in the session, the first reminder after a return starts with a note to read the saved plan and decide whether the task is the same. `ExitPlanMode` now also records `approved` and the saved plan's path in the call's metadata for that purpose, so a fork names the file its parent wrote. The leave and re-entry notes are worked out from the history the request carries, so a compaction drops a note that was still owed; the first step after one gets the ordinary plan reminder or none.
+- Todo: once ten assistant text and tool-call blocks (not reasoning) have passed since the last `TodoWrite`, `TaskCreate` or `TaskUpdate` call and since the last nudge, the next step gets a nudge to update or tidy the list, with the current items. It is skipped when neither `TodoWrite` nor `TaskUpdate` is offered.
+- Verification: when a call closes out a list of three or more (every call that leaves every item completed, including one that sends an all-completed list again) whose items are none about checking (`verif` in any letter case), the next step is asked to run the relevant checks before reporting and to say what it did not check.
+
+Sessions that already hold the old Plan mode rows keep working: an old enter row counts as the first reminder and an old leave row as the leave. A running session sees one prompt-cache miss when it first picks this build up.
+
+**Affects:** sessions that use Plan mode, `TodoWrite` or the task tools; clients that listed the Plan reminders as hidden `session.synthetic` rows will no longer see new ones.
+
+**What to do:** Nothing.
+
+### Input sent mid-turn, @agent mentions and editor context reach the model
+
+Three notes are now written while a user message is lowered, from fields the message already stores, and none is stored itself.
+
+- A message that the person sent while the agent was working, and that is steered in right after a round of tool calls, gets a short note ahead of it saying so and that it must be acted on once the current task is done. The person's words stay outside the note, unchanged. Such a message gets only the note and its text: its `@agent` hints and its `editor` field are stored but not shown to the model, because only a prompt sent while idle carries them. A slash command typed mid-turn is steered like any other input, so its expanded text gets the note too (recorded as a deviation; see FU-M4-35). Input that waited in the queue, a first prompt, a prompt after idle, an interruption or a checkpoint, and a steer that follows a final text-only step get no note. A message that a subagent or workflow tool sent to a child session gets a note naming the parent agent as the sender.
+- Each distinct `agents` entry of a prompt adds one hint that the person asked for that agent and that the `Agent` tool starts it. Admission now drops entries that name an agent the tool cannot start (unknown or primary-only); before, a mention had no effect on the model at all.
+- A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative for the platform the server runs on (on Linux and macOS a Windows spelling such as `C:...`, `\...` or `\host...` is relative; a `~name/` spelling counts as relative; only `~`, `~/` and, on Windows, `~\` mean the home folder), cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI keep sending the editor context as a hidden item until a later change moves them.
+
+`orb run --bare` and vanilla instances keep the mid-turn note and drop the hints and the editor note. On a normal instance, compaction summaries and session generations (/btw and the keep-alive warm-up) lower a prompt like the main request, so they share its cache and see the selection; retained recent messages never carry the hints or the editor note. A redacted session export now replaces `editor.path` and the selected text.
+
+Each of these notes (the mid-turn note, every `@agent` hint, the editor note and the reasoning-effort note) now ends with a blank line when it is lowered, so a provider route that joins a message's text parts with nothing, such as the chat-completions providers, keeps every closing fence on its own line and starts your words on a new line outside the quoted block. Stored messages are unchanged; a running session sees one more prompt-cache miss. Under text tool calling, user messages that sit side by side are now joined with a blank line, so a reminder's closing fence stays apart from your prompt.
+
+Sessions that already hold steered messages gain the note once when first lowered by this build, so a running session sees one prompt-cache miss. A steer that follows a fork, an import or a crash that cut history right after a tool step also gets the note, and the first steer after a completed checkpoint does not.
+
+**Affects:** people who type while the agent works, users of `@agent` mentions, and SDK or protocol clients that can now send `editor` (the generated clients carry it).
+
+**What to do:** Nothing.
+
+### Nested instruction files load outermost first, and only for what a read returned
+
+When the model reads a file or lists a folder below the folder the session started in, the instruction files of the folders between them are added to the conversation. Three things about that changed.
+
+- The files now come outermost folder first, so a folder's file is read before the file of a folder inside it. They came innermost first.
+- A read of a path outside the folder the session started in, such as a sibling package in the same repository, no longer loads that folder's instruction file. Only the folders below the started folder count. A read of a PDF, and a read that fails, load nothing either; a text file, an image, a notebook and a folder listing do.
+- `orb run --bare` and instances created with discovery off load no nested instruction files on read. They did before.
+
+A nested instruction file that is a link leading out of the project is no longer loaded, in a trusted project as well as in one that is not. A session started at the home folder loads nested files only once that folder has been trusted for the session. A file that the model edits or writes does not load nested files; the read the edit tools require beforehand does. A repeat read that is answered with the "has not changed" note loads nothing either.
+
+**Affects:** projects with instruction files in subfolders, repositories that link an instruction file to a file outside them, and `orb run --bare`.
+
+**What to do:** Nothing. Copy a linked instruction file into the project if you want it loaded.
+
+### Rule folders: `.orbit/rules`, and rules that wait for a matching read
+
+A folder named `rules` now holds instruction files too. Orbit reads `<folder>/.orbit/rules` in every folder of the instruction walk, `rules` in your own config folder, and `rules` in the managed folder beside the managed `ORBIT.md`. With compatibility on, the `rules` folder inside another product's dot-directory is read as well, before Orbit's own, so Orbit's rules take precedence. Every file whose name ends in `.md` (lower case) is a rule, in subfolders too, loaded by name order.
+
+A rule with no `paths` in its front matter is an ordinary instruction file: it joins the first request right after the instruction file of its folder (the managed rules after the managed file, your own after your global file) and before that folder's local file. A rule with `paths` (a YAML list, or a comma-separated string, with `{a,b}` groups expanded) is not in the first request. It is added to the conversation, once, the first time the model reads a file that matches. The patterns follow the rules of a `.gitignore`, from the folder that holds the `.orbit` folder (your own and the managed rules: from the folder the session started in), on the real path of the file: `*.ts` matches at any depth, `src/api/**` and `/src/*.ts` are anchored, case is ignored, `*.md` matches `.notes.md`, and `!` takes a match back. Only a read triggers a rule, not an edit, a folder listing or a PDF. A read outside the folder the session started in, such as a file of a sibling package in the same repository, adds no rule, even one whose patterns match that file. A rule is added again after compaction drops it. A `paths` that cannot be read as YAML makes the rule apply from the start, and a front matter whose first line names a language (`---js`) is text, not front matter. A rule keeps at most 256 patterns of at most 1,024 characters each, and reading its `paths` stops after a fixed amount of work, enough for a list of 256 patterns of 480 characters. That work counts what is read and expanded whether it is kept or not, so a YAML alias that repeats one value thousands of times, or `{a,b}` groups whose every spelling is empty or refused, no longer holds Orbit up at each session start and each read below the rule's folder; before, a rule file of 17 KB written that way cost about 5 seconds each time. A rule keeps the patterns it had found when the work runs out, and one that had found none waits and matches no read. A rule whose front matter comes to more than its own text once its YAML aliases are followed is refused before its `paths` is read, and waits in the same way (see "Front matter and workflow YAML whose aliases come to more than their text are not read"). A pattern that ends in a long run of slashes followed by another character no longer costs the square of the run's length when it is compiled, and neither does an `@` import token after an underscore whose name is a long run of underscores: before, a rules folder of 64 files written that way held each read below it for 17 to 29 seconds on Windows, and an instruction file of 200,000 such underscores for 39 seconds.
+
+An unconditional rule counts toward the 40,000-character size warning; a rule that waits does not. `instructions_exclude` applies to your own and the project's rules, never to the managed ones. In a project that is not trusted, a rule or a rules folder that is a link out of the project is skipped and logged once, and loads once the project is trusted. A rule with `paths` that is a link out of the project is never added on a read, in a trusted project too. Rule paths are matched by Bun's glob matcher, whose time grows with the path and the pattern and cannot blow up, and a read of a path more than 32 folders deep or 1,024 characters long matches no pattern. A rule in a folder above the project waits for the project to be trusted, as the instruction file in that folder does, and loads, or waits for a matching read, once it is.
+
+A `.orbit/rules` folder (and, with compatibility on, the other product's `rules` folder) in a folder below the one the session started in is read when the model reads a file below it: its rules without `paths` are added to the conversation on that read, and also when the model lists that folder, and its rules with `paths` when the file read matches. They are read from what the folder held at a recent read (see the note on the cap below for how long that is kept), and a rules folder or a rule that is a link out of the project is neither listed nor read.
+
+**Affects:** people who keep a `rules` folder in `.orbit`, in their config folder or, with compatibility on, in another product's dot-directory, and administrators who deploy policy.
+
+**What to do:** Nothing, except to copy a rule with `paths` that is a link to a file outside the project into the project. Move text you want only for some files into a rule with `paths`.
+
+### Links in a project at home or at a filesystem root, unreadable rules, and a cap on rule files
+
+When the project is your home folder or a filesystem root, an instruction file of the walk (`AGENTS.md`, `ORBIT.local.md`, the other product's names) and a rule of a `rules` folder may no longer be a link that leads out of the folder you started the session in, unless it leads to a folder you have trusted and you started the session in that home or root folder and trusted it for the session. Trusting the project alone does not open it. Before, in a folder with no repository of its own below a home folder that was a repository, a downloaded `AGENTS.md` or rule that linked to `~/.ssh/id_rsa` was sent to the model at the start of the session, with no trust granted. A plain file in the started folder is still read.
+
+A project or personal rule that cannot be read (no read permission, or a file another program holds open) is now left out with one warning line that names it. Before, it stopped every new session in the folder with "Instruction initialization blocked by unavailable sources". An instruction file of the walk (`AGENTS.md`, `ORBIT.local.md`, the other product's names) that cannot be read is left out the same way, and the next name in its slot in that folder is read instead; before, it stopped every new session in the folder with the same message, and a file that was readable when the session was prepared but gone when it was read kept its old text. The administrator's rules and file still stop the session, so that policy text is never dropped for a failed read.
+
+One rules folder now lists at most 256 rule files, in name order, with one warning when more are there. One read of a file looks at no more than 256 rule files over all the folders it passes through, and the next read of the same folders does not list them again until a rescan or a short while has passed, so a new rule shows on a later read. Before, every read walked every rule folder on the way again, which took minutes in a repository that held thousands of rule files. One scan of a rules folder also enters at most 256 folders, with one warning when more are there. That limit counts the folders of one rules folder, not of the whole pass: a session scans two rules folders (Orbit's and, with compatibility on, which is the default, the other product's) in each folder from the one it started in up to the project root, and each scan has its own 256. A repository that fills every one of them with empty subfolders can therefore still delay the first request of a session started a few levels down: about 28 seconds on Windows with 400 empty subfolders in each rules folder of four levels, against 3 seconds without them. It costs time only; nothing runs and nothing is sent. This stays open as register row FU-M4-r2-rule-scan. The `@` import allowance in the next paragraph is shared by every file of a pass instead (register row FU-M4-r5-pass-budget). A rule or instruction file that fails to read costs only itself now; before, one file another program held open dropped every nested file of that read.
+
+A rules folder that is a link, or a link to a folder inside one, is held to the same bound as a linked file: in a home or root project a linked folder of rules may no longer lead out of the folder you started in, and before it carried every `.md` file of the folder it led to, a diary under `~/Documents` included. One pass of loading instructions now follows at most 256 `@` imports in all, counted over every file of the pass (the instruction files of the walk, the rule files of every folder, and the files they import); the rest are left out with one warning for the pass, and an import whose target is missing or refused is not looked up again in the same pass. This is a limit of Orbit's own: the reference has no such cap. Before, a file with thousands of them delayed the first request of the session by about a minute for every 175 KiB, and a first cap of 256 for each file left the same delay when the tokens were spread over imported files (40 files of 256 missing imports took 35 seconds). In a project that is your home folder or a filesystem root, an agent, command, skill or output style file of the project's own config folders (`.orbit` and the other product's project folder) that is a link may no longer lead out of that config folder or the folder you started in, and a config folder that is itself a link out is not read from; trusting the project alone does not open it. Your own config (the global config folder, `~/.orbit`, the other product's user folder) is not held to this: a link there may lead anywhere, in any folder you start in, as it did before.
+
+**Affects:** people who start a session in a folder below their home folder when home is a git repository, repositories that link an instruction file or a rule to a file outside the folder, and folders with more than 256 rule files.
+
+**What to do:** Copy a linked file into the folder you start in. Merge rule files if you have more than 256.
+
+### A reply language setting and the `ultrathink` keyword
+
+The new `language` config key names the language the agent replies to you in, for example `"language": "Japanese"`. The main thread of a session is told about it in its baseline; subagents are not. Changing or clearing it mid-session is announced to the model as an instruction update. An empty or blank value counts as unset. A project's `language` applies only once its folder is trusted (see the note on untrusted folders and reply language above); until then your own value stays in force.
+
+A prompt you send that starts a turn and holds the word `ultrathink` (any case, as a whole word), a shell command you type while the agent is idle that holds it, and a command or skill whose text holds it (a skill activated through the API included) now carry a short note asking for a high level of reasoning effort for that turn. Queued input that starts its own turn gets the note too. No model, variant or request setting changes, and the note stays in the conversation from then on, so the cached prompt prefix is unaffected. Input delivered mid-turn (a steer, a shell command or an activated skill that follows a tool step), the prompt a parent agent gives a subagent, the child prompt of a command that runs as a subagent, and the completion of a background job the agent started never carry it. A typed shell command carries the note on its completion notice. `orb run --bare` does not carry the note.
+
+**Affects:** anyone who types `ultrathink` in a prompt or a command or skill text, and anyone who wants replies in another language.
+
+**What to do:** Nothing. Set `language` in `orbit.json` to use the reply language.
+
+### A call that lists the loaded instruction files, their sizes and the baseline the next step sends
+
+`GET /api/experimental/session/:sessionID/instructions` (`client.session.instructions.preview` in the SDK, `orb api
+GET /api/experimental/session/<id>/instructions` on the command line) answers with `status`, `initial` and `update`.
+`status.files` lists the instruction files the session's location has loaded in the order the model reads them (none
+for an agent that leaves instruction files out of its context, which reports `available` as true), each with its real
+path, its scope (`managed`, `user`, `project` or `local`), its length in characters after front matter and comment
+blocks are off, and the file that imported it when it was imported. `status.warnings` names each file longer than
+40,000 characters, which is still sent whole, and each import that was left out because it leads outside what the
+project may supply (`import-external`, or `import-untrusted` when trusting the folder would load it).
+`status.available` is false when a source could not be read, as when the administrator's instruction file is there and
+cannot be read, so the list is incomplete. A project instruction file that cannot be read keeps `available` true: it is
+missing from the list, and the next name in its folder is listed in its place. `initial` is the baseline the
+next request sends and `update` the instruction update the next step boundary would record, empty when nothing
+changed. Neither starts a model request or needs a provider. When a source is unavailable and the session has no
+baseline yet, `initial` and `update` are left out and `blocked` names the sources. Warnings never reach the model.
+
+`orb api` now prints a JSON response again with C1 controls and bidi format characters written as `\uXXXX`, and other
+bodies as message text, because a response can carry text from a project's files. JSON bodies are indented by two spaces.
+
+**Affects:** SDK callers and scripts that call the experimental endpoint, and scripts that read the raw output of `orb api`
+(the same JSON, re-indented).
+
+**What to do:** Nothing.
 
 ## Shell sandbox
 
@@ -2504,7 +3217,7 @@ picks.
 
 Before, the `WebSearch` tool returned only the results and its description did not mention how to cite them. Its
 description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown
-links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page
+links to the pages it used, and explains `allowed_domains` and `blocked_domains`. Results that contain at least one page
 also begin with a one-line reminder of that rule, ahead of the first result so that a result the session bounds (it
 keeps the head) still carries it; an empty result does not. Domain filtering and the query sent to providers are
 unchanged.
@@ -2521,8 +3234,9 @@ analysis judges read-only (`ls`, `git status`, `cat a | grep b`, `sleep 1`) runs
 `tool_execution.max_concurrency`. Any other call, such as `touch x` or `echo hi > f`, still runs alone and waits for
 the calls before it. The decision uses the command text the model sent, before any hook rewrites it, and ignores
 `run_in_background`, the timeout and the paths the command reads. A command that cannot be analysed, an empty command,
-and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has an empty or relative
-entry (a trailing `;` in the Windows `Path` is enough) no command counts as read-only, so shell calls stay serial.
+and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has a relative entry, or an
+empty one in a POSIX `PATH`, no command counts as read-only, so shell calls stay serial. A trailing `;` in a Windows
+`Path` does not do that (see the note on `readOnly` below).
 
 **Affects:** people whose model issues several read-only shell commands in one step, and plugins that observe the
 `execute.before` and `execute.after` hooks of `Bash` and assume they never overlap.
@@ -2537,15 +3251,24 @@ and the ones not started yet, because commands in a step often depend on each ot
 program that ends the command line, as written: `grep`, `rg`, `find`, `diff`, `test` and `[` only fail at exit code 2 or
 more, since 1 means no match, differences, unreadable folders or a false condition. `grep x f && echo found` is judged
 by `echo`, and a line the analysis cannot model (a `$(...)`, an unknown variable, a syntax error) fails on any non-zero
-code. Under PowerShell an exit code never cancels anything, and under `cmd.exe` any non-zero code does. The text the
-model sees is unchanged. Timeouts, signals and commands that cannot start already cancelled their siblings. Background
-commands are not affected.
+code. Under PowerShell nothing cancels anything: not an exit code, and not a timeout, a kill by a signal, a command that
+cannot start or one that is removed while it runs (pinned by the explicit-shell rows in `test/tool-shell.test.ts`). Under
+`cmd.exe` any non-zero code does. Under the POSIX shells timeouts, signals and commands that cannot start already
+cancelled their siblings. Background commands are not affected.
+
+The text the model sees says "Exited with code N" only when the code is a failure by the same reading: a `grep` with no
+match, a `diff` that found differences and a false `test` come back with their output alone (an empty run reads as the
+empty run of a command that succeeded), while `false`, `exit 3` and a `grep` of a missing file still carry the line. A
+timeout and a kill by a signal always carry theirs. PowerShell keeps the line for every non-zero code, and the output
+of a background command keeps it too. The structured `exit` field is unchanged.
 
 The shell tool also reports `readOnly` and `destructive` for each call (advisory; nothing
 is allowed or asked differently because of them). `rm -rf x`, `git reset --hard`, `git push --force`, `DROP TABLE` and
 similar are destructive; every command under `cmd.exe` or an unrecognised shell is. `destructive` is read from the command
 text alone; `readOnly` also depends on where each program would be found, so a program on a relative `PATH` entry or in
-the working folder is not read-only.
+the working folder is not read-only. An empty entry of a Windows `Path` does not count as the working folder, because Git
+Bash drops it and Windows PowerShell 5.1 does not search the folder for it (`test/shell-analysis/readonly-tools.test.ts`);
+an empty entry of a POSIX `PATH` still does.
 
 **Affects:** people whose model issues several shell commands in one step, and plugins or SDK code that read the
 `error` field of a shell result's metadata.
@@ -2558,7 +3281,7 @@ Changes to the file tools and the web tools.
 
 ### Read refuses devices and budgets its output by tokens
 
-The Read, Grep and Glob tools now refuse a device or stream path with a message that says it is a device or stream (the failure reaches a client as an ordinary tool error, with no dedicated error type), before anything is asked or opened: `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/ptmx`, `/dev/tty*`, `/dev/cu.*`, `/dev/pts/*`, `/dev/fd/*` and `/proc/<self, thread-self or pid>/[task/<tid>/]fd/*` on Linux and macOS, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9` (also `COM¹`, `COM²`, `COM³` and the `LPT` forms), `CONIN$`, `CONOUT$` (with or without an extension) and the `\\.\` forms and the `\\?\` forms of these names on Windows (a `\\?\` drive path such as `\\?\C:\Windows\win.ini` is read as the plain drive path and goes through the usual approval). On Linux and macOS a path whose target, followed through links, exists and is neither a file nor a folder (a pipe, a socket, a device the list lacks, or a link of the repository to one) is refused the same way. The Windows names are refused on every Windows version, though Windows 11 itself opens `nul.txt` or `aux.c` as an ordinary file; rename such a file to read it. Files such as `console.log` still read. A read also returns at most about 25,000 tokens of rendered text (line numbers included) instead of 50 KB: a file of ordinary lines up to that size comes back whole where it was paged before, a file of more than 2,000 lines pages whatever its size, and a truncated read ends with the offset to continue from and a hint to use Grep. Notebooks page by the same budget.
+The Read, Grep and Glob tools now refuse a device or stream path with a message that says it is a device or stream (the failure reaches a client as an ordinary tool error, with no dedicated error type), before anything is asked or opened: `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/ptmx`, `/dev/tty*`, `/dev/cu.*`, `/dev/pts/*`, `/dev/fd/*` and `/proc/<self, thread-self or pid>/[task/<tid>/]fd/*` on Linux and macOS, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9` (also `COM¹`, `COM²`, `COM³` and the `LPT` forms), `CONIN$`, `CONOUT$` (with or without an extension) and the `\\.\` forms and the `\\?\` forms of these names on Windows (a `\\?\` drive path such as `\\?\C:\Windows\win.ini` is read as the plain drive path and goes through the usual approval). On Linux and macOS a path whose target, followed through links, exists and is neither a file nor a folder (a pipe, a socket, a device the list lacks, or a link of the repository to one) is refused the same way. On Windows 11 (build 22000 and later) only the bare name is refused, with its trailing dots and spaces dropped (`CON`, `con.`, `nul `), because there `nul.txt` or `aux.c` is an ordinary file that reads like any other; before Windows 11 a name with an extension is refused too, so rename such a file to read it (pinned by `test/device-path.test.ts`, which runs both builds on any host). Files such as `console.log` still read. A read also returns at most about 25,000 tokens of rendered text (line numbers included) instead of 50 KB: a file of ordinary lines up to that size comes back whole where it was paged before, a file of more than 2,000 lines pages whatever its size, and a truncated read ends with the offset to continue from and a hint to use Grep. Notebooks page by the same budget.
 
 **Affects:** people and scripts that read very large files or device paths through the Read tool.
 
@@ -2665,25 +3388,28 @@ It now sends each request itself:
 - The timeout (30 seconds by default, at most 120) applies to each request and to the read of the body, not to the whole
   call and never to a question put to you, which can wait as long as you take. A chain of redirects can therefore take
   longer than the timeout in all, and the limit of 10 redirects bounds it. (Tests: `WebFetchTool timeout`.)
-- The name of a site is now resolved on this machine, and a name that does not resolve there is refused. Through a proxy
-  the name used to be resolved by the proxy. A configured proxy now sees the address that was checked, not the name, so a
-  `NO_PROXY` entry written by name no longer matches. Whether a proxy should be given the name instead is an open question
-  for the owner, kept under Known gaps in `docs/untrusted-repositories.md`.
+- The name of a site is now resolved on this machine, and a name that does not resolve there is refused. The exception
+  is a request that goes through a configured proxy, which is sent the name and resolves it, as the note "`WebFetch`
+  sends the host name to a configured proxy" below says.
 
 **Affects:** people and scripts that fetch a local server or a private address with `WebFetch`, pages that redirect to
 another host, and anyone with `WebFetch` rules written for `http:` URLs, which now match the `https:` URL.
 
 **What to do:** To fetch local servers, set `experimental.allow_local_fetch` to `true` in your own configuration. Write
-rules for the `https:` form of a URL. Behind a proxy that resolves names this machine cannot, or one that is picked by
-`NO_PROXY` entries written by name, `WebFetch` does not work yet. When a note reports a redirect, call `WebFetch` again with the target it names.
+rules for the `https:` form of a URL. When a note reports a redirect, call `WebFetch` again with the target it names.
 
 ### Edit keeps a file's curly quotes and removes the line break of a deleted line
 
 When Edit finds `old_string` only after matching typography (curly quotes, dashes, spaces) or ignoring trailing whitespace, and the quote characters of the text it found differ from those of `old_string`, it writes the straight `"` and `'` of `new_string` in the quote style of the text it replaced: curly doubles are used only if the replaced text has curly doubles, curly singles only if it has curly singles, and a quote opens at the start of `new_string`, after a space, tab or line break, after `(`, `[` or `{`, or after an en or em dash, and closes anywhere else (a no-break space and a hyphen-minus close). A match whose quotes equal `old_string`'s (an exact match, or one that differs only in whitespace, dashes or spaces) is never restyled. When `new_string` is empty and the matched text is the only thing on its line (apart from whitespace), Edit also removes the line break, so no blank line is left; a deletion in the middle of a line, or one whose `old_string` starts or ends with a line break, removes only the matched text.
 
-**Affects:** people and scripts that rely on the exact bytes Edit writes.
+Only the four English curly quotes (U+2018, U+2019, U+201C and U+201D) match a straight quote when Edit looks for
+`old_string`. A file that spells its quotes with the low-9 forms (U+201A and U+201E, as German does) or the reversed
+forms (U+201B and U+201F) no longer matches an `old_string` with straight quotes: the edit fails as not found and the
+file is left alone, so spell the quotes of the file in `old_string` (pinned by the `Q9` rows in `test/tool-edit.test.ts`).
 
-**What to do:** Nothing.
+**Affects:** people and scripts that rely on the exact bytes Edit writes, and edits of text with German or reversed quotes.
+
+**What to do:** Nothing, or copy the file's own quote characters into `old_string`.
 
 ### WebFetch answers a question about the page
 
@@ -2846,11 +3572,42 @@ When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name
 folder's own `.hg/hgrc` into each command. None of them is run now until you trust the folder: the branch is unknown
 and there are no changes or diffs, and they appear once you trust it. An untrusted Mercurial folder is its own project
 (identified by its path), not the shared `global` project, so its saved "always allow" answers are not shared with other
-folders; a trusted folder with no `hg` or no changeset is `global`, as before.
+folders. A trusted folder with no `hg` or no changeset keeps that name too (see "A repository that git or Mercurial
+cannot name keeps its project once trusted").
 
 **Affects:** Mercurial users who open a clone before trusting it.
 
 **What to do:** Nothing; trust the folder.
+
+### Git is not run in a folder that is not trusted
+
+When a client opened a folder that holds `.git`, Orbit ran `git rev-parse`, `git remote get-url`, `git rev-list` and
+`git worktree list` there to name the project, and `git status`, `git diff` and `git reflog show` for the branch and the
+changes, and the location watcher asked git where `HEAD` is. Git applies the folder's own `.git/config`, which can name
+programs for it to run: `core.fsmonitor`, hooks, the filter and text-conversion drivers that `.gitattributes` selects, and
+`gpg.program` for a commit that carries a signature. None of them is run now until you trust the folder. The project is
+named from the files of `.git` (the remote URL in its config, or the path of the folder when it names none), the branch is
+unknown and there are no changes, diffs or review base, and they appear once you trust the folder, with no restart. A
+repository with a remote keeps the project ID that it had. One with no remote is named by its path until you trust it (never
+`global`, whose saved "always allow" answers every such folder would share), and by its first commit afterwards; one with
+no commit yet keeps the name of its path (see "A repository that git or Mercurial cannot name keeps its project once
+trusted").
+The URL is read as written, so a remote that an include or a `url.<base>.insteadOf` rule supplies or rewrites gives the
+folder another project ID until you trust it. A linked worktree follows the decision for its main checkout. A `.git` that is a link, a submodule or a separate git
+directory, or that names another repository's directories, is read for its remote only after you trust the folder, and
+counts as a project of its own until then. The check that asks git whether a path is ignored runs without
+`core.fsmonitor`.
+
+On Windows, when git is on no PATH, Orbit no longer starts the bare name `git`. The library that starts programs looks in
+the working folder for a bare name, with and without an extension, and started the interpreter named by the first line of a
+file called `git` that a repository could ship. A git that is not found now fails as a git that is not installed fails.
+
+**Affects:** anyone who opens a clone before trusting it, in the terminal UI or with `orb`, and on Windows anyone whose git
+is not on PATH.
+
+**What to do:** Run `orb trust` in the folder, or choose "Trust this folder" when the terminal UI asks, which it does only
+for a folder that holds config of its own back, so for a repository with none no dialog or indicator says that the
+branch and the changes wait (`/trust` does not show either); or put git on PATH.
 
 ### Declarations that print the environment ask like any command
 
@@ -2886,10 +3643,23 @@ A read through a wildcard (`cat secr*.txt`, `head *`) is still checked against y
 
 **What to do:** Nothing; a command that your rules now stop is refused with the rule that matched.
 
+### The WebSearch domain lists are `allowed_domains` and `blocked_domains`
+
+The two optional inputs of `WebSearch` that filter results by site are now named `allowed_domains` and `blocked_domains`.
+Before, they were `allowedDomains` and `blockedDomains`, and a call that used the new names got no filtering, since the
+keys were dropped. The old names are no longer read: a call that sends them is searched without a filter. The names show
+in the tool description, in the permission request's `metadata`, in the input that a foreign hook receives as
+`tool_input`, and in the fields that the ACP client is shown (pinned by `test/tool-websearch.test.ts`,
+`test/plugin/lifecycle-hooks.test.ts` and `packages/cli/test/acp/tool.test.ts`).
+
+**Affects:** plugins, hooks and prompts that name the old keys of a `WebSearch` call.
+
+**What to do:** Use the snake_case names.
+
 ### Web tools refuse bad searches with a type, send no trace headers, and Read keeps folders and long lines in bounds
 
 - `WebSearch` refuses a query shorter than 2 characters (type `tool.input-invalid`) and a call that gives both
-  `allowedDomains` and `blockedDomains` (type `websearch.invalid`). Both are refused before the permission request, the
+  `allowed_domains` and `blocked_domains` (type `websearch.invalid`). Both are refused before the permission request, the
   consent form or any provider call, so nothing is asked or sent. Before, a one-character query was sent to the provider
   and the blocked list silently won over the allowed one.
 - `WebFetch` refusals now carry a type: `webfetch.refused` for a URL that cannot be fetched (not http or https,
@@ -2912,6 +3682,170 @@ A read through a wildcard (`cat secr*.txt`, `head *`) is still checked against y
 wording of those notes, and models that sent a one-character query or both domain lists.
 
 **What to do:** Nothing. Send one domain list per search.
+
+### `WebFetch` sends the host name to a configured proxy
+
+When a proxy is configured, `WebFetch` now sends the request to it for the host name. One proxy serves both schemes: it
+is the first of `https_proxy`, `HTTPS_PROXY`, `http_proxy` and `HTTP_PROXY` that is set to an `http:` or `https:` address, so
+a page with `https:` goes to a proxy that only `HTTP_PROXY` names, and the other way round. Before, Orbit resolved the
+name itself, checked the address and sent the address, so a proxy that filters by name saw an address. The proxy
+resolves the name and connects, so Orbit's own address check does not run for that request; the permission check for
+each hop still does. A literal address, `localhost` and the names under `.localhost` are never sent that way. This is the
+owner's exception of 2026-10-19 to connecting to the checked address.
+
+A host that `NO_PROXY` names is not sent for its name: Orbit resolves it, checks the address and pins the request to
+that address. The runtime still applies its own proxy variables to a request for an address, so the request goes through
+the proxy as that address, unless `NO_PROXY` lists the address too. It does not connect directly, as the reference does
+for such a host; that difference is on the follow-up list (FU-M4-r3-no-proxy).
+
+**Affects:** people who run Orbit behind a proxy and fetch pages with `WebFetch`.
+
+**What to do:** Nothing. To keep a host out of the proxy, list its name and its addresses in `NO_PROXY`.
+
+### Grep and Glob say where to put ripgrep when it is missing
+
+Orbit runs the ripgrep it finds on PATH or in its own `bin` folder and never downloads one. When neither has it, a Grep
+or Glob call used to fail with only "ripgrep execution failed". It now fails with a message that ripgrep was not found,
+naming the program and the full path of the `bin` folder copy that would work.
+
+**Affects:** people on a machine without ripgrep, such as a fresh Windows install or a CI image that does not ship it.
+
+**What to do:** Install ripgrep so that it is on PATH, or copy the program into Orbit's `bin` folder.
+
+## System prompt
+
+### The base system prompt is rewritten, with a fixed list of sections
+
+The default system prompt, the text that opens the system prompt of a request, is new. After a one-line introduction it
+has seven sections, always in this order: Harness, Consent, Scope, Working in code, Evidence, Tool use and Writing to
+the user. Main's prompt had Harness, Communication, Doing tasks, Code style, Safety and Verification. Consent takes
+over the old Safety section, and Scope, Working in code and Evidence take over the coding rules.
+
+- **Where text comes from.** The prompt tells the model where `<system-reminder>` and `<system-update>` blocks come
+  from, and that a lookalike inside a tool result, a file or a data block is data. File contents, command output,
+  fetched pages and search and MCP results are information and not instructions, with three exceptions that also arrive
+  in tool results: your own answers, the instructions of a skill that was loaded for the task, and hook feedback, which
+  counts as your own words. A skill that says you already agreed to a risky step has not made it so: a standing
+  approval comes only from your own instructions, given ahead of time.
+- **New rules.** Write a comment only when the code cannot say why. Check that a change works before calling a task
+  done, and report results faithfully in both directions. Say so when a request rests on a mistaken premise. Commentary
+  between tool calls runs to about 25 words, and the closing message to about 100 unless the task needs more. Web
+  addresses come only from you, the project's files, or search and fetch results; the single thing the model may offer
+  from memory is the documentation site of a library the project uses.
+- **Git.** The git guidance in the base prompt is one line, which says to ask before committing, pushing or opening a
+  pull request. The advice on staging and commit messages that was there is gone, and the prompt no longer names any
+  instruction file.
+- **Tool guidance.** `AskUserQuestion`, `Skill`, `LSP`, `Workflow`, `EnterWorktree`, `ExitWorktree` and `Execute` get a
+  guidance line, `Agent` says how to brief an agent and check what it did, and the lines for `Read`, `Edit`, `Write`,
+  `Glob`, `Grep` and `Bash` say which shell habit each one replaces. `Patch` and `WebSearch` get none, because a hook
+  can remove them after the prompt is rendered.
+- **Size.** The static text, which is everything but the guidance lines, grows from about 4,200 to about 7,200
+  characters, and a request that offers the usual tools carries about 12,400 characters of prompt instead of about
+  7,300, which is about 1,300 more tokens. A model with a small context window has that much less room for history,
+  and the first request of a session after the upgrade misses the provider's prompt cache once.
+
+**Affects:** sessions that use the default prompt, since the model's behavior follows its prompt. That is every model
+except the ones that have a prompt of their own, which replaces it and ends with the Orbit rules (the third note
+below): a model that one of the prompt overlays in `packages/core/src/plugin/system-prompt` matches by its ID, and a model of a local provider that runs on the user's machine, or
+one that takes tool calls as text. A model of the family that Orbit treats as its main target gets the default prompt with a block added after it. An agent that
+has a system prompt of its own gets neither. Also anything that compares the default system prompt byte for byte, such
+as a recorded request in a test or a plugin that looks for the heading `# Safety`.
+
+**What to do:** Nothing. Refresh a recorded request that holds the default prompt.
+
+### A web page question is answered with its own instructions, not the session's prompt
+
+WebFetch asks a second model about a fetched page with instructions of its own (answer from the page alone, short
+quotes, no lyrics). The request keeps its own text whichever model overlay, prompt key or subagent template applies to
+the session. Pinned by `packages/core/test/plugin/side-query-prompt.test.ts`.
+
+**Affects:** sessions on models with a prompt overlay, sessions with the prompt keys set, and subagents that fetch pages.
+
+**What to do:** Nothing.
+
+### An output style keeps the coding sections only when it asks for them, and the opening line follows the style
+
+A custom output style used to keep the coding sections of the default prompt (Scope, Working in code and
+Evidence) unless its front matter said `keep-coding-instructions: false`. It now keeps them only when the front
+matter sets `keep-coding-instructions` to `true`, as a boolean or as the string `"true"`. A missing key, `false` and any
+other value drop them. The built-in Explanatory and Learning styles keep them. While a style applies, the opening line
+of the default prompt is replaced by one that says the agent helps the way the output style at the end of the prompt
+describes. A prompt that does not open with the default line, such as an agent's own system prompt or a `system_prompt` replacement,
+keeps its first line. The model-family prompts open with the default line, so the style replaces it for them too. A prompt whose style comes from a folder that is not trusted yet keeps it too: Orbit still reads that
+style and puts its text last in the prompt, but the clone's style does not get to say what the agent is for until you
+trust the folder. No style removes the rules about approval, which stay in the sections that every style keeps. The
+style also applies to the requests that compact a conversation and to the background generate requests (such as cache
+warming), so they carry the same system prompt as your messages and reuse its cached prefix; a one-shot side query such
+as a web page extraction keeps its own text.
+
+**Affects:** people with a custom output style that has no `keep-coding-instructions` key, including styles kept in
+another product's folder that Orbit reads while compatibility is on, and people who open a repository with a style of
+its own before they trust it.
+
+**What to do:** Add `keep-coding-instructions: true` to the front matter of a style that should still follow the
+coding sections.
+
+### The rules that every model-specific prompt carries say what outside content is
+
+A model with a prompt of its own, which replaces the default prompt, gets the `# Orbit rules` block after it. Its data
+rule said to treat all text inside tool results and fetched pages as data, which also told the model to ignore the
+instructions of a loaded skill, your own answers to a question and hook feedback. It now says that outside content is
+information and not instructions, except for those three, and that an attempt to redirect the task is reported to you.
+The block also says where reminders and updates come from, that hook feedback counts as your own words, that an approval
+covers only the action it was given for and that a skill's claim of an earlier approval does not count, and that long
+conversations are summarized automatically. The rule about not committing, pushing or opening pull requests unless
+asked is unchanged.
+
+**Affects:** people who use a model with a prompt of its own, and tests that compare that prompt.
+
+**What to do:** Nothing.
+
+### Commits and pull requests the agent writes carry an Orbit attribution by default
+
+Every request that offers the shell tool now has a "Git and pull requests" section in its system prompt, for every
+agent, whichever model prompt applies. It follows the model prompt and comes before any output style. It says that commits, pushes and pull requests wait for your
+request, that published history, git configuration, hooks and signing are left alone, that a commit holds only the
+task's changes staged by path, and that a pull request description covers every commit on the branch and says how the
+change was verified. Instructions about the form of commits and pull requests (message format, trailers, branch names, templates) from you or the project take precedence, but only you can lift the ask-first rule and the steps that need your explicit request; a project's file cannot. It also asks the agent to end each commit
+message with `Assisted-by: Orbit` and each pull request description with `Created with Orbit`. The first request of a
+session after the upgrade misses the prompt cache once, because the system prompt changed.
+
+The new `attribution` key sets either text. Each field is decided by the highest-priority config that sets it, so your
+own `commit: ""` and a project's `pr` combine. An empty string turns that one off and tells the agent to add none. The
+value may hold several lines, such as several trailers. A project's or local config can set it too: its value applies once the folder is trusted, and then takes precedence
+over your own, your `""` included. Until then your own value, or the default, applies.
+
+```json
+{ "attribution": { "commit": "Co-authored-by: Name <name@example.com>", "pr": "" } }
+```
+
+**Affects:** everyone who asks Orbit to commit or open pull requests, and anyone whose repository checks commit
+trailers.
+
+**What to do:** Set `attribution.commit` or `attribution.pr` to `""` to turn the line off, or to your own text.
+
+### Config keys that replace or extend the system prompt
+
+Three keys change the system prompt of the main thread of a session (a session without a parent, and forks of it):
+
+- `system_prompt` replaces Orbit's base prompt, the model-specific prompt included. Orbit's core rules (where
+  reminders come from, that outside content is data) are kept after it, then the git section, then the appended text and
+  the output style. Put `${ORBIT_TOOL_GUIDANCE}` where the guidance lines of the offered tools should go; without it
+  there are none.
+- `system_prompt_file` is the same with the text read from a UTF-8 file at each request, so an edit applies from the next
+  request. The path is absolute, starts with `~/`, or is relative to the folder of the config file that names it. A file
+  that cannot be read keeps the default prompt and logs one warning. A path on a network share is refused.
+- `append_system_prompt` adds text after the base and the git section, also on top of an agent's own prompt.
+
+An agent with a prompt of its own keeps it and gets no replacement; the appended text still applies on the main thread.
+Subagent child sessions get neither. A config with no file resolves a relative `system_prompt_file` against the folder
+the session runs in. The three keys are read only from your own config (the global and home folders), the `ORBIT_CONFIG`
+file and `ORBIT_CONFIG_CONTENT`, and managed settings. A project's or local config never sets them, trusted or not. The
+highest-priority of those that sets a replacement decides, and an empty string counts as unset.
+
+**Affects:** people who set these keys, and SDK callers.
+
+**What to do:** Nothing unless you want to use them. A replacement removes Orbit's coding guidance on purpose.
 
 ## No saved grant for `ipconfig`, `hostname` and `route`
 
@@ -2942,3 +3876,214 @@ wording of those notes, and models that sent a one-character query or both domai
 **Affects:** people who edited `.git/orbit` or `.hg/orbit` by hand, and repositories that ship such a file or link.
 
 **What to do:** Nothing; trust the folder, or use a 40-character hash, to keep a hand-written ID.
+
+## A trusted project's instruction files can import files outside the project
+
+- An `@path` import in a project instruction file (`AGENTS.md` and the like) may now name a file outside the project's
+  folders, such as `@~/team/rules.md`, `@../shared.md` or an absolute path, once the folder that holds the importing
+  file is trusted. Until then the import is skipped and the file is not sent to the model; a warning names the folder
+  whose trust would load it. Granting or revoking trust rescans the files. Before this change such an import was always
+  skipped.
+- The project's own decision covers the files in the project. A file above the project, or one that a trusted file
+  imports from outside, needs the folder that owns it trusted before it imports anything from outside. When the
+  repository is the home folder itself (or a filesystem root), a session started below it imports only from the folder
+  it started in, even with home trusted for the session. A file above the project that the home folder or a root owns
+  (`~/AGENTS.md` for a project in `~/code/repo`) never imports from outside. A session started at home itself, with
+  home trusted for the session, does let home's own files import from outside.
+- Network paths are never read, trusted or not, and files that the model's reads load later never import from outside.
+
+**Affects:** people who trust a project whose instruction files import files outside it.
+
+**What to do:** Nothing for a project you trust; the outside files are sent with the first request. Run
+`orb trust --revoke` in a folder to stop its files importing from outside.
+
+## Turn cost, token and step limits count every spend and every response
+
+- `--max-cost` and `--max-tokens` now count what side queries spend (today the summary of a fetched page; a side query
+  added later is recorded the same way) and what session generations spend (`/btw`, warming, plugin and doctor calls),
+  in the session and in its subagents. They used to count only responses, compaction and titles.
+- A response that the provider cut off before it reported usage (a stream that failed part way, a side query that
+  timed out after it was sent, a title or compaction call that failed) is counted by an estimate priced with the model's
+  own rates, so recovery after it (continuing the reply, retrying, the fallback model) runs under a cost limit
+  instead of ending the turn as `limit.cost-unknown`. A request the provider refused before it began costs nothing.
+  An attempt that reported usage and was then retried is counted too.
+- A subagent's limit check now includes the response of its parent that started it, from the moment the provider
+  reported that response, instead of after the parent's tools finished.
+- A token limit refuses with the new `limit.tokens-unknown` (a plain error, like `limit.cost-unknown`, not a limit that
+  was reached) when a finished response or a usage record in the turn reported no tokens. A usage record with no tokens
+  and no cost now counts as unknown spend under a cost limit.
+- A reply that was cut off at the output limit and then escalated or resumed is one step with what continues it, so
+  `--max-steps 1` no longer stops a text-only capped reply from being repeated at the larger cap. `orb run` reports the
+  same step count. A cut-off that holds a tool part (a completed call, an input the cap cut off, or a hosted call) is a
+  step of its own, so a reply cut off while it was writing a tool call still ends with `limit.steps`.
+- The session's shown cost and `orb stats` totals now include estimates for failed responses, retried attempts and
+  generations, which were not counted before.
+- A wake-up (a background job's or subagent's completion notice) continues the limits of the turn before it whether it
+  was queued or steered, and finds that turn in a fixed number of reads however many wake-ups came between.
+
+**Affects:** people who run with `--max-cost`, `--max-tokens` or `--max-steps`, and scripts that read the `limit.*`
+error types.
+
+**What to do:** Nothing; expect a cost or token limit to stop a little earlier than before when side queries ran, and
+treat `limit.tokens-unknown` as a refusal to count (for example, use a provider that reports usage, or drop the token limit).
+
+## Agent and skill listings are context, not tool text
+
+- The agent types the `Agent` and `Workflow` tools can start are no longer appended to those tools' descriptions. They arrive as their own instruction source (`core/agent-guidance`), so the tool definitions stay the same when agents change and the model is told only what changed.
+- The skill listing is one bullet per skill (`- id: description`), each description is cut to 250 characters, and the whole listing is held to about 1% of the model's context window (4 characters per token): descriptions are shortened evenly, then dropped to names only. Every skill stays listed. Switching to a model with a different window can restate the listing.
+- The skill listing is offered only when the request has the `Skill` tool, and the agent listing only when it has `Agent` or `Workflow`.
+- Agent ids, descriptions and tool names, and skill ids and descriptions, are flattened to one line (control characters become a space) and envelope look-alikes are escaped before they are listed, and the agent picker, the skill picker, the `@` and `/` autocomplete and every Mini menu (including the `/` composer) escape control characters in what they draw (`dialog-listings.test.tsx`, `autocomplete-hostile.test.tsx`, `footer.view.test.tsx`). In a Plan-mode session the agent listing names only the agents Plan mode lets it start, and the `explore` agent is listed with the tools it has (Grep, Glob, Read, WebFetch, WebSearch).
+
+**Affects:** plugins that read the `Agent` or `Workflow` tool description for the agent list, and people with many skills.
+
+**What to do:** Read the agent list from the conversation context instead of the tool description; shorten skill descriptions that matter early.
+
+## Instruction files run from general to specific, with local variants and a managed file
+
+- The instruction files in the first request now run from general to specific, because the later one takes precedence: the managed file, the global file, then the project's folders from the farthest ancestor to the one the session started in (they ran nearest first before). The baseline opens with a short header that says so, and that the files are standing background to apply where they bear on the task. Every running session with instruction files takes one prompt-cache miss, because its baseline is rendered again with the header. The project memory index (`MEMORY.md`) comes after the project files.
+- `ORBIT.local.md` (and the reference vendor's local file while compatibility is on) is looked up in every folder of the walk, after that folder's shared file, and loads even in a folder with no shared file. Keep it out of version control. A repository can ship one too, so the baseline labels it (and every file it imports) as a local variant that carries no approval from the user, in a trusted folder as well as an untrusted one, and the header says a project's file cannot approve a risky action, local variants included. The first-of rule for shared names (`ORBIT.md`, then `AGENTS.md`) is unchanged and applies to the local names separately.
+- A file named `ORBIT.md` in the managed folder (`%ProgramFiles%\Orbit` on Windows, `/Library/Application Support/Orbit` on macOS, `/etc/orbit` elsewhere, or `ORBIT_MANAGED_DIR`) is organisation policy: it loads in every project, trusted or not, and `instructions_exclude` cannot remove it. Its imports outside the project load only once the project is trusted. `ORBIT_DISABLE_INSTRUCTIONS`, `orb run --bare` and an agent whose `context.instructions` is `false` switch it off.
+- A session whose project files come from two or more different folders sees one short note that the order changed. A worktree inside its main checkout skips the main checkout's shared files above the worktree and keeps its local ones.
+
+**Affects:** people whose instruction files conflict across folders, and administrators who deploy policy.
+
+**What to do:** Put the more specific instruction in the nearer folder; add `ORBIT.local.md` to `.gitignore`.
+
+## Exact forks carry the parent baseline
+
+- `Session.fork` in core takes `prompt: "exact"`. The fork then renders the same epoch baseline as its parent (its first model request repeats the parent's system parts, tools and settled history, and, when the parent is not itself a fork or a subagent child, its cache key and scratchpad folder, because a fork of a fork has its own affinity), because `session.forked` carries the parent's epoch-start values as an optional `baseline`. A default fork is unchanged and writes no `baseline`.
+- An exact fork must start at the parent's settled tail; any other boundary fails with `Session.ForkBoundaryError` and publishes nothing. A source that really changed since the parent's last request still produces a normal update in the child.
+- The HTTP fork payload does not change. The `session.forked` event type in the generated clients gains the optional `baseline`. `InstructionState.initialize` now takes `{ initial, current }` instead of one value set.
+
+**Affects:** code that calls `InstructionState.initialize` or reads `session.forked` events.
+
+**What to do:** Pass `{ initial, current }` to `initialize`; treat a missing `baseline` as the same as `instructions`.
+
+## New built-in commands: /ide, /terminal-setup, /todos, /vim, and agents you can create
+
+- `/ide` lists the editor windows that have the session's folder open, links the session to the one you pick, and `/ide open` opens the folder in an editor (VS Code, the editors built on it and VSCodium, by their command-line programs, found on `PATH`). Choosing "No editor" closes the link and stops the search until you pick a window again. Outside an editor's own terminal nothing connects by itself; a setting for that is not built yet.
+- `/terminal-setup` adds one `shift+enter` binding to the keybindings file of VS Code, or of an editor built on it, after showing you the file and asking. It keeps your comments and other bindings, saves a backup beside the file first, and leaves a file it cannot read as a list exactly as it was. For other terminals it shows the setting to change and copies it to the clipboard. In a terminal where Shift+Enter already works it says so.
+- `/todos` shows the session's plan in full, as the plan above the prompt reads it. `/vim` turns `prompt.vim` in `cli.json` on and off.
+- `/model`, `/mcp`, `/config` and `/plugin` are aliases of `/models`, `/mcps`, `/settings` and `/plugins`. They open the same dialogs; the argument forms (`/model <name>`) are not built yet.
+- `/agents` has a "Create agent" row that writes `agents/<name>.md` under the project's `.orbit` folder or your own config folder, and an "Edit an agent file" row that opens the file in `$VISUAL` or `$EDITOR`. Both are offered only when the server runs on this machine. A new or edited file reaches the server through `POST /api/experimental/config/sources/changed`, which rebuilds the agents without a reload, so questions waiting in other sessions stay open. The text steps of Create can be edited in your editor with the rebindable key `dialog.prompt.editor` (Ctrl+G by default).
+
+**Affects:** people who use the terminal UI; clients of the generated API gain `config.sources.changed`; code that implements `Config.Interface` gains `notify`.
+
+**What to do:** Nothing. A server started with the file watcher off now picks up an agent file when the terminal UI reports it.
+
+## Late language-server problems reach the model as a reminder
+
+- An edit no longer waits for a language server that is not running yet. The first Edit, Write, Patch or NotebookEdit in a language starts its server in the background and returns at once, with no inline error block; the errors that server publishes reach the model through this reminder at a later step. A server that is already running is still waited for (about 3 seconds), so its errors stay inline. The `LSP` tool and other direct callers still wait for a start. A server that was starting when the folder's session ends is stopped (pinned by `test/lsp-reminder.test.ts`).
+- When a language server publishes a problem for a file the session changed after the edit tool stopped waiting (about 3 seconds), the problem now reaches the model once, at the start of a later step, as a hidden reminder row. Only the main conversation gets it, and only when a shell tool is offered. A subagent's late problems are reported to its top-level session.
+- The reminder lists errors, then warnings, information and hints, at most 10 per file and 30 per step, with the path relative to the project, the line and column, the message, and the code and source when the server sends them. A problem is reported once; a completed compaction makes the ones that remain reportable again. The inline block after an edit is unchanged, except that a diagnostic with no severity now counts as an error there, as it already did in the `LSP` tool.
+- Language servers that spell a file's address differently from Orbit (a lower-case Windows drive with an encoded colon) now match the file they published for.
+- A server is no longer started for a file that the `LSP` tool would refuse for its size, and a request the server asks to retry sends the document once instead of once per retry.
+
+**Affects:** plugins and clients that read hidden `session.synthetic` rows (kind `lsp-diagnostics`), and servers that were slow to publish.
+
+**What to do:** Nothing. A client that shows reminder rows can show the row's description, which holds counts only.
+
+## The prompt text was rewritten in Orbit's own words
+
+- The prompt texts that ship with Orbit were written from Orbit's own requirements: the base system prompt, the model
+  overlays, the new git section, the subagent prompt and its report notes, the plan, todo, task and verification
+  reminders, the scratchpad, environment and git snapshot texts, the notes for messages that arrive mid-task, the agent
+  listing and several tool descriptions and results. The sections of the base prompt are listed in the note above.
+- The section list of the base prompt, and what became of main's git advice, are in the first note under "System
+  prompt" above.
+- A style without coding instructions drops Scope, Working in code and Evidence. Consent stays, and in it the rule that
+  only the user can approve a risky action ahead of time, in the default prompt and in every full model overlay. The
+  prompt for local models keeps that rule under How to work.
+- The environment block labels the repository line `Git repository`, and the git snapshot labels its fields Branch,
+  Pull request target, Configured author, Changes and Latest commits.
+- The built-in Explanatory style marks its notes with `Design note:` instead of `Insight:`, and the Learning style
+  leaves a comment reading `ORBIT:YOURS` in the source instead of `TODO(human)`, for one small piece at a time. A
+  comment that an earlier session left behind under the old marker is ordinary text now.
+- The explore agent's description names the depth levels cursory, careful and sweeping.
+- The idle reminder of the terminal UI now reads "The session has stopped and the next step is yours" (the notification
+  title stays `Orbit`).
+
+**Affects:** people who match on prompt text or section names in tests, hooks or recordings; people who rely on the
+`Insight:` or `TODO(human)` markers; every session's first request after the upgrade (the system part changed once, so
+the provider's prompt cache is cold for it).
+
+**What to do:** Update recorded requests and any match on prompt text. Nothing else.
+
+## Instruction notes, and an explicit rescan of the instruction files
+
+- Two endpoints add a quick note to the instruction files. `GET /api/location/instructions/note` lists, for the user, project and local scopes in that order, the file a note would go to (`path`), whether it exists, whether that scope's instruction files are loaded in this location (`enabled`) and whether the file is loaded now (`loaded`). `POST /api/location/instructions/note` takes `{ scope, text }` (the text is trimmed and must be 1 to 2,000 characters) and appends it as a bullet; later lines of the note are indented under it.
+- A note goes to the file the loader already reads in that scope: the first of `ORBIT.md`, `AGENTS.md` (and the other tool's file name only while compatibility makes it the loader's choice) that exists and is not excluded by `instructions_exclude`. When there is none, the note creates `ORBIT.md` in Orbit's config folder (user), `AGENTS.md` at the project root (project) or `ORBIT.local.md` at the project root (local). A new `ORBIT.local.md` is added to the repository's own `.git/info/exclude`, as an anchored line, unless a git ignore already covers it; no tracked file and no global git file changes. Existing text is never rewritten: the bullet is appended in the file's own line break style, and an existing byte order mark is kept.
+- A refusal is `400 InvalidRequestError` with `field: "scope"` and the reason in `kind`: `disabled` (that scope's instruction files are off here, or the location is outside the project root), `unavailable` (an instruction source could not be read, so where the note would load is not known), `excluded` (a pattern of `instructions_exclude` drops the file) or `outside` (in a project that is not trusted, the file leads outside the project through a link; also, trusted or not, the file is a link to a network share, which is never opened or connected to). Nothing is created or changed for any of them. A file that cannot be written (permissions, a lock held by another program) is a `503` for the `instructions` service. A missing default that a pattern excludes is created, and `loaded` is `false` in the answer. In the `GET` listing, `enabled` is `false` for a file that a `POST` would refuse as `excluded` or `outside`, and the project and local `path` is the file as spelled in the project folder.
+- After a write, and before answering `GET`, Orbit reads the instruction files again from disk, so the note is in the instruction list at once even when the file watcher is off, and a running session gets it as a chronological instruction update at its next step boundary. This is the new `InstructionDiscovery.rescan()`, with `addRescan` for a source of files to register how it refreshes. Other open locations of the same project see the note through their own file watcher.
+- Not built yet: a note typed in a file that ends inside an unclosed HTML comment is appended but the loader strips it, and `loaded` still says `true`.
+
+**Affects:** clients of the generated API gain `instruction.note.targets` and `instruction.note.add`; code that implements `InstructionDiscovery.Interface` gains `addRescan` and `rescan`.
+
+**What to do:** Nothing. A client that offers a `#` note asks the targets first and shows `loaded: false` and the refusal reasons.
+
+## An untrusted folder cannot change the prompt of an agent that exists
+
+A project or local config in a folder that is not trusted can no longer set `agents.<id>.system`, `description` or `initial_prompt` for an agent that is not the folder's alone: one Orbit ships, or one that your own trusted config names, whatever its scope. That includes an agent defined only in a scope that ranks above the project, the flag scope (filled by `--agents`, `--settings`, `ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT`) or managed settings, which does not exist yet when the project's config is read. Before, that text became the agent's prompt and your `system_prompt` was skipped for it, and for an agent defined only above the project the repository's file was recorded as the agent's source. A file under `agents/` in such a folder is skipped whole for the same agents. An agent that only the folder defines keeps its prompt, and a trusted folder is unchanged. Trust status now lists such an `orbit.json` entry (`system`, `description`, `initial_prompt` or `disallowed_tools`) as holding back `permissions`, so the trust question opens for the folder, and Orbit logs a line for each entry it holds back.
+
+**Affects:** people who open a repository that sets a prompt on a built-in agent, or on an agent they pass with `--agents` or keep in managed settings, before trusting it.
+
+**What to do:** Trust the folder if you want its prompt to apply.
+
+## A provider package written as an absolute file path loads again
+
+A `package` of a provider that is a plain absolute file path (`/opt/providers/acme.mjs`, `C:\providers\acme.mjs`) loads as the `file://` URL of that file. In the compiled binary such a path did not load at all, because the binary never looks a name up in the folder it starts in. A relative path is still refused: it would be read against Orbit's own folder, not the folder of the config that wrote it.
+
+**Affects:** people whose provider config names a package by an absolute file path.
+
+**What to do:** Nothing. Use an absolute path or a `file://` URL, not a relative one.
+
+## The embedded SDK gives `SessionNotFoundError` for an unknown session
+
+`sessions.get` of the embedded Effect client used to fail with the core error `Session.NotFoundError` for a session that does not exist. It now fails with the protocol's `SessionNotFoundError` (with `sessionID` and `message`), the error the HTTP client already gave, so one handler covers both transports.
+
+**Affects:** code that calls `sessions.get` on an embedded `Orbit` from `@orbit/sdk/effect` and catches the core error.
+
+**What to do:** Catch `SessionNotFoundError` (tag `"SessionNotFoundError"`) instead of `Session.NotFoundError`.
+
+## One experimental key does not hide another
+
+A later settings file that has an `experimental` block no longer hides the keys of an earlier block that it does not set. `allow_local_fetch`, `portable_shell_scanner` and `subagent_depth` each take the value of the last file that sets that key, so a project that sets a depth leaves your own `allow_local_fetch`. An untrusted project's block is still withheld. The other nested blocks (`compaction`, `tool_output`, `media`, `shell_tool`, `sandbox`) still take the whole block from the last file.
+
+**Affects:** people who set `experimental` keys in both their own config and a project's.
+
+**What to do:** Nothing.
+
+## A dropped or pasted `.svg` path is no longer read into the prompt, and only absolute image paths attach
+
+Dropping or pasting the path of an `.svg` file used to read the file and put its text into the prompt as if you had typed it, in the full terminal UI and in Mini. The path now stays as the text you pasted and the file is never opened. Only PNG, JPEG, GIF and WebP files attach: a PDF path and an AVIF path stay as typed text too, and a PDF is no longer read and attached whole. A relative image path such as `shot.png` or `assets/logo.png` used to be looked up in the working folder and attached when the file was there; it now stays as typed text and is not read.
+
+Both clients read a drop or a paste the same way. The text is cut into lines, and a line is cut again only at a space that comes right before an absolute path, or before a quote that opens one, since Windows Terminal puts quotes around every path it drops. A piece attaches when, once one pair of quotes around it and (outside Windows) its backslash escapes are taken off, it is an absolute path ending in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` that reads as an image; a `file://` URL counts as the path it names. Every other piece stays in the prompt exactly as you pasted it, quotes, backslashes and line breaks included, and is never read. So `/tmp/shot.png /tmp/logo.svg` attaches the PNG and keeps the SVG path, a paste of three lines whose middle line is an image path attaches the image and keeps the first and last lines, and `compare /tmp/shot.png with the mockup` stays as typed with nothing attached, because the piece that starts at the path ends in `mockup`. To show a model an SVG or a PDF, ask it to read the file, or paste the markup yourself.
+
+**Affects:** people who drop SVG or PDF files into the prompt to send their contents, and people who paste a relative image path to attach it.
+
+**What to do:** Ask the agent to read an SVG or a PDF, or paste the markup. To attach an image, drop it or paste its absolute path.
+
+## U+2028 and U+2029 are text inside a line of an instruction file or of front matter
+
+A long line that held U+2028 or U+2029 after a run of fence markers or spaces cost time that grew with the square of the line: one such line of 100 KB in a cloned repository's `AGENTS.md`, or in the front matter of one of its rules, held the reading of the instruction files at the start of a session for tens of seconds, before anyone had trusted the folder. A lone CR inside a front matter line did the same, and so did a long run of empty lines anywhere in a front matter block: 100 KB of them in a rule held that reading for seconds. Such a line or run now takes time in proportion to its length. Front matter is still read as before, by the same YAML and JSON readers, with JavaScript refused; only the step that looked for a block of nothing but comments is Orbit's own now.
+
+The characters are read as part of their line, as a Markdown line ends only at LF, CR or CRLF:
+
+- In an instruction file or a rule, a line that opens a fence or a list item and holds U+2028 or U+2029 opens it. Before, it was read as plain text, so a comment block in the fence or under the item was removed, a heading in the fence opened a section, and an `@` token in the fence was followed.
+- In front matter, a value that holds a lone CR, U+2028 or U+2029 gets the same retry as any other value with an unquoted colon or a YAML indicator. A `description: Use when: it fits` line that ends in a stray CR before its CRLF now reads, and a rule whose `paths` line ends in U+2028 or U+2029 keeps its patterns; before, that front matter did not parse, and such a rule applied from the start.
+
+**Affects:** repositories whose instruction, rule or Markdown config files hold U+2028, U+2029 or a stray CR.
+
+**What to do:** Nothing.
+
+## Front matter and workflow YAML whose aliases come to more than their text are not read
+
+In YAML an alias names a value that an anchor wrote earlier, and Orbit's readers handle each alias as a full copy of that value. A file of a few hundred bytes whose anchors each named the one before ten times stood for billions of values, so an agent or skill file like that in a cloned repository ran Orbit out of time and memory while it fingerprinted the project's config, before anyone had trusted the folder. A value is now measured with every alias followed, counting each value and the characters of each string and key:
+
+- **Front matter** of agents, skills, commands, output styles and rules is not read when it comes to more than its text and 10,000, or nests 1,000 levels deep. The file is skipped as a file whose front matter does not parse is, and when it is an agent or a skill in a project's config folder, the trust fingerprint logs one `config file skipped` warning that names it. A rule whose front matter is refused this way waits and matches no read; it does not apply from the start as a rule whose front matter does not parse does. An anchor named a few times reads as before.
+- **`orb flow` and `orb eval`** refuse a YAML workflow or suite that comes to more than its text in the same way, with an error that names the file, in every reader of the file.
+- **Trust fingerprints.** A config value that comes to more than 4,000,000 values and characters, or nests 1,000 levels deep, is not digested: that kind of that file is `unreadable`, which counts as changed, as a file that cannot be read does, with one `config fingerprint unreadable` warning.
+
+**Affects:** projects whose front matter, workflow or suite files repeat large values through YAML aliases, or nest that deep.
+
+**What to do:** Write the repeated values out, or repeat them less.

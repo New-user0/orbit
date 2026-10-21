@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { Effect, Layer } from "effect"
 import { FileAccess } from "@orbit/core/file-access"
@@ -77,7 +78,14 @@ describe("FileAccess.authorizeRead", () => {
   // A device is refused from its resolved path, before the external-directory question and the read rules.
   const devices =
     process.platform === "win32"
-      ? ["NUL", "nul.txt", "COM1", "src/con.txt", "AUX"]
+      ? [
+          "NUL",
+          "COM1",
+          "AUX",
+          "src/con.",
+          // Before Windows 11 (build 22000) a name with an extension is the device too.
+          ...(Number(os.release().split(".")[2]) >= 22000 ? [] : ["nul.txt", "src/con.txt"]),
+        ]
       : ["/dev/zero", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "/dev/./urandom", "/dev/pts/0"]
   for (const device of devices)
     it.live(`refuses the device ${device} without asking`, () => {

@@ -161,6 +161,28 @@ it.effect("loads and replays a persisted pre-2.0.15 media checkpoint", () =>
   }),
 )
 
+it.effect(
+  "a keyword prompt that a completed checkpoint summarised away leaves only the note of the prompt kept after it",
+  () =>
+    Effect.gen(function* () {
+      const s = yield* setup
+      yield* s.prepare
+      yield* s.prompt("please ultrathink about the design")
+      yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+      yield* s.compact()
+      yield* s.prompt("ultrathink again after the checkpoint")
+      const history = yield* s.load("local")
+      const text = JSON.stringify(
+        toLLMMessages(
+          history.entries.map((entry) => entry.message),
+          model.ref,
+        ),
+      )
+      expect(text.split("asked for a high level of reasoning effort")).toHaveLength(2)
+      expect(text).not.toContain("the design")
+    }),
+)
+
 test("canonical provider context round-trips tools, opaque checkpoints and binary media through JSON", () => {
   const messages = [
     ...replacement,

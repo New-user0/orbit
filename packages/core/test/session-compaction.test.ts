@@ -12,10 +12,11 @@ import type { SessionContext } from "@orbit/core/session/context"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
-import { SessionTable } from "@orbit/core/session/sql"
+import { SessionTable, SessionUsageTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { Session } from "@orbit/core/session"
 import { Project } from "@orbit/core/project"
@@ -48,9 +49,12 @@ const cost = [
     },
   },
 ]
+// When set, the provider answers with this instead of the summary.
+let override: (() => Stream.Stream<LLMEvent>) | undefined
 const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
+    if (override) return override()
     return Stream.make(
       LLMEvent.textDelta({ id: "summary", text: "## Objective\n- manual summary" }),
       LLMEvent.stepFinish({
@@ -88,8 +92,51 @@ const it = testEffect(
       SessionModelRequest.node,
       PluginHooks.node,
     ]),
-    [Bus.node.replace(Bus.configured({ persist: true })), llmClient.replace(client)],
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      llmClient.replace(client),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
+    ],
   ),
+)
+
+const lean = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionCompaction.node,
+      SessionModelRequest.node,
+      PluginHooks.node,
+    ]),
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      llmClient.replace(client),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.minimal(SessionReminders.production))),
+    ],
+  ),
+)
+
+lean.effect("a minimal instance's summary request carries neither the hint nor the editor note", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_lean_compaction"))
+    const prompt = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Lean compaction keeps this text.",
+      agents: [{ name: "helper" }],
+      editor: { path: "/project/src/open-file.ts" },
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compactManually(session, [prompt])).toEqual({ status: "completed" })
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).toContain("Lean compaction keeps this text.")
+    expect(sent).not.toContain("agent named below")
+    expect(sent).not.toContain("open-file.ts")
+  }),
 )
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
@@ -261,6 +308,8 @@ it.effect("auto compaction estimates current content against the buffered prompt
       id: SessionMessage.ID.create(),
       type: "user",
       text: "",
+      // A queued prompt waited for the work to end, so it carries no mid-turn note to add to the estimate.
+      delivery: "queue",
       files: media.map((file) => ({ mime: file.mime, data: "a".repeat(100_000), source: { type: "inline" } })),
       time: { created: 0 },
     })
@@ -394,6 +443,8 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       id: SessionMessage.ID.create(),
       type: "user" as const,
       text: "Manual compaction should include this short conversation.",
+      agents: [{ name: "helper" }],
+      editor: { path: "/project/src/open-file.ts" },
       skills: [
         {
           id: Skill.ID.make("effect"),
@@ -450,6 +501,9 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("Manual compaction should include this short conversation.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("Use Effect services and generators.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("User shell pwd completed: /project")
+    // A normal instance sends the summary request the way the main request lowers the prompt: hint and editor note stay.
+    expect(JSON.stringify(requests[0]?.messages)).toContain("agent named below")
+    expect(JSON.stringify(requests[0]?.messages)).toContain("open-file.ts")
     expect(requests[0]?.messages).toHaveLength(hooked + 1)
     expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("Summarize only what")
     expect(JSON.stringify(requests[0]?.messages)).not.toContain("display-only-output")
@@ -534,6 +588,97 @@ it.effect("compaction hooks can supply the summary instead of the model", () =>
     ])
   }),
 )
+
+// FU-M2-015: a summary call that began and was cut off was probably billed, so an estimate keeps it from reading as free.
+for (const [name, stream, records] of [
+  [
+    "after the response began",
+    () =>
+      Stream.make(
+        LLMEvent.textDelta({ id: "summary", text: "## Objective\n- half a summary" }),
+        LLMEvent.providerError({ message: "The provider stopped the response" }),
+      ),
+    true,
+  ],
+  ["before any response", () => Stream.make(LLMEvent.providerError({ message: "The provider refused" })), false],
+] as const)
+  it.effect(`compaction records an estimated spend for a stream that failed ${name}: ${records}`, () =>
+    Effect.gen(function* () {
+      requests = []
+      const db = (yield* Database.Service).db
+      const sessionID = Session.ID.make(`ses_failed_compaction_${records}`)
+      const session = yield* insertSession(sessionID)
+      override = stream
+      const result = yield* compactManually(
+        session,
+        [
+          {
+            id: SessionMessage.ID.create(),
+            type: "user" as const,
+            text: "Summarize this conversation, which will fail.",
+            time: { created: DateTime.makeUnsafe(0) },
+          },
+        ],
+        SessionMessage.ID.make(`msg_failed_compaction_${records}`),
+      ).pipe(Effect.ensuring(Effect.sync(() => (override = undefined))))
+
+      expect(result.status).toBe("failed")
+      const rows = yield* db
+        .select()
+        .from(SessionUsageTable)
+        .where(eq(SessionUsageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows.length > 0).toBe(records)
+      for (const row of rows) {
+        expect(row.source).toBe("compaction")
+        expect(row.tokens_input).toBeGreaterThan(0)
+        expect(row.tokens_output).toBeGreaterThan(0)
+        expect(row.cost).toBeGreaterThan(0)
+      }
+    }),
+  )
+
+// A hook that supplies the summary ran no model: tokens it does not report are no spend, and are not recorded as one.
+for (const [name, tokens, records] of [
+  ["no tokens", { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, 0],
+  ["tokens", { input: 10, output: 4, reasoning: 0, cache: { read: 0, write: 0 } }, 1],
+] as const)
+  it.effect(`compaction records ${records} usage when a hook supplies the summary with ${name}`, () =>
+    Effect.gen(function* () {
+      requests = []
+      const db = (yield* Database.Service).db
+      const hooks = yield* PluginHooks.Service
+      const sessionID = Session.ID.make(`ses_hook_tokens_${records}`)
+      const session = yield* insertSession(sessionID)
+      yield* hooks.register("session", "compaction", (event) =>
+        Effect.sync(() => {
+          event.result = { summary: "## Objective\n- hooked summary", tokens }
+        }),
+      )
+
+      yield* compactManually(
+        session,
+        [
+          {
+            id: SessionMessage.ID.create(),
+            type: "user" as const,
+            text: "Hooked compaction.",
+            time: { created: DateTime.makeUnsafe(0) },
+          },
+        ],
+        SessionMessage.ID.make(`msg_hook_tokens_${records}`),
+      )
+
+      const rows = yield* db
+        .select()
+        .from(SessionUsageTable)
+        .where(eq(SessionUsageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows).toHaveLength(records)
+    }),
+  )
 
 it.effect("native compaction fails without a model call on a route that cannot compact", () =>
   Effect.gen(function* () {
@@ -680,5 +825,22 @@ it.effect("a replaced attempt is not the measured anchor of a prompt estimate", 
       loaded(session, [history.user, history.cut, history.notice, history.answer]),
     )
     expect(estimate.measured).toBe(0)
+  }),
+)
+
+it.effect("a minimal estimate leaves out the editor selection that the full estimate counts", () =>
+  Effect.gen(function* () {
+    const session = yield* insertSession(Session.ID.make("ses_minimal_estimate"))
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Question",
+      editor: { path: "/p/a.ts", selection: { start: 1, end: 2, text: "x".repeat(1800) } },
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    const context = loaded(session, [user])
+    expect(SessionCompaction.estimatePrompt(context, true).estimated).toBeLessThan(
+      SessionCompaction.estimatePrompt(context, false).estimated,
+    )
   }),
 )

@@ -10,6 +10,8 @@ export { Info, Ref, response }
 
 export interface Interface extends Info {
   readonly vcs?: Project.Vcs
+  /** The project ID this folder had before trust, the one its sessions and memory notes move from. */
+  readonly previousProjectID?: Project.ID
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Location") {}
@@ -27,6 +29,7 @@ const layer = (ref: Ref) =>
         workspaceID: ref.workspaceID,
         project: { id: resolved.id, directory: resolved.directory, canonical: resolved.canonical },
         vcs: resolved.vcs,
+        previousProjectID: resolved.previous,
       })
     }),
   )

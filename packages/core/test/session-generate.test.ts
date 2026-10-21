@@ -33,6 +33,7 @@ import { ReferenceInstructions } from "@orbit/core/reference/instructions"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionContext } from "@orbit/core/session/context"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionGenerate } from "@orbit/core/session/generate"
 import { InstructionState } from "@orbit/core/session/instruction-state"
 import { SessionMessage } from "@orbit/core/session/message"
@@ -44,18 +45,22 @@ import {
   InstructionStateTable,
   SessionMessageTable,
   SessionInboxTable,
+  SessionUsageTable,
   SessionTable,
 } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
+import { SessionTurn } from "@orbit/core/session/turn"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Tool } from "@orbit/core/tool"
 import { asc, eq } from "drizzle-orm"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
+import { noScratchpad } from "./lib/scratchpad"
+import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
 
 const requests: LLMRequest[] = []
@@ -100,6 +105,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
     ),
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
+  preferences: () => Effect.succeed(Instructions.empty),
   load: () =>
     Effect.succeed(
       Instructions.make({
@@ -153,14 +159,19 @@ const it = testEffect(
       Agent.node,
       InstructionBuiltIns.node,
       SessionContext.node,
+      SessionReminders.node,
       PluginHooks.node,
       llmClient,
     ]),
     [
+      // The production node reads the Location for its language-server reminder; these tests have none.
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
       Bus.node.replace(Bus.configured({ persist: true })),
       llmClient.replace(client),
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(builtins),
+      noScratchpad,
+      noVcsSnapshot,
       InstructionDiscovery.node.replace(discovery),
       SkillInstructions.node.replace(skills),
       ReferenceInstructions.node.replace(references),
@@ -361,9 +372,60 @@ it.effect(
       expect(requests[0]?.tools).toMatchObject([{ name: "lookup", description: "Lookup" }])
       expect(requests[0]?.toolChoice).toBeUndefined()
       expect(options[0]?.webSocket).toBeUndefined()
-      expect(yield* durableState(db, sessionID)).toEqual(before)
+      // The only durable fact is what the call spent, recorded on the Session so turn limits count it.
+      const after = yield* durableState(db, sessionID)
+      expect(after.bus.slice(before.bus.length).map((event) => event.type)).toEqual(["session.side_query.recorded.1"])
+      expect({ ...after, bus: after.bus.slice(0, before.bus.length), sequence: before.sequence, session: before.session }).toEqual(before)
+      const spent = yield* db
+        .select()
+        .from(SessionUsageTable)
+        .where(eq(SessionUsageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(spent.map((row) => [row.kind, row.source, row.tokens_input, row.tokens_output])).toEqual([
+        ["side_query", "session.generate", 0, 10],
+      ])
+      expect(
+        (yield* SessionTurn.usage(db, sessionID, { seq: -1, time: DateTime.makeUnsafe(0) })).tokens,
+      ).toBe(10)
     }),
   { timeout: 15_000 },
+)
+
+it.effect("a generation lowers a prompt's hint and editor note like the main request, except on a minimal instance", () =>
+  Effect.gen(function* () {
+    instruction = "Initial context"
+    const { db, bus, instructions, session, instances } = yield* setup
+    yield* InstructionState.prepare(db, bus, instructions, sessionID)
+    const id = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.InboxEnqueued, {
+      sessionID,
+      inboxID: id,
+      item: {
+        type: "user",
+        payload: { text: "Original prompt", agents: [{ name: "helper" }], editor: { path: "/project/open-file.ts" } },
+        delivery: "steer",
+      },
+    })
+    yield* bus.publish(SessionEvent.InboxDelivered, { sessionID, inboxID: id })
+    const texts = Effect.gen(function* () {
+      requests.length = 0
+      yield* SessionGenerate.generate({ session, prompt: "Side question" }).pipe(Effect.provideService(Instance.Service, instances))
+      return userTexts(requests[0])
+    })
+
+    const normal = yield* texts
+    expect(normal).toHaveLength(4)
+    expect(normal.join("\n")).toContain("helper")
+    expect(normal.join("\n")).toContain("open-file.ts")
+    expect(normal.at(-2)).toBe("Original prompt")
+
+    const reminders = yield* SessionReminders.Service
+    const lean = yield* texts.pipe(
+      Effect.provideService(SessionReminders.Service, SessionReminders.Service.of({ ...reminders, minimal: true })),
+    )
+    expect(lean).toEqual(["Original prompt", "Side question"])
+  }),
 )
 
 it.effect(

@@ -9,26 +9,75 @@ const connection = createMessageConnection(
   new StreamMessageWriter(process.stdout),
 )
 const texts = new Map<string, string>()
-const diagnostic = (line: number, character: number, end: number, message: string) => ({
+const diagnostic = (line: number, character: number, end: number, message: string, extra: object = {}) => ({
   range: { start: { line, character }, end: { line, character: end } },
   severity: 1,
   message,
+  ...extra,
 })
-const found = (text: string) =>
-  text
-    .split("\n")
-    .flatMap((line, index) =>
-      line.includes("ERROR") ? [diagnostic(index, line.indexOf("ERROR"), line.length, "found ERROR")] : [],
+// Markers a test puts in a line: ERROR, WARN and HINT report that severity, NOSEV reports no severity at all, and LATE
+// is reported only by a second publication `--late-ms=<n>` (default 4 s) after the text arrives, outside the 3 s an edit
+// waits. `CODE=<x>` on the line adds that code and the source "fake".
+const flagValue = (name: string) =>
+  process.argv.find((argument) => argument.startsWith(`--${name}=`))?.slice(name.length + 3)
+const MARKERS = [
+  ["ERROR", { severity: 1 }],
+  ["WARN", { severity: 2 }],
+  ["HINT", { severity: 4 }],
+  ["NOSEV", { severity: undefined }],
+] as const
+// The files whose late problems were already published, so that later publications keep them.
+const lateReady = new Set<string>()
+const found = (text: string, uri = "") =>
+  text.split("\n").flatMap((line, index) => {
+    const code = /CODE=(\S+)/.exec(line)?.[1]
+    const extra = code === undefined ? {} : { code, source: "fake" }
+    const marked = MARKERS.filter(([name]) => line.includes(name)).map(([name, severity]) =>
+      diagnostic(index, line.indexOf(name), line.length, `found ${name}`, { ...severity, ...extra }),
     )
+    const late =
+      line.includes("LATE") && lateReady.has(uri)
+        ? [diagnostic(index, line.indexOf("LATE"), line.length, "found LATE", extra)]
+        : []
+    return [...marked, ...late]
+  })
+// `--encoded-uris` writes the address the way several servers do: the drive in lower case with the colon encoded on
+// Windows, and every dash percent-encoded, which is a second spelling of the same file on any platform.
+const spelled = (uri: string) =>
+  process.argv.includes("--encoded-uris")
+    ? uri
+        .replace(/^file:\/\/\/([A-Za-z]):/, (_, drive: string) => `file:///${drive.toLowerCase()}%3A`)
+        .replaceAll("-", "%2D")
+    : uri
 const publish = (uri: string, diagnostics: ReturnType<typeof found>) =>
-  connection.sendNotification("textDocument/publishDiagnostics", { uri, diagnostics })
+  connection.sendNotification("textDocument/publishDiagnostics", {
+    uri: spelled(uri),
+    // `--malformed` adds one entry that has no range to every publication.
+    diagnostics: process.argv.includes("--malformed") ? [...diagnostics, { severity: 1, message: "no range" }] : diagnostics,
+  })
 const remember = (uri: string, text: string) => {
   texts.set(uri, text)
-  return publish(uri, found(text))
+  lateReady.delete(uri)
+  if (text.includes("LATE"))
+    setTimeout(
+      () => {
+        if (texts.get(uri) !== text) return
+        lateReady.add(uri)
+        void publish(uri, found(text, uri))
+      },
+      Number(flagValue("late-ms") ?? 4000),
+    ).unref()
+  return publish(uri, found(text, uri))
 }
 // The project root as the client sent it; positions in answers are built from it.
 let rootUri = ""
-connection.onRequest("initialize", (params: { rootUri: string }) => {
+// `--init-delay-ms=<n>` answers initialize after that long, as a server that loads a large project does, and
+// `--pid=<file>` writes the process id, so a test can tell whether the process is gone.
+const pidFile = process.argv.find((argument) => argument.startsWith("--pid="))?.slice("--pid=".length)
+if (pidFile) writeFileSync(pidFile, String(process.pid))
+connection.onRequest("initialize", async (params: { rootUri: string }) => {
+  const delay = Number(flagValue("init-delay-ms") ?? 0)
+  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
   rootUri = params.rootUri.replace(/\/$/, "")
   const recorded = process.argv.find((argument) => argument.startsWith("--record-init="))?.slice("--record-init=".length)
   if (recorded) writeFileSync(recorded, JSON.stringify(params))
@@ -49,6 +98,7 @@ connection.onRequest("shutdown", () => null)
 connection.onNotification("exit", () => process.exit(0))
 // `--marker=<file>` appends a line to the file for every document the server is told to open, so a test can tell that
 // a server read a file at all.
+const changes = process.argv.find((argument) => argument.startsWith("--changes="))?.slice("--changes=".length)
 const marker = process.argv.find((argument) => argument.startsWith("--marker="))?.slice("--marker=".length)
 connection.onNotification("textDocument/didOpen", (params: { textDocument: { uri: string; text: string } }) => {
   if (marker) appendFileSync(marker, `${params.textDocument.uri}\n`)
@@ -56,8 +106,11 @@ connection.onNotification("textDocument/didOpen", (params: { textDocument: { uri
 })
 connection.onNotification(
   "textDocument/didChange",
-  (params: { textDocument: { uri: string }; contentChanges: { text: string }[] }) =>
-    remember(params.textDocument.uri, params.contentChanges.at(-1)?.text ?? ""),
+  (params: { textDocument: { uri: string }; contentChanges: { text: string }[] }) => {
+    // `--changes=<file>` appends a line for every document change, so a test can count how often a text was sent.
+    if (changes) appendFileSync(changes, `${params.textDocument.uri}\n`)
+    return remember(params.textDocument.uri, params.contentChanges.at(-1)?.text ?? "")
+  },
 )
 connection.onNotification("textDocument/didSave", (params: { textDocument: { uri: string }; text?: string }) => {
   const uri = params.textDocument.uri
@@ -77,7 +130,7 @@ connection.onNotification("textDocument/didSave", (params: { textDocument: { uri
               : "checked on save (stale text)",
         ),
       ]
-  return publish(uri, [...found(known), ...extra])
+  return publish(uri, [...found(known, uri), ...extra])
 })
 // Flags for the requests beyond diagnostics:
 // `--content-modified=<n>` answers the first n queries with error -32801, `--fail=<code>` answers every query with that

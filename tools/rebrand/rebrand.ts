@@ -7,7 +7,8 @@
  *   bun tools/rebrand/rebrand.ts --scan <dir>   exit 1 if a built artifact contains the upstream brand or the notice file
  *
  * The upstream names are assembled at runtime so this file never contains them literally.
- * THIRD_PARTY_NOTICES.txt is the only file allowed to keep the upstream name (MIT notice).
+ * THIRD_PARTY_NOTICES.txt is the only file allowed to keep the upstream name. The tree has no such file, by the owner's
+ * decision (2026-10-19, declined again), so today no file may hold the name.
  * files.ts lists the files; without .git, which an exported tree lacks, --check reads the tree instead.
  */
 import { $ } from "bun"
@@ -17,9 +18,10 @@ import { hasGit, listFiles, readText, root } from "./files.ts"
 const word = ["open", "code"].join("")
 const org = ["anomaly", "co"].join("")
 const share = ["op", "ncd"].join("")
+// The one allowed name is of a file that is not in the tree (no notice file, by the owner's decision of 2026-10-19).
 const allowed = new Set(["THIRD_PARTY_NOTICES.txt"])
 // License files are never rewritten: changing a copyright line would misstate who holds it. An upstream
-// license copy fails the check instead, and its notice belongs in THIRD_PARTY_NOTICES.txt.
+// license copy fails the check instead. There is no notice file to move it to: the owner decided not to add one.
 const license = (file: string) => /^(licen[cs]e|copying|notice)/i.test(path.basename(file))
 
 // Reserved TLD: links that used to point at the upstream site can never resolve or leak traffic.

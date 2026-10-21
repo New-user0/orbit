@@ -1,10 +1,24 @@
 import { Orbit } from "@orbit/client"
+import { IdeLock } from "@orbit/util/ide-lock"
 import path from "node:path"
 import vscode from "vscode"
-import { ask, explain, fix, review, type Diagnostic, type Selection } from "./context.js"
+import {
+  ask,
+  explain,
+  fix,
+  lines,
+  outgoing,
+  place,
+  review,
+  workspaceView,
+  type Diagnostic,
+  type EditorFile,
+  type Selection,
+} from "./context.js"
 import { Controller, type TrustAnswer, type Update } from "./controller.js"
 import { askForm } from "./forms.js"
 import { headers, start, version } from "./endpoint.js"
+import { startBridge, type Bridge } from "./ide-bridge.js"
 import { createNoticeTracker, notice } from "./notify.js"
 import { proposed } from "./patch.js"
 import { configured, find, missing } from "./program.js"
@@ -18,6 +32,7 @@ export function activate(context: vscode.ExtensionContext) {
   const editor = new EditorState()
   const chat = new Chat(context, editor)
   new RunsView(executable, () => directory(editor), chat.log).register(context)
+  ideBridge(context, editor, chat.log)
   const proposals = new Map<string, string>()
   context.subscriptions.push(
     editor,
@@ -119,22 +134,101 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 /**
- * The text editor the user last worked in. While the chat tab is focused VS Code reports no active text editor, so
- * the selection, problems and folder the chat offers come from here.
+ * Orbit's bridge to the terminal UI that runs in this window (ide-bridge.ts), kept on while the person's own setting says
+ * so. It starts no program, makes no outbound connection and does not wait for the service: it listens on the loopback
+ * interface, writes a private lock file and hands the terminals of this window the port, and nothing else.
+ */
+function ideBridge(context: vscode.ExtensionContext, editor: EditorState, log: vscode.OutputChannel) {
+  let bridge: Bridge | undefined
+  let starting = false
+  const folders = () =>
+    (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => upperDrive(folder.uri.fsPath))
+  const apply = async () => {
+    const wanted = ideBridgeEnabled()
+    if (!wanted && bridge) {
+      bridge.dispose()
+      bridge = undefined
+    }
+    if (!wanted || bridge || starting) return
+    starting = true
+    const started = await startBridge({
+      directory: IdeLock.directory(),
+      folders: folders(),
+      ideName: vscode.env.appName,
+      log: (line) => log.appendLine(line),
+      // Not persistent: a terminal of a reloaded window gets the new port and never a stale one.
+      environment: (port) => {
+        const variables = context.environmentVariableCollection
+        variables.persistent = false
+        variables.description = "Lets the Orbit terminal UI find this window's Orbit bridge."
+        if (port === undefined) variables.delete("ORBIT_EDITOR_SSE_PORT")
+        else variables.replace("ORBIT_EDITOR_SSE_PORT", String(port))
+      },
+    }).then(
+      (next) => next,
+      (error: unknown) => {
+        log.appendLine(`IDE bridge: could not start: ${error instanceof Error ? error.message : "error"}`)
+        return undefined
+      },
+    )
+    starting = false
+    // The setting may have been turned off while the server was starting.
+    if (started && !ideBridgeEnabled()) return started.dispose()
+    bridge = started
+    bridge?.select(editor.raw())
+  }
+  void apply()
+  context.subscriptions.push(
+    { dispose: () => bridge?.dispose() },
+    editor.onDidChange(() => bridge?.select(editor.raw())),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => bridge?.folders(folders())),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("orbit.ideBridge.enabled")) void apply()
+    }),
+    vscode.commands.registerCommand("orbit.mentionSelection", async () => {
+      const current = editor.editor()
+      if (!current) return void vscode.window.showInformationMessage("Orbit: open a file to mention first")
+      const range = lines(current.selection.start, current.selection.end)
+      const sent = bridge?.mention(
+        { filePath: upperDrive(current.document.uri.fsPath), ...(range && { lineStart: range.startLine, lineEnd: range.endLine }) },
+        await vscode.window.activeTerminal?.processId,
+      )
+      if (!sent) void vscode.window.showInformationMessage("Orbit: no Orbit terminal UI is connected to this window")
+    }),
+  )
+}
+
+function upperDrive(file: string) {
+  return file.replace(/^[a-z]:/, (drive) => drive.toUpperCase())
+}
+
+/**
+ * The file editor the user last worked in. While the chat tab is focused VS Code reports no active text editor, and a
+ * chat that opens over the editor hides it, so the file, selection, problems and folder the chat offers come from
+ * here. It keeps that editor while its document is open, visible or not. Only documents of the `file` scheme count:
+ * not an untitled buffer, an output pane, a `git:` view or the chat's own proposal diffs.
  */
 class EditorState implements vscode.Disposable {
-  private last: vscode.TextEditor | undefined = vscode.window.activeTextEditor
+  private last: vscode.TextEditor | undefined = counts(vscode.window.activeTextEditor)
   private readonly changed = new vscode.EventEmitter<void>()
   readonly onDidChange = this.changed.event
   private readonly subscriptions = [
     this.changed,
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (!editor || editor.document.uri.scheme === scheme) return
-      this.last = editor
+      const next = counts(editor)
+      if (!next) return
+      this.last = next
       this.changed.fire()
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
       if (event.textEditor !== this.last) return
+      this.changed.fire()
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      if (this.last?.document !== document) return
+      this.last = undefined
       this.changed.fire()
     }),
     vscode.languages.onDidChangeDiagnostics((event) => {
@@ -144,19 +238,55 @@ class EditorState implements vscode.Disposable {
   ]
 
   editor() {
-    if (this.last && vscode.window.visibleTextEditors.includes(this.last)) return this.last
+    if (this.last && vscode.workspace.textDocuments.includes(this.last.document)) return this.last
     return undefined
+  }
+
+  /**
+   * The folder the chat's agent runs in, once the chat has connected. In a multi-root workspace the file being edited
+   * can belong to another root, and a path is only meaningful against the folder the agent works in.
+   */
+  root: string | undefined
+
+  /** The file as the agent resolves it from the chat's folder. */
+  private place(editor: vscode.TextEditor) {
+    return place(this.root ?? directory(this), editor.document.uri.fsPath)
+  }
+
+  /** The file and selection as the bridge sends them: the editor's own 0-based positions and the path on disk. */
+  raw() {
+    const editor = this.editor()
+    if (!editor) return undefined
+    return {
+      filePath: upperDrive(editor.document.uri.fsPath),
+      text: editor.document.getText(editor.selection),
+      start: editor.selection.start,
+      end: editor.selection.end,
+    }
   }
 
   selection(): Selection | undefined {
     const editor = this.editor()
-    if (!editor || editor.selection.isEmpty) return undefined
+    if (!editor) return undefined
+    const range = lines(editor.selection.start, editor.selection.end)
+    if (!range) return undefined
     return {
-      file: vscode.workspace.asRelativePath(editor.document.uri),
+      file: this.place(editor),
       language: editor.document.languageId,
-      startLine: editor.selection.start.line + 1,
-      endLine: editor.selection.end.line + 1,
+      ...range,
       text: editor.document.getText(editor.selection),
+    }
+  }
+
+  /** The open file for the model: its path, and the selection when there is one. */
+  file(): EditorFile | undefined {
+    const editor = this.editor()
+    if (!editor) return undefined
+    const selection = this.selection()
+    return {
+      file: this.place(editor),
+      language: editor.document.languageId,
+      selection: selection && { startLine: selection.startLine, endLine: selection.endLine, text: selection.text },
     }
   }
 
@@ -169,30 +299,53 @@ class EditorState implements vscode.Disposable {
       .map(
         (item): Diagnostic => ({
           line: item.range.start.line + 1,
+          column: item.range.start.character + 1,
+          code: code(item.code),
           severity: (["error", "warning", "information", "hint"] as const)[item.severity],
           message: item.message,
           source: item.source,
         }),
       )
     if (diagnostics.length === 0) return undefined
-    return { file: vscode.workspace.asRelativePath(editor.document.uri), diagnostics }
+    return { file: this.place(editor), diagnostics }
   }
 
+  /**
+   * What the chat draws. Every string came from the repository, so each is written on one line by `plain` before the
+   * webview gets it.
+   */
   workspace(): Workspace {
     const editor = this.editor()
     const selection = this.selection()
     const problems = this.problems()
-    return {
-      folder: path.basename(directory(this)),
-      file: editor ? vscode.workspace.asRelativePath(editor.document.uri) : undefined,
-      selection: selection && { file: selection.file, startLine: selection.startLine, endLine: selection.endLine },
+    return workspaceView({
+      folder: path.basename(this.root ?? directory(this)),
+      file: editor && this.place(editor),
+      selection: selection && editor && {
+        file: selection.file,
+        startLine: selection.startLine,
+        endLine: selection.endLine,
+        startColumn: editor.selection.start.character + 1,
+        endColumn: editor.selection.end.character + 1,
+      },
       problems: problems && { file: problems.file, count: problems.diagnostics.length },
-    }
+      includeFile: includeOpenFile(),
+    })
   }
 
   dispose() {
     this.subscriptions.forEach((item) => item.dispose())
   }
+}
+
+function counts(editor: vscode.TextEditor | undefined) {
+  return editor?.document.uri.scheme === "file" ? editor : undefined
+}
+
+// VS Code gives a diagnostic's code as a string, a number, or an object that holds the value.
+function code(value: vscode.Diagnostic["code"]) {
+  const inner = typeof value === "object" ? value.value : value
+  return inner === undefined || inner === "" ? undefined : String(inner)
 }
 
 /**
@@ -238,6 +391,11 @@ class Chat implements vscode.WebviewViewProvider {
       this.status,
       this.untrusted,
       editor.onDidChange(() => this.post({ type: "workspace", workspace: editor.workspace() })),
+      // The file chip's default follows the setting without waiting for the next editor change.
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("orbit.context.includeOpenFile"))
+          this.post({ type: "workspace", workspace: editor.workspace() })
+      }),
     )
   }
 
@@ -272,10 +430,10 @@ class Chat implements vscode.WebviewViewProvider {
     )
   }
 
-  async send(text: string) {
+  async send(text: string, context?: string, shown?: string) {
     await this.reveal()
     const controller = await this.connect()
-    if (controller) await controller.send(text)
+    if (controller) await controller.send(text, context, shown)
   }
 
   async reset() {
@@ -297,10 +455,10 @@ class Chat implements vscode.WebviewViewProvider {
         { label: "Default", description: "Concise answers focused on the task", value: "default" },
         {
           label: "Explanatory",
-          description: "Adds short insights about the codebase and choices",
+          description: "Adds short design notes about the codebase and choices",
           value: "explanatory",
         },
-        { label: "Learning", description: "Leaves small TODO(human) pieces for you to write", value: "learning" },
+        { label: "Learning", description: "Leaves small ORBIT:YOURS pieces for you to write", value: "learning" },
       ],
       { title: "Orbit output style" },
     )
@@ -357,8 +515,9 @@ class Chat implements vscode.WebviewViewProvider {
         return this.loadModels(controller)
       }
       case "send": {
-        const selection = message.selection ? this.editor.selection() : undefined
-        return this.send(selection ? ask(selection, message.text) : message.text)
+        // The editor is read now, as the message goes, and the person's words stay exactly as typed.
+        const sent = outgoing(message, { file: this.editor.file(), problems: this.editor.problems() })
+        return this.send(message.text, sent.context, sent.shown)
       }
       case "starter": {
         if (message.starter === "explain") return vscode.commands.executeCommand("orbit.explainSelection")
@@ -509,7 +668,8 @@ class Chat implements vscode.WebviewViewProvider {
         this.paint()
         this.post(update)
       }
-      return new Controller(client, directory(this.editor), apply, (trust) => this.askTrust(trust))
+      this.editor.root = directory(this.editor)
+      return new Controller(client, this.editor.root, apply, (trust) => this.askTrust(trust))
     })()
     return this.controller.catch((error: unknown) => {
       this.controller = undefined
@@ -613,6 +773,19 @@ function directory(editor: EditorState) {
 // The person's own setting. A workspace's value is never read: it would choose the program the extension runs.
 function executable() {
   return configured(vscode.workspace.getConfiguration("orbit").inspect<string>("executable"))
+}
+
+// The person's own setting, like `executable`: a repository must not be able to open a listener the person turned off.
+function ideBridgeEnabled() {
+  const setting = vscode.workspace.getConfiguration("orbit").inspect<boolean>("ideBridge.enabled")
+  return setting?.globalValue ?? setting?.defaultValue ?? true
+}
+
+// The person's own setting, like `executable`: a repository's .vscode/settings.json must not decide how much of the
+// person's editor goes to the model.
+function includeOpenFile() {
+  const setting = vscode.workspace.getConfiguration("orbit").inspect<boolean>("context.includeOpenFile")
+  return setting?.globalValue ?? setting?.defaultValue ?? true
 }
 
 function placement() {

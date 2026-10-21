@@ -4,6 +4,7 @@ import { ToolFailure } from "@orbit/ai"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { Hash } from "@orbit/util/hash"
 import { Effect, Schema } from "effect"
 import path from "path"
 import { InstructionDiscovery } from "../../instruction-discovery.js"
@@ -43,13 +44,10 @@ export const Plugin = {
     const directory = path.join(global.data, "memory", location.project.id)
     const indexPath = path.join(directory, INDEX)
     const read = (file: string) => fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
-    const index: { current?: string } = { current: yield* read(indexPath) }
-
-    // The index joins the session's instructions; reload whenever a save or delete changes it.
-    yield* discovery.transform((editor) => {
-      if (discovery.project && index.current?.trim())
-        editor.add(new InstructionDiscovery.File({ path: AbsolutePath.make(indexPath), content: index.current }))
-    })
+    // The index joins the session's instructions through IndexPlugin; reload whenever a save or delete changes it.
+    const index = shared(discovery)
+    index.path = indexPath
+    index.current = yield* read(indexPath)
 
     const rebuild = Effect.fn("MemoryTool.rebuild")(function* () {
       const files = (yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => [] as string[])))
@@ -72,6 +70,42 @@ export const Plugin = {
       yield* index.current ? fs.writeWithDirs(indexPath, index.current) : fs.remove(indexPath).pipe(Effect.ignore)
       yield* discovery.reload()
     })
+
+    // A repository with no remote is named by its path until it is trusted and by its first commit afterwards, and a
+    // Location keeps the ID it was bound with, so notes can sit under the path-named folder. Move them over; a note that
+    // already has the name here wins, and the index is rebuilt from the files.
+    const moved = yield* Effect.forEach(
+      [
+        ...new Set([
+          ...[location.project.directory, location.project.canonical].map((folder) => Hash.fast(`directory:${folder}`)),
+          // The ID the project row held before trust: another checkout of a repository with no remote may have named it.
+          ...(location.previousProjectID ? [location.previousProjectID] : []),
+        ]),
+      ]
+        .map((id) => path.join(global.data, "memory", id))
+        .filter((legacy) => legacy !== directory),
+      (legacy) =>
+        Effect.gen(function* () {
+          const names = (yield* fs.readDirectory(legacy)).filter((file) => file.endsWith(".md") && file !== INDEX)
+          if (names.length === 0) return false
+          yield* fs.ensureDir(directory)
+          yield* Effect.forEach(
+            names,
+            (file) =>
+              fs
+                .existsSafe(path.join(directory, file))
+                .pipe(
+                  Effect.flatMap((exists) =>
+                    exists ? Effect.void : fs.rename(path.join(legacy, file), path.join(directory, file)),
+                  ),
+                ),
+            { discard: true },
+          )
+          yield* fs.remove(path.join(legacy, INDEX)).pipe(Effect.ignore)
+          return true
+        }).pipe(Effect.orElseSucceed(() => false)),
+    )
+    if (moved.includes(true)) yield* rebuild().pipe(Effect.ignore)
 
     yield* ctx.tool.transform((editor) => {
       editor.add({
@@ -111,6 +145,34 @@ export const Plugin = {
       })
     })
   }),
+}
+
+/**
+ * Offers the memory index as an instruction file. It is a separate plugin that activates after the instruction files, so
+ * the index renders last (the later a file, the more it outranks) while the tool itself activates with the other tools
+ * and stays replaceable by a plugin. The tool plugin owns the text and reloads discovery when it changes.
+ */
+export const IndexPlugin = {
+  id: "orbit.tool.memory.index",
+  effect: Effect.fn("MemoryTool.IndexPlugin")(function* (_ctx: Context) {
+    const discovery = yield* InstructionDiscovery.Service
+    const index = shared(discovery)
+    yield* discovery.transform((editor) => {
+      if (discovery.project && index.path && index.current?.trim())
+        editor.add(new InstructionDiscovery.File({ path: AbsolutePath.make(index.path), content: index.current }))
+    })
+  }),
+}
+
+// The discovery service is one per location, so it keys the index text the two plugins share.
+const indexes = new WeakMap<object, { path?: string; current?: string }>()
+
+function shared(discovery: object) {
+  const existing = indexes.get(discovery)
+  if (existing) return existing
+  const created: { path?: string; current?: string } = {}
+  indexes.set(discovery, created)
+  return created
 }
 
 function summary(text: string) {

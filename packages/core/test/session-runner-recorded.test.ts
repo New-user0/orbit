@@ -45,6 +45,8 @@ import { testEffect } from "./lib/effect"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { permissionLayer } from "./lib/permission"
+import { noScratchpad } from "./lib/scratchpad"
+import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 
 const cassetteName = "session-runner/openai-chat-streams-text"
@@ -74,7 +76,10 @@ const models = Layer.mock(SessionRunnerModel.Service)({
       }),
     ),
 })
-const systemContext = Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) })
+const systemContext = Layer.mock(InstructionBuiltIns.Service, {
+  load: () => Effect.succeed(Instructions.empty),
+  preferences: () => Effect.succeed(Instructions.empty),
+})
 const instructionContext = Layer.mock(InstructionDiscovery.Service, {
   project: true,
   global: true,
@@ -100,6 +105,8 @@ const runnerLayer = (llmClient: Layer.Layer<LLMClientService>) =>
     SessionRunnerModel.node.replace(models),
     InstructionBuiltIns.node.replace(systemContext),
     InstructionDiscovery.node.replace(instructionContext),
+    noScratchpad,
+    noVcsSnapshot,
     Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
     SkillInstructions.node.replace(skillInstructions),
     ReferenceInstructions.node.replace(referenceInstructions),
@@ -157,6 +164,8 @@ const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(systemContext),
       InstructionDiscovery.node.replace(instructionContext),
+      noScratchpad,
+      noVcsSnapshot,
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SkillInstructions.node.replace(skillInstructions),
       ReferenceInstructions.node.replace(referenceInstructions),
@@ -186,10 +195,21 @@ describe("SessionRunnerLLM recorded", () => {
         agent: agentHost(agents),
         model: modelHost(models),
         provider: noProviders,
-        session: { hook: (name, callback) => hooks.register("session", name, callback) },
+        session: {
+      hook: (name, callback) => hooks.register("session", name, callback),
+      // These sessions have no parent and no fork, so no plugin takes them for a subagent.
+      get: (input) => Effect.fail(new Session.NotFoundError({ sessionID: input.sessionID })),
+    },
       })
       yield* Effect.forEach(OptimizePlugin.Plugins, (plugin) => plugin.effect(pluginHost), { discard: true })
       yield* IdentityPlugin.Plugin.effect(pluginHost)
+      // A cassette that no longer matches the request (for example after a prompt edit) is a transport
+      // error the runner would retry for minutes; decline every retry so a stale fixture fails at once.
+      yield* hooks.register("session", "retry", (event) =>
+        Effect.sync(() => {
+          event.decision = { retry: false }
+        }),
+      )
       const { db } = yield* Database.Service
       yield* db
         .insert(ProjectTable)

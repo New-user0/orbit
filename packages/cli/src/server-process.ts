@@ -4,6 +4,7 @@ import { NodeServices } from "@effect/platform-node"
 import { Service, type DiscoverOptions } from "@orbit/client/effect/service"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
+import { ManagedPath } from "@orbit/util/managed-path"
 import { ORBIT_ARTIFACT, ORBIT_CHANNEL, ORBIT_VERSION } from "./version"
 import { AppProcess } from "@orbit/util/process"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -214,7 +215,7 @@ export function trustOptions(mode: Mode, env: Readonly<Record<string, string | u
  * server that `orb` starts owns its process, so the model client's proxy and CA set-up and every later child see it.
  */
 export function managedOptions(env: Readonly<Record<string, string | undefined>>) {
-  return { directory: env.ORBIT_MANAGED_DIR || undefined, applyEnv: true }
+  return { directory: ManagedPath.override(env) || undefined, applyEnv: true }
 }
 
 /**

@@ -1,19 +1,41 @@
 export * as Git from "./git.js"
 
-import { existsSync } from "node:fs"
-import { appendFile, readdir, readFile, rm } from "node:fs/promises"
+import { existsSync, statSync } from "node:fs"
+import { appendFile, lstat, readdir, readFile, realpath, rm } from "node:fs/promises"
 import path from "node:path"
+import { GitSubmodules } from "@orbit/util/git-submodules"
 
 // Worktrees give each agent its own checkout and branch, so agents running in parallel never touch the same files.
 // They live under .orbit/worktrees/<run>/<node> and branch from the commit the run started at.
 
-export async function git(directory: string, args: ReadonlyArray<string>) {
+/**
+ * Runs git in `directory`. Git looks for the repository there and in the folders above it up to `top` (`directory` when not
+ * given), and never above (`GIT_CEILING_DIRECTORIES`): a `.git` that git passes over would otherwise hand the command, with
+ * the config of the repository above, to a folder that nobody was asked about (class 1, class 3). A folder above `top`
+ * whose path holds the list separator cannot be given to git that way, and git is then not started.
+ */
+export async function git(directory: string, args: ReadonlyArray<string>, top = directory) {
+  const result = await spawn(directory, args, top)
+  return { code: result.code, stdout: result.stdout.trim(), stderr: result.stderr.trim() }
+}
+
+// `git`, with the output as git wrote it.
+async function spawn(directory: string, args: ReadonlyArray<string>, top: string) {
   // Without git, every directory is simply not a repository: runs still work, without worktrees or merges.
   if (!Bun.which("git")) return { code: 127, stdout: "", stderr: "git is not installed or not on PATH" }
+  const bound = path.resolve(top)
+  const above = path.dirname(bound)
+  if (above.includes(path.delimiter))
+    return { code: 1, stdout: "", stderr: "git was not started: the folder above the repository cannot be its ceiling" }
   // Worktrees nest deep under .orbit/worktrees; on Windows that passes the 260-character path limit without this.
   const options = process.platform === "win32" ? ["-c", "core.longpaths=true"] : []
-  const child = Bun.spawn(["git", ...options, ...args], {
+  const child = Bun.spawn(["git", ...GitSubmodules.skip([...options, ...args])], {
     cwd: directory,
+    env: {
+      ...process.env,
+      [GitSubmodules.VARIABLE]: "all",
+      ...(above === bound ? {} : { GIT_CEILING_DIRECTORIES: above }),
+    },
     stdout: "pipe",
     stderr: "pipe",
     stdin: "ignore",
@@ -23,7 +45,7 @@ export async function git(directory: string, args: ReadonlyArray<string>) {
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ])
-  return { code, stdout: stdout.trim(), stderr: stderr.trim() }
+  return { code, stdout, stderr }
 }
 
 async function ok(directory: string, args: ReadonlyArray<string>) {
@@ -32,10 +54,59 @@ async function ok(directory: string, args: ReadonlyArray<string>) {
   return result.stdout
 }
 
-/** The repository root containing `directory`, or undefined outside a git repository. */
-export async function root(directory: string) {
-  const result = await git(directory, ["rev-parse", "--show-toplevel"])
-  return result.code === 0 ? path.resolve(result.stdout) : undefined
+/** The folders that the trust decision for a run's folder covers, as the server resolved its project. */
+export interface Project {
+  /** The project's folder: git looks for a repository no further up than it. */
+  readonly directory: string
+  /** The project's main checkout, which is the project's folder unless that is a linked worktree. */
+  readonly canonical: string
+}
+
+/**
+ * The repository that git uses in `directory`, a folder that is trusted: `root` is its work tree, or `outside` names the
+ * part of it (work tree, git directory or common directory) that lies outside `directory` and the project's folders, and
+ * neither is set outside a repository. Git follows what a folder's `.git` names (a `gitdir:` pointer, a link, a
+ * `commondir`) and applies the config and hooks of the directory it lands in, so it is first asked which directories it
+ * would use (`rev-parse`, which starts no program that a config names), and the repository is used only when all of them
+ * are inside the folders that the decision covers (class 1, class 3). Without `project`, git looks only in `directory`.
+ */
+export async function root(
+  directory: string,
+  project: Project = { directory, canonical: directory },
+): Promise<{ readonly root?: string; readonly outside?: string }> {
+  const result = await spawn(
+    directory,
+    ["rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
+    project.directory,
+  )
+  // One path a line, in the order asked, and nothing trimmed: a path with a line break in it gives more lines and is not
+  // taken apart, and a name that ends in a space keeps it.
+  const lines = result.stdout.replace(/\n$/, "").split("\n")
+  if (result.code !== 0 || lines.length !== 3) return {}
+  const real = (file: string) => realpath(file).catch(() => undefined)
+  const places = await Promise.all(lines.map((line) => real(process.platform === "win32" ? line.replace(/\r$/, "") : line)))
+  const folders = await Promise.all([directory, project.directory, project.canonical].map(real))
+  const outside = lines.find((line, index) => {
+    const place = places[index]
+    return place === undefined || !folders.some((folder) => folder !== undefined && within(folder, place))
+  })
+  return outside === undefined ? { root: places[0] } : { outside }
+}
+
+/**
+ * The folder that holds the `.git` nearest to `directory`, found with `stat` and no process, or undefined outside a
+ * repository. The commands that only read the run store use it: starting git in a folder applies the config that the
+ * folder ships, which can name programs to run or shares to open, and these commands run before anyone is asked about it.
+ */
+export function holder(directory: string) {
+  const start = path.resolve(directory)
+  for (let folder = start; ; folder = path.dirname(folder)) {
+    const marker = path.join(folder, ".git")
+    // Git passes over a `.git` directory with no HEAD and looks in the folder above, as `Git.root` does up to the
+    // project's folder.
+    if (existsSync(marker) && (!statSync(marker).isDirectory() || existsSync(path.join(marker, "HEAD")))) return folder
+    if (path.dirname(folder) === folder) return undefined
+  }
 }
 
 export const head = (directory: string) => ok(directory, ["rev-parse", "HEAD"])
@@ -87,6 +158,13 @@ const adding = new Map<string, Promise<void>>()
 const GENERATED = ["__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules", ".DS_Store"]
 
 export async function commit(directory: string, message: string) {
+  // `git add` takes no switch that keeps it out of a submodule (`GitSubmodules`), so each gitlink of the index is left
+  // out by name.
+  const gitlinks = (await ok(directory, ["ls-files", "--stage", "-z"]))
+    .split("\0")
+    .flatMap((entry) =>
+      entry.startsWith("160000 ") ? [`:(exclude,literal)${entry.slice(entry.indexOf("\t") + 1)}`] : [],
+    )
   await ok(directory, [
     "add",
     "-A",
@@ -94,6 +172,7 @@ export async function commit(directory: string, message: string) {
     ".",
     ...GENERATED.map((pattern) => `:(exclude,glob)**/${pattern}/**`),
     ...GENERATED.map((pattern) => `:(exclude,glob)**/${pattern}`),
+    ...gitlinks,
   ])
   if ((await git(directory, ["diff", "--cached", "--quiet"])).code === 0) return false
   await ok(directory, ["-c", "user.name=Orbit", "-c", "user.email=orbit@localhost", "commit", "-q", "-m", message])
@@ -107,7 +186,9 @@ export async function dirty(repository: string) {
 
 /** Merge `name` into the checkout at `repository`; on conflict, abort and report the conflicting files. */
 export async function merge(repository: string, name: string, message: string) {
+  // Before it merges, git saves the work tree with a `git stash create` of its own, which takes no switch.
   const result = await git(repository, [
+    ...GitSubmodules.pinned(await submodules(repository)),
     "-c",
     "user.name=Orbit",
     "-c",
@@ -131,6 +212,31 @@ export async function merge(repository: string, name: string, message: string) {
   if (left.length > 0) await git(repository, ["checkout", "HEAD", "--", ...left])
   if (files.length === 0) throw new Error(`git merge ${name} failed: ${result.stderr || result.stdout}`)
   return { merged: false as const, files, blocked: [] }
+}
+
+// The names that `.gitmodules` gives the submodules of the checkout at `repository`, read from where git reads it to
+// compare the work tree: the file in the work tree, else the one in the index, else the one in HEAD.
+async function submodules(repository: string) {
+  const sources = existsSync(path.join(repository, ".gitmodules"))
+    ? [["--file", ".gitmodules"]]
+    : [
+        ["--blob", ":.gitmodules"],
+        ["--blob", "HEAD:.gitmodules"],
+      ]
+  for (const source of sources) {
+    const listed = await spawn(
+      repository,
+      ["config", ...source, "-z", "--name-only", "--get-regexp", "^submodule\\..*\\.path$"],
+      repository,
+    )
+    // 1: the file names no submodule. Anything else: there is no such file, and the next source is read.
+    if (listed.code === 0 || listed.code === 1)
+      return listed.stdout
+        .split("\0")
+        .filter(Boolean)
+        .map((key) => key.slice("submodule.".length, -".path".length))
+  }
+  return []
 }
 
 /** Keep run data and worktrees out of the user's status without touching their tracked .gitignore. */
@@ -164,21 +270,52 @@ function inside(folder: string, candidate: string) {
   return relative !== "" && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative)
 }
 
-/** Remove a run's worktrees and branches; returns how many of each went. */
+// Whether `candidate` is `folder` or inside it, compared as `inside` compares.
+function within(folder: string, candidate: string) {
+  return path.relative(folder, candidate) === "" || inside(folder, candidate)
+}
+
+/**
+ * Remove a run's worktrees and branches; returns how many of each went. When `.orbit`, `.orbit/worktrees` or the run's
+ * folder is a link, it removes nothing and returns that path as `refused`.
+ */
 export async function clean(repository: string, run: string) {
-  const prefix = runFolder(repository, run)
-  const listed = (await ok(repository, ["worktree", "list", "--porcelain"]))
-    .split("\n")
-    .flatMap((line) => (line.startsWith("worktree ") ? [path.resolve(line.slice("worktree ".length))] : []))
-    .filter((directory) => inside(prefix, directory))
+  // Git lists a worktree under the long name of each folder in the case it has on disk, and `repository` may spell a
+  // folder with other case or by its 8.3 short name, so the repository is taken by its real path and each listed worktree
+  // too (class 4). The run's folder is then named under the repository and never resolved: a clone can ship any of the
+  // three folders as a link, which would make a folder outside .orbit/worktrees, and a person's own worktrees in it, the
+  // run's to remove by force.
+  const folder = runFolder(await real(repository), run)
+  const parts = [path.dirname(path.dirname(folder)), path.dirname(folder), folder]
+  const links = await Promise.all(parts.map((part) => lstat(part).then((stat) => stat.isSymbolicLink(), () => false)))
+  const refused = parts.find((_, index) => links[index])
+  if (refused !== undefined) return { worktrees: 0, branches: 0, refused }
+  const listed = (
+    await Promise.all(
+      (await ok(repository, ["worktree", "list", "--porcelain"]))
+        .split("\n")
+        .flatMap((line) => (line.startsWith("worktree ") ? [path.resolve(line.slice("worktree ".length))] : []))
+        .map(async (directory) => ({ directory, inside: inside(folder, await real(directory)) })),
+    )
+  ).flatMap((entry) => (entry.inside ? [entry.directory] : []))
   for (const directory of listed) await ok(repository, ["worktree", "remove", "--force", directory])
   await ok(repository, ["worktree", "prune"])
-  await rm(prefix, { recursive: true, force: true })
-  const parent = path.dirname(prefix)
+  await rm(folder, { recursive: true, force: true })
+  const parent = path.dirname(folder)
   if ((await readdir(parent).catch(() => [])).length === 0) await rm(parent, { recursive: true, force: true })
   const branches = (await ok(repository, ["for-each-ref", "--format=%(refname:short)", `refs/heads/orbit/${run}/`]))
     .split("\n")
     .filter(Boolean)
   if (branches.length > 0) await ok(repository, ["branch", "-D", ...branches])
   return { worktrees: listed.length, branches: branches.length }
+}
+
+// The real path of `file`: of the nearest folder up from it that exists, followed by the rest as written. Git keeps
+// listing a worktree whose folder was deleted until it is pruned.
+async function real(file: string): Promise<string> {
+  const found = await realpath(file).catch(() => undefined)
+  if (found !== undefined) return found
+  const parent = path.dirname(file)
+  if (parent === file) return file
+  return path.join(await real(parent), path.basename(file))
 }

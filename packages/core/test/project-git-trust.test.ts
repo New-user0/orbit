@@ -1,0 +1,561 @@
+import { afterAll, describe, expect, test } from "bun:test"
+import { eq } from "drizzle-orm"
+import { realpathSync } from "fs"
+import fs from "fs/promises"
+import os from "os"
+import path from "path"
+import { Effect } from "effect"
+import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Bus } from "@orbit/core/bus"
+import { Database } from "@orbit/core/database/database"
+import { Project } from "@orbit/core/project"
+import { AbsolutePath } from "@orbit/core/schema"
+import { SessionProjector } from "@orbit/core/session/projector"
+import { SessionTable } from "@orbit/core/session/sql"
+import { SessionID } from "@orbit/schema/session-id"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { Hash } from "@orbit/util/hash"
+import { LayerNode } from "@orbit/util/effect/layer-node"
+import { Global } from "@orbit/util/global"
+import { which } from "@orbit/util/which"
+import { git, repository } from "./fixture/git"
+import { type Found, folders, forgeries } from "./fixture/git-forged"
+import { keys, live, planted } from "./fixture/git-keys"
+import { traced } from "./fixture/git-trace"
+import { tempGlobalLayer } from "./fixture/global"
+import { tmpdirScoped } from "./fixture/tmpdir"
+import { it, testEffect } from "./lib/effect"
+
+// Class 1 (register FU-M1-022): `Project.resolve` ran `git rev-parse`, `git remote get-url`, `git rev-list` and
+// `git worktree list` in any folder that holds `.git`, when a client opened it and before anyone was asked, and git applies
+// the folder's own `.git/config` to each. A clone can name programs there (`core.fsmonitor`, hooks, filter and text
+// conversion drivers, `gpg.program` ...), so a folder that is not trusted is read from its files and no git starts in it.
+//
+// The oracle is git's own trace of every process it starts, together with a program that the folder's config names and that
+// records its runs. Every row has a control: the plain git command that makes git run the program shows that the key is
+// live in a repository like the folder's, and a trusted folder shows that `Project.resolve` does start git where it may.
+// The core tests trust every folder unless a graph says otherwise, which hides the attack, so `untrusted` says it.
+
+const graph = (implicit: boolean) =>
+  AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node, WorkspaceTrust.node]), [
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit })),
+    Global.node.replace(tempGlobalLayer),
+  ])
+const untrusted = testEffect(graph(false))
+const trusted = testEffect(graph(true))
+
+const abs = AbsolutePath.make
+const SLOW = 90_000
+
+const remoteID = (name: string) => Project.ID.make(Hash.fast(`git-remote:${name}`))
+const pathID = (folder: string) => Project.ID.make(Hash.fast(`directory:${folder}`))
+// The path as the file system spells it (`native` also expands a short Windows name), which is how git and Orbit spell it.
+const real = (file: string) => Effect.sync(() => abs(realpathSync.native(file)))
+
+/** Resolves a folder in a graph of its own that trusts every folder, or none. */
+const resolveIn = (implicit: boolean, folder: string) =>
+  Project.Service.use((project) => project.resolve(abs(folder))).pipe(Effect.provide(graph(implicit)))
+
+describe("Project.resolve in a git folder that is not trusted, whatever its config names", () => {
+  for (const key of keys)
+    untrusted.live(
+      `starts no git and runs no program for ${key.name}`,
+      () =>
+        Effect.gen(function* () {
+          // The control: the key is live, so no marker below means that nothing ran it.
+          if (key.trigger) expect(yield* live(key)).not.toEqual([])
+          const found = yield* planted(key)
+          const project = yield* Project.Service
+
+          const { value, git } = yield* traced(project.resolve(abs(found.root)))
+
+          expect(git).toEqual([])
+          expect(yield* found.ran()).toEqual([])
+          expect(value.vcs).toEqual({ type: "git", store: abs(path.join(yield* real(found.root), ".git")) })
+          expect(value.directory).toBe(yield* real(found.root))
+          // The remote is in the config file: a clone of the same remote is the same project, and never `global`, whose saved
+          // answers every folder would share.
+          expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+        }),
+      SLOW,
+    )
+
+  for (const key of keys)
+    trusted.live(
+      `starts git in a trusted folder that sets ${key.name} (control)`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* planted(key)
+          const project = yield* Project.Service
+
+          const { value, git } = yield* traced(project.resolve(abs(found.root)))
+
+          expect(git.some((command) => command.includes("rev-parse"))).toBe(true)
+          expect(git.some((command) => command.includes("remote"))).toBe(true)
+          expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+        }),
+      SLOW,
+    )
+
+  untrusted.live(
+    "starts no git in a folder below the repository, and finds the same project",
+    () =>
+      Effect.gen(function* () {
+        const found = yield* planted(keys[0]!)
+        yield* Effect.promise(() => fs.mkdir(path.join(found.root, "a", "b"), { recursive: true }))
+        const project = yield* Project.Service
+
+        const { value, git } = yield* traced(project.resolve(abs(path.join(found.root, "a", "b"))))
+
+        expect(git).toEqual([])
+        expect(value.directory).toBe(yield* real(found.root))
+        expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+      }),
+    SLOW,
+  )
+
+  // Windows ignores case, so a folder spelled in capitals is the same folder: the same trust key, and the same project.
+  untrusted.live(
+    "starts no git for a differently cased spelling of the folder, on Windows",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+        const found = yield* planted(keys[0]!)
+        const project = yield* Project.Service
+
+        const { value, git } = yield* traced(project.resolve(abs(found.root.toUpperCase())))
+
+        expect(git).toEqual([])
+        expect(value.directory).toBe(yield* real(found.root))
+        expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+      }),
+    SLOW,
+  )
+
+  untrusted.live(
+    "gives a repository with no remote its own project, never global, and the same one each time",
+    () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        yield* repository(path.join(root, "one"))
+        yield* repository(path.join(root, "two"))
+        const project = yield* Project.Service
+
+        const { value: first, git } = yield* traced(project.resolve(abs(path.join(root, "one"))))
+        const second = yield* project.resolve(abs(path.join(root, "two")))
+
+        expect(git).toEqual([])
+        expect(first.id).toBe(pathID(yield* real(path.join(root, "one"))))
+        expect(first.id).not.toBe(Project.ID.global)
+        expect(second.id).not.toBe(first.id)
+        expect((yield* project.resolve(abs(path.join(root, "one")))).id).toBe(first.id)
+      }),
+    SLOW,
+  )
+})
+
+// Class 3: a clone ships every file under its `.git`, so it can name a trusted repository there, and the trust decision for a
+// linked worktree is its main checkout's. The folder must not take it: nothing but a repository that listed the folder
+// (`git worktree add`) counts, and every other layout leaves the folder its own canonical folder, so that git does not start.
+describe("Project.resolve gives a folder that names a trusted repository none of its trust", () => {
+  const grantVictim = (found: Found) =>
+    WorkspaceTrust.Service.use((trust) => trust.grant(found.victim, { persist: false, via: "test" }))
+
+  for (const [name, make] of forgeries)
+    untrusted.live(
+      `starts no git, and names the folder itself, for ${name}`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* folders
+          yield* Effect.promise(() => make(found))
+          yield* grantVictim(found)
+
+          const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(found.crafted))))
+
+          expect(git).toEqual([])
+          expect(value.directory).toBe(found.crafted)
+          expect(value.canonical).toBe(found.crafted)
+          // The victim's remote is not the folder's, and its git directory is not the folder's store.
+          expect(value.id).toBe(pathID(found.crafted))
+          expect(value.vcs).toEqual({ type: "git", store: abs(path.join(found.crafted, ".git")) })
+        }),
+      SLOW,
+    )
+
+  untrusted.live(
+    "gives a linked worktree that git added the decision of its main checkout, which is trusted (control)",
+    () =>
+      Effect.gen(function* () {
+        const found = yield* folders
+        yield* grantVictim(found)
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(found.linked))))
+
+        expect(git.some((command) => command.includes("rev-parse"))).toBe(true)
+        expect(value.canonical).toBe(found.victim)
+        expect(value.id).toBe(remoteID("example.test/victim/repo"))
+      }),
+    SLOW,
+  )
+
+  untrusted.live(
+    "starts no git for a linked worktree of a main checkout that is not trusted, and still names its main checkout",
+    () =>
+      Effect.gen(function* () {
+        const found = yield* folders
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(found.linked))))
+
+        expect(git).toEqual([])
+        expect(value.canonical).toBe(found.victim)
+        expect(value.directory).toBe(found.linked)
+        expect(value.id).toBe(remoteID("example.test/victim/repo"))
+      }),
+    SLOW,
+  )
+
+  untrusted.live(
+    "starts git for the same folder once it is trusted, with no restart",
+    () =>
+      Effect.gen(function* () {
+        const found = yield* planted(keys[0]!)
+        const project = yield* Project.Service
+
+        const before = yield* traced(project.resolve(abs(found.root)))
+        yield* WorkspaceTrust.Service.use((trust) => trust.grant(found.root, { persist: false, via: "test" }))
+        const after = yield* traced(project.resolve(abs(found.root)))
+
+        expect(before.git).toEqual([])
+        expect(after.git.some((command) => command.includes("rev-parse"))).toBe(true)
+        expect(after.value.id).toBe(before.value.id)
+      }),
+    SLOW,
+  )
+})
+
+// Git passes over a `.git` directory that has no `HEAD` and uses the repository above it, and stops at a `.git` file that is no
+// good. The project is the one git would find, in a folder that is trusted and in one that is not.
+describe("Project.resolve and a .git that git would not take for a repository", () => {
+  const nested = (make: (sub: string) => Promise<void>) =>
+    Effect.gen(function* () {
+      const found = yield* planted(keys[0]!)
+      const sub = path.join(found.root, "sub")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(sub)
+        await make(sub)
+      })
+      return { found, sub }
+    })
+  const empty = (sub: string) => fs.mkdir(path.join(sub, ".git"))
+  const garbage = (sub: string) => fs.writeFile(path.join(sub, ".git"), "this is not a pointer\n")
+
+  untrusted.live(
+    "uses the repository above a .git directory with no HEAD, and starts no git while it is not trusted",
+    () =>
+      Effect.gen(function* () {
+        const { found, sub } = yield* nested(empty)
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(sub))))
+
+        expect(git).toEqual([])
+        expect(value.directory).toBe(yield* real(found.root))
+        expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+      }),
+    SLOW,
+  )
+
+  untrusted.live(
+    "uses the repository above a .git directory with no HEAD, from git once that repository is trusted",
+    () =>
+      Effect.gen(function* () {
+        const { found, sub } = yield* nested(empty)
+        yield* WorkspaceTrust.Service.use((trust) => trust.grant(found.root, { persist: false, via: "test" }))
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(sub))))
+
+        expect(git.some((command) => command.includes("rev-parse"))).toBe(true)
+        expect(value.directory).toBe(yield* real(found.root))
+        expect(value.id).toBe(remoteID("example.test/orbit/clone"))
+      }),
+    SLOW,
+  )
+
+  untrusted.live(
+    "stops at a .git file that is no good, as git does, and is a folder without a repository",
+    () =>
+      Effect.gen(function* () {
+        const { sub } = yield* nested(garbage)
+
+        const { value, git } = yield* traced(Project.Service.use((project) => project.resolve(abs(sub))))
+
+        expect(git).toEqual([])
+        expect(value.vcs).toBeUndefined()
+        expect(value.directory).toBe(yield* real(sub))
+        expect(value.id).toBe(pathID(yield* real(sub)))
+      }),
+    SLOW,
+  )
+})
+
+describe("Project.resolve names a folder that is not trusted as it names a trusted one", () => {
+  // Each shape is resolved twice, in a graph that trusts nothing and in one that trusts everything. The answers differ only
+  // in the project ID of a repository with no remote, which git names by its first commit.
+  const shapes = {
+    "a repository with an scp remote": (root: string) =>
+      Effect.gen(function* () {
+        yield* repository(path.join(root, "repo"), "git@example.test:Owner/Repo.git")
+        return { start: "repo", id: remoteID("example.test/Owner/Repo") }
+      }),
+    "a repository with an https remote": (root: string) =>
+      Effect.gen(function* () {
+        yield* repository(path.join(root, "repo"), "https://User@Example.test/Owner/Repo.git")
+        return { start: "repo", id: remoteID("example.test/Owner/Repo") }
+      }),
+    "a linked worktree of a repository with a remote": (root: string) =>
+      Effect.gen(function* () {
+        yield* repository(path.join(root, "main"), "git@example.test:Owner/Repo.git")
+        yield* Effect.promise(() => git(path.join(root, "main"), "worktree", "add", "--detach", path.join(root, "linked")))
+        return { start: "linked", id: remoteID("example.test/Owner/Repo") }
+      }),
+    "a repository with a file remote": (root: string) =>
+      Effect.gen(function* () {
+        yield* repository(path.join(root, "repo"), "file:///elsewhere/repo.git")
+        return { start: "repo", id: undefined }
+      }),
+    "a repository with no remote": (root: string) =>
+      Effect.gen(function* () {
+        yield* repository(path.join(root, "repo"))
+        return { start: "repo", id: undefined }
+      }),
+    "a linked worktree of a repository with no remote": (root: string) =>
+      Effect.gen(function* () {
+        yield* repository(path.join(root, "main"))
+        yield* Effect.promise(() => git(path.join(root, "main"), "worktree", "add", "--detach", path.join(root, "linked")))
+        return { start: "linked", id: undefined }
+      }),
+  }
+
+  for (const [name, make] of Object.entries(shapes))
+    it.live(
+      `${name}: the same folder, canonical folder and git directory`,
+      () =>
+        Effect.gen(function* () {
+          const root = (yield* tmpdirScoped()).path
+          const shape = yield* make(root)
+          const start = path.join(root, shape.start)
+
+          const here = yield* resolveIn(false, start)
+          const there = yield* resolveIn(true, start)
+
+          expect(here.directory).toBe(there.directory)
+          expect(here.canonical).toBe(there.canonical)
+          expect(here.vcs).toEqual(there.vcs)
+          if (shape.id) {
+            expect(here.id).toBe(shape.id)
+            expect(there.id).toBe(shape.id)
+            return
+          }
+          // Git names a repository with no remote by its first commit, which is not read from the files, so the folder is
+          // named by its path until it is trusted.
+          expect(here.id).toBe(pathID(here.directory))
+          expect(there.id).not.toBe(here.id)
+        }),
+      SLOW,
+    )
+})
+
+// Git takes a folder whose owner is not the user for safe when `safe.directory` names it, and reads that key only from
+// the system and global config and the config given on its command line. The host owns those and may name every folder
+// there, so this row hands git empty ones, and its control below shows that git refuses the folder before the row runs.
+const owner = await (async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-owner-"))
+  const empty = path.join(folder, "empty.gitconfig")
+  await fs.writeFile(empty, "")
+  const env = {
+    GIT_TEST_ASSUME_DIFFERENT_OWNER: "1",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: empty,
+    GIT_CONFIG_GLOBAL: empty,
+    GIT_CONFIG_COUNT: "0",
+    GIT_CONFIG_PARAMETERS: "",
+  }
+  const control = path.join(folder, "control")
+  await fs.mkdir(control)
+  await git(control, "init", "-q")
+  const plain = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
+    cwd: control,
+    env: { ...process.env, ...env },
+    stdout: "ignore",
+    stderr: "ignore",
+  })
+  // Git reads `GIT_TEST_ASSUME_DIFFERENT_OWNER` from 2.37.1 (and its backports), so a git from then on that accepts the
+  // control was handed config that names the folder safe, and the row runs and fails rather than being skipped.
+  const version = (Bun.spawnSync(["git", "--version"]).stdout.toString().match(/(\d+)\.(\d+)\.(\d+)/) ?? [])
+    .slice(1)
+    .map(Number)
+  const current = version.length === 3 && version[0] * 1_000_000 + version[1] * 1_000 + version[2] >= 2_037_001
+  return { folder, env, refused: plain.exitCode !== 0, runs: plain.exitCode !== 0 || current }
+})()
+afterAll(() => fs.rm(owner.folder, { recursive: true, force: true }))
+// Only a git from before 2.37.1 that takes no notice of `GIT_TEST_ASSUME_DIFFERENT_OWNER` accepts the control and skips
+// the row, rather than passing it without a refusal to keep the project across.
+if (!owner.runs) console.warn("git accepts a folder that it is told has another owner: the owner row does not run")
+
+// Class 3: the folder that the person is asked about and grants is the one that the next resolve names, and the project
+// keeps its ID, so the sessions made before the grant stay in it. A trusted repository is named from git, which can give
+// no answer (git on no PATH, a config or an owner that git refuses) or no name (no remote and no commit yet), and
+// Mercurial can give no name either. Each row starts in a subfolder, resolves while the folder is untrusted, records a
+// session in the project it names, grants the folder it names and resolves again. Mutations: reading the files only for
+// an untrusted folder (`layout && !trusted`) fails the rows where git gives no answer; `id ?? ID.global` for the trusted
+// repository fails the row with no commit; and `global` for a trusted Mercurial folder with no name fails its row.
+describe("Project.resolve keeps a folder's project across the grant when git or Mercurial cannot name it", () => {
+  const stable = testEffect(
+    AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node, WorkspaceTrust.node, SessionProjector.node]), [
+      WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+      Global.node.replace(tempGlobalLayer),
+    ]),
+  )
+
+  // A repository as git writes one, made without git: `HEAD`, `objects`, `refs` and the config given.
+  const written = (config: string) => async (root: string) => {
+    await fs.mkdir(path.join(root, ".git", "refs", "heads"), { recursive: true })
+    await fs.mkdir(path.join(root, ".git", "objects"), { recursive: true })
+    await fs.writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
+    await fs.writeFile(path.join(root, ".git", "config"), config)
+  }
+  const origin = '[remote "origin"]\n\turl = https://example.test/owner/repo.git\n'
+  const named = (value: Project.Resolved) => ({ id: value.id, directory: value.directory, canonical: value.canonical, vcs: value.vcs })
+
+  // Runs `effect` with `env` added to the environment that git is started with.
+  const withEnv = <A, E, R>(env: Record<string, string>, effect: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const before = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]))
+        Object.assign(process.env, env)
+        return before
+      }),
+      () => effect,
+      (before) =>
+        Effect.sync(() => {
+          for (const [key, value] of Object.entries(before)) {
+            if (value === undefined) delete process.env[key]
+            else process.env[key] = value
+          }
+        }),
+    )
+
+  const rows: ReadonlyArray<{
+    readonly name: string
+    readonly make: (root: string) => Promise<void>
+    // Added to git's environment while Orbit resolves the folder.
+    readonly env?: Record<string, string>
+    // Whether git refuses the repository, which the row checks first with a plain git.
+    readonly refused?: boolean
+    // Whether the row runs on this host.
+    readonly runs?: boolean
+  }> = [
+    { name: "a config that git refuses", make: written(`${origin}[broken\n`), refused: true },
+    {
+      name: "a repository whose owner git refuses",
+      make: (root) => Effect.runPromise(repository(root, "https://example.test/owner/repo.git")),
+      env: owner.env,
+      refused: true,
+      runs: owner.runs,
+    },
+    { name: "a repository with no commit and no remote", make: (root) => git(root, "init", "-q") },
+    {
+      name: "a Mercurial folder that hg cannot name",
+      make: async (root) => {
+        await fs.mkdir(path.join(root, ".hg"), { recursive: true })
+      },
+    },
+  ]
+
+  for (const row of rows)
+    (row.runs === false ? stable.live.skip : stable.live)(
+      `${row.name}: the same project, folders and decision before and after the grant`,
+      () =>
+        Effect.gen(function* () {
+          const root = path.join((yield* tmpdirScoped()).path, "clone")
+          const sub = path.join(root, "sub")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(root, { recursive: true })
+            await row.make(root)
+            await fs.mkdir(sub, { recursive: true })
+          })
+          if (row.refused) {
+            const plain = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
+              cwd: root,
+              env: { ...process.env, ...row.env },
+              stderr: "ignore",
+            })
+            expect(plain.exitCode).not.toBe(0)
+          }
+          const project = yield* Project.Service
+          const trust = yield* WorkspaceTrust.Service
+          const database = yield* Database.Service
+
+          const before = yield* withEnv(row.env ?? {}, project.resolve(abs(sub)))
+          const id = SessionID.make("ses_across_the_grant")
+          yield* database.db
+            .insert(SessionTable)
+            .values({ id, project_id: before.id, directory: yield* real(sub), slug: "before", version: "test" })
+            .run()
+          yield* trust.grant(before.canonical, { persist: false, via: "test" })
+          const after = yield* withEnv(row.env ?? {}, project.resolve(abs(sub)))
+          const session = yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, id)).get()
+
+          expect(named(after)).toEqual(named(before))
+          expect(after.id).not.toBe(Project.ID.global)
+          expect(session?.project_id).toBe(after.id)
+          expect((yield* trust.status(after.canonical)).trusted).toBe(true)
+        }),
+      SLOW,
+    )
+
+  // `gitExecutable` is decided once when its module loads, so this row runs `Project.resolve` in a process of its own whose
+  // PATH has no git: the folder of the program that runs it, and System32 on Windows. A PATH that holds git there skips it.
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path")),
+    PATH: [
+      path.dirname(process.execPath),
+      ...(process.platform === "win32" ? [path.join(process.env.SystemRoot ?? "C:\\Windows", "System32")] : []),
+    ].join(path.delimiter),
+  }
+  test.skipIf(which("git", env) !== null)(
+    "git on no PATH: the same project, folders and decision before and after the grant",
+    async () => {
+      const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-no-git-")))
+      const root = path.join(base, "clone")
+      try {
+        await written(origin)(root)
+        await fs.mkdir(path.join(root, "sub"))
+        const host = path.join(import.meta.dir, "fixture", "project-host.ts")
+        const child = Bun.spawn([process.execPath, "run", host, path.join(root, "sub")], {
+          cwd: root,
+          env,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [out, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+        const line = out.split(/\r?\n/).find((item) => item.startsWith("{"))
+        expect({ line: line !== undefined, error: line === undefined ? error : "" }).toEqual({ line: true, error: "" })
+        const result = JSON.parse(line!) as {
+          readonly before: Project.Resolved
+          readonly after: Project.Resolved
+          readonly session: string
+          readonly trusted: boolean
+        }
+
+        expect(named(result.after)).toEqual(named(result.before))
+        expect(result.before.id).toBe(remoteID("example.test/owner/repo"))
+        expect(result.session).toBe(result.after.id)
+        expect(result.trusted).toBe(true)
+      } finally {
+        await fs.rm(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+      }
+    },
+    SLOW,
+  )
+})

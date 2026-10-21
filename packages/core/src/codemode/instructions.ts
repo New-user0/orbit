@@ -3,6 +3,7 @@ export * as CodeModeInstructions from "./instructions.js"
 import { searchSignature, toolExpression } from "@orbit/codemode"
 import { Effect, Schema } from "effect"
 import { Instructions } from "../instructions/index.js"
+import { ReminderText } from "../session/reminder-text.js"
 import { CodeModeCatalog } from "./catalog.js"
 
 // prettier-ignore
@@ -16,7 +17,14 @@ ${hasMoreTools ? `The catalog is partial. Inside \`Execute\`, use \`search(...)\
 
 ## Available tools`
 
-export function render(catalog: CodeModeCatalog.Summary) {
+// Tool descriptions come from MCP servers, so a look-alike of an envelope tag in the listing is escaped. Orbit's own
+// catalog text holds no tag.
+export const render = (catalog: CodeModeCatalog.Summary) => ReminderText.neutralize(renderListing(catalog))
+
+export const update = (previous: CodeModeCatalog.Summary, current: CodeModeCatalog.Summary) =>
+  ReminderText.neutralize(updateListing(previous, current))
+
+function renderListing(catalog: CodeModeCatalog.Summary) {
   if (catalog.total === 0)
     return "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `Execute` unless there is at least one available Code Mode tool."
 
@@ -29,10 +37,10 @@ export function render(catalog: CodeModeCatalog.Summary) {
 ${tools.join("\n")}`
 }
 
-export function update(previous: CodeModeCatalog.Summary, current: CodeModeCatalog.Summary) {
+function updateListing(previous: CodeModeCatalog.Summary, current: CodeModeCatalog.Summary) {
   const replacement = `The Code Mode tool catalog has changed. This catalog supersedes the previous Code Mode tool catalog.
 
-${render(current)}`
+${renderListing(current)}`
   if (current.total === 0) return replacement
   const previousComplete = previous.shown === previous.total
   const currentComplete = current.shown === current.total

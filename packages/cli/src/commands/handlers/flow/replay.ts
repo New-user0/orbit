@@ -1,18 +1,19 @@
-import { Orbit } from "@orbit/client"
-import { Service } from "@orbit/client/effect/service"
 import { json, plain, progress } from "@orbit/flow/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
-import { ServerConnection } from "../../../services/server-connection"
 import { requireTrust } from "../../../util/trust"
-import { directory, load } from "./execute"
+import { connect, directory, load } from "./execute"
 
 export default Runtime.handler(
   Commands.commands.flow.commands.replay,
   Effect.fn("cli.flow.replay")(function* (input) {
+    // A replay runs on no server, but it goes on from a run that the folder's run store records, and the store is a file
+    // that a clone ships, so the folder has to be trusted before the store is opened, which only a server can say.
+    const client = yield* connect(input)
+    yield* requireTrust(client, directory(), { grant: input.trust, strict: "recorded" })
     const { importsModule, openStore, run } = yield* Effect.promise(() => import("@orbit/flow"))
     const store = yield* Effect.promise(() => openStore(directory()))
     const recorded = store.run(input.run)
@@ -22,22 +23,13 @@ export default Runtime.handler(
       directory(),
       Option.getOrElse(input.file, () => recorded.file),
     )
-    // A replay runs on no server, but a module workflow is code that runs here as it does for `orb flow run`, and the
-    // file is the one the repository's run store names unless --file says otherwise. So before it is loaded the folder
-    // has to be trusted, which only a server can say, and so does the folder that holds the file when that belongs to
-    // another project, as for `orb flow run`. A YAML workflow is only read, and connects to nothing: a replay answers
-    // every check from the recording, so the shell commands that the workflow defines never run here. It answers every
-    // agent from the recording as well, which opens no session, so the agents that the workflow names, and the
+    // A module workflow is code that runs here as it does for `orb flow run`, and the file is the one the repository's
+    // run store names unless --file says otherwise. That file can belong to another project, so before it is loaded the
+    // folder that holds it has to be trusted as well, as for `orb flow run`. A YAML workflow is only read: a replay
+    // answers every check from the recording, so the shell commands that the workflow defines never run here. It answers
+    // every agent from the recording as well, which opens no session, so the agents that the workflow names, and the
     // approvals it sets, choose nothing.
-    if (importsModule(file)) {
-      const server = yield* ServerConnection.resolve({
-        server: Option.getOrUndefined(input.server),
-        standalone: input.standalone,
-        trust: input.trust,
-      })
-      const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-      yield* requireTrust(client, directory(), { grant: input.trust, imports: file })
-    }
+    if (importsModule(file)) yield* requireTrust(client, directory(), { grant: input.trust, imports: file })
     const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
     // No server: a replay answers every node from the recording.
     const result = yield* Effect.promise(() =>
@@ -45,6 +37,8 @@ export default Runtime.handler(
         workflow,
         file,
         directory: directory(),
+        // A replay creates no worktrees and answers from the recording, so it needs no version control.
+        trusted: false,
         replay: recorded.id,
         log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
       }),

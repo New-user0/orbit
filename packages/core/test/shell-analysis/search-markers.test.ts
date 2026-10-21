@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { which } from "@orbit/util/which"
-import { bash, pwsh, powershell } from "./helper"
+import { bash, pwsh, powershell, SHELL_START } from "./helper"
 
 // Each attack plants a marker outside a temporary project and a control run shows that the attack really reads it. The
 // verdict then has to refuse the attack and allow the safe form (class 14: a negative test must not pass vacuously).
@@ -62,7 +62,7 @@ describe("xargs splits a name at a blank", () => {
     expect(output).not.toContain("OUTSIDE_MARKER")
     expect(output).toContain("INSIDE")
     expect(bash(safe).readOnly).toBe(true)
-  })
+  }, SHELL_START)
 })
 
 describe("recursion that follows a link", () => {
@@ -74,7 +74,7 @@ describe("recursion that follows a link", () => {
     expect(run(inside, "grep -r OUTSIDE_MARKER .")).not.toContain("OUTSIDE_MARKER")
     expect(bash("grep -R OUTSIDE_MARKER .").readOnly).toBe(false)
     expect(bash("grep -r OUTSIDE_MARKER .").readOnly).toBe(true)
-  })
+  }, SHELL_START)
   test.skipIf(!bashPath || !rg)("rg -L reads through a link and rg does not", () => {
     const { outside, inside } = project()
     expect(link(outside, path.join(inside, "docs"))).toBe(true)
@@ -82,7 +82,7 @@ describe("recursion that follows a link", () => {
     expect(run(inside, "rg OUTSIDE_MARKER")).not.toContain("OUTSIDE_MARKER")
     expect(bash("rg -L OUTSIDE_MARKER").readOnly).toBe(false)
     expect(bash("rg OUTSIDE_MARKER").readOnly).toBe(true)
-  })
+  }, SHELL_START)
   test.skipIf(!windows)("findstr /S reads through a junction, so it is not on the list", () => {
     const { outside, inside } = project()
     expect(link(outside, path.join(inside, "docs"))).toBe(true)
@@ -101,14 +101,14 @@ describe("the program a search starts", () => {
     expect(run(inside, "rg --pre ./pre.sh hello a.txt")).toContain("hello")
     expect(fs.existsSync(path.join(inside, "ran.txt"))).toBe(true)
     expect(bash("rg --pre ./pre.sh hello a.txt").readOnly).toBe(false)
-  })
+  }, SHELL_START)
   withBash("find -exec writes a file, and the verdict refuses it", () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "x\n")
     run(inside, "find . -name a.txt -exec touch made.txt ';'")
     expect(fs.existsSync(path.join(inside, "made.txt"))).toBe(true)
     expect(bash("find . -name a.txt -exec touch made.txt ';'").readOnly).toBe(false)
-  })
+  }, SHELL_START)
   withBash("sed w writes a file, and the verdict refuses it", () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "x\n")
@@ -116,7 +116,7 @@ describe("the program a search starts", () => {
     expect(fs.existsSync(path.join(inside, "copy.txt"))).toBe(true)
     expect(bash("sed -n 'w copy.txt' a.txt").readOnly).toBe(false)
     expect(bash("sed -n 1p a.txt").readOnly).toBe(true)
-  })
+  }, SHELL_START)
 })
 
 describe("a path operand that a joined folder does not change (class 4)", () => {
@@ -136,5 +136,5 @@ describe("a path operand that a joined folder does not change (class 4)", () => 
     const text = `${path.basename(fd!, path.extname(fd!))} --base-directory src --base-directory .. -t f .`
     expect(run(inside, text)).toContain("outside")
     expect(bash(text).readOnly).toBe(false)
-  })
+  }, SHELL_START)
 })

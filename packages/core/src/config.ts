@@ -37,6 +37,13 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
     ?.info[key]
 }
 
+/** The last document that sets this experimental key decides it; a later block hides only the keys it sets. */
+export function experimental<K extends keyof NonNullable<Info["experimental"]>>(entries: readonly Entry[], key: K) {
+  return entries.findLast(
+    (entry): entry is Document => entry.type === "document" && entry.info.experimental?.[key] !== undefined,
+  )?.info.experimental?.[key]
+}
+
 /** A root that other agent products keep config in, with what is decided for the folder it belongs to. */
 export interface CompatRoot extends CompatRoots.Root {
   /**
@@ -88,6 +95,13 @@ export interface Interface {
    * source files they parse and rebuild their own state.
    */
   readonly changes: () => Stream.Stream<Watcher.Update>
+  /**
+   * Reports that the files at `paths` changed, to every `changes()` subscriber, for a server that has no file watcher or
+   * a client that wrote a file and does not want to wait for one. It does not reload the config and publishes no
+   * `config.updated`, so the services of the location and the asks pending in its sessions are left alone; an owner that
+   * does not read one of the paths ignores it. The caller decides which paths count.
+   */
+  readonly notify: (paths: readonly string[]) => Effect.Effect<void>
   /** Updates supported global config fields while preserving unrelated JSONC content. */
   readonly update?: (patch: Patch) => Effect.Effect<void, FSUtil.Error>
   /**
@@ -146,6 +160,8 @@ export const testLayer = (initial: Entry[] = [], compat: Compat = defaultCompat)
         compatEnabled: () => Effect.succeed(compat.enabled),
         compat: () => Effect.succeed(compat),
         changes: () => Stream.fromPubSub(updates),
+        notify: (paths) =>
+          Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
         fingerprints: () => Effect.succeed([]),
         pluginsChanged: () => Effect.succeed(false),
         setEntries: (next) => Ref.set(entries, next),
@@ -668,7 +684,7 @@ export const layer = (options?: Options) =>
           const filepath = (yield* Effect.filter(candidates, fs.isFile)).at(-1) ?? path.join(directory, "orbit.jsonc")
           const text = (yield* fs.readFileStringSafe(filepath)) ?? "{}\n"
           // Only the keys present in the patch change; null removes a key.
-          const keys = (["shell", "output_style"] as const).filter((key) => key in patch)
+          const keys = (["shell", "output_style", "language"] as const).filter((key) => key in patch)
           const updated = yield* Effect.try({
             try: () =>
               keys.reduce(
@@ -701,6 +717,8 @@ export const layer = (options?: Options) =>
           return { enabled, roots: yield* Effect.forEach(present, stampRoot) }
         }),
         changes: () => Stream.fromPubSub(updates),
+        notify: (paths) =>
+          Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
         update,
         fingerprints: () => Effect.sync(() => observed),
         pluginsChanged: Effect.fn("Config.pluginsChanged")(function* (directory) {

@@ -194,6 +194,18 @@ export const executeTool = (
 export const runTool = (tool: Parameters<typeof execute>[0], input: unknown, context: Parameters<typeof execute>[2]) =>
   execute(tool, input, context, () => Effect.void)
 
+/** The fields of a tool that a plugin can make unreadable. */
+export const unreadableFields = ["name", "description", "traits", "options", "execute", "validate"] as const
+
+/** A copy of `tool` whose `field` throws when it is read, as a plugin's getter can. */
+export const withThrowingField = <T extends object>(tool: T, field: (typeof unreadableFields)[number]): T =>
+  Object.defineProperty({ ...tool }, field, {
+    enumerable: true,
+    get: () => {
+      throw new Error("boom")
+    },
+  })
+
 /**
  * The registry asks about calls of these tools: none of them claims to ask for itself, so none escapes the rules. The
  * gate itself is tested in tool-gate.test.ts; this pins that a built-in does not opt out of it.

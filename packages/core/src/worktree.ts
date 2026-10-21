@@ -23,6 +23,7 @@ import { ProjectTable } from "./project/sql.js"
 import { AppProcess } from "@orbit/util/process"
 import { ChildProcess } from "effect/unstable/process"
 import { WorktreeStrategies } from "./worktree/strategies.js"
+import { WorkspaceTrust } from "./workspace-trust.js"
 
 export type { Strategy, Editor } from "./worktree/strategies.js"
 
@@ -341,7 +342,7 @@ const layer = Layer.effect(
 export const node: LayerNode.Provider<Service, never, typeof Node.tags.values.global> = Node.makeGlobalNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Git.node, Bus.node, Database.node, AppProcess.node, LocationServiceMap.node],
+  deps: [FSUtil.node, Git.node, Bus.node, Database.node, AppProcess.node, LocationServiceMap.node, WorkspaceTrust.node],
 })
 
 function operationError(strategy: StrategyID, operation: string, error: unknown) {

@@ -19,6 +19,7 @@ describe("ConfigEntryObserver", () => {
         changes: () => Stream.empty,
         fingerprints: () => Effect.succeed([]),
         pluginsChanged: () => Effect.succeed(false),
+        notify: () => Effect.void,
       })
       const event = {
         subscribe: () =>

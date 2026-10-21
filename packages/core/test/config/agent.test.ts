@@ -39,6 +39,8 @@ const defaultPermissions = (global: Global.Interface): Permission.Ruleset => [
   { action: "external_directory", resource: path.join(global.data, "tool-output", "*"), effect: "allow" },
   { action: "external_directory", resource: path.join(global.tmp, "*"), effect: "allow" },
   { action: "external_directory", resource: path.join(global.config, "*"), effect: "allow" },
+  // The allow for editing in the scratchpad of the session that asks, written for every session until `Permission` cuts it.
+  { action: "Edit", resource: path.join(global.tmp, "sessions", "*"), effect: "allow" },
 ]
 
 test("rejects named agent color tokens", () => {
@@ -904,7 +906,9 @@ permissions:
         yield* trust.grant({ persist: false, via: "test" })
         yield* bus.publish(Event.Updated, {})
         yield* advance(() => reloads >= 1)
-        expect(yield* agents.get(build)).toMatchObject({ system: "STOLEN PROMPT" })
+        // The entry is still stamped untrusted until the config reloads it, and a file of an untrusted folder never
+        // tunes an agent that exists; `extra` is new, so the file that was behind the link defines it.
+        expect((yield* agents.get(build))?.system).toBeUndefined()
         expect(yield* agents.get(Agent.ID.make("extra"))).toMatchObject({ system: "Another stolen prompt" })
       }).pipe(Effect.provide(untrustedProject({ directory: project })))
     }),

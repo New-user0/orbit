@@ -294,6 +294,8 @@ const withScanner = <A, E, R>(
   portable: boolean,
   body: (registry: Tool.Interface, fixture: { active: string; outside: string }) => Effect.Effect<A, E, R>,
   shell = "sh",
+  // A later document of the same project (orbit.local.json), for a test of what a later block hides.
+  local?: object,
 ) =>
   Effect.acquireUseRelease(
     Effect.promise(() => tmpdir()),
@@ -307,6 +309,10 @@ const withScanner = <A, E, R>(
             JSON.stringify({ experimental: { portable_shell_scanner: portable } }),
           ),
         )
+        if (local)
+          yield* Effect.promise(() =>
+            Bun.write(path.join(fixture.active, "orbit.local.json"), JSON.stringify(local)),
+          )
         return yield* withSession(fixture.active, (registry) =>
           Effect.gen(function* () {
             const selection = yield* ShellSelect.Service
@@ -385,6 +391,33 @@ const runCovered = (registry: Tool.Interface, command: string, shell: string, ma
     }
     return result
   })
+
+// A block of a later document hides only the keys it sets. The condition is read differently by the two scanners (the
+// portable one also lists the test), so the patterns the request offers to save tell which one the call went through.
+describe("ShellTool scanner choice", () => {
+  const test = isWindows || !Bun.which("sh") ? permissionIt.live.skip : permissionIt.live
+  for (const [name, local, saves] of [
+    ["is kept past a later block about another key", { experimental: { allow_local_fetch: false } }, ["[ *", "cat *", "echo *"]],
+    ["is replaced by a later block that sets it", { experimental: { portable_shell_scanner: false } }, ["cat *", "echo *"]],
+  ] as const) {
+    test(`the person's portable scanner ${name}`, () =>
+      withScanner(
+        true,
+        (registry, fixture) =>
+          Effect.gen(function* () {
+            const result = yield* runPermissionCommand(
+              registry,
+              "if [ -f x ]; then cat x; else echo no; fi",
+              path.join(fixture.active, "marker"),
+              ["once"],
+            )
+            expect(result.requests.map((request) => request.save)).toEqual([saves])
+          }),
+        "sh",
+        local,
+      ))
+  }
+})
 
 // Directory cases still document inherited limitations; fixed scanner cases require matching behavior.
 describe("ShellTool scanner permissions", () => {
@@ -1163,11 +1196,11 @@ describe("ShellTool", () => {
     ),
   )
 
-  // The positive rows need a PATH the read-only analysis trusts (no empty or relative entry); a Windows Path often has
-  // one, and Linux runs them (tools/linux-test).
+  // The positive rows need a PATH the read-only analysis trusts (no relative entry, and no empty one off Windows, where
+  // an empty entry is dropped); a Windows Path may have a relative one, and Linux runs them (tools/linux-test).
   const cleanPath = (process.env.PATH ?? "")
     .split(path.delimiter)
-    .every((entry) => entry !== "" && path.isAbsolute(entry))
+    .every((entry) => (entry === "" ? isWindows : path.isAbsolute(entry)))
   const wiring = cleanPath ? it.live : it.live.skip
   const bashOnly = isWindows ? it.live.skip : wiring
 
@@ -2011,7 +2044,9 @@ describe("ShellTool", () => {
                       expect(offered).toHaveLength(1)
                       expect(["Bash", "PowerShell"]).toContain(offered[0])
                       // The prompt names the tool the model is offered.
-                      expect(control.system[0]?.text).toBe(`Fall back to ${offered[0]} when a tool cannot do it.`)
+                      expect(control.system[0]?.text).toStartWith(
+                        `Fall back to ${offered[0]} when a tool cannot do it.\n\n# Git and pull requests\n`,
+                      )
 
                       hideShell = true
                       expect(Object.keys((yield* request()).tools)).toEqual([])
@@ -2061,8 +2096,8 @@ describe("ShellTool", () => {
                 tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
               } as never)
               // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
-              expect(event.system[0]?.text).toBe(
-                `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
+              expect(event.system[0]?.text).toStartWith(
+                `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.\n\n# Git and pull requests\n`,
               )
             }),
           ),
@@ -2341,6 +2376,28 @@ describe("ShellTool", () => {
       ),
     )
 
+    // FU-M3-186: the text for the model says "Exited with code N" only when the code is a failure of its command.
+    posix("writes the exit code into the text of a failing exit only", () =>
+      withFiles((registry) =>
+        Effect.gen(function* () {
+          const text = (command: string, id: string) =>
+            executeTool(registry, call({ command }, id)).pipe(
+              Effect.map((settled) => (settled.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("\n")),
+            )
+          for (const command of ["grep nomatch a", "diff a b", "test 1 = 2", ...answers]) {
+            const content = yield* text(command, `call-quiet-${command}`)
+            expect({ command, content }).toEqual({ command, content: expect.not.stringContaining("Exited with code") })
+          }
+          for (const command of failures) {
+            const content = yield* text(command, `call-loud-${command}`)
+            expect({ command, content }).toEqual({ command, content: expect.stringContaining("Exited with code") })
+          }
+          // A non-failing empty run reads as a successful empty run.
+          expect(yield* text("grep nomatch a", "call-empty-a")).toBe(yield* text("true", "call-empty-b"))
+        }),
+      ),
+    )
+
     posix("judges the command that ran, after the hooks", () =>
       withFiles((_registry, run) =>
         Effect.gen(function* () {
@@ -2584,7 +2641,7 @@ describe("ShellTool", () => {
               },
               {
                 type: "text",
-                text: "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+                text: "The command keeps running on its own, and its output comes back to you in a message when it ends. Waiting on it by sleeping, re-reading or searching its output file is polling; poll only when the user requests it, even if the next step needs the result. One look at the output so far is fine when it lets you do something useful now. Meanwhile do the work that does not depend on the result; if there is none, close the turn, and the session picks up again when the command ends.",
               },
             ])
             expect((yield* shell.list()).map((info) => info.id)).toContain(id)
@@ -2850,7 +2907,7 @@ describe("ShellTool", () => {
             })
             expect(settled.content?.[1]).toEqual({
               type: "text",
-              text: "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+              text: "The command keeps running on its own, and its output comes back to you in a message when it ends. Waiting on it by sleeping, re-reading or searching its output file is polling; poll only when the user requests it, even if the next step needs the result. One look at the output so far is fine when it lets you do something useful now. Meanwhile do the work that does not depend on the result; if there is none, close the turn, and the session picks up again when the command ends.",
             })
             yield* Effect.sleep(Duration.millis(100))
             expect((yield* shell.get(id)).status).toBe("running")
@@ -2875,7 +2932,8 @@ describe("ShellTool", () => {
 
   const killCommand = "kill -9 $$"
   const flagCases = [
-    ["a timeout", { command: idleCommand, timeout: 50 }, { settled: "completed", flag: true }, true],
+    // Only a bash-dialect shell cancels sibling calls; a PowerShell call never does (FU-M3-183).
+    ["a timeout", { command: idleCommand, timeout: 50 }, { settled: "completed", flag: isWindows ? undefined : true }, true],
     ["a signal kill", { command: killCommand }, { settled: "completed", flag: true }, !isWindows],
     // A failing exit cancels siblings except under PowerShell, where an exit code carries no meaning.
     [
@@ -2903,6 +2961,46 @@ describe("ShellTool", () => {
     )
   }
 
+  // FU-M3-183: the shell decides whether a failed call cancels the calls beside it, whatever the machine's default is.
+  // PowerShell never does, whether the call times out or is removed; the same failures under a bash-dialect shell do.
+  const explicitShells = [
+    ["powershell", "Start-Sleep -Seconds 60", isWindows],
+    ["sh", "sleep 60", which("sh") !== null],
+  ] as const
+  for (const [shellName, sleeping, available] of explicitShells)
+    for (const [name, remove] of [
+      ["times out", false],
+      ["is removed while it runs", true],
+    ] as const)
+      (available ? it.live : it.live.skip)(
+        `a ${shellName} call that ${name} ${shellName === "powershell" ? "leaves its siblings alone" : "cancels its siblings"}`,
+        () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => tmpdir()),
+            (tmp) => {
+              reset()
+              return withSession(tmp.path, (registry) =>
+                Effect.gen(function* () {
+                  const selection = yield* ShellSelect.Service
+                  yield* selection.transform((editor) => editor.configure(shellName))
+                  const input = call(remove ? { command: sleeping } : { command: sleeping, timeout: 50 }, "call-explicit-shell")
+                  const running = yield* failureFlag(registry, input).pipe(Effect.forkChild({ startImmediately: true }))
+                  if (remove) {
+                    const shell = yield* Shell.Service
+                    for (let attempt = 0; attempt < 1000 && (yield* shell.list()).length === 0; attempt++)
+                      yield* Effect.promise(() => Bun.sleep(5))
+                    yield* shell.remove((yield* shell.list())[0]!.id)
+                  }
+                  const outcome = yield* Fiber.join(running)
+                  expect(outcome.flag).toBe(shellName === "powershell" ? undefined : true)
+                }),
+              )
+            },
+            (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+          ),
+        { timeout: 15_000 },
+      )
+
   // A foreground call whose command record disappears while it waits ends through the job-error path. A client's
   // shell.remove is a deliberate stop, and it counts as a failure here (unlike shell.kill, which settles "killed").
   it.live(
@@ -2927,7 +3025,7 @@ describe("ShellTool", () => {
                   return yield* first(remaining - 1)
                 })
               yield* shell.remove((yield* first()).id)
-              expect(yield* Fiber.join(running)).toEqual({ settled: "failed", flag: true })
+              expect(yield* Fiber.join(running)).toEqual({ settled: "failed", flag: isWindows ? undefined : true })
             }),
           )
         },
@@ -3105,6 +3203,43 @@ describe("ShellTool", () => {
   )
 })
 
+describe("ShellTool interruption before the call waits on its job", () => {
+  // FU-M2-041: the call is interrupted while its first progress update is being published, after the command was
+  // created and before the job that waits for it was started. The command must not be left running.
+  it.live(
+    "stops a command whose call is interrupted between its creation and its job",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              const blocked = yield* Deferred.make<void>()
+              const running = yield* executeTool(registry, {
+                ...call({ command: idleCommand, timeout: 0 }, "call-interrupted-early"),
+                progress: (update) =>
+                  typeof update.shellID === "string"
+                    ? Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Effect.never))
+                    : Effect.void,
+              }).pipe(Effect.forkChild({ startImmediately: true }))
+              yield* Deferred.await(blocked)
+              expect((yield* shell.list()).length).toBe(1)
+              yield* Fiber.interrupt(running)
+
+              for (let attempt = 0; attempt < 400 && (yield* shell.list()).length > 0; attempt++)
+                yield* Effect.promise(() => Bun.sleep(5))
+              expect(yield* shell.list()).toEqual([])
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+})
+
 // The deadline: a foreground command that outlives it moves to the background, except one made only of sleeps.
 describe("ShellTool timeouts", () => {
   const releaseLoop = (release: string) =>
@@ -3226,7 +3361,7 @@ describe("ShellTool timeouts", () => {
       inFolder(undefined, ({ registry, notifications }) =>
         Effect.gen(function* () {
           const settled = yield* executeTool(registry, call({ command: idleCommand, timeout: 200 }))
-          expect(settled.metadata).toMatchObject({ timeout: true, error: true })
+          expect(settled.metadata).toMatchObject(isWindows ? { timeout: true } : { timeout: true, error: true })
           expect(text(settled)).toContain("Command exceeded timeout of 200 ms")
           yield* Effect.promise(() => Bun.sleep(300))
           expect(notifications()).toEqual([])
@@ -3504,7 +3639,7 @@ describe("ShellTool timeouts", () => {
             }),
           )
           const settled = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 200 }))
-          expect(settled.metadata).toMatchObject({ timeout: true, error: true })
+          expect(settled.metadata).toMatchObject(isWindows ? { timeout: true } : { timeout: true, error: true })
         }),
       ),
     { timeout: 30_000 },

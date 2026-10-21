@@ -2,59 +2,145 @@ export * as InstructionBuiltIns from "./builtins.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
-import { Global } from "@orbit/util/global"
+import os from "os"
+import { Config } from "../config.js"
 import { Location } from "../location.js"
+import { ReminderText } from "../session/reminder-text.js"
+import { ShellSelect } from "../shell/select.js"
 import { Instructions } from "./index.js"
 
 export interface Interface {
   readonly load: () => Effect.Effect<Instructions.List>
+  /** The person's own preferences. Only the main thread of a session carries them, so the caller decides whether to include the list. */
+  readonly preferences: () => Effect.Effect<Instructions.List>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/InstructionBuiltIns") {}
 
-const layer = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const global = yield* Global.Service
-    const location = yield* Location.Service
-    return Service.of({
-      load: () =>
-        Effect.succeed(
-          Instructions.combine([
-            Instructions.make({
-              key: Instructions.Key.make("core/date"),
-              codec: Schema.toCodecJson(Schema.String),
-              read: DateTime.nowAsDate.pipe(Effect.map((date) => date.toDateString())),
-              render: {
-                initial: (date) => `Today's date: ${date}`,
-                changed: (_previous, date) => `Today's date is now: ${date}`,
-              },
-            }),
-            Instructions.make({
-              key: Instructions.Key.make("core/environment"),
-              codec: Schema.toCodecJson(Schema.String),
-              read: Effect.sync(() =>
-                [
-                  "<env>",
-                  `  Working directory: ${location.directory}`,
-                  `  Workspace root folder: ${location.project.directory}`,
-                  `  Is directory a git repo: ${location.vcs?.type === "git" ? "yes" : "no"}`,
-                  `  Platform: ${process.platform}`,
-                  `  Prefer ${global.tmp} over generic system temporary directories such as /tmp; it is pre-created and approved for external access.`,
-                  "</env>",
-                ].join("\n"),
-              ),
-              render: {
-                initial: (environment) =>
-                  ["Here is some useful information about the environment you are running in:", environment].join("\n"),
-                changed: (_previous, environment) =>
-                  ["The environment you are running in is now:", environment].join("\n"),
-              },
-            }),
-          ]),
-        ),
-    })
-  }),
-)
+export interface EnvironmentInput {
+  readonly directory: string
+  /** The project's folder, which is not always the working directory. */
+  readonly root: string
+  readonly git: boolean
+  /** The main checkout, when `directory` is a linked git worktree of the project. */
+  readonly worktree?: string
+  readonly platform: NodeJS.Platform
+  /** What `os.type()`, `os.release()` and `os.version()` say. Taken as input so each platform's text is testable anywhere. */
+  readonly os: { readonly type: string; readonly release: string; readonly version: string }
+  /** The shell the shell tool runs, by name (`ShellSelect.name`): that function cannot read a Windows path on Linux. */
+  readonly shell: string
+}
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Global.node, Location.node] })
+// Shells whose syntax is not Windows syntax. PowerShell and cmd belong to Windows and need no note.
+const POSIX_SHELLS = new Set(["bash", "sh", "dash", "ksh", "zsh"])
+
+/** The `<env>` block of the baseline. Every platform dependent value is an input, so the Windows text runs on Linux. */
+export function environment(input: EnvironmentInput) {
+  const windows = input.platform === "win32"
+  const platform = ShellSelect.platformName(input.platform)
+  return [
+    "<env>",
+    `  Working directory: ${input.directory}`,
+    ...(input.worktree === undefined
+      ? []
+      : [
+          `  Main checkout (off limits): ${input.worktree}. This directory is a linked git worktree; run commands and make edits here, not in the main checkout.`,
+        ]),
+    `  Workspace root folder: ${input.root}`,
+    `  Git repository: ${input.git ? "yes" : "no"}`,
+    `  Platform: ${platform === input.platform ? platform : `${platform} (${input.platform})`}`,
+    windows && POSIX_SHELLS.has(input.shell)
+      ? `  Shell: ${input.shell} (runs on Windows but takes POSIX syntax)`
+      : `  Shell: ${input.shell}`,
+    // On Windows `os.type()` says only `Windows_NT`, and on Linux `os.version()` is the kernel's build banner.
+    `  OS version: ${windows ? input.os.version || input.os.type : input.os.type} ${input.os.release}`,
+    "</env>",
+  ].join("\n")
+}
+
+export interface Options {
+  /** False on the minimal instances (`--bare`, vanilla): a bare run carries no reply-language preference. */
+  readonly preferences: boolean
+}
+
+const layerOf = (options: Options) =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const location = yield* Location.Service
+      const shells = yield* ShellSelect.Service
+      const config = yield* Config.Service
+      return Service.of({
+        preferences: () =>
+          Effect.succeed(
+            !options.preferences
+              ? Instructions.empty
+              : Instructions.make({
+                  key: Instructions.Key.make("core/language"),
+                  codec: Schema.toCodecJson(Schema.String),
+                  // A value from a file is one line of text: a line break in it must not start a new section.
+                  read: config.entries().pipe(
+                    Effect.map((entries) => ReminderText.oneLine(Config.latest(entries, "language") ?? "")),
+                    Effect.map((value) => (value === "" ? Instructions.removed : value)),
+                  ),
+                  render: {
+                    initial: (language) =>
+                      `Preferred reply language: ${language}. Write prose for the person in that language; code, commands, paths, identifiers and technical terms stay as they are.`,
+                    changed: (_previous, language) =>
+                      `The person's preferred reply language is now ${language}. From here on, write replies to the person in it; the same exceptions for code and technical terms apply.`,
+                    removed: () =>
+                      "The person no longer has a preferred reply language. Reply in the language their messages are written in.",
+                  },
+                }),
+          ),
+        load: () =>
+          Effect.succeed(
+            Instructions.combine([
+              Instructions.make({
+                key: Instructions.Key.make("core/date"),
+                codec: Schema.toCodecJson(Schema.String),
+                read: DateTime.nowAsDate.pipe(Effect.map((date) => date.toDateString())),
+                render: {
+                  initial: (date) => `Today's date: ${date}`,
+                  changed: (_previous, date) => `Today's date is now: ${date}`,
+                },
+              }),
+              Instructions.make({
+                key: Instructions.Key.make("core/environment"),
+                codec: Schema.toCodecJson(Schema.String),
+                // The shell the shell tool will run, which is not always the login shell: the tool skips shells it cannot drive.
+                read: shells.resolve({ priority: "compat" }).pipe(
+                  Effect.map((shell) =>
+                    environment({
+                      directory: location.directory,
+                      root: location.project.directory,
+                      git: location.vcs?.type === "git",
+                      // A linked worktree is its own project directory, and the main checkout is the canonical one.
+                      worktree:
+                        location.project.directory === location.project.canonical
+                          ? undefined
+                          : location.project.canonical,
+                      platform: process.platform,
+                      os: { type: os.type(), release: os.release(), version: os.version() },
+                      shell: ShellSelect.name(shell),
+                    }),
+                  ),
+                ),
+                render: {
+                  initial: (block) => ["Facts about the machine and folder this session runs in:", block].join("\n"),
+                  changed: (_previous, block) =>
+                    ["Those machine and folder facts have changed. They now read:", block].join("\n"),
+                },
+              }),
+            ]),
+          ),
+      })
+    }),
+  )
+
+/** A node with explicit options; the minimal instances replace the default node with their own. */
+export const configured = (options: Options) =>
+  makeLocationNode({ service: Service, layer: layerOf(options), deps: [Config.node, Location.node, ShellSelect.node] })
+
+/** `orb run --bare` switches instruction files off through this variable, and the reply language goes with them. */
+export const node = configured({ preferences: process.env.ORBIT_DISABLE_INSTRUCTIONS !== "1" })

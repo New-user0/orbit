@@ -220,6 +220,7 @@ export const Definitions = {
   "dialog.select.end": keybind("end", "Move to last dialog item"),
   "dialog.select.submit": keybind("return", "Submit selected dialog item"),
   "dialog.prompt.submit": keybind("return", "Submit dialog prompt"),
+  "dialog.prompt.editor": keybind("ctrl+g", "Edit dialog prompt in your editor"),
   "dialog.project_copy.generate": keybind("tab", "Generate project copy name"),
   "dialog.move_session.new": keybind("ctrl+m", "New project copy"),
   "dialog.move_session.delete": keybind("ctrl+d", "Delete project copy"),

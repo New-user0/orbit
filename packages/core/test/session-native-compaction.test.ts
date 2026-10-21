@@ -20,6 +20,7 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionProviderContext } from "@orbit/core/session/provider-context"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { SessionStore } from "@orbit/core/session/store"
@@ -41,7 +42,10 @@ const it = testEffect(
       PluginHooks.node,
       llmClient,
     ]),
-    [Bus.node.replace(Bus.configured({ persist: true }))],
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
+    ],
   ),
 )
 
@@ -421,6 +425,26 @@ it.live("rejects request-hook route rewrites before provider compaction", () =>
     expect(fixture.state.calls).toBe(0)
   }),
 )
+
+test("retained users keep their words and lose the agent hint and the editor note", () => {
+  const model = SessionRunnerModel.resolved(OpenAI.responses("gpt-5.4-mini"), {
+    capabilities: { tools: true, input: ["text"], output: ["text"] },
+    cost: [],
+    limit: { context: 200_000, output: 32_000 },
+  })
+  const message = SessionMessage.User.make({
+    id: SessionMessage.ID.create(),
+    type: "user",
+    text: "Fix it",
+    agents: [{ name: "helper" }],
+    editor: { path: "/project/src/open-file.ts" },
+    time: { created: DateTime.makeUnsafe(0) },
+  })
+  const retained = JSON.stringify(SessionCompaction.recentUserMessages([message], model, 64_000))
+  expect(retained).toContain("Fix it")
+  expect(retained).not.toContain("requested agent")
+  expect(retained).not.toContain("open-file.ts")
+})
 
 test("retained user budget counts attachments and drops whole oldest messages", () => {
   const model = SessionRunnerModel.resolved(OpenAI.responses("gpt-5.4-mini"), {

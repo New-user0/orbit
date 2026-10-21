@@ -23,15 +23,17 @@ import { Provider } from "@orbit/core/provider"
 import { ReferenceInstructions } from "@orbit/core/reference/instructions"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionContext } from "@orbit/core/session/context"
+import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionEvent } from "@orbit/core/session/event"
 import { InstructionState } from "@orbit/core/session/instruction-state"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionSchema } from "@orbit/core/session/schema"
-import { SessionTable } from "@orbit/core/session/sql"
+import { SessionTable, SessionUsageTable } from "@orbit/core/session/sql"
 import { SessionStats } from "@orbit/core/session/stats"
 import { SessionStore } from "@orbit/core/session/store"
+import { SessionTurn } from "@orbit/core/session/turn"
 import { SideQuery } from "@orbit/core/side-query"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Tool } from "@orbit/core/tool"
@@ -40,9 +42,11 @@ import { Money } from "@orbit/schema/money"
 import { SessionEvent as SessionEventSchema } from "@orbit/schema/session-event"
 import { eq } from "drizzle-orm"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { Context, Duration, Effect, Fiber, Layer, Schema } from "effect"
+import { Context, DateTime, Duration, Effect, Fiber, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
+import { noScratchpad } from "./lib/scratchpad"
+import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
 
 const sessionID = SessionSchema.ID.make("ses_side_query_test")
@@ -95,6 +99,7 @@ const catalogModels = Layer.mock(Model.Service, {
     Effect.succeed(id === pinnedInfo.id ? pinnedInfo : id === primaryInfo.id ? primaryInfo : undefined),
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
+  preferences: () => Effect.succeed(Instructions.empty),
   load: () =>
     Effect.succeed(
       Instructions.make({
@@ -119,16 +124,21 @@ const it = testEffect(
         SessionStore.node,
         Agent.node,
         SessionContext.node,
+        SessionReminders.node,
         InstructionBuiltIns.node,
         PluginHooks.node,
         llmClient,
       ]),
       [
+        // The production node reads the Location for its language-server reminder; these tests have none.
+        SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
         Bus.node.replace(Bus.configured({ persist: true })),
         llmClient.replace(llm),
         Model.node.replace(catalogModels),
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(builtins),
+        noScratchpad,
+        noVcsSnapshot,
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),
@@ -170,6 +180,7 @@ const setup = (config?: {
     const agents = yield* Agent.Service
     const projects = yield* Project.Service
     const context = yield* SessionContext.Service
+    const reminders = yield* SessionReminders.Service
     const store = yield* SessionStore.Service
     yield* agents.transform((editor) => {
       editor.update(Agent.ID.make("build"), (agent) => {
@@ -206,6 +217,7 @@ const setup = (config?: {
         return Effect.provide(
           Layer.mergeAll(
             Layer.succeed(SessionContext.Service, context),
+            Layer.succeed(SessionReminders.Service, reminders),
             Layer.mock(Plugin.Service, { awaitActivation: config?.activation ?? Effect.void }),
           ) as Layer.Layer<Instance.Services>,
         )
@@ -365,6 +377,42 @@ it.effect("a response that never arrives yields TimeoutError", () =>
     const error = yield* Fiber.join(fiber)
 
     expect(error._tag).toBe("SideQuery.TimeoutError")
+  }),
+)
+
+// FU-M2-017: a call the deadline cuts off was sent, so it was probably billed.
+it.effect("a side query that times out after the request was sent records an estimated spend", () =>
+  Effect.gen(function* () {
+    const { db, sideQuery } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* test.push(answer("late"))
+    const gate = yield* test.gate()
+    const fiber = yield* sideQuery.text({ ...base, timeout: Duration.seconds(5) }).pipe(Effect.flip, Effect.forkChild)
+    yield* gate.started
+    yield* TestClock.adjust("6 seconds")
+    expect((yield* Fiber.join(fiber))._tag).toBe("SideQuery.TimeoutError")
+
+    const rows = yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ kind: "side_query", source: base.purpose })
+    // The prompt is estimated and the reply is taken at the model's output limit, priced at the model's rates.
+    expect(rows[0]!.tokens_input).toBeGreaterThan(0)
+    expect(rows[0]!.tokens_output).toBe(32_000)
+    expect(rows[0]!.cost).toBeGreaterThan(0)
+    const spent = yield* SessionTurn.usage(db, sessionID, { seq: -1, time: DateTime.makeUnsafe(0) })
+    expect(spent).toMatchObject({ unknown: 0, unknownTokens: 0 })
+    expect(spent.cost).toBeCloseTo(rows[0]!.cost)
+  }),
+)
+
+it.effect("a deadline that fires before the request is sent records nothing", () =>
+  Effect.gen(function* () {
+    const { db, sideQuery } = yield* setup({ activation: Effect.never })
+    const fiber = yield* sideQuery.text({ ...base, timeout: Duration.seconds(5) }).pipe(Effect.flip, Effect.forkChild)
+    yield* TestClock.adjust("6 seconds")
+    expect((yield* Fiber.join(fiber))._tag).toBe("SideQuery.TimeoutError")
+
+    expect(yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie)).toEqual([])
   }),
 )
 

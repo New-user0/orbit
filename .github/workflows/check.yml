@@ -55,6 +55,9 @@ jobs:
   test:
     name: test (${{ matrix.package }})
     runs-on: ubuntu-latest
+    # A stopped or hung worker must fail the job instead of holding it for hours.
+    # The cli job took 29.7 min on 2 CPUs in Docker, and CI runners are 1.25x to 1.5x slower; 90 leaves headroom.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -93,14 +96,28 @@ jobs:
       # The tests compare file contents byte for byte, so checkouts keep the line endings agents wrote.
       - name: Configure git
         run: git config --global core.autocrlf false
+      # The Windows image has no ripgrep, and the Grep and Glob rows of the cli step search with it. Chocolatey puts a
+      # shim in its bin folder, which is already on PATH. Printing the version fails the step when the shim is missing.
+      - name: Install ripgrep
+        run: |
+          choco install ripgrep --yes --no-progress
+          rg --version
       - name: Flow package
         working-directory: packages/flow
         run: bun test
       # Windows semantics (path.win32, .exe heads, UNC paths, aliases) are exercised here as well as on Linux.
       - name: Shell analysis
+        if: ${{ !cancelled() }}
         working-directory: packages/core
         run: bun run test test/shell-analysis
+      # Instruction file patterns are matched as forward-slash paths, and a pattern written through a junction must match
+      # the folder it leads to; both are Windows behavior that the Linux job cannot show.
+      - name: Instruction files
+        if: ${{ !cancelled() }}
+        working-directory: packages/core
+        run: bun run test test/config/instruction-file.test.ts
       - name: orb flow, the workflow tool and orb -p end to end
+        if: ${{ !cancelled() }}
         working-directory: packages/cli
         run: bun test --timeout 60000 test/flow.test.ts test/flow-verify.test.ts test/flow-team.test.ts test/workflow-tool.test.ts test/argv.test.ts test/print.test.ts test/config-overlay-flags.test.ts
 

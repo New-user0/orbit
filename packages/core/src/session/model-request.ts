@@ -42,7 +42,7 @@ import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
 import { SessionSystemPrompt } from "./system-prompt.js"
-import { toLLMMessages } from "./runner/to-llm-message.js"
+import { toLLMMessages, type LoweredInsertion } from "./runner/to-llm-message.js"
 import type { SessionMessage } from "./message.js"
 
 const IMAGE_BYTES_TRIGGER = 25 * 1024 * 1024 // 25 MiB
@@ -135,11 +135,17 @@ export const baseTranscript = (input: {
   readonly tools: Tool.Snapshot
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
+  /** Derived reminders for the primary request only; compaction, generate and title pass none. */
+  readonly insertions?: ReadonlyArray<LoweredInsertion>
+  /** The minimal instances keep a prompt's queued-input note and drop its agent hints and editor note. */
+  readonly minimal?: boolean
 }) => {
   const providerMetadataKey = input.model.model.route.providerMetadataKey ?? input.model.model.provider
   return {
     providerMetadataKey,
     system: [
+      // An agent's own prompt is kept as written: `SubagentPromptPlugin` fills its guidance slot after the hooks that
+      // change the tool set have run.
       input.agent.system
         ? input.agent.system
         : SessionSystemPrompt.make(input.tools.definitions.map((tool) => tool.name)),
@@ -147,7 +153,9 @@ export const baseTranscript = (input: {
     ]
       .filter((part) => part.length > 0)
       .map(SystemPart.make),
-    messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey),
+    messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey, input.insertions, {
+      minimal: input.minimal,
+    }),
   }
 }
 

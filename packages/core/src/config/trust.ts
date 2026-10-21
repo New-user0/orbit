@@ -12,6 +12,7 @@ import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
 import type { Permission } from "@orbit/schema/permission"
 import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 
 // Config from a folder that is not trusted yet. Consumers read whole values with `Config.latest`, and project and local
 // documents outrank the user's, so a partial value from a repository could replace one the user set. Whatever a
@@ -30,12 +31,27 @@ import { FSUtil } from "@orbit/util/fs-util"
 // (`ConfigVariable`). Every other reader of a file that the repository supplies asks `ProjectTrust` before it reads one,
 // and these are the readers, so that the next one added has a list to join:
 //
-// - `reachable`: an instruction file (`ConfigInstructionPlugin`, `SessionInstructions`);
+// - `reachable`: an instruction file (`ConfigInstructionPlugin`; `SessionInstructions` asks `importable` on the real
+//   path instead, so that a link out of the project's folders is refused in a trusted project too). Both then process the text with
+//   `ConfigInstructionFile.parse`, which takes the front matter off with `ConfigMarkdown.split`, by its delimiter lines
+//   alone and without parsing it, and leave out what `instructions_exclude` names, a list that an untrusted folder does
+//   not supply. The files they import with `@path` (`ConfigInstructionFile.load`) are readers of the same list: a
+//   project file's import must lie inside the folder the session started in or a project folder that can be trusted
+//   for good (the started folder also counts once it is trusted, so home and filesystem roots count only then) and pass `reachable`, and a network path is refused; an import that fails that is still read once the folder that holds the importing file is trusted (`ProjectTrust.outward`), except for the files that the model's reads load;
+//   Rule files (`ConfigInstructionRules`, the `rules` folders of the same walk) are readers of the same list: a project's
+//   rule is asked of `reachable` and `supplies` on its real path at start, and of `importable` when a read brings it (for a rule of a folder above the project, of `reachable` and `supplies` again on where it leads now, never for a rule inside the project), and the `paths` key of its
+//   front matter is read only through `ConfigMarkdown`;
 // - `supplies`: a file of a config directory, or of another product's root, which is the agents of `ConfigAgentPlugin`,
 //   the commands of `ConfigCommandPlugin`, the skills of `ConfigSkillPlugin` and `ConfigCompatibilityPlugin`, and the
 //   output styles of `OutputStylePlugin`;
 // - `escapes`: the path that a file tool is given (`FileAccess`), which asks about the folder a link leads to, as for any
 //   path outside the project.
+//
+// One reader cannot ask, because a Location, and `ProjectTrust` with it, exists only once the project is known: the one
+// that finds the project. `GitLayout` (`Project.resolve`, `LocationWatcher`) reads a folder's `.git`, the `commondir` and
+// `gitdir` files of its worktree entry, and the shared `config` for one URL. It opens only what git itself wrote for the
+// folder, never reads through a `.git` that is a link or opens a share, bounds every read, and starts git for a folder only
+// once `WorkspaceTrust` trusts it.
 //
 // A folder that was trusted is held to its config as the grant saw it. `Config` digests the executable parts of every
 // project and local source (`Fingerprint`), `WorkspaceTrust.compare` says which kinds differ from the grant's record, and
@@ -103,7 +119,7 @@ function isUrl(entry: string) {
 // A path stays inside when it is read from the document's own folder and lands in one of the folders trust is decided
 // for. Home is not one of them, and neither is a network share, which `\\host\share` and `//host/share` both name.
 function inside(place: Place, entry: string) {
-  if (entry === "~" || entry.startsWith("~/") || entry.startsWith("~\\") || /^[\\/]{2}/.test(entry)) return false
+  if (entry === "~" || entry.startsWith("~/") || entry.startsWith("~\\") || LinkShare.isShare(entry)) return false
   const resolved = path.resolve(place.directory, entry)
   return place.roots.some((root) => FSUtil.contains(root, resolved))
 }
@@ -152,6 +168,29 @@ function toolExecution(value: ConfigToolExecution.Info): Outcome<ConfigToolExecu
   if (value.max_concurrency === undefined || value.max_concurrency <= ConfigToolExecution.DEFAULT_MAX_CONCURRENCY)
     return { value, withheld: [] }
   return { value: undefined, withheld: ["settings"] }
+}
+
+// A slash command in the text would run a command that nobody typed. Plain text is kept for an agent the folder defines
+// and held back from one that exists, which status cannot tell apart, so it is reported as well.
+function initialPrompt(value: string): Outcome<string> {
+  return value.trimStart().startsWith("/")
+    ? { value: undefined, withheld: ["commands"] }
+    : { value, withheld: value.trim() === "" ? [] : ["permissions"] }
+}
+
+// `instructions` is left out in either direction: `false` would hide the person's own files from the agent, and `true`
+// would replace the person's own `false` (and an agent's default, such as Explore's, that leaves them out to spare
+// tokens), because the later document wins. `git_status` keeps only `false`, which can drop the snapshot and never add it.
+function agentContext(value: NonNullable<ConfigAgent.Info["context"]>): Outcome<NonNullable<ConfigAgent.Info["context"]>> {
+  if (value.instructions === undefined && value.git_status !== true) return { value, withheld: [] }
+  const kept = value.git_status === false ? { git_status: false } : undefined
+  return { value: kept, withheld: ["settings"] }
+}
+
+// Only `false` is kept, for the reason that applies to the agent's `context`: a `true` would switch the git snapshot back
+// on against the person's own opt-out.
+function gitStatus(value: boolean): Outcome<boolean> {
+  return value === false ? { value, withheld: [] } : { value: undefined, withheld: ["settings"] }
 }
 
 function agents(
@@ -213,10 +252,26 @@ export const classification = {
     // A model, a provider or a budget is paid for by the user, and the owner decided that an untrusted folder cannot pick one.
     model: withhold("providers"),
     fallback_model: withhold("providers"),
+    // The names small and large pick the models that agents run on, which the user pays for. The owner chose to withhold it.
+    model_aliases: withhold("providers"),
     output_token_cap: withhold("providers"),
+    // Only turning the snapshot off is kept. A folder above a trusted project could otherwise switch it back on against
+    // the person's own `false`, because the later document wins.
+    git_status: filter(gitStatus),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
-    output_style: inert,
+    // Both are text that reaches the model and, as the last entry wins, a repository's value would outrank the person's own.
+    // An untrusted folder is held to the person's choice; a grant applies them through the usual reload.
+    output_style: withhold("settings"),
+    language: withhold("settings"),
+    // Left whole because the reader takes the three prompt keys only from the person's own and the organization's
+    // documents (`PromptConfigPlugin.promptKeys`), as it does `compatibility`; withholding them here would list
+    // `settings` in the trust prompt for keys that a grant never applies.
+    system_prompt: inert,
+    append_system_prompt: inert,
+    // It reads a file of this machine into every request, which a repository must not be able to ask for. Its reader
+    // also ignores repository scopes, so this is a second gate.
+    system_prompt_file: withhold("settings"),
     update: withhold("network"),
     share: withhold("network"),
     enterprise: withhold("network"),
@@ -228,20 +283,27 @@ export const classification = {
     hooks: withhold("hooks"),
     formatter: withhold("formatter"),
     lsp: withhold("lsp"),
-    media: inert,
+    // How much each paid request carries (image sizes, tool output length, when and how a conversation is compacted): a
+    // budget, withheld like the output cap.
+    media: withhold("providers"),
+    // A project's value outranks the person's own, an empty one included, so it waits until the folder is trusted.
+    attribution: withhold("settings"),
     sandbox: withhold("sandbox"),
     // A budget: a tiny timeout turns every command into a background job whose completion wakes the session for a paid
     // request, and the atomic value would replace the user's own.
     shell_tool: withhold("providers"),
-    tool_output: inert,
+    tool_output: withhold("providers"),
     tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
-    compaction: inert,
+    compaction: withhold("providers"),
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.
     compatibility: inert,
     skills: withhold("skills"),
     commands: filter(sanitizeCommands),
     instructions: filter(instructionPaths),
+    // The lists of every scope are combined, so a repository's list would hide the user's own instruction files from the
+    // model. Withheld whole, even when empty, as the other lists are.
+    instructions_exclude: withhold("settings"),
     references: withhold("settings"),
     websearch: filter(webSearch),
     webfetch: filter(webFetch),
@@ -256,8 +318,11 @@ export const classification = {
     model: withhold("providers"),
     // Extra headers and body fields reach the provider, whose tools and endpoints they can change.
     request: withhold("providers"),
-    system: inert,
-    description: inert,
+    // The agents plugin keeps this text only for an agent that the folder alone defines, and holds it back from one that
+    // exists or that a trusted source names in any scope. Trust status cannot tell which it is, so it reports the
+    // stricter answer, as it does for the files under agents/.
+    system: flag("permissions", () => true),
+    description: flag("permissions", () => true),
     // What an agent may be used for decides which rules apply to the work: a primary agent is out of the model's reach
     // as a subagent, and a repository that changed this for an agent of the user's would put it there.
     mode: withhold("permissions"),
@@ -268,6 +333,33 @@ export const classification = {
     color: inert,
     // A step allowance is a budget on the user's spend, so it is held back like the model.
     steps: withhold("providers"),
+    max_turns: withhold("providers"),
+    // A thinking budget is paid for by the user, like the model.
+    effort: withhold("providers"),
+    // The allow list chooses the tools and, through the one that starts agents, other agents.
+    tools: withhold("permissions"),
+    // It only removes tools, as a deny rule does. The agents plugin adds an untrusted list to the existing one instead
+    // of replacing it, so it cannot clear the person's own denies. Trusting turns the merge into a replacement, so it is
+    // reported.
+    disallowed_tools: flag("permissions", () => true),
+    permission_mode: withhold("permissions"),
+    // An MCP server is a program to start or a server of the person to reach.
+    mcp_servers: withhold("mcp"),
+    hooks: withhold("hooks"),
+    // A skill carries shell snippets and grants of its own.
+    skills: withhold("skills"),
+    // A slash command at the start would run a command nobody typed. Plain text is only a prompt.
+    initial_prompt: filter(initialPrompt),
+    // The user scope would write into the person's own memory.
+    memory: withhold("permissions"),
+    // It only changes how the run is attached.
+    background: inert,
+    // It starts a worktree in the folder, as the worktree setting does.
+    isolation: withhold("settings"),
+    // Switching off the instruction files would hide the user's own, the global file and the memory index included, from
+    // the agent, as `instructions_exclude` does, so a repository cannot. Leaving out the git snapshot hides nothing of the
+    // user's.
+    context: filter(agentContext),
     // Removing an agent also removes the rules the user attached to it, and an agent defined afterwards starts from
     // allowing everything.
     disabled: withhold("permissions"),

@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Logger, Schedule, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Logger, Schedule, Stream } from "effect"
 import { CompatNames } from "@orbit/compat/names"
 import { Event } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
@@ -12,6 +12,7 @@ import { ConfigAgentPlugin } from "@orbit/core/config/plugin/agent"
 import { ConfigSkillPlugin } from "@orbit/core/config/plugin/skill"
 import { Credential } from "@orbit/core/credential"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
+import { ManagedSettings } from "@orbit/core/managed-settings"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
@@ -45,18 +46,19 @@ interface Folders {
 // The real configuration loader and ProjectTrust over a project in a home of its own, in a folder that nothing trusts
 // on its own. The watcher is the test one, so that a test can say that a file changed.
 // With `canonical`, the project is a linked worktree of a main checkout kept there.
-function loader(folders: Folders, canonical?: string, directory?: string) {
+function loader(folders: Folders, canonical?: string, directory?: string, filesystem?: Layer.Layer<FSUtil.Service>) {
   return Layer.mergeAll(
     AppNodeBuilder.build(
       LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]),
-      replacements(folders, canonical, directory),
+      replacements(folders, canonical, directory, filesystem),
     ),
     Watcher.testLayer,
   )
 }
 
-// The same, with the registries that the config plugins write to, and what they read the files with.
-function pluginLoader(folders: Folders) {
+// The same, with the registries that the config plugins write to, and what they read the files with. `extra` replaces more
+// nodes, such as the config with a flag document or the managed settings folder.
+function pluginLoader(folders: Folders, extra: LayerNode.Replacements = []) {
   return Layer.mergeAll(
     AppNodeBuilder.build(
       LayerNode.group([
@@ -71,13 +73,13 @@ function pluginLoader(folders: Folders) {
         Location.node,
         ManagedPolicy.node,
       ]),
-      replacements(folders),
+      [...replacements(folders), ...extra],
     ),
     Watcher.testLayer,
   )
 }
 
-function replacements(folders: Folders, canonical?: string, directory?: string) {
+function replacements(folders: Folders, canonical?: string, directory?: string, filesystem?: Layer.Layer<FSUtil.Service>) {
   const here = location(
     { directory: AbsolutePath.make(directory ?? folders.repo) },
     directory === undefined ? {} : { projectDirectory: AbsolutePath.make(folders.repo) },
@@ -92,6 +94,7 @@ function replacements(folders: Folders, canonical?: string, directory?: string) 
     Credential.node.replace(emptyCredentialNode),
     WellKnown.node.replace(emptyWellknownNode),
     Watcher.node.replace(Watcher.testLayer),
+    ...(filesystem ? [FSUtil.node.replace(filesystem)] : []),
   ] satisfies LayerNode.Replacements
 }
 
@@ -199,10 +202,6 @@ describe("ProjectTrust.status", () => {
           ),
           // A file that is not a command is not loaded, so a snippet in it holds nothing back.
           write(path.join(folders.repo, ".orbit", "commands", "broken.md"), "---\nsubagent: maybe\n---\n!`rm -rf /`"),
-          write(
-            path.join(folders.repo, ".orbit", "agents", "careful.md"),
-            `---\ndescription: Careful\npermissions:\n  - action: shell\n    resource: "rm *"\n    effect: deny\n---\nBe careful.`,
-          ),
           write(path.join(folders.repo, ".orbit", "skills", "demo", "SKILL.md"), "---\nname: demo\n---\nDemo."),
           write(path.join(folders.repo, ".orbit", "themes", "dark.json"), {}),
         ]),
@@ -213,6 +212,56 @@ describe("ProjectTrust.status", () => {
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
+
+  // The agents plugin holds this text back from an agent that exists and keeps it for a new one; status takes the
+  // stricter answer for both, so that a client asks.
+  const agentText: [string, unknown][] = [
+    ["system", { agents: { build: { system: "TEAM PROMPT" } } }],
+    ["description", { agents: { build: { description: "TEAM DESC" } } }],
+    ["initial_prompt", { agents: { build: { initial_prompt: "TEAM FIRST" } } }],
+    ["disallowed_tools", { agents: { build: { disallowed_tools: ["edit"] } } }],
+    ["a new agent", { agents: { fresh: { system: "TEAM PROMPT" } } }],
+  ]
+  for (const [name, config] of agentText) {
+    it.live(`lists orbit.json for agent ${name} in an untrusted project, and nothing once it is trusted`, () =>
+      Effect.gen(function* () {
+        const folders = yield* bare
+        yield* Effect.promise(() => write(path.join(folders.repo, "orbit.json"), config))
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          expect<unknown>(held(folders.repo, yield* project.status())).toEqual([["orbit.json", ["permissions"]]])
+          expect((yield* project.grant({ persist: false, via: "test" })).withheld).toEqual([])
+        }).pipe(Effect.provide(loader(folders)))
+      }),
+    )
+  }
+
+  // Both spellings of the folder are listed. A definition always sets its prompt, which is held back as well, so the
+  // mutation of `AgentFile.defines` to agents/ only is caught by the agent/ rows in test/config/agent-definition.test.ts.
+  for (const folder of ["agent", "agents"]) {
+    it.live(`lists every file under ${folder}/ as held back, whatever it names`, () =>
+      Effect.gen(function* () {
+        const folders = yield* bare
+        yield* Effect.promise(() =>
+          Promise.all([
+            write(path.join(folders.repo, ".orbit", folder, "explore.md"), "---\nbackground: true\n---\n"),
+            // Whether an id exists depends on the entries before the file, the person's own agents included, so a file for
+            // a name that nothing ships is listed as well; the stricter answer wins.
+            write(path.join(folders.work, ".orbit", folder, "fresh.md"), "---\nbackground: true\n---\n"),
+          ]),
+        )
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          const status = held(folders.root, yield* project.status())
+          expect<unknown>(status).toContainEqual([path.join("work", "repo", ".orbit"), ["permissions"]])
+          expect<unknown>(status).toContainEqual([path.join("work", ".orbit"), ["permissions"]])
+          // Trusted control: granting the repository folder releases its file; only the parent's persistent entry stays.
+          const granted = yield* project.grant({ persist: false, via: "test" })
+          expect<unknown>(granted.withheld.map((entry) => entry.path)).toEqual([path.join(folders.work, ".orbit")])
+        }).pipe(Effect.provide(loader(folders)))
+      }),
+    )
+  }
 
   it.live("lists a command that names an agent, and an agent that sets its mode, as held back", () =>
     Effect.gen(function* () {
@@ -313,22 +362,24 @@ describe("ProjectTrust.status", () => {
     }),
   )
 
-  it.live("lists nothing for a folder above the project the moment its own grant is made, before the config reloads", () =>
-    Effect.gen(function* () {
-      const folders = yield* bare
-      yield* Effect.promise(() => write(path.join(folders.work, ".orbit", "plugins", "shared.ts"), plugin))
-      yield* Effect.gen(function* () {
-        const project = yield* ProjectTrust.Service
-        const trust = yield* WorkspaceTrust.Service
-        expect(yield* project.status().pipe(Effect.map((status) => status.withheld.length))).toBe(1)
-        // No wait for the reload: the entry's stamp still says untrusted, and the store says otherwise.
-        yield* project.grant({ persist: false, via: "test", holder: AbsolutePath.make(folders.work) })
-        expect((yield* project.status()).withheld).toEqual([])
-        // And the other way: a revoke lists it again at once, though the stamp still says trusted.
-        yield* trust.revoke(folders.work)
-        expect(held(folders.root, yield* project.status())).toEqual([[path.join("work", ".orbit"), ["plugins"]]])
-      }).pipe(Effect.provide(loader(folders)))
-    }),
+  it.live(
+    "lists nothing for a folder above the project the moment its own grant is made, before the config reloads",
+    () =>
+      Effect.gen(function* () {
+        const folders = yield* bare
+        yield* Effect.promise(() => write(path.join(folders.work, ".orbit", "plugins", "shared.ts"), plugin))
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          const trust = yield* WorkspaceTrust.Service
+          expect(yield* project.status().pipe(Effect.map((status) => status.withheld.length))).toBe(1)
+          // No wait for the reload: the entry's stamp still says untrusted, and the store says otherwise.
+          yield* project.grant({ persist: false, via: "test", holder: AbsolutePath.make(folders.work) })
+          expect((yield* project.status()).withheld).toEqual([])
+          // And the other way: a revoke lists it again at once, though the stamp still says trusted.
+          yield* trust.revoke(folders.work)
+          expect(held(folders.root, yield* project.status())).toEqual([[path.join("work", ".orbit"), ["plugins"]]])
+        }).pipe(Effect.provide(loader(folders)))
+      }),
   )
 
   it.live("names the folder around an Orbit file or a file in a `.orbit` directory above the project", () =>
@@ -413,6 +464,67 @@ describe("ProjectTrust.status", () => {
   )
 })
 
+describe("ProjectTrust.status during a reload", () => {
+  // A listing that began before a change finishes after the change was announced and after a newer listing was kept. Its
+  // answer describes the folder as it was, so it must not replace the newer one.
+  it.live("keeps the newer listing when an older one finishes after a change was announced", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const orbit = path.join(folders.repo, ".orbit")
+      yield* Effect.promise(() => write(path.join(orbit, "commands", "plain.md"), "Plain"))
+      const plugins = path.join(orbit, "plugins")
+      const reading = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let reads = 0
+      // The second read of the plugin folder (the first is the digest of the config directory, the second is the listing of
+      // what it holds back) returns what was there, then waits to be let go.
+      const slow = Layer.effect(
+        FSUtil.Service,
+        FSUtil.Service.pipe(
+          Effect.map((real) =>
+            FSUtil.Service.of({
+              ...real,
+              readDirectoryEntries: (directory) =>
+                real.readDirectoryEntries(directory).pipe(
+                  Effect.tap(() => {
+                    if (directory !== plugins || ++reads !== 2) return Effect.void
+                    return Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(release)))
+                  }),
+                ),
+            }),
+          ),
+        ),
+      ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const watcher = yield* Watcher.Test
+        yield* Effect.promise(() => fs.mkdir(plugins, { recursive: true }))
+        const older = yield* project.status().pipe(Effect.forkScoped)
+        yield* Deferred.await(reading)
+
+        // A checkout adds a plugin while the older listing is still open, and the change is announced.
+        const added = path.join(plugins, "greeter.ts")
+        yield* Effect.promise(() => write(added, plugin))
+        const announced = watcher.emit({ path: added, type: "create" }).pipe(
+          Effect.andThen(Effect.sleep("20 millis")),
+          Effect.andThen(project.status()),
+          Effect.filterOrFail(
+            (status) => status.withheld.length > 0,
+            () => "the answer has not been read again",
+          ),
+          Effect.retry({ times: 100, schedule: Schedule.spaced("20 millis") }),
+        )
+        expect<unknown>(held(folders.repo, yield* announced)).toEqual([[".orbit", ["plugins"]]])
+
+        // The older listing ends now, with the folder as it was before the plugin: it is not kept.
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(older)
+        expect<unknown>(held(folders.repo, yield* project.status())).toEqual([[".orbit", ["plugins"]]])
+      }).pipe(Effect.provide(loader(folders, undefined, undefined, slow)))
+    }),
+  )
+})
+
 describe("ProjectTrust.allows", () => {
   it.live("refuses a file under an untrusted project's config directory and allows one under the user's own", () =>
     Effect.gen(function* () {
@@ -433,18 +545,28 @@ describe("ProjectTrust.allows", () => {
           command: path.join(folders.globalConfig, "commands", "mine.md"),
           plugin: path.join(folders.globalConfig, "plugins", "mine.ts"),
         }
-        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => false))
-        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(Object.values(mine).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(
+          Object.values(own).map(() => false),
+        )
+        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(
+          Object.values(mine).map(() => true),
+        )
 
         // Trusting the project allows its files once the config has reloaded, which stamps its entries trusted. A file
         // is not allowed on a stamp that is out of date, so a revoke refuses at once.
         const granted = yield* nextUpdate
         yield* project.grant({ persist: false, via: "test" })
         yield* Fiber.join(granted)
-        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(
+          Object.values(own).map(() => true),
+        )
         yield* project.revoke()
-        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => false))
-        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(Object.values(mine).map(() => true))
+        expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(
+          Object.values(own).map(() => false),
+        )
+        expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(
+          Object.values(mine).map(() => true),
+        )
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -455,7 +577,9 @@ describe("ProjectTrust.status, plugins planted after the grant", () => {
     Effect.gen(function* () {
       const folders = yield* bare
       const config = path.join(folders.repo, ".orbit")
-      yield* Effect.promise(() => write(path.join(config, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nText."))
+      yield* Effect.promise(() =>
+        write(path.join(config, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nText."),
+      )
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
         const next = yield* nextUpdate
@@ -789,6 +913,109 @@ describe("ProjectTrust.supplies", () => {
     }),
   )
 
+  // Class 4: a project that is the home folder contains everything below it, so a link in a config directory of a folder
+  // below it may not carry a file of the user's out of that folder, whatever the decision for the project. Each row is a
+  // way a repository can lead a definition (an agent, a command, a skill, an output style) to a file elsewhere under home.
+  for (const granted of [false, true])
+    it.live(`holds a config directory below a project at home to its own folder, ${granted ? "trusted for the session" : "not trusted"}`, () =>
+      Effect.gen(function* () {
+        const bareFolders = yield* bare
+        const folders = { ...bareFolders, repo: bareFolders.home }
+        const started = path.join(folders.home, "Downloads", "x")
+        const orbit = path.join(started, ".orbit")
+        const notes = path.join(folders.home, "Documents", "notes")
+        yield* Effect.promise(async () => {
+          await write(path.join(orbit, "skills", "own", "SKILL.md"), "own")
+          await write(path.join(notes, "diary.md"), "private")
+          await write(path.join(folders.home, ".aws", "credentials"), "secret")
+          await fs.symlink(notes, path.join(orbit, "agents"), "junction")
+          await fs.symlink(notes, path.join(orbit, "skills", "linked"), "junction")
+          await fs.symlink(path.join(folders.home, ".aws"), path.join(orbit, "commands"), "junction")
+        })
+        const rows = [
+          ["a plain file of the folder", path.join(orbit, "skills", "own", "SKILL.md"), true],
+          ["a file under a linked config folder", path.join(orbit, "agents", "diary.md"), false],
+          ["a file under a linked skill folder", path.join(orbit, "skills", "linked", "diary.md"), false],
+          ["a credentials file under a linked commands folder", path.join(orbit, "commands", "credentials"), false],
+        ] as const
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          if (granted) yield* project.grant({ persist: false, via: "test" })
+          const source = { path: orbit, scope: "project", trusted: false } as const
+          expect(yield* Effect.forEach(rows, ([, file]) => project.supplies(source, file))).toEqual([true, false, false, false])
+        }).pipe(Effect.provide(loader(folders, undefined, started)))
+      }),
+    )
+
+  // The person's own sources are theirs wherever the session starts: a session at home, or below a home repository,
+  // puts the global config folder and a vendor's user root inside the project's folders, and a link from them to the
+  // person's dotfiles must still be read.
+  for (const startedAtHome of [true, false])
+    for (const granted of [false, true])
+      it.live(`does not hold the person's own sources when the project is home, started ${startedAtHome ? "at home" : "below it"}, ${granted ? "trusted for the session" : "not trusted"}`, () =>
+        Effect.gen(function* () {
+          const bareFolders = yield* bare
+          const folders = { ...bareFolders, repo: bareFolders.home }
+          const started = startedAtHome ? folders.home : path.join(folders.home, "Downloads", "x")
+          const dotfiles = path.join(folders.home, "dotfiles")
+          const vendor = path.join(folders.home, ".vendorx")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(started, { recursive: true })
+            await write(path.join(dotfiles, "skills", "s", "SKILL.md"), "mine")
+            await write(path.join(dotfiles, "agents", "mine.md"), "mine")
+            await fs.mkdir(vendor, { recursive: true })
+            await fs.symlink(path.join(dotfiles, "skills"), path.join(folders.globalConfig, "skills"), "junction")
+            await fs.symlink(path.join(dotfiles, "agents"), path.join(vendor, "agents"), "junction")
+          })
+          yield* Effect.gen(function* () {
+            const project = yield* ProjectTrust.Service
+            if (granted) yield* project.grant({ persist: false, via: "test" })
+            expect(
+              yield* Effect.forEach(
+                [
+                  [{ path: folders.globalConfig, scope: "user" as const }, path.join(folders.globalConfig, "skills", "s", "SKILL.md")],
+                  [{ path: vendor, scope: "user" as const }, path.join(vendor, "agents", "mine.md")],
+                  [{ path: vendor, scope: "user" as const }, path.join(vendor, "agents")],
+                ] as const,
+                ([source, file]) => project.supplies(source, file),
+              ),
+            ).toEqual([true, true, true])
+          }).pipe(Effect.provide(loader(folders, undefined, started)))
+        }),
+      )
+
+  // A config folder that is itself a link leads to wherever its target is, and the folders of a project at home reach
+  // everything under home, so its real path is not one of the folders a file may come from. An ordinary project that is
+  // trusted for the session holds nothing back, which is the control.
+  for (const wide of [true, false])
+    for (const granted of [false, true])
+      it.live(`holds a config folder that is a link out to the folder it points at, ${wide ? "project at home" : "ordinary project"}, ${granted ? "trusted for the session" : "not trusted"}`, () =>
+        Effect.gen(function* () {
+          const bareFolders = yield* bare
+          const folders = wide ? { ...bareFolders, repo: bareFolders.home } : bareFolders
+          const started = wide ? path.join(folders.home, "Downloads", "x") : folders.repo
+          const target = path.join(folders.home, "work", "secret", ".orbit")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(started, { recursive: true })
+            await write(path.join(target, "agents", "private.md"), "private agent")
+            await write(path.join(target, "skills", "s", "SKILL.md"), "private skill")
+            await fs.symlink(target, path.join(started, ".orbit"), "junction")
+          })
+          yield* Effect.gen(function* () {
+            const project = yield* ProjectTrust.Service
+            if (granted) yield* project.grant({ persist: false, via: "test" })
+            const orbit = path.join(started, ".orbit")
+            const source = { path: orbit, scope: "project", trusted: false } as const
+            expect(
+              yield* Effect.forEach(
+                [path.join(orbit, "agents", "private.md"), path.join(orbit, "skills", "s", "SKILL.md")],
+                (file) => project.supplies(source, file),
+              ),
+            ).toEqual(granted && !wide ? [true, true] : [false, false])
+          }).pipe(Effect.provide(loader(folders, undefined, started)))
+        }),
+      )
+
   it.live("holds a folder above the project to that folder, and to its own decision rather than the project's", () =>
     Effect.gen(function* () {
       const folders = yield* bare
@@ -819,6 +1046,70 @@ describe("ProjectTrust.supplies", () => {
         expect(yield* answers(untrusted)).toEqual([true, true, false])
         // Once the folder is trusted, its stamp says so.
         expect(yield* answers({ path: above, scope: "project" })).toEqual([true, true, true])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+// What `supplies` asks first, said on its own for what a source's text may speak for: the output style plugin changes the
+// prompt's opening line only for a style whose folder is trusted. One row for each kind of source, before a grant, after
+// one and after a revoke.
+describe("ProjectTrust.trustedSource", () => {
+  it.live("answers for the folder that holds a source, as supplies does, and follows the decision at once", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const orbit = path.join(folders.repo, ".orbit")
+      const above = path.join(folders.work, ".orbit")
+      // [what the source is, whether it is trusted before a grant, after a grant and after a revoke]
+      const rows = [
+        // The person's own sources, and a directory that no scope speaks for.
+        ...(["user", "remote", "flag", "managed"] as const).map(
+          (scope) => [`a ${scope} directory`, { path: folders.globalConfig, scope }, [true, true, true]] as const,
+        ),
+        ["a directory with no scope", { path: orbit }, [true, true, true]] as const,
+        // Where the person's own source is, and what its stamp says, does not matter.
+        ["a user directory inside the project", { path: orbit, scope: "user" }, [true, true, true]] as const,
+        [
+          "a user directory stamped untrusted",
+          { path: above, scope: "user", trusted: false },
+          [true, true, true],
+        ] as const,
+        // The project's own folders follow the decision just made, whatever the stamp says.
+        ["a project directory", { path: orbit, scope: "project", trusted: false }, [false, true, false]] as const,
+        ["a project directory with no stamp", { path: orbit, scope: "project" }, [false, true, false]] as const,
+        ["a local directory", { path: orbit, scope: "local", trusted: false }, [false, true, false]] as const,
+        [
+          "a project directory whose stamp trails",
+          { path: orbit, scope: "project", trusted: true },
+          [false, true, false],
+        ] as const,
+        // A folder above the project follows its own stamp, which trusting the project does not change.
+        [
+          "a directory above, stamped untrusted",
+          { path: above, scope: "project", trusted: false },
+          [false, false, false],
+        ] as const,
+        [
+          "a directory above, stamped trusted",
+          { path: above, scope: "project", trusted: true },
+          [true, true, true],
+        ] as const,
+        ["a directory above, with no stamp", { path: above, scope: "project" }, [true, true, true]] as const,
+      ]
+
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const asked = () =>
+          Effect.forEach(rows, ([name, source]) =>
+            project.trustedSource(source).pipe(Effect.map((answer) => [name, answer] as const)),
+          )
+        const expected = (when: 0 | 1 | 2) => rows.map(([name, , answers]) => [name, answers[when]] as const)
+
+        expect(yield* asked()).toEqual(expected(0))
+        yield* project.grant({ persist: false, via: "test" })
+        expect(yield* asked()).toEqual(expected(1))
+        yield* project.revoke()
+        expect(yield* asked()).toEqual(expected(2))
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -876,4 +1167,74 @@ describe("the config plugins over the real configuration loader", () => {
       }).pipe(Effect.provide(pluginLoader(folders)))
     }),
   )
+})
+
+// Class 8 by scope order, over the real loader: the person's agent comes from `ORBIT_CONFIG_CONTENT` (the flag scope, as
+// `--agents` and `--settings` do) or from the managed settings folder, both of which rank after the project, so the agent
+// does not exist yet when the repository's entry or file comes up.
+// Mutation: build `named` in ConfigAgentPlugin from `editor.list()` alone and every row fails before the grant.
+describe("an agent the person defines in a scope above the project, over the real configuration loader", () => {
+  const MARKER = "RANK-MARKER the person allows every command"
+  const own = JSON.stringify({ agents: { helper: { mode: "subagent" } } })
+  const doors = [
+    ["orbit.json", { agents: { helper: { system: MARKER, description: MARKER, initial_prompt: MARKER } } }],
+    [
+      path.join(".orbit", "agents", "helper.md"),
+      ["---", `description: ${MARKER}`, `initial_prompt: ${MARKER}`, "---", MARKER].join("\n"),
+    ],
+  ] as const
+
+  for (const scope of ["flag", "managed"] as const) {
+    for (const [door, contents] of doors) {
+      it.live(`${scope}: ${door} of an untrusted project writes none of the agent's text until the project is trusted`, () =>
+        Effect.gen(function* () {
+          const folders = yield* bare
+          const managed = path.join(folders.root, "managed")
+          yield* Effect.promise(() =>
+            Promise.all([
+              write(path.join(folders.repo, door), contents),
+              ...(scope === "managed" ? [write(path.join(managed, "managed-settings.json"), own)] : []),
+            ]),
+          )
+          const extra =
+            scope === "flag"
+              ? [Config.node.replace(Config.configured({ content: own }))]
+              : [ManagedSettings.node.replace(ManagedSettings.configured({ directory: managed }))]
+          yield* Effect.gen(function* () {
+            const agents = yield* Agent.Service
+            const bus = yield* Bus.Service
+            const project = yield* ProjectTrust.Service
+            yield* ConfigAgentPlugin.Plugin.effect(
+              host({ agent: agentHost(agents), event: { subscribe: () => bus.subscribe(Event.Updated) } }),
+            )
+            const helper = Effect.suspend(() => agents.get(Agent.ID.make("helper")))
+            const agent = yield* helper
+            expect([agent?.system, agent?.description, agent?.initialPrompt, agent?.source?.scope, agent?.mode]).toEqual([
+              undefined,
+              undefined,
+              undefined,
+              scope,
+              "subagent",
+            ])
+            expect(JSON.stringify(agent)).not.toContain("RANK-MARKER")
+            // Control: the same files write the text once the project is trusted.
+            yield* project.grant({ persist: false, via: "test" })
+            const trusted = yield* helper.pipe(
+              Effect.filterOrFail(
+                (found) => found?.system === MARKER,
+                () => "the agents have not been read again",
+              ),
+              Effect.retry({ times: 200, schedule: Schedule.spaced("50 millis") }),
+            )
+            expect([trusted?.description, trusted?.initialPrompt, trusted?.source?.scope]).toEqual([
+              MARKER,
+              MARKER,
+              "project",
+            ])
+          }).pipe(Effect.provide(pluginLoader(folders, extra)))
+        }),
+        30_000,
+      )
+    }
+  }
 })

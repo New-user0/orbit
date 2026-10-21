@@ -186,18 +186,20 @@ describe("Session.create", () => {
         expect(created.projectID).not.toBe(Project.ID.global)
         expect(child.projectID).not.toBe(created.projectID)
         expect(alias.projectID).toBe(child.projectID)
-        expect(unborn.id).toBe(Project.ID.global)
-        expect(unbornRoot).toMatchObject({ projectID: Project.ID.global, subpath: undefined })
-        expect(unbornNested).toMatchObject({ projectID: Project.ID.global, subpath: "packages/app" })
-        expect(unbornAlias).toMatchObject({ projectID: Project.ID.global, subpath: "packages/app" })
+        // A repository that git cannot name yet keeps the name of its folder, never `global`, which every such folder would
+        // share; the sessions of the folders inside it are adopted into it, and all of them follow it to its name.
+        expect(unborn.id).toBe(created.projectID)
+        expect(unbornRoot).toMatchObject({ projectID: created.projectID, subpath: undefined })
+        expect(unbornNested).toMatchObject({ projectID: created.projectID, subpath: "packages/app" })
+        expect(unbornAlias).toMatchObject({ projectID: created.projectID, subpath: "packages/app" })
         expect(
           yield* db
             .select({ data: EventTable.data })
             .from(EventTable)
-            .where(eq(EventTable.aggregate_id, Project.ID.global))
+            .where(eq(EventTable.aggregate_id, created.projectID))
             .get()
             .pipe(Effect.orDie),
-        ).toMatchObject({ data: { adopted: expect.arrayContaining([created.projectID, child.projectID]) } })
+        ).toMatchObject({ data: { adopted: expect.arrayContaining([child.projectID]) } })
         expect(project.id).toBe(Project.ID.make(Hash.fast("git-remote:github.com/owner/adopted")))
         expect(repeat.id).toBe(project.id)
         expect(page.data.map((item) => item.id)).toEqual(expect.arrayContaining([created.id, child.id]))
@@ -1407,6 +1409,7 @@ describe("SessionTransfer", () => {
               id: sourceMessageID,
               type: "user",
               text: "Imported message",
+              editor: { path: "/private/project/secret.ts", selection: { start: 3, end: 4, text: "private selection" } },
               skills: [
                 {
                   id: Skill.ID.make("effect"),
@@ -1457,6 +1460,10 @@ describe("SessionTransfer", () => {
         {
           id: sourceMessageID,
           text: `[redacted:text:${sourceMessageID}]`,
+          editor: {
+            path: `[redacted:editor-path:${sourceMessageID}]`,
+            selection: { start: 3, end: 4, text: `[redacted:editor-selection:${sourceMessageID}]` },
+          },
           skills: [{ id: "effect", name: "[redacted:skill-name:0]", text: "[redacted:skill:0]" }],
         },
         { id: errorMessageID, error: { type: "test_error", message: "Original error" } },

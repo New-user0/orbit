@@ -1,5 +1,6 @@
 import { EOL } from "node:os"
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
+import { body, json } from "@orbit/util/plain"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Service, type Endpoint } from "@orbit/client/effect/service"
@@ -42,7 +43,7 @@ export default Runtime.handler(
         body,
       }),
     )
-    const output = yield* Effect.promise(() => response.text())
+    const output = render(yield* Effect.promise(() => response.text()))
     if (output) process.stdout.write(output + (output.endsWith(EOL) ? "" : EOL))
     if (!response.ok) {
       process.stderr.write(`HTTP ${response.status} ${response.statusText}${EOL}`)
@@ -50,6 +51,17 @@ export default Runtime.handler(
     }
   }),
 )
+
+/**
+ * A response body as it is printed. A server answers with text from the project's files (an instruction file's path, a
+ * warning that names an import), and `JSON.stringify` leaves C1 controls and bidi format characters raw, so a JSON
+ * body is parsed and printed again with those written out. Anything else is printed as message text.
+ */
+export function render(output: string) {
+  if (!output) return output
+  const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(output)
+  return Option.isSome(parsed) ? json(parsed.value) : body(output)
+}
 
 export function resolveOperation(spec: OpenApi, operationID: string, params: Record<string, string>) {
   for (const [path, operations] of Object.entries(spec.paths ?? {})) {

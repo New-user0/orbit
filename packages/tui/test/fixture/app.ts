@@ -13,6 +13,8 @@ export async function createAppFixture(
     height?: number
     state?: string
     config?: Config.Info
+    /** What `config.update` does; the default changes nothing. A test passes its own to see the draft it is given. */
+    update?: (update: (draft: any) => void) => Promise<Config.Info>
     /** Where cli.json would be. The keybindings file is read from beside it. */
     configPath?: string
     args?: TuiInput["args"]
@@ -21,6 +23,8 @@ export async function createAppFixture(
     packages?: TuiInput["packages"]
     /** Where log lines go; a test passes its own to see what was logged. */
     log?: TuiInput["log"]
+    /** The clipboard the app reads and writes; a test passes its own. */
+    clipboard?: TuiInput["clipboard"]
   } = {},
 ) {
   const { run } = await import("../../src/app")
@@ -43,12 +47,13 @@ export async function createAppFixture(
       config: {
         path: input.configPath,
         get: async () => input.config ?? { animations: false },
-        update: async () => ({}),
+        update: input.update ?? (async () => ({})),
       },
       packages: input.packages ?? { prepare: async () => ({ directory: "" }) },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
       args: input.args ?? {},
       log: input.log ?? (() => {}),
+      clipboard: input.clipboard,
     }).pipe(
       Effect.provide(Global.layerWith({ state: input.state ?? state?.path })),
       Effect.provide(FileSystem.layerNoop({})),

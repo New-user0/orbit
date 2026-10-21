@@ -10,6 +10,7 @@ import { SessionMessage } from "@orbit/schema/session-message"
 import { Agent } from "@orbit/core/agent"
 import { Location } from "@orbit/core/location"
 import { FileAccess } from "@orbit/core/file-access"
+import { LspDiagnostics } from "@orbit/core/lsp/collector"
 import { Lsp } from "@orbit/core/lsp/index"
 import { LspPlugin } from "@orbit/core/lsp/plugin"
 import { Plugin } from "@orbit/core/plugin"
@@ -23,7 +24,7 @@ import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
-const asked: { files: string[]; options: { readonly save?: boolean } | undefined }[] = []
+const asked: { files: string[]; options: { readonly save?: boolean; readonly background?: boolean } | undefined }[] = []
 const lspLayer = Layer.mock(Lsp.Service, {
   diagnostics: (files, options) =>
     Effect.sync(() => {
@@ -47,7 +48,11 @@ const lspLayer = Layer.mock(Lsp.Service, {
       )
     }),
 })
-const it = testEffect(Layer.merge(PluginTestLayer, lspLayer))
+const touched: { sessionID: string; files: readonly string[] }[] = []
+const collectorLayer = Layer.mock(LspDiagnostics.Service, {
+  touch: (sessionID, files) => Effect.sync(() => void touched.push({ sessionID, files })),
+})
+const it = testEffect(Layer.mergeAll(PluginTestLayer, lspLayer, collectorLayer))
 
 const base = (tool: string, input: unknown, result: Tool.Result) => ({
   sessionID: Session.ID.make("ses_lsp_plugin"),
@@ -98,12 +103,15 @@ describe("LspPlugin", () => {
       ] as const
       for (const [given, expected] of rows) {
         asked.length = 0
+        touched.length = 0
         yield* hooks.trigger(
           "tool",
           "execute.after",
           base("Write", { file_path: given, content: "x" }, { content: "Wrote it" } as Tool.Result),
         )
-        expect({ given, asked }).toEqual({ given, asked: [{ files: [expected], options: { save: true } }] })
+        expect({ given, asked }).toEqual({ given, asked: [{ files: [expected], options: { save: true, background: true } }] })
+        // The collector is told the same file, under the session that made the edit.
+        expect({ given, touched }).toEqual({ given, touched: [{ sessionID: "ses_lsp_plugin", files: [expected] }] })
       }
       // The older field name, as a plugin hook may leave it.
       asked.length = 0
@@ -131,7 +139,7 @@ describe("LspPlugin", () => {
               metadata: { files: [{ file: "b.ipynb" }, { file: "gone.ts", status: "deleted" }] },
             } as Tool.Result),
           )
-          expect(asked).toEqual([{ files: [path.resolve(location.directory, "b.ipynb")], options: { save: true } }])
+          expect(asked).toEqual([{ files: [path.resolve(location.directory, "b.ipynb")], options: { save: true, background: true } }])
         }
         asked.length = 0
         yield* hooks.trigger("tool", "execute.after", {
@@ -188,6 +196,11 @@ describe("LspPlugin", () => {
       )
       const trust = Context.get(lsp, WorkspaceTrust.Service)
       yield* trust.grant(location.directory, { persist: false, via: "test" })
+      // An edit waits inline for a server that is running, and starts one that is not in the background. These rows look
+      // at the inline block, so the server is started first.
+      const warmup = path.join(location.directory, "orbit-warmup.fake")
+      yield* Effect.promise(() => Bun.write(warmup, "fine\n"))
+      yield* Context.get(lsp, Lsp.Service).diagnostics([warmup])
       const access = Context.get(lsp, FileAccess.Service)
       yield* body(hooks, location.directory, {
         trust,
@@ -292,6 +305,8 @@ describe("LspPlugin", () => {
         expect(opened).not.toContain("orbit-n3-home")
       }),
     ),
+    // It drives 17 path spellings; a loaded Windows host needs more than the default limit.
+    60_000,
   )
   // The server is told the path the tool wrote (its output), and that path is decided twice: by the spelling and by
   // where the file really is, and the stricter answer wins. Each row takes its target from the real FileAccess.resolve,
@@ -365,7 +380,7 @@ describe("LspPlugin", () => {
       }
       yield* hooks.trigger("tool", "execute.after", event)
       const absolute = path.resolve(location.directory, "src/a.ts")
-      expect(asked).toEqual([{ files: [absolute], options: { save: true } }])
+      expect(asked).toEqual([{ files: [absolute], options: { save: true, background: true } }])
       expect(event.result.content).toEqual([
         { type: "text", text: "Edited src/a.ts (1 replacement)" },
         {

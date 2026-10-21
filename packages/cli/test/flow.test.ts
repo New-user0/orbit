@@ -169,6 +169,40 @@ test("parallel agents run in separate worktrees and merge into the checkout", as
   ])
 }, 180_000)
 
+// The project of a folder inside a repository is the repository. The runner's git looks for the repository no further
+// up than the project's folder, which the command takes from the server, so the run still gets its worktrees there.
+test("orb flow run in a folder inside a repository runs its agents in worktrees of that repository", async () => {
+  const repository = await repo("inside")
+  const inside = path.join(repository, "docs")
+  await fs.mkdir(inside)
+  requests.length = 0
+  concurrent = 0
+  gather = 2
+
+  const result = await orb(inside, ["flow", "run", "--standalone", workflow])
+
+  expect({ code: result.code, stderr: result.code === 0 ? "" : result.stderr }).toEqual({ code: 0, stderr: "" })
+  expect(JSON.parse(result.stdout)).toMatchObject({ status: "merged", merged: expect.any(Array) })
+  expect(await files(repository)).toEqual(["a.txt", "b.txt", "c.txt", "readme.md"])
+}, 180_000)
+
+// Classes 1 and 3: a folder whose `.git` file names the git directory of the repository around it. Git would apply that
+// repository's config and hooks to the worktree commands of `clean`, and the decision for the folder does not cover that
+// repository, so the command stops and says why. The control is the same command in the repository itself.
+test("orb flow clean stops in a folder whose .git leads into another repository's git directory", async () => {
+  const repository = await repo("pointer-clean")
+  const sub = path.join(repository, "sub")
+  await fs.mkdir(sub)
+  await Bun.write(path.join(sub, ".git"), "gitdir: ../.git\n")
+
+  const refused = await orb(sub, ["flow", "clean", "--standalone", "--trust"])
+
+  expect(refused.code).toBe(1)
+  expect(refused.stderr).toContain("orb flow clean does not use git here")
+  const control = await orb(repository, ["flow", "clean", "--standalone", "--trust"])
+  expect({ code: control.code, stderr: control.code === 0 ? "" : control.stderr }).toEqual({ code: 0, stderr: "" })
+}, 120_000)
+
 test("resume reruns only the node that failed", async () => {
   const repository = await repo("resume")
   requests.length = 0
@@ -451,8 +485,8 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
   const calls = requests.length
   const worktrees = await fs.readdir(path.join(repository, ".orbit", "worktrees"))
 
-  // A module workflow is code, so a replay asks a server whether the folder is trusted before it loads one: a private
-  // server here, though the replay itself calls no model.
+  // A replay goes on from the run store, so it asks a server whether the folder is trusted before it reads the store:
+  // a private server here, though the replay itself calls no model.
   const same = await orb(repository, ["flow", "replay", "--standalone", id])
 
   expect({ code: same.code, stderr: same.code === 0 ? "" : same.stderr }).toEqual({ code: 0, stderr: "" })
@@ -667,20 +701,51 @@ test("orb flow clean in a clone whose run store names runs like paths leaves eve
   }
   store.close()
 
-  const cleaned = await orb(repository, ["flow", "clean"])
+  const cleaned = await orb(repository, ["flow", "clean", "--standalone", "--trust"])
 
   expect({ code: cleaned.code, stderr: cleaned.code === 0 ? "" : cleaned.stderr }).toEqual({ code: 0, stderr: "" })
   // Only the run with an ID the runner could have made is a run.
   expect(cleaned.stdout).toContain("from 1 run(s)")
   // Naming such a run does not make it one, for any command that takes a run, and resuming one makes no worktree.
   for (const command of ["clean", "show", "resume"]) {
-    const named = await orb(repository, ["flow", command, "../../../victim"])
+    const named = await orb(repository, ["flow", command, ...(command === "show" ? [] : ["--standalone", "--trust"]), "../../../victim"])
     expect({ command, code: named.code }).toEqual({ command, code: 1 })
     expect(named.stderr).toContain("No run ../../../victim in this repository")
   }
   expect(await Bun.file(path.join(victim, "precious.txt")).text()).toBe("keep\n")
   expect(await Bun.file(path.join(repository, "readme.md")).text()).toBe("fixture\n")
   expect(await Bun.file(path.join(repository, ".orbit", "runs.db")).exists()).toBe(true)
+}, 120_000)
+
+// A clone can ship a run's folder under .orbit/worktrees as a link to a folder outside it. `orb flow clean` leaves that
+// run alone, with its branch and the folder the link leads to, says so in one line, and still cleans the other run.
+test("orb flow clean leaves a run whose folder is a link alone, says so, and cleans the others", async () => {
+  const repository = await repo("linked-clean")
+  const side = path.join(root, "linked-clean-side")
+  await Bun.write(path.join(side, "precious.txt"), "keep\n")
+  const linked = "run_20260101000041_0a1b2c"
+  const plainRun = "run_20260101000042_0a1b2c"
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  for (const id of [linked, plainRun]) {
+    store.create({ id, workflow: "w", file: "w.ts", directory: repository, input: {} })
+    store.status(id, "succeeded")
+    await Bun.spawn(["git", "branch", `orbit/${id}/build`], { cwd: repository, stdout: "ignore", stderr: "ignore" }).exited
+  }
+  store.close()
+  await fs.mkdir(path.join(repository, ".orbit", "worktrees"), { recursive: true })
+  await fs.symlink(side, path.join(repository, ".orbit", "worktrees", linked), process.platform === "win32" ? "junction" : "dir")
+
+  const cleaned = await orb(repository, ["flow", "clean", "--standalone", "--trust"])
+
+  expect(cleaned.code).toBe(0)
+  expect(cleaned.stdout).toContain("Removed 0 worktree(s) and 1 branch(es) from 2 run(s)")
+  expect(cleaned.stderr.split(/\r?\n/).filter((line) => line.startsWith("Left run"))).toEqual([
+    `Left run ${linked} alone: ${path.join(await fs.realpath(repository), ".orbit", "worktrees", linked)} is a link, not a folder`,
+  ])
+  const branches = Bun.spawnSync(["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/orbit/"], { cwd: repository })
+  expect(branches.stdout.toString().trim()).toBe(`orbit/${linked}/build`)
+  expect(await Bun.file(path.join(side, "precious.txt")).text()).toBe("keep\n")
 }, 120_000)
 
 test("orb flow prints what a run store says without the characters that act on a terminal", async () => {
@@ -892,7 +957,7 @@ test("orb flow replay prints the nodes of a YAML workflow without the characters
   // A node whose inputs changed since the recording is named, as the replay of an edited workflow goes on.
   const edited = path.join(repository, "edited.yaml")
   await Bun.write(edited, workflow("write a.txt carefully"))
-  const changed = await orb(repository, ["flow", "replay", id, "--file", edited])
+  const changed = await orb(repository, ["flow", "replay", "--standalone", id, "--file", edited])
 
   expectNoControl(changed.stdout, changed.stderr)
   expect(changed.stderr).toContain(`~ a${shown}: its inputs differ from the recording`)
@@ -903,7 +968,7 @@ test("orb flow replay prints the nodes of a YAML workflow without the characters
   // A node that the recording lacks stops the replay, and the failure names it.
   const longer = path.join(repository, "longer.yaml")
   await Bun.write(longer, workflow("write a.txt", `  - id: ${JSON.stringify(`b${evil}`)}`, "    prompt: write b.txt"))
-  const diverged = await orb(repository, ["flow", "replay", id, "--file", longer])
+  const diverged = await orb(repository, ["flow", "replay", "--standalone", id, "--file", longer])
 
   expect(diverged.code).toBe(1)
   expectNoControl(diverged.stderr)
@@ -950,9 +1015,9 @@ test("orb flow resume and replay print the failure for a workflow file that the 
   store.status(id, "failed")
   store.close()
 
-  // A replay of a YAML workflow connects to no server, so nothing at all stands in front of its failure. They run one
-  // after the other, as processes that open the same store at once can find it locked.
-  const replayed = await orb(repository, ["flow", "replay", id])
+  // Both ask a private server whether the folder is trusted, which the tests' servers answer yes, before they read the
+  // store. They run one after the other, as processes that open the same store at once can find it locked.
+  const replayed = await orb(repository, ["flow", "replay", "--standalone", id])
   const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
 
   for (const output of [replayed, resumed]) {

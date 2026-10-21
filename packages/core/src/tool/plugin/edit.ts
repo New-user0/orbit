@@ -56,8 +56,8 @@ interface Match {
 
 const normalizeForMatch = (value: string) =>
   value
-    .replace(/[‘’‚‛]/g, "'")
-    .replace(/[“”„‟]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
     .replace(/[‐‑‒–—―−]/g, "-")
     .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ")
 
@@ -170,7 +170,7 @@ const restyleQuotes = (slice: string, text: string) => {
 const refusal = (input: typeof Input.Type) => {
   if (input.old_string === input.new_string)
     return new ToolFailure({
-      message: "No changes to apply: old_string and new_string are identical.",
+      message: "The edit would change nothing, because new_string equals old_string.",
       code: Tool.ErrorCode.EditNoChange,
     })
   if (input.old_string === "")
@@ -189,7 +189,7 @@ const mismatch = (input: typeof Input.Type, replacements: number) => {
     })
   if (replacements > 1 && input.replace_all !== true)
     return new ToolFailure({
-      message: `Found ${replacements} matches for old_string, but expected exactly one. Add more surrounding context to make old_string unique, or set replace_all to true to replace every occurrence.`,
+      message: `Found ${replacements} matches for old_string, but expected exactly one. Lengthen old_string until it matches one place, or set replace_all to true to change all of them.`,
       code: Tool.ErrorCode.EditAmbiguous,
     })
 }
@@ -234,7 +234,7 @@ export const Plugin = {
           options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
-            "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in old_string or new_string. The edit fails if old_string is not found. By default, old_string must identify a UNIQUE location. Multiple matches FAIL unless replace_all is true. Add more surrounding context to disambiguate, or set replace_all to true to replace every occurrence. Use replace_all when the change should apply to every occurrence, such as renaming a variable. To delete whole lines, set new_string to an empty string; the line break after them is removed too, so no blank line is left.",
+            "Replaces exact text in a file. old_string is copied from Read output with its indentation as shown and without the `N: ` line-number prefix, which belongs to neither old_string nor new_string. The edit fails when old_string is absent, and also when it matches several places unless replace_all is true: in that case lengthen old_string until it matches one place, or set replace_all to change every occurrence. An empty new_string deletes the matched lines together with their line break, so no blank line remains.",
           input: Input,
           output: Output,
           // Refuses an edit that cannot work before `execute` asks anyone to approve it. A file outside the Location is

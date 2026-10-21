@@ -103,6 +103,8 @@ function build(id: Model.ID, remote: RemoteModel, baseURL: string, previous?: Mo
     providerID,
     name: remote.name ?? previous?.name ?? remote.id,
     family: previous?.family,
+    // The provider reports no cutoff of its own, so the catalog's entry for the same model is the only source.
+    knowledge: previous?.knowledge,
     compatibility:
       remote.interleaved === undefined
         ? previous?.compatibility

@@ -179,6 +179,35 @@ export type LocationTrustUpdateOperation<E = never> = (
   input: LocationTrustUpdateInput,
 ) => Effect.Effect<LocationTrustUpdateOutput, E>
 
+export type LocationInstructionNoteTargetsInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+}
+export type LocationInstructionNoteTargetsOutput = ReadonlyArray<{
+  readonly scope: "user" | "project" | "local"
+  readonly path: string
+  readonly exists: boolean
+  readonly enabled: boolean
+  readonly loaded: boolean
+}>
+export type LocationInstructionNoteTargetsOperation<E = never> = (
+  input?: LocationInstructionNoteTargetsInput,
+) => Effect.Effect<LocationInstructionNoteTargetsOutput, E>
+
+export type LocationInstructionNoteAddInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+  readonly scope: "user" | "project" | "local"
+  readonly text: string
+}
+export type LocationInstructionNoteAddOutput = {
+  readonly scope: "user" | "project" | "local"
+  readonly path: string
+  readonly created: boolean
+  readonly loaded: boolean
+}
+export type LocationInstructionNoteAddOperation<E = never> = (
+  input: LocationInstructionNoteAddInput,
+) => Effect.Effect<LocationInstructionNoteAddOutput, E>
+
 export type LocationTrustListOutput = ReadonlyArray<{
   readonly directory: AbsolutePath
   readonly time: number
@@ -200,6 +229,12 @@ export interface LocationApi<E = never> {
     readonly update: LocationTrustUpdateOperation<E>
     readonly list: LocationTrustListOperation<E>
     readonly revoke: LocationTrustRevokeOperation<E>
+  }
+  readonly instruction: {
+    readonly note: {
+      readonly targets: LocationInstructionNoteTargetsOperation<E>
+      readonly add: LocationInstructionNoteAddOperation<E>
+    }
   }
 }
 
@@ -403,6 +438,12 @@ export type SessionPromptInput = {
   readonly files?: ReadonlyArray<PromptInput.FileAttachment> | undefined
   readonly agents?: ReadonlyArray<AgentAttachment> | undefined
   readonly skills?: ReadonlyArray<PromptInput.SkillAttachment> | undefined
+  readonly editor?:
+    | {
+        readonly path: string
+        readonly selection?: { readonly start: number; readonly end: number; readonly text: string } | undefined
+      }
+    | undefined
   readonly metadata?: { readonly [x: string]: unknown } | undefined
   readonly turn?: SessionTurn.Options | undefined
   readonly delivery?: SessionInbox.Delivery | undefined
@@ -418,6 +459,12 @@ export type SessionCommandInput = {
   readonly files?: ReadonlyArray<PromptInput.FileAttachment> | undefined
   readonly agents?: ReadonlyArray<AgentAttachment> | undefined
   readonly skills?: ReadonlyArray<PromptInput.SkillAttachment> | undefined
+  readonly editor?:
+    | {
+        readonly path: string
+        readonly selection?: { readonly start: number; readonly end: number; readonly text: string } | undefined
+      }
+    | undefined
   readonly delivery?: SessionInbox.Delivery | undefined
 }
 export type SessionCommandOutput = void
@@ -521,6 +568,35 @@ export type SessionInboxUpdateOutput = void
 export type SessionInboxUpdateOperation<E = never> = (
   input: SessionInboxUpdateInput,
 ) => Effect.Effect<SessionInboxUpdateOutput, E>
+
+export type SessionInstructionsPreviewInput = { readonly sessionID: Session.ID }
+export type SessionInstructionsPreviewOutput = {
+  readonly status: {
+    readonly files: ReadonlyArray<{
+      readonly path: string
+      readonly kind: "managed" | "user" | "project" | "local"
+      readonly chars: number
+      readonly importedBy?: string | undefined
+      readonly paths?: ReadonlyArray<string> | undefined
+    }>
+    readonly warnings: ReadonlyArray<{
+      readonly path: string
+      readonly type: "size" | "import-untrusted" | "import-external"
+      readonly message: string
+      readonly chars?: number | undefined
+      readonly limit?: number | undefined
+      readonly target?: string | undefined
+      readonly directory?: string | undefined
+    }>
+    readonly available: boolean
+  }
+  readonly initial?: string | undefined
+  readonly update?: string | undefined
+  readonly blocked?: ReadonlyArray<string> | undefined
+}
+export type SessionInstructionsPreviewOperation<E = never> = (
+  input: SessionInstructionsPreviewInput,
+) => Effect.Effect<SessionInstructionsPreviewOutput, E>
 
 export type SessionInstructionsEntryListInput = { readonly sessionID: Session.ID }
 export type SessionInstructionsEntryListOutput = ReadonlyArray<InstructionEntry.Info>
@@ -731,6 +807,9 @@ export type SessionLogOutput =
             readonly sessionID: Session.ID
             readonly parentID: Session.ID
             readonly boundary: Session.ForkBoundary
+            readonly baseline?:
+              | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
+              | undefined
             readonly instructions?:
               | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
               | undefined
@@ -1629,6 +1708,7 @@ export interface SessionApi<E = never> {
     readonly update: SessionInboxUpdateOperation<E>
   }
   readonly instructions: {
+    readonly preview: SessionInstructionsPreviewOperation<E>
     readonly entry: {
       readonly list: SessionInstructionsEntryListOperation<E>
       readonly put: SessionInstructionsEntryPutOperation<E>
@@ -2541,15 +2621,29 @@ export type ConfigShellsOutput = ReadonlyArray<{
 }>
 export type ConfigShellsOperation<E = never> = () => Effect.Effect<ConfigShellsOutput, E>
 
-export type ConfigUpdateInput = { readonly shell?: string | null; readonly output_style?: string | null }
+export type ConfigUpdateInput = {
+  readonly shell?: string | null
+  readonly output_style?: string | null
+  readonly language?: string | null
+}
 export type ConfigUpdateOutput = void
 export type ConfigUpdateOperation<E = never> = (input?: ConfigUpdateInput) => Effect.Effect<ConfigUpdateOutput, E>
+
+export type ConfigSourcesChangedInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+  readonly paths: ReadonlyArray<string>
+}
+export type ConfigSourcesChangedOutput = void
+export type ConfigSourcesChangedOperation<E = never> = (
+  input: ConfigSourcesChangedInput,
+) => Effect.Effect<ConfigSourcesChangedOutput, E>
 
 export interface ConfigApi<E = never> {
   readonly get: ConfigGetOperation<E>
   readonly effective: ConfigEffectiveOperation<E>
   readonly shells: ConfigShellsOperation<E>
   readonly update: ConfigUpdateOperation<E>
+  readonly sources: { readonly changed: ConfigSourcesChangedOperation<E> }
 }
 
 export interface AppApi<E = never> {

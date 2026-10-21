@@ -110,7 +110,7 @@ test("every agent that a run of a workflow sends to the server is one that workf
   )
   const { client, sent } = recording()
 
-  const result = await run({ client, workflow: await loadWorkflow(file), file, directory: root })
+  const result = await run({ client, trusted: true, workflow: await loadWorkflow(file), file, directory: root })
   const listed = (await workflowAgents(file)).map((item) => item.agent)
 
   expect(result).toMatchObject({ status: "succeeded" })
@@ -137,7 +137,7 @@ test("every agent that an eval sends to the server is one that suiteAgents liste
   await Bun.write(file, JSON.stringify(suite))
   const { client, sent } = recording()
 
-  const result = await evaluate({ client, suite, file, directory: root })
+  const result = await evaluate({ client, trusted: true, suite, file, directory: root })
   const listed = (await suiteAgents(file)).map((item) => item.agent)
 
   expect(result.scores?.map((score) => [score.task, score.passed])).toEqual([
@@ -174,7 +174,7 @@ test("the title of every session that a run opens has the control characters of 
   )
   const { client, titles } = recording()
 
-  const result = await run({ client, workflow: await loadWorkflow(file), file, directory: root })
+  const result = await run({ client, trusted: true, workflow: await loadWorkflow(file), file, directory: root })
 
   expect(result).toMatchObject({ status: "succeeded" })
   // The agent node opens one session, and the member of the team a session for its first turn.
@@ -216,7 +216,7 @@ test("the commit that records the work of an agent and of a team has the control
   // Each agent writes a file in its own worktree, so there is a change to commit.
   const { client } = recording((worktree) => Bun.write(path.join(worktree, "out.txt"), "x\n"))
 
-  const result = await run({ client, workflow: await loadWorkflow(file), file, directory })
+  const result = await run({ client, trusted: true, workflow: await loadWorkflow(file), file, directory })
 
   expect(result).toMatchObject({ status: "succeeded" })
   const subjects = (await Git.git(directory, ["log", "--all", "--format=%s"])).stdout.split(/\r?\n/)

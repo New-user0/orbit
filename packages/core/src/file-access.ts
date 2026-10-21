@@ -493,7 +493,13 @@ export const node = makeLocationNode({
 // there, and otherwise the one entry that is the same file, which is the long name of an 8.3 short name. Undefined when
 // something is there under `part` but no single entry is it.
 async function longName(folder: string, part: string, entries: readonly string[] | undefined) {
-  if (entries === undefined || entries.some((entry) => entry.toLowerCase() === part.toLowerCase())) return part
+  // A folder that cannot be listed cannot say what the part stands for. A part in the form of a short name that exists
+  // is refused, rather than passed on unchanged for rules that are written for the long name.
+  if (entries === undefined)
+    return /~[0-9]/.test(part) && (await lstat(path.join(folder, part)).catch(() => undefined)) !== undefined
+      ? undefined
+      : part
+  if (entries.some((entry) => entry.toLowerCase() === part.toLowerCase())) return part
   const file = await lstat(path.join(folder, part), { bigint: true }).catch(() => undefined)
   if (file === undefined) return part
   const same = await Promise.all(

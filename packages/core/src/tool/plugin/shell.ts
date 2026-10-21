@@ -22,6 +22,7 @@ import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
 import { STYLE_HEADING } from "../../plugin/output-style.js"
+import { SessionSystemPrompt } from "../../session/system-prompt.js"
 import { ShellAnalysis } from "../../shell/analysis.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { ProjectTrust } from "../../project-trust.js"
@@ -58,15 +59,7 @@ export function budget(
 }
 
 const BACKGROUND_INSTRUCTION =
-  "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
-const OS =
-  process.platform === "darwin"
-    ? "macOS"
-    : process.platform === "win32"
-      ? "Windows"
-      : process.platform === "linux"
-        ? "Linux"
-        : process.platform
+  "The command keeps running on its own, and its output comes back to you in a message when it ends. Waiting on it by sleeping, re-reading or searching its output file is polling; poll only when the user requests it, even if the next step needs the result. One look at the output so far is fine when it lets you do something useful now. Meanwhile do the work that does not depend on the result; if there is none, close the turn, and the session picks up again when the command ends."
 const duration = (ms: number) => {
   const minutes = Number((ms / 60_000).toFixed(2))
   return minutes < 1 ? `${ms} ms` : `${ms} ms (${minutes} ${minutes === 1 ? "minute" : "minutes"})`
@@ -74,15 +67,15 @@ const duration = (ms: number) => {
 const description = (shell: string | undefined, limit: ReturnType<typeof limits>) =>
   [
     "Execute a shell command and return its output.",
-    ...(shell ? [`Commands run on ${OS} using ${shell}.`] : []),
+    ...(shell ? [`Commands run on ${ShellSelect.platformName(process.platform)} using ${shell}.`] : []),
     "Quote file paths containing spaces or special characters.",
     "Prefer dedicated tools over shell commands when possible.",
     "When output is large, the full result is saved to a file and a truncated preview is returned.",
     "Rely on automatic truncation unless filtering the output is more useful.",
     `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a foreground command waits ${duration(limit.timeout)}.`,
-    "A foreground command still running at its timeout is not stopped: it moves to the background and you are notified when it finishes. A command made only of sleeps is stopped instead.",
+    "A foreground command still running at its timeout is not stopped: it moves to the background and a message reports back when it ends. A command made only of sleeps is stopped instead.",
     "Background commands have no timeout unless one is given.",
-    "Background commands return immediately, and you will be notified when they complete.",
+    "Background commands return at once and report back in a message when they end.",
   ].join(" ")
 
 export const Input = Schema.Struct({
@@ -101,7 +94,7 @@ export const Input = Schema.Struct({
   }),
   run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion. To wait for a server to become ready, use TaskWatch; to stop the command, use TaskStop.",
+      "Run the command detached and return at once, which suits dev servers and long builds. No trailing ampersand is needed. A notification reports completion, so do not poll. TaskWatch waits for a server to become ready, and TaskStop ends the command.",
   }),
 })
 
@@ -121,8 +114,12 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
-const resultMessages = (output: Output) => {
-  const notice = output.status === "running" ? BACKGROUND_INSTRUCTION : ShellResult.notice(output)
+// `exitNotice` says whether a non-zero exit code is written into the text. A timeout and a kill by a signal always are.
+const resultMessages = (output: Output, exitNotice = true) => {
+  const notice =
+    output.status === "running"
+      ? BACKGROUND_INSTRUCTION
+      : ShellResult.notice(exitNotice ? output : { ...output, exit: undefined })
   return [...(output.output ? [output.output] : []), ...(notice ? [notice] : [])]
 }
 
@@ -140,15 +137,23 @@ const exitFailed = (output: Output, analysis: ShellAnalysis.Analysis | undefined
   output.signal === undefined &&
   ShellExit.failed(analysis, output.exit)
 
-const toolResult = (output: Output, failed = false) => {
+// What the scheduler reads to cancel the calls beside a failed one. Only a bash-dialect shell cancels them, because its
+// steps depend on each other; a PowerShell call cancels nothing, whatever way it fails (a timeout, a signal, a start
+// that fails or a removed command included).
+const failedMetadata = (powershell: boolean) => (powershell ? {} : { error: true })
+
+const toolResult = (output: Output, failed = false, powershell = false) => {
   return {
     output,
-    content: resultMessages(output).map((text) => ({ type: "text" as const, text })),
+    // A foreground run says "Exited with code N" only when that code is a failure of its command (a grep with no match,
+    // a diff that found differences and a false test are answers, and say nothing). PowerShell keeps its notice: its
+    // codes are not judged.
+    content: resultMessages(output, failed || powershell).map((text) => ({ type: "text" as const, text })),
     metadata: {
       status: output.status,
       ...ShellResult.metadata(output),
       // A timeout, a kill by signal and an exit code that reads as a failure (see `exitFailed`) cancel sibling calls.
-      ...(output.timeout === true || output.signal !== undefined || failed ? { error: true } : {}),
+      ...(output.timeout === true || output.signal !== undefined || failed ? failedMetadata(powershell) : {}),
       ...(output.shellID !== undefined ? { shellID: output.shellID } : {}),
     },
   }
@@ -238,7 +243,7 @@ export const Plugin = {
         shell: invocation.shell,
         cwd: target,
         env: invocation.env,
-        portable: Config.latest(entries, "experimental")?.portable_shell_scanner === true,
+        portable: Config.experimental(entries, "portable_shell_scanner") === true,
         writable,
         base: { sessionID: context.sessionID, agent: context.agent, source },
       }).pipe(Effect.provideContext(guarded))
@@ -364,15 +369,16 @@ export const Plugin = {
           description: description(undefined, limits()),
           input: Input,
           output: Output,
-          execute: (input, context) =>
-            Effect.gen(function* () {
+          execute: (input, context) => {
+            let powershell = false
+            return Effect.gen(function* () {
               // Read at call time, so a config change applies to the next call.
               const timeout = budget(input, limits(Config.latest(yield* config.entries(), "shell_tool")))
               let finalTimeout = timeout
               let autoBackground = false
               let analysis: ShellAnalysis.Analysis | undefined
               const selected = yield* compatibleShell
-              const powershell = ["powershell", "pwsh"].includes(ShellSelect.name(selected))
+              powershell = ["powershell", "pwsh"].includes(ShellSelect.name(selected))
               const info = yield* shell.create(
                 {
                   command: input.command,
@@ -393,39 +399,53 @@ export const Plugin = {
                     analysis = prepared.analysis
                   }),
               )
-              yield* context.progress({ shellID: info.id })
-
               const settled = yield* Deferred.make<Output>()
-              const run = Effect.gen(function* () {
-                const result = yield* shell.result(info)
-                if (!result.capture) return yield* new Shell.NotFoundError({ id: info.id })
-                const output = ShellResult.output(result)
-                return {
-                  ...output,
-                  output: output.timeout
-                    ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-                    : output.output,
-                  status: "completed" as const,
-                }
+              const startedJob = yield* Ref.make<string | undefined>(undefined)
+              // An interrupt after create returns and before block takes over would leave the command running until its
+              // timeout, and for ever without one: take the shell back, and the job once it has started.
+              const job = yield* Effect.gen(function* () {
+                yield* context.progress({ shellID: info.id })
+                const run = Effect.gen(function* () {
+                  const result = yield* shell.result(info)
+                  if (!result.capture) return yield* new Shell.NotFoundError({ id: info.id })
+                  const output = ShellResult.output(result)
+                  return {
+                    ...output,
+                    output: output.timeout
+                      ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
+                      : output.output,
+                    status: "completed" as const,
+                  }
+                }).pipe(
+                  Effect.tap((output) => Deferred.succeed(settled, output)),
+                  Effect.map((output) => resultMessages(output).join("\n\n")),
+                  Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
+                )
+                const started = yield* jobs.start({
+                  // CodeMode children share a tool-call ID, but each shell must own its job.
+                  id: info.id,
+                  type: "shell",
+                  title: input.description ?? info.command,
+                  metadata: { sessionID: context.sessionID, shellID: info.id },
+                  recovery: {
+                    kind: "shell",
+                    sessionID: context.sessionID,
+                    shellID: info.id,
+                    command: info.command,
+                  },
+                  run,
+                })
+                yield* Ref.set(startedJob, started.id)
+                return started
               }).pipe(
-                Effect.tap((output) => Deferred.succeed(settled, output)),
-                Effect.map((output) => resultMessages(output).join("\n\n")),
-                Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
+                Effect.onInterrupt(() =>
+                  Effect.gen(function* () {
+                    const id = yield* Ref.get(startedJob)
+                    if (id) yield* jobs.cancel(id)
+                    yield* shell.remove(info.id)
+                  }).pipe(Effect.ignore),
+                ),
               )
-              const job = yield* jobs.start({
-                // CodeMode children share a tool-call ID, but each shell must own its job.
-                id: info.id,
-                type: "shell",
-                title: input.description ?? info.command,
-                metadata: { sessionID: context.sessionID, shellID: info.id },
-                recovery: {
-                  kind: "shell",
-                  sessionID: context.sessionID,
-                  shellID: info.id,
-                  command: info.command,
-                },
-                run,
-              })
 
               if (input.run_in_background === true) {
                 yield* jobs.background(job.id)
@@ -474,12 +494,12 @@ export const Plugin = {
               if (result?.info.status === "error")
                 return yield* new ToolFailure({
                   message: result.info.error ?? "Command failed",
-                  metadata: { error: true },
+                  metadata: failedMetadata(powershell),
                 })
               if (result?.info.status === "cancelled") return yield* Effect.fail(new Error("Command cancelled"))
 
               const output = yield* Deferred.await(settled)
-              return toolResult(output, exitFailed(output, analysis, powershell))
+              return toolResult(output, exitFailed(output, analysis, powershell), powershell)
             }).pipe(
               Effect.mapError(
                 (error) =>
@@ -491,11 +511,12 @@ export const Plugin = {
                     ...(error instanceof ToolFailure
                       ? { metadata: error.metadata }
                       : error instanceof AppProcess.AppProcessError
-                        ? { metadata: { error: true } }
+                        ? { metadata: failedMetadata(powershell) }
                         : {}),
                   }),
               ),
-            ),
+            )
+          },
         }),
       )
       .pipe(Effect.orDie)
@@ -547,19 +568,24 @@ export const AdvertisePlugin = {
         if (!tool) return
         event.tools[ToolNames.powershell] = tool
         delete event.tools[name]
-        // The guidance and the model prompts call the tool `Bash`. An agent's own system prompt is its author's text.
+        // The guidance and the model prompts call the tool `Bash`. The author's own words in an agent's system prompt are
+        // registered as personal text, which the rename leaves alone.
         const system = event.system[0]
         if (!system) return
-        const custom = yield* ctx.agent.get({ agentID: event.agent }).pipe(
-          Effect.map((agent) => agent.data.system !== undefined),
-          Effect.catch(() => Effect.succeed(true)),
-        )
-        if (custom) return
-        // An output style is appended to this text before this runs and is the person's own words, so it stays as written.
-        const at = system.text.indexOf(STYLE_HEADING)
-        const base = at < 0 ? system.text : system.text.slice(0, at)
-        const style = at < 0 ? "" : system.text.slice(at)
-        event.system[0] = { ...system, text: base.replace(/\bBash\b/g, ToolNames.powershell) + style }
+        // The git section and an output style are appended to this text before this runs. The section names no shell tool
+        // and carries the person's attribution text, and the style is the person's own words, so both stay as written.
+        const gitAt = system.text.indexOf(`\n\n${SessionSystemPrompt.GIT_HEADING}\n`)
+        const styleAt = system.text.indexOf(STYLE_HEADING)
+        const at = Math.min(...[gitAt, styleAt].filter((index) => index >= 0), system.text.length)
+        // The person's own text from the prompt keys keeps the word it used.
+        const pieces = SessionSystemPrompt.personal.get(event) ?? []
+        event.system[0] = {
+          ...system,
+          text:
+            SessionSystemPrompt.outsidePersonal(system.text.slice(0, at), pieces, (part) =>
+              part.replace(/\bBash\b/g, ToolNames.powershell),
+            ) + system.text.slice(at),
+        }
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

@@ -21,6 +21,7 @@ import { ConfigFormatterPlugin } from "../config/plugin/formatter.js"
 import { ConfigImagePlugin } from "../config/plugin/image.js"
 import { ConfigInstructionPlugin } from "../config/plugin/instruction.js"
 import { LifecycleHooksPlugin } from "../config/plugin/lifecycle-hooks.js"
+import { LspDiagnostics } from "../lsp/collector.js"
 import { Lsp } from "../lsp/index.js"
 import { LspPlugin } from "../lsp/plugin.js"
 import { ConfigLocationWatcherPlugin } from "../config/plugin/location-watcher.js"
@@ -56,6 +57,7 @@ import { Job } from "../job.js"
 import { KV } from "../kv.js"
 import { Location } from "../location.js"
 import { ManagedPolicy } from "../managed-policy.js"
+import { ManagedSettings } from "../managed-settings.js"
 import { ModelsDev } from "../models-dev.js"
 import { Mcp } from "../mcp/index.js"
 import { Npm } from "@orbit/util/npm"
@@ -67,6 +69,7 @@ import { Ripgrep } from "../ripgrep.js"
 import { Session } from "../session.js"
 import { SessionCompaction } from "../session/compaction.js"
 import { SessionInstructions } from "../session/instructions.js"
+import { InstructionTriggers } from "../instruction-triggers.js"
 import { SideQuery } from "../side-query.js"
 import { Shell } from "../shell.js"
 import { PowerShellParse } from "../shell/powershell-parse.js"
@@ -115,9 +118,11 @@ import { SkillPlugin } from "./skill.js"
 import { VcsHgPlugin } from "./vcs/hg.js"
 import { ToolInputRepairPlugin } from "./tool-input-repair.js"
 import { OptimizePlugin } from "./optimize.js"
+import { SubagentPromptPlugin } from "./subagent-prompt.js"
 import { VcsGitPlugin } from "./vcs/git.js"
 import { VerbosityPlugin } from "./verbosity.js"
 import { OutputStylePlugin } from "./output-style.js"
+import { PromptConfigPlugin } from "./prompt-config.js"
 import { WarmingPlugin } from "./warming.js"
 import { WellKnownPlugin } from "../wellknown/plugin.js"
 
@@ -135,6 +140,7 @@ const services = [
   FileMutation.Service,
   FileLedger.Service,
   Lsp.Service,
+  LspDiagnostics.Service,
   Formatter.Service,
   LocationWatcherPolicy.Service,
   FileSystem.Service,
@@ -149,6 +155,7 @@ const services = [
   LLMClient.Service,
   Location.Service,
   ManagedPolicy.Service,
+  ManagedSettings.Service,
   ModelsDev.Service,
   Mcp.Service,
   Npm.Service,
@@ -162,6 +169,7 @@ const services = [
   Session.Service,
   SessionCompaction.Service,
   SessionInstructions.Service,
+  InstructionTriggers.Service,
   SideQuery.Service,
   Shell.Service,
   ShellSelect.Service,
@@ -193,6 +201,7 @@ export const requirements = LayerNode.group([
   FileMutation.node,
   FileLedger.node,
   Lsp.node,
+  LspDiagnostics.node,
   Formatter.node,
   LocationWatcherPolicy.node,
   FileSystem.node,
@@ -207,6 +216,7 @@ export const requirements = LayerNode.group([
   llmClient,
   Location.node,
   ManagedPolicy.node,
+  ManagedSettings.node,
   ModelsDev.node,
   Mcp.node,
   Npm.node,
@@ -220,6 +230,7 @@ export const requirements = LayerNode.group([
   Session.node,
   SessionCompaction.node,
   SessionInstructions.node,
+  InstructionTriggers.node,
   SideQuery.node,
   Shell.node,
   ShellSelect.node,
@@ -253,8 +264,13 @@ const pre = [
   ...ProviderPlugins,
   ...WebSearchPlugins,
   PatchTool.Plugin,
+  // A subagent's base, rendered after the patch plugin selects the available editing tools. The model prompts below
+  // leave a subagent alone.
+  SubagentPromptPlugin.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.
   ...OptimizePlugin.Plugins,
+  // After the model prompts, so the git guidance follows whichever base was chosen, and before the output style.
+  PromptConfigPlugin.Plugin,
   // After the model prompts, so a style applies to whichever base prompt was chosen.
   OutputStylePlugin.Plugin,
   VerbosityPlugin.Plugin,
@@ -286,6 +302,8 @@ const pre = [
 
 const post = [
   ConfigInstructionPlugin.Plugin,
+  // Right after the instruction files, so the memory index renders last: the later a file, the more it outranks.
+  MemoryTool.IndexPlugin,
   LifecycleHooksPlugin.Plugin,
   LspPlugin.Plugin,
   ConfigReferencePlugin.Plugin,

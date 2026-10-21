@@ -111,3 +111,12 @@ test("loads the providers that are built in and a file: URL", async () => {
   expect(await start("load", "@orbit/ai/providers/openai")).toEqual({ loaded: true, added: [], ran: [] })
   expect(await start("load", pathToFileURL(elsewhere).href)).toEqual({ loaded: true, added: [], ran: ["file.marker"] })
 })
+
+test("loads a plain absolute file path like its file: URL, and refuses a relative one", async () => {
+  expect(await start("load", elsewhere)).toEqual({ loaded: true, added: [], ran: ["file.marker"] })
+  expect(await start("load", "./provider.js")).toMatchObject({
+    loaded: false,
+    error: expect.stringContaining("is not installed"),
+    ran: [],
+  })
+})

@@ -24,7 +24,9 @@ const withheld = new Set([
 export function session() {
   return Object.fromEntries(
     Object.entries(process.env).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined && !withheld.has(entry[0]),
+      (entry): entry is [string, string] =>
+        // ORBIT_EDITOR_* tells a terminal UI which editor window it runs in: it stays with the terminal.
+        entry[1] !== undefined && !withheld.has(entry[0]) && !entry[0].startsWith("ORBIT_EDITOR_"),
     ),
   )
 }
