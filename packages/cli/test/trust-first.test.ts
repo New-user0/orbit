@@ -189,6 +189,35 @@ test.each(doors)(
   180_000,
 )
 
+// A probe lists the models of the folder it asked about and starts its session in, which the shell names in PWD, not of
+// the folder the process happens to run in (class 3). Here the process runs in the package folder, which names no
+// provider, and only the probed folder's own config names `clone`.
+test("orb doctor --probe lists the models of the folder it asked about, not of the process's folder", async () => {
+  const folder = await clone("doctor-folder")
+  await Bun.write(
+    path.join(folder, "orbit.json"),
+    JSON.stringify({
+      providers: {
+        clone: {
+          name: "Clone",
+          package: "aisdk:@ai-sdk/openai-compatible",
+          settings: { apiKey: "test-key", baseURL: `http://127.0.0.1:${ollama.port}/v1` },
+          models: {
+            "clone-model": {
+              name: "Clone Model",
+              capabilities: { tools: true, input: ["text"], output: ["text"] },
+              cost: { input: 0, output: 0 },
+              limit: { context: 100_000, output: 10_000 },
+            },
+          },
+        },
+      },
+    }),
+  )
+  const probed = await orb(folder, ["doctor", "--probe", "--trust", "--standalone"])
+  expect(probed.stdout).toContain("clone/clone-model")
+}, 180_000)
+
 // The flow commands that read the run store open a file the clone can ship with any run in it, so they wait for the
 // folder to be trusted too, and do not touch the folder's .git before then (FU-M4-202).
 const readers = [

@@ -66,7 +66,8 @@ export default Runtime.handler(
     // A probe starts a session in this folder, which an untrusted folder refuses, so the folder is asked about first and
     // the refusal says how to trust it, rather than the probe failing on the server's answer (class 12).
     yield* requireTrust(client, directory(), { grant: input.trust })
-    const available = yield* Effect.promise(() => settledModels(client, model))
+    // The models are listed for the folder that was asked about and that the probe starts its session in (class 3).
+    const available = yield* Effect.promise(() => settledModels(client, directory(), model))
     const targets =
       model === undefined
         ? [...new Map(available.map((item) => [item.providerID, `${item.providerID}/${item.id}`])).values()]
