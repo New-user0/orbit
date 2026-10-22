@@ -235,10 +235,11 @@ test("typing ahead into Home before the question opens, and Enter as it opens, s
   const grants: unknown[] = []
   const created: unknown[] = []
   const release = Promise.withResolvers<void>()
-  // The first read, the one the plugin loader waits for, answers at once, so Home is drawn; the reads after it wait until
-  // the person has typed, and the first of them presses Enter just before it answers. The test sets the key once the
-  // app is drawn.
-  const keys = { reads: 0, enter: () => {}, entered: false }
+  // The start folder's reads, the ones the plugin loader waits for, answer at once, so Home is drawn; the reads of the
+  // folder in view wait until the person has typed, and the first of them presses Enter just before it answers. The test
+  // sets the key once the app is drawn. The two are told apart by folder, because two reads made in the same moment can
+  // reach the server in either order.
+  const keys = { enter: () => {}, entered: false }
   await using setup = await createAppFixture({
     state: state.path,
     fetch: async (url, request) => {
@@ -248,8 +249,7 @@ test("typing ahead into Home before the question opens, and Enter as it opens, s
         grants.push(await request.json())
         return json(trusted(root))
       }
-      keys.reads += 1
-      if (keys.reads === 1) return json(clean(root))
+      if (url.searchParams.get("location[directory]") !== directory) return json(clean(root))
       await release.promise
       if (!keys.entered) {
         keys.entered = true
@@ -279,14 +279,13 @@ test("typing ahead into Home before the question opens, and Enter as it opens, s
 test("a slow trust read keeps Home's prompt closed, and a trusted folder's prompt opens and takes typing", async () => {
   await using state = await tmpdir()
   const release = Promise.withResolvers<void>()
-  const reads = { count: 0 }
   await using setup = await createAppFixture({
     state: state.path,
     fetch: async (url) => {
       if (url.pathname !== "/api/location/trust") return undefined
-      // The first read lets Home be drawn; the ones after it are slow.
-      reads.count += 1
-      if (reads.count > 1) await release.promise
+      // The start folder's reads let Home be drawn; those of the folder in view are slow. They are told apart by folder,
+      // because two reads made in the same moment can reach the server in either order.
+      if (url.searchParams.get("location[directory]") === directory) await release.promise
       return json(trusted(root))
     },
   })
@@ -414,6 +413,12 @@ test("a --prompt on Home waits for the start folder to be trusted, and is sent o
 test("a session's prompt takes no keys, and its --prompt waits, until its folder's trust is read", async () => {
   await using state = await tmpdir()
   const cwd = process.cwd()
+  // The terminal UI starts in a folder of its own, and the session works in the server's folder, so that the start
+  // folder's reads are told apart from the session's by folder: two reads made in the same moment can reach the server
+  // in either order.
+  await using start = await tmpdir()
+  process.chdir(start.path)
+  await using _restore = { [Symbol.asyncDispose]: async () => process.chdir(cwd) }
   const location = { directory: cwd, project: { id: "project", directory: cwd, canonical: cwd } }
   const session = {
     id: "ses_waiting",
@@ -428,16 +433,15 @@ test("a session's prompt takes no keys, and its --prompt waits, until its folder
   }
   const bodies: unknown[] = []
   const release = Promise.withResolvers<void>()
-  const reads = { count: 0 }
   await using setup = await createAppFixture({
     state: state.path,
     args: { sessionID: session.id, prompt: "SESSION_AFTER_TRUST" },
     fetch: async (url, request) => {
       if (url.pathname === "/api/location/trust") {
-        // The first read, the start folder's, lets the session be drawn; the session's own reads are slow.
-        reads.count += 1
-        if (reads.count > 1) await release.promise
-        return json(trusted(cwd))
+        // The start folder's reads let the session be drawn; the session's own reads, and any other, are slow.
+        const folder = url.searchParams.get("location[directory]") ?? ""
+        if (folder !== start.path) await release.promise
+        return json(trusted(folder))
       }
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })

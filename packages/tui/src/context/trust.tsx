@@ -238,7 +238,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
 })
 
 /**
- * Asks whether to trust the folder in view when it is not trusted and nobody has said not now. For the routes that show a folder's work, which are Home and a session.
+ * Asks whether to trust the folder in view when it is not trusted and nobody has said not now. For the routes that show
+ * a folder's work, which are Home and a session.
  */
 export function useTrustPrompt() {
   const trust = useTrust()
