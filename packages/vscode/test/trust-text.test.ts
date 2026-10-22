@@ -1,14 +1,10 @@
 import { expect, test } from "bun:test"
-import type { TrustKind, TrustStatus } from "@orbit/client"
+import type { TrustStatus } from "@orbit/client"
 import path from "node:path"
-import { aboveFolders, asksTrust, prompt, readStatus, trusted, view } from "../src/trust"
-
-// The client types a kind as the closed set the protocol knows, and the server's answer is not checked against it, so a
-// newer server, or a hostile one, can send another.
-const kinds = (...names: string[]) => names as TrustKind[]
+import { asksTrust, prompt, readStatus, trusted, view } from "../src/trust"
 
 // What the extension says about trust, from the answer of the server. The strings in it come from the server and from the
-// names of files that a repository chose, so they are written out before anything shows them.
+// names of folders that a repository chose, so they are written out before anything shows them.
 const repo = path.resolve(path.sep, "work", "repo")
 const outer = path.resolve(path.sep, "work")
 
@@ -19,68 +15,32 @@ const untrusted = {
   withheld: [
     { path: path.join(repo, "orbit.json"), kinds: ["hooks", "mcp"] },
     { path: path.join(repo, ".orbit", "plugins"), kinds: ["plugins"] },
-    { path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer },
   ],
 } satisfies TrustStatus
+
+// What a server older than this extension sends for a trusted folder whose config changed since the grant, with config
+// in a folder above the project as well.
+const older = {
+  ...untrusted,
+  trusted: true,
+  source: "saved",
+  withheld: [...untrusted.withheld, { path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer }],
+  changed: [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }],
+} as TrustStatus
 
 // ESC ] 0 BEL sets a window title, CSI 2 K erases the line, U+009B starts an escape sequence on a terminal that takes
 // 8-bit controls, U+202E reorders the text after it, and a line break moves it.
 const hostile = "evil\u001b]0;pwned\u0007\u001b[2K\u009b‮gpj.\r\nrest"
 const controls = /\p{C}/u
 
-// The same files as a trusted folder whose config changed since the grant: the one case where the question lists what a
-// folder holds, since nothing of an untrusted folder is read (trust-first).
-const changedAll = (status: TrustStatus): TrustStatus => ({
-  ...status,
-  trusted: true,
-  source: "saved",
-  changed: status.withheld.filter((item) => item.directory === undefined).map((item) => ({ path: item.path, kinds: item.kinds })),
-})
-
-test("lists nothing of an untrusted folder, and splits what changed in a trusted one from what stays off above it", () => {
-  // Nothing of an untrusted folder was read, so the question lists none of it, whatever the answer carries.
-  expect(view(untrusted, repo)).toMatchObject({ directory: repo, persistent: true, summary: "", held: [] })
-
-  const shown = view(changedAll(untrusted), repo)
-  expect(shown.directory).toBe(repo)
-  expect(shown.persistent).toBe(true)
-  expect(shown.summary).toBe("hooks, MCP servers, plugins")
-  expect(shown.held).toEqual([
-    { name: "orbit.json", kinds: "hooks, MCP servers" },
-    { name: path.join(".orbit", "plugins"), kinds: "plugins" },
-  ])
-  expect(shown.above).toEqual([outer])
-  expect(shown.opened).toBeUndefined()
-  expect(aboveFolders(untrusted)).toEqual([outer])
-})
-
-test("asks about the changes of a trusted folder, listing only what changed", () => {
-  const changed = {
-    directory: repo,
-    trusted: true,
-    source: "saved",
-    persistent: true,
-    withheld: [
-      { path: path.join(repo, "orbit.json"), kinds: ["hooks"] },
-      { path: path.join(outer, "orbit.json"), kinds: ["mcp"], directory: outer },
-    ],
-    changed: [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }],
-  } satisfies TrustStatus
-
-  expect(asksTrust(changed)).toBe(true)
-  // A trusted folder whose only held-back config is above it has nothing that trusting it would turn on.
-  expect(asksTrust({ ...changed, changed: [], withheld: [changed.withheld[1]] })).toBe(false)
-  const shown = view(changed, repo)
-  expect(shown.changed).toBe(true)
-  expect(shown.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
-  const asked = prompt(shown)
-  expect(asked.message).toBe(`Trust the changes in ${repo}?`)
-  expect(asked.detail).toContain("changed since you trusted it")
-  expect(asked.accept).toBe("Trust changes")
-  // The question for an untrusted folder is the one it was: where the folder came from, and what Orbit can do there.
-  expect(prompt(view(untrusted, repo)).accept).toBe("Trust this folder")
-  expect(prompt(view(untrusted, repo)).detail).toContain("Do you know where this folder came from?")
-  expect(asked.detail).not.toContain("Do you know where this folder came from?")
+test("lists nothing of an untrusted folder, whatever the answer carries", () => {
+  expect(view(untrusted, repo)).toEqual({ directory: repo, persistent: true, summary: "", held: [] })
+  const asked = prompt(view(untrusted, repo))
+  expect(asked.message).toBe(`Trust ${repo}?`)
+  expect(asked.detail).toContain("Do you know where this folder came from?")
+  expect(asked.detail).toContain("Orbit can read, change and run the files here")
+  expect(asked.detail).not.toContain("orbit.json")
+  expect(asked.accept).toBe("Trust this folder")
 })
 
 test("names the folder VS Code opened when it is not the project's folder", () => {
@@ -92,29 +52,18 @@ test("names the folder VS Code opened when it is not the project's folder", () =
   expect(view(untrusted, repo + path.sep).opened).toBeUndefined()
 })
 
-test("asks for every folder that is not trusted, whatever it holds, and for a trusted one only when it changed", () => {
-  const above = { ...untrusted, withheld: [untrusted.withheld[2]] }
-
+// D8: a trusted folder is never asked about again, as the reference does, even when an older server lists its changes.
+test("asks for every folder that is not trusted, whatever it holds, and never for a trusted one", () => {
   expect(asksTrust(untrusted)).toBe(true)
   expect(asksTrust({ ...untrusted, withheld: [] })).toBe(true)
-  expect(asksTrust(above)).toBe(true)
   expect(asksTrust({ ...untrusted, trusted: true, withheld: [] })).toBe(false)
-  // What sits above a trusted project follows its own folder's decision, so trusting the project turns nothing on.
-  expect(asksTrust({ ...above, trusted: true })).toBe(false)
+  expect(asksTrust(older)).toBe(false)
   expect(asksTrust(undefined)).toBe(false)
 })
 
 test("writes out the control and format characters that a repository chose, wherever they show", () => {
   const shown = view(
-    changedAll({
-      directory: path.join(outer, hostile),
-      trusted: false,
-      persistent: true,
-      withheld: [
-        { path: path.join(outer, hostile, `${hostile}.json`), kinds: kinds("hooks", hostile) },
-        { path: path.join(outer, hostile, "x"), kinds: kinds("mcp"), directory: path.join(outer, hostile, hostile) },
-      ],
-    }),
+    { directory: path.join(outer, hostile), trusted: false, persistent: true, withheld: [] },
     path.join(outer, hostile, hostile),
   )
   const everything = JSON.stringify(shown)
@@ -123,33 +72,11 @@ test("writes out the control and format characters that a repository chose, wher
   expect(everything).not.toMatch(controls)
   // A line break, as a carriage return and a line feed or as either, is written as \n.
   expect(shown.directory).toContain("\\x1b]0;pwned\\x07\\x1b[2K\\x9b\\u{202e}gpj.\\nrest")
-  expect(shown.held[0]?.kinds).toContain("\\x1b")
   expect(asked.message + asked.detail.replaceAll("\n", "")).not.toMatch(controls)
-  expect(trusted({ directory: shown.directory, persistent: true, above: shown.above })).not.toMatch(controls)
+  expect(trusted({ directory: shown.directory, persistent: true })).not.toMatch(controls)
 })
 
-test("lists the first files in the question and says how many more there are", () => {
-  const files = Array.from({ length: 9 }, (_, index) => ({
-    path: path.join(repo, `f${index}.json`),
-    kinds: kinds("hooks"),
-  }))
-  const asked = prompt(view(changedAll({ ...untrusted, withheld: files }), repo))
-
-  expect(asked.message).toBe(`Trust the changes in ${repo}?`)
-  expect(asked.detail).toContain("f0.json: hooks")
-  expect(asked.detail).toContain("f5.json: hooks")
-  expect(asked.detail).not.toContain("f6.json")
-  expect(asked.detail).toContain("and 3 more")
-  expect(asked.accept).toBe("Trust changes")
-  // The question about an untrusted folder lists none of them, and says what trusting it lets Orbit do.
-  const first = prompt(view({ ...untrusted, withheld: files }, repo))
-  expect(first.message).toBe(`Trust ${repo}?`)
-  expect(first.detail).not.toContain("f0.json")
-  expect(first.detail).toContain("Orbit can read, change and run the files here")
-  expect(first.accept).toBe("Trust this folder")
-})
-
-test("says what a grant lasts, and gives no command for config above the project", () => {
+test("says what a grant lasts, and prints no command but the one that ends it", () => {
   const sub = path.join(repo, "sub")
   const stored = prompt(view(untrusted, sub))
   const session = prompt(view({ ...untrusted, persistent: false }, repo))
@@ -158,29 +85,13 @@ test("says what a grant lasts, and gives no command for config above the project
   expect(stored.detail).toContain(`VS Code opened ${sub}.`)
   expect(session.accept).toBe("Trust until Orbit restarts")
   expect(session.detail).toContain("lasts only until Orbit restarts")
-  // A grant always goes to the project's root, which is not always the folder that holds the config above it, so the
-  // only command the question may print is the one that ends a grant.
-  for (const asked of [stored, session]) {
-    expect(asked.detail).toContain(`Config in ${outer} stays off: each folder is trusted on its own.`)
-    expect(asked.detail.replaceAll("`orb trust --revoke`", "")).not.toMatch(/orb trust/)
-  }
-  expect(trusted({ directory: repo, persistent: true, above: [outer] })).toBe(
-    `Trusted ${repo}. Config in ${outer} stays off: each folder is trusted on its own.`,
-  )
-  expect(trusted({ directory: repo, persistent: false, above: [] })).toBe(`Trusted ${repo} until Orbit restarts.`)
-})
-
-test("falls back to the kind as written when the protocol has no words for it", () => {
-  const shown = view(
-    changedAll({ ...untrusted, withheld: [{ path: path.join(repo, "a"), kinds: kinds("hooks", "constructor", "teleport") }] }),
-    repo,
-  )
-
-  expect(shown.summary).toBe("hooks, constructor, teleport")
+  for (const asked of [stored, session]) expect(asked.detail.replaceAll("`orb trust --revoke`", "")).not.toMatch(/orb trust/)
+  expect(trusted({ directory: repo, persistent: true })).toBe(`Trusted ${repo}.`)
+  expect(trusted({ directory: repo, persistent: false })).toBe(`Trusted ${repo} until Orbit restarts.`)
 })
 
 test("accepts a trust status and nothing else", () => {
-  const good = [untrusted, { ...untrusted, trusted: true, source: "saved", withheld: [] }, { ...untrusted, extra: 1 }]
+  const good = [untrusted, { ...untrusted, trusted: true, source: "saved", withheld: [] }, { ...untrusted, extra: 1 }, older]
   const bad: unknown[] = [
     undefined,
     null,
@@ -200,13 +111,7 @@ test("accepts a trust status and nothing else", () => {
 })
 
 test("drops a withheld entry that does not fit and keeps the rest of the answer", () => {
-  const odd: unknown[] = [
-    null,
-    { path: 7, kinds: [] },
-    { path: "a", kinds: "hooks" },
-    { path: "a", kinds: [1] },
-    { path: "a", kinds: [], directory: 7 },
-  ]
+  const odd: unknown[] = [null, { path: 7, kinds: [] }, { path: "a", kinds: "hooks" }, { path: "a", kinds: [1] }]
 
   expect(readStatus({ ...untrusted, withheld: [odd[0], ...untrusted.withheld, ...odd.slice(1)] })?.withheld).toEqual(
     untrusted.withheld,

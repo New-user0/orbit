@@ -1,13 +1,12 @@
 import type { TrustStatus } from "@orbit/client"
 import { Trust } from "@orbit/schema/trust"
 import { Option, Schema } from "effect"
-import { isDeepEqual } from "remeda"
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js"
 import { DialogTrust } from "../component/dialog-trust"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 import { abbreviateHome } from "../util/path-format"
-import { asksTrust, groupWithheld, pluginTrust, trustCommands } from "../util/trust"
+import { asksTrust } from "../util/trust"
 import { useClient } from "./client"
 import { useData } from "./data"
 import { TrustDeclined, useExit } from "./exit"
@@ -116,7 +115,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     const asked = createMemo((): TrustStatus | undefined => {
       const status = current.status()
       if (status !== undefined || !current.settled()) return status
-      return { directory: directory(), trusted: false, persistent: true, withheld: [], changed: [] }
+      return { directory: directory(), trusted: false, persistent: true, withheld: [] }
     })
     // Whether a question about this folder is the one about the folder the terminal UI started in, which offers Exit in
     // place of Not now: nothing can be done there until it is trusted, as the reference does.
@@ -143,8 +142,6 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
 
     // A choice is for `target`, the folder the dialog was opened for.
     const grant = async (target: string, persist: boolean) => {
-      // Asked before the grant, which clears it: whether this is a folder that was trusted and whose config changed.
-      const changed = current.status()?.trusted === true
       await client.api.location.trust
         .update({ location: { directory: target }, trust: true, persist })
         .then(async (status) => {
@@ -153,20 +150,9 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
           await Promise.all([current.refresh(), startup.refresh()])
           if (directory() === target && dialog.key === DialogTrustKey) dialog.clear()
           const folder = abbreviateHome(status.directory, paths.home)
-          // The grant lifts the folder's own config, so what is still held back sits above it, in folders of their own.
-          const above = groupWithheld(status.withheld).above
           toast.show({
             variant: "success",
-            message: [
-              changed
-                ? `Trusted the changes in ${folder}`
-                : status.persistent
-                  ? `Trusted ${folder}`
-                  : `Trusted ${folder} until Orbit restarts`,
-              ...(above.length === 0
-                ? []
-                : [`Config above it stays off until its own folder is trusted: ${trustCommands(above, target)}`]),
-            ].join(". "),
+            message: status.persistent ? `Trusted ${folder}` : `Trusted ${folder} until Orbit restarts`,
           })
         }, toast.error)
     }
@@ -186,7 +172,6 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         () => (
           <DialogTrust
             status={asked() ?? status}
-            location={folder}
             leave={leaving ? "exit" : "later"}
             guarded={guarded}
             onTrust={(persist) => grant(folder, persist)}
@@ -239,24 +224,10 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         /** Whether the plugins in the project the terminal UI started in may load. */
         trusted: createMemo(() => startup.status()?.trusted === true),
         /**
-         * The folders above the project that the server still holds config back for, each until its own decision. The
-         * terminal UI finds its project's root without asking, so its plugins can lie in one of them. The same list is
-         * the same answer, so that a read that finds nothing new does not rebuild the plugins.
+         * The folder the server decided the startup folder's trust for. The terminal UI finds its project's root without
+         * asking, so this bounds its walk where the server's root is the narrower one (class 3).
          */
-        above: createMemo(
-          () => pluginTrust(startup.status()).above,
-          [],
-          { equals: isDeepEqual },
-        ),
-        /**
-         * The config directories whose plugins changed since their folder was trusted, which the server holds back until
-         * the changes are trusted. The terminal UI imports a project's plugins itself, so it leaves these out too.
-         */
-        changedPlugins: createMemo(
-          () => pluginTrust(startup.status()).changed,
-          [],
-          { equals: isDeepEqual },
-        ),
+        root: createMemo(() => startup.status()?.directory),
         /** Whether the first answer has come, whatever it was. */
         settled: startup.settled,
         /** Reads the status again now, for whoever is about to import a plugin and must not act on an older answer. */
@@ -267,8 +238,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
 })
 
 /**
- * Asks whether to trust the folder in view when it is not trusted, or its config changed since it was, and nobody has
- * said not now. For the routes that show a folder's work, which are Home and a session.
+ * Asks whether to trust the folder in view when it is not trusted and nobody has said not now. For the routes that show a folder's work, which are Home and a session.
  */
 export function useTrustPrompt() {
   const trust = useTrust()

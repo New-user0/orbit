@@ -136,6 +136,54 @@ describe("config above the project", () => {
       }).pipe(Effect.provide(loader({ ...layout, directory: layout.inner })))
     }),
   )
+
+  // Class 4: the walk is decided on real paths. A start folder reached through a link (a junction on Windows) walks
+  // where it really is, up to the project's real root, and never the folders around the link's own spelling.
+  it.live("walks a start folder reached through a link from where it really is, and not from the link's folder", () =>
+    Effect.gen(function* () {
+      const layout = yield* folders
+      const outer = path.dirname(layout.work)
+      const alias = path.join(outer, "alias")
+      yield* Effect.promise(async () => {
+        await fs.symlink(layout.inner, alias, "junction")
+        await Bun.write(path.join(outer, "orbit.json"), JSON.stringify({ username: "LINK-PARENT-USER" }))
+      })
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        // A grant for the link's folder covers the project too, so only the walk keeps that folder's config out.
+        yield* trust.grant(outer, { persist: true, via: "test" })
+        yield* reread
+        const read = yield* listed
+        expect(read).toContain(path.join(layout.inner, "orbit.json"))
+        expect(read).toContain(path.join(layout.repo, "orbit.json"))
+        expect(read).not.toContain(path.join(outer, "orbit.json"))
+      }).pipe(Effect.provide(loader({ ...layout, directory: alias })))
+    }),
+  )
+
+  // Class 4: Windows ignores case, so a Location spelled in another case still ends its walk at the project's root.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "ends the walk at the project's root however the Location spells its case",
+    () =>
+      Effect.gen(function* () {
+        const layout = yield* folders
+        const lower = (item: string) => item.toLowerCase()
+        yield* Effect.gen(function* () {
+          const trust = yield* WorkspaceTrust.Service
+          yield* trust.grant(layout.work, { persist: true, via: "test" })
+          yield* reread
+          const read = (yield* listed).map(lower)
+          expect(read).toContain(lower(path.join(layout.repo, "orbit.json")))
+          expect(read.filter((item) => item.startsWith(lower(layout.work)) && !item.startsWith(lower(layout.repo)))).toEqual(
+            [],
+          )
+        }).pipe(
+          Effect.provide(
+            loader({ ...layout, directory: layout.repo.toUpperCase(), repo: layout.repo.toUpperCase() }),
+          ),
+        )
+      }),
+  )
 })
 
 describe("config sources that are skipped", () => {
@@ -158,6 +206,46 @@ describe("config sources that are skipped", () => {
       const own = path.join(layout.repo, "orbit.json")
       expect(logged.filter((item) => item === own)).toEqual([own])
       expect(logged.filter((item) => item === above)).toEqual([])
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  // Class 7: the walk never leaves the project, but the disk can change under a Location that is open. A start folder
+  // replaced by a link to a folder outside the project is not the project's: its config is not read, even under a grant
+  // of its own, and the skip is logged once with that reason.
+  it.live("leave out a folder that the disk moved outside the project, with one log line saying so", () => {
+    const logged: { readonly path: string; readonly reason: string }[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "config source skipped") return
+      const details: unknown = entry.message[1]
+      if (typeof details === "object" && details !== null && "path" in details && "reason" in details)
+        logged.push({ path: String(details.path), reason: String(details.reason) })
+    })
+    return Effect.gen(function* () {
+      const layout = yield* folders
+      const elsewhere = path.join(path.dirname(layout.work), "elsewhere")
+      const moved = path.join(elsewhere, "orbit.json")
+      yield* Effect.promise(() => Bun.write(moved, JSON.stringify({ username: "MOVED-OUT-USER" })))
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        yield* trust.grant(layout.repo, { persist: true, via: "test" })
+        yield* trust.grant(elsewhere, { persist: true, via: "test" })
+        yield* reread
+        // The control: the start folder is read while it is the project's.
+        expect(yield* listed).toContain(path.join(layout.inner, "orbit.json"))
+
+        yield* Effect.promise(async () => {
+          await fs.rm(layout.inner, { recursive: true, force: true })
+          await fs.symlink(elsewhere, layout.inner, "junction")
+        })
+        yield* reread
+        yield* reread
+        const read = yield* listed
+        expect(read).not.toContain(moved)
+        expect(read).not.toContain(path.join(layout.inner, "orbit.json"))
+      }).pipe(Effect.provide(loader({ ...layout, directory: layout.inner })))
+      expect(logged.filter((item) => item.path === moved)).toEqual([
+        { path: moved, reason: "it is outside the project's folders" },
+      ])
     }).pipe(Effect.provide(Logger.layer([logger])))
   })
 })

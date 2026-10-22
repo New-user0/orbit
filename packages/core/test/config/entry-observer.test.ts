@@ -17,8 +17,6 @@ describe("ConfigEntryObserver", () => {
         compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
         compat: () => Effect.succeed(Config.defaultCompat),
         changes: () => Stream.empty,
-        fingerprints: () => Effect.succeed([]),
-        pluginsChanged: () => Effect.succeed(false),
         notify: () => Effect.void,
       })
       const event = {

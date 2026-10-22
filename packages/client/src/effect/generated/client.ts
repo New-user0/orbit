@@ -337,7 +337,7 @@ const EndpointLocationTrustUpdate = (raw: RawClient["server.location"]) => (inpu
   preserveEffect<LocationTrustUpdateOutput>()(
     raw["location.trust.update"]({
       query: { location: input["location"] },
-      payload: { trust: input["trust"], persist: input["persist"], holder: input["holder"] },
+      payload: { trust: input["trust"], persist: input["persist"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 

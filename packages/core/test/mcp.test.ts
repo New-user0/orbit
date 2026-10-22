@@ -81,7 +81,7 @@ import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { decoyName, row } from "./fixture/decoy"
 import { trustedProject, untrustedProject } from "./fixture/project-trust"
 import { ProjectTrust } from "@orbit/core/project-trust"
-import { grantWithRecords } from "./fixture/grant"
+import { grantFolder } from "./fixture/grant"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { expectOneSpelling, received, spellingEnv, withLookupVariable } from "./fixture/child-env"
@@ -324,8 +324,6 @@ function resourceMcpLayer(
                 compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
                 compat: () => Effect.succeed(Config.defaultCompat),
                 changes: () => Stream.never,
-                fingerprints: () => Effect.succeed([]),
-                pluginsChanged: () => Effect.succeed(false),
                 notify: () => Effect.void,
               }),
             )
@@ -2077,7 +2075,7 @@ describe("MCP servers from .mcp.json", () => {
 
         // The config reloads a moment after the decision, and says so when it has.
         const granted = yield* nextUpdate
-        yield* grantWithRecords(project, { persist: false, via: "test" })
+        yield* grantFolder(project, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         expect(yield* registered(yield* config.entries())).toEqual({
           personal: { status: "connected" },

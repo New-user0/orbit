@@ -4,7 +4,7 @@ import os, { EOL } from "node:os"
 import path from "node:path"
 import type { TrustStatus } from "@orbit/client/promise"
 import { SessionID } from "@orbit/schema/session-id"
-import { holderRefusal, quoted, refusal, trustCommand, unanswered } from "../src/util/trust"
+import { holderRefusal, quoted, refusal, unanswered } from "../src/util/trust"
 import { isolatedEnv } from "./fixture/environment"
 
 // `orb run` and its siblings against a real private server and a scripted model, in repositories that hold something
@@ -2062,124 +2062,6 @@ test("trusting a folder whose project is an outer repository covers the reposito
   succeeded(await orb(inner, ["run", "--standalone", "--model", model, "say ok"]))
 }, 300_000)
 
-test("trusting a folder above the project lists nothing of it as still held back, and the revoke it prints ends that folder only", async () => {
-  const { outer, middle, inner } = await nested("nested-revoke")
-  succeeded(await orb(root, ["trust", "--standalone", outer]))
-  const granted = await orb(root, ["trust", "--standalone", middle, "--for", inner])
-  succeeded(granted)
-  expect(granted.stdout).toContain(`Trusted ${middle}`)
-  // Right after its own grant, the folder is not listed as holding anything back, and nobody is told to trust it again.
-  expect(granted.stdout).not.toContain("Still held back")
-  expect(granted.stdout).not.toContain(`orb trust ${quoted(middle)} --for`)
-
-  // The revoke is typed as printed. It names the folder that was granted, which exists and is not the project of its
-  // own location: revoking it through a location would end the grant of the outer repository and leave this one.
-  const advice = granted.stdout.match(/Stop trusting it with: orb trust --revoke (.+)/)?.[1]
-  expect(advice).toBe(quoted(middle))
-  const revoked = await orb(root, ["trust", "--standalone", "--revoke", middle])
-  succeeded(revoked)
-  expect(revoked.stdout).toContain("Stopped trusting")
-  const listed = (await orb(root, ["trust", "--standalone", "--list"])).stdout
-    .split(/\r?\n/)
-    .map((line) => line.split("  ")[0])
-  expect(listed).toContain(outer)
-  expect(listed).not.toContain(middle)
-}, 300_000)
-
-// Names that a repository can give a folder. On Windows a name cannot hold a quote or a control character.
-const hostile = [
-  "$(touch PWNED)",
-  "`touch PWNED`",
-  "it's",
-  ...(process.platform === "win32" ? [] : ['a"b', "a\u001bb", "a\nb"]),
-]
-
-test("the commands the advice prints for a folder name are quoted so that no shell runs the name, or are not printed", async () => {
-  const location = path.join(root, "work", "advice-location")
-  const marker = path.join(root, "PWNED")
-  const sh = Bun.which("sh")
-  for (const name of hostile) {
-    const folder = path.join(root, "work", "advice-holders", name)
-    const text = refusal(
-      {
-        directory: location,
-        trusted: false,
-        persistent: true,
-        withheld: [{ path: path.join(folder, "orbit.json"), kinds: ["hooks"], directory: folder }],
-      } satisfies TrustStatus,
-      undefined,
-      undefined,
-      undefined,
-      location,
-    )
-    // Whatever is printed carries no raw control character, line break or escape sequence of the name.
-    expect(text).not.toContain("\u001b")
-    expect(text).not.toContain(`${path.sep}a\nb`)
-    const command = trustCommand(folder, location)
-    if (command === undefined) {
-      // No command is printed, and the advice says so.
-      expect(text).toContain("no command is printed")
-      continue
-    }
-    expect(text).toContain(command)
-    if (process.platform === "win32") {
-      // Neither PowerShell nor cmd gets a name with anything either would expand.
-      expect(command).not.toMatch(/[$`]/)
-      continue
-    }
-    // Run the printed text as a shell would, with the command swapped for a program that only prints its arguments.
-    if (sh === null) continue
-    const ran = await spawned([sh, "-c", command.replace(/^orb trust/, "printf '%s\\n'")], root)
-    expect(ran.code).toBe(0)
-    expect(await Bun.file(marker).exists()).toBe(false)
-    expect(ran.stdout.split("\n")[0]).toBe(folder)
-  }
-})
-
-test("orb trust --for trusts only a folder that the location holds config back for", async () => {
-  const { middle, inner } = await nested("nested-other")
-  const stray = path.join(root, "work", "stray")
-  await fs.mkdir(stray, { recursive: true })
-
-  const refused = await orb(root, ["trust", "--standalone", stray, "--for", inner])
-
-  expect(refused.code).toBe(1)
-  expect(refused.stderr).toContain("holds no config back")
-  // Nothing was trusted: the run from the location still stops on the folder above it.
-  const run = await orb(inner, ["run", "--standalone", "--model", model, "say ok"])
-  expect(run.code).toBe(1)
-  expect(run.stderr).toContain(middle)
-  const listed = await orb(root, ["trust", "--standalone", "--list"])
-  expect(listed.stdout).not.toContain(stray)
-}, 240_000)
-
-test("the advice offers no command for a folder above the project that can never be trusted for good", () => {
-  const root = path.parse(path.resolve("/")).root
-  const location = path.resolve("/projects/app")
-  const status = {
-    directory: location,
-    trusted: false,
-    persistent: true,
-    withheld: [{ path: path.join(root, "orbit.json"), kinds: ["hooks"], directory: root, persistent: false }],
-  } satisfies TrustStatus
-
-  const text = refusal(status, undefined, undefined, undefined, location)
-
-  expect(text).not.toContain(`orb trust ${root}`)
-  expect(text).toContain("home directory or a filesystem root")
-  expect(text).toContain("--trust")
-  // A folder that can be trusted for good gets its command, with the location.
-  const folder = path.resolve("/projects")
-  const good = refusal(
-    { ...status, withheld: [{ path: path.join(folder, "orbit.json"), kinds: ["hooks"], directory: folder }] },
-    undefined,
-    undefined,
-    undefined,
-    location,
-  )
-  expect(good).toContain(`\`orb trust ${folder} --for ${location}\``)
-})
-
 // trust-first: orb acp no longer warns about the folder it starts in; it refuses a session there instead
 // (acp/trust-first.subprocess.test.ts), and stdout stays the protocol's.
 test("orb acp writes nothing about the folder it starts in, and keeps stdout for the protocol", async () => {
@@ -2248,7 +2130,6 @@ test("orb acp writes nothing about the folder it starts in, and keeps stdout for
 // Folders that the pure functions below only print, so they need not exist.
 const repo = path.resolve("/trust-repo")
 const outer = path.resolve("/trust-outer")
-const wider = path.resolve("/trust-wider")
 
 test("the refusal names what is held back, and says what a home directory needs instead", () => {
   const folder = repo
@@ -2259,7 +2140,6 @@ test("the refusal names what is held back, and says what a home directory needs 
     withheld: [
       { path: path.join(folder, "orbit.json"), kinds: ["hooks", "mcp"] },
       { path: path.join(folder, ".orbit"), kinds: ["plugins"] },
-      { path: path.join(outer, "orbit.json"), kinds: ["providers"], directory: outer },
     ],
   } satisfies TrustStatus
 
@@ -2268,37 +2148,15 @@ test("the refusal names what is held back, and says what a home directory needs 
   expect(text).toContain(`${folder} is not trusted`)
   expect(text).toMatch(/^ {2}orbit\.json\s+hooks, mcp$/m)
   expect(text).toMatch(/^ {2}\.orbit\s+plugins$/m)
-  // A folder above the project is shown by its whole path, and its own folder is the one to trust for it.
-  expect(text).toContain(path.join(outer, "orbit.json"))
   expect(text).toContain("`orb trust`")
   expect(text).toContain("--trust")
-  expect(text).toContain(`orb trust ${outer}`)
+  // Nothing above the project is read (D7), so the refusal names no other folder to trust.
+  expect(text).not.toContain("--for")
 
   const home = refusal({ ...status, persistent: false })
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("`orb trust` refuses it")
   expect(home).toContain("--trust")
-})
-
-test("the refusal for config above the project names its folder, as neither the project nor --trust lifts it", () => {
-  const status = {
-    directory: repo,
-    trusted: false,
-    persistent: true,
-    withheld: [
-      { path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer },
-      { path: path.join(wider, ".orbit"), kinds: ["plugins"], directory: wider },
-    ],
-  } satisfies TrustStatus
-
-  const text = refusal(status)
-
-  expect(text).toContain(`${repo} is not trusted`)
-  expect(text).toContain(`orb trust ${outer}`)
-  expect(text).toContain(`orb trust ${wider}`)
-  // Nothing of the project's own is held back, so neither trusting it nor --trust would apply any of this.
-  expect(text).not.toContain("`orb trust`")
-  expect(text).not.toContain("--trust")
 })
 
 test("the refusal for a command that imports a file says it runs code from the folder, whether or not config is held back", () => {
@@ -2333,15 +2191,6 @@ test("the refusal for a command that imports a file says it runs code from the f
   expect(home).toContain("`orb trust` refuses it")
   expect(home).toContain("--trust")
   expect(home).not.toContain("Look the file over")
-
-  // Config above the project is still named with the folder to trust for it.
-  const above = refusal(
-    { ...status, withheld: [{ path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer }] },
-    file,
-  )
-  expect(above).toContain("runs code from the folder")
-  expect(above).toContain("Look the file over, then trust the folder for good")
-  expect(above).toContain(`orb trust ${outer}`)
 })
 
 test("the refusal for a command that runs the shell commands of a file lists them, whether or not config is held back", () => {
@@ -2396,16 +2245,6 @@ test("the refusal for a command that runs the shell commands of a file lists the
   expect(home).toContain("`orb trust` refuses it")
   expect(home).toContain("--trust")
   expect(home).not.toContain("Look the file over")
-
-  // Config above the project is still named with the folder to trust for it.
-  const above = refusal(
-    { ...status, withheld: [{ path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer }] },
-    undefined,
-    { file, commands, approvals: [], agents: [], models: [] },
-  )
-  expect(above).toContain("runs shell commands from the folder")
-  expect(above).toContain("Look the file over, then trust the folder for good")
-  expect(above).toContain(`orb trust ${outer}`)
 })
 
 test("the refusal shows what an untrusted file says on one line, without the characters that act on a terminal or hide text", () => {

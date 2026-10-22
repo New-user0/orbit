@@ -16,7 +16,6 @@ const status = (overrides: Partial<TrustStatus> = {}): TrustStatus => ({
   directory: "/projects/app",
   trusted: false,
   persistent: true,
-  changed: [],
   withheld: [],
   ...overrides,
 })

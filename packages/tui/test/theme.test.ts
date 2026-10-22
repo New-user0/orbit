@@ -4,7 +4,7 @@ import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
 import { allThemes, hasTheme, getOrbitTheme, parseTheme, resolveTheme } from "../src/theme"
 import { discoverThemes } from "../src/theme/discovery"
-import { configDirectories } from "../src/util/config-directories"
+import { themeDirectories } from "../src/util/config-directories"
 import { terminalMode } from "../src/theme/system"
 import orbitSource from "../src/theme/assets/orbit.json" with { type: "json" }
 import type { ThemeV1Json } from "@orbit/theme/tui/v1"
@@ -138,7 +138,8 @@ test("theme directories include global config before project directories", async
   await writeFile(path.join(global, "themes", "global.json"), JSON.stringify({ source: "global" }))
   await writeFile(path.join(project, ".orbit", "themes", "project.json"), JSON.stringify({ source: "project" }))
 
-  await expect(discoverThemes(configDirectories(global, project))).resolves.toEqual({
+  const home = path.join(tmp.path, "home")
+  await expect(discoverThemes(await themeDirectories({ config: global, home, cwd: project, project: {} }))).resolves.toEqual({
     global: { source: "global" },
     project: { source: "project" },
   })

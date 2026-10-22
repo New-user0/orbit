@@ -1,4 +1,4 @@
-import type { TrustKind, TrustStatus, TrustWithheld } from "@orbit/client"
+import type { TrustStatus, TrustWithheld } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
 import path from "node:path"
 import type { TrustView } from "./protocol.js"
@@ -6,32 +6,10 @@ import type { TrustView } from "./protocol.js"
 // What the extension says about workspace trust. The server decides it; this turns its answer into text for the person.
 // Nothing here imports `vscode`, so it is tested without the editor.
 
-// Typed by kind, so a kind that the protocol adds does not compile until it has words here.
-const labels: Record<TrustKind, string> = {
-  hooks: "hooks",
-  mcp: "MCP servers",
-  plugins: "plugins",
-  commands: "shell snippets",
-  permissions: "permission rules",
-  providers: "providers",
-  shell: "shell",
-  env: "environment variables",
-  formatter: "formatters",
-  lsp: "language servers",
-  sandbox: "sandbox",
-  skills: "skills",
-  network: "network access",
-  settings: "other settings",
-}
-
-/** How many of the held-back files the question lists before it says how many more there are. */
-const listed = 6
-
-/** What trusting `granted` did, for the person to read: the folder, how long it lasts, and what stays off above it. */
+/** What trusting `granted` did, for the person to read: the folder, and how long it lasts. */
 export interface TrustGrant {
   readonly directory: string
   readonly persistent: boolean
-  readonly above: ReadonlyArray<string>
 }
 
 /**
@@ -57,32 +35,13 @@ export function readStatus(value: unknown): TrustStatus | undefined {
 }
 
 /**
- * What trusting the project turns on, apart from what it does not. A file or directory in a folder above the project
- * names that folder as its `directory`, because each folder is trusted on its own: trusting the project lifts `own` and
- * leaves `above` held back.
- */
-export function groupWithheld(items: ReadonlyArray<TrustWithheld>) {
-  return {
-    own: items.filter((item) => item.directory === undefined),
-    above: items.filter((item) => item.directory !== undefined),
-  }
-}
-
-/** The files of the folder itself whose executable config changed since the folder was trusted. */
-function changedOwn(status: TrustStatus) {
-  const changed = new Set((status.changed ?? []).map((item) => item.path))
-  return groupWithheld(status.withheld).own.filter((item) => changed.has(item.path))
-}
-
-/**
  * Whether the folder needs an answer from the person, which is what the question and the indicators are for: it is not
  * trusted, whatever it holds, because nothing a folder supplies loads and no work starts there until it is
- * (trust-first), or it is trusted and some of its own config changed since. Config in a folder above it follows that
- * folder's own decision, so a trusted folder whose only held-back config sits above it has nothing to ask.
+ * (trust-first). A trusted folder is never asked about again, whatever changed in it since the grant, as the reference
+ * does (D8), and so is one that a server older than this extension still lists changes for.
  */
 export function asksTrust(status: TrustStatus | undefined) {
-  if (status === undefined) return false
-  return status.trusted ? changedOwn(status).length > 0 : true
+  return status !== undefined && !status.trusted
 }
 
 /**
@@ -90,73 +49,39 @@ export function asksTrust(status: TrustStatus | undefined) {
  * belongs to is the server's: the project's root, which is not always the folder that was opened.
  */
 export function view(status: TrustStatus, opened: string): TrustView {
-  // Nothing of a folder that is not trusted was read, so only a trusted folder's changes are listed.
-  const own = status.trusted ? changedOwn(status) : []
+  // Nothing of a folder that is not trusted was read, so nothing is listed.
   return {
     directory: plain(status.directory),
     ...(path.relative(opened, status.directory) === "" ? {} : { opened: plain(opened) }),
     persistent: status.persistent,
-    ...(status.trusted ? { changed: true } : {}),
-    summary: [...new Set(own.flatMap((item) => item.kinds.map(label)))].join(", "),
-    held: own.map((item) => ({
-      name: plain(fromFolder(status.directory, item.path)),
-      kinds: item.kinds.map(label).join(", "),
-    })),
-    above: aboveFolders(status),
+    summary: "",
+    held: [],
   }
 }
 
-/** The folders above the project that still hold config back, which trusting the project does not turn on. */
-export function aboveFolders(status: TrustStatus) {
-  return [...new Set(groupWithheld(status.withheld).above.flatMap((item) => item.directory ?? []))].map(plain)
-}
-
-/** The question that a modal asks, for a folder that is not trusted or whose config changed since it was. */
+/** The question that a modal asks, for a folder that is not trusted. */
 export function prompt(trust: TrustView) {
-  const shown = trust.held.slice(0, listed)
   return {
-    message: trust.changed === true ? `Trust the changes in ${trust.directory}?` : `Trust ${trust.directory}?`,
+    message: `Trust ${trust.directory}?`,
     detail: [
-      ...(trust.changed === true
-        ? [
-            "This folder's config changed since you trusted it, and Orbit is leaving out what changed:",
-            [
-              ...shown.map((item) => `${item.name}: ${item.kinds}`),
-              ...(trust.held.length > shown.length ? [`and ${trust.held.length - shown.length} more`] : []),
-            ].join("\n"),
-          ]
-        : [
-            "Do you know where this folder came from? If you are not sure, read through its files before you go on.",
-            "Orbit can read, change and run the files here, and nothing here loads until you trust it.",
-          ]),
+      "Do you know where this folder came from? If you are not sure, read through its files before you go on.",
+      "Orbit can read, change and run the files here, and nothing here loads until you trust it.",
       ...(trust.opened === undefined
         ? []
         : [
             `VS Code opened ${trust.opened}. Trust belongs to the project's folder, which covers everything under it and its linked worktrees.`,
           ]),
-      trust.changed === true
-        ? "Trust the changes only if you know who made them. The folder stays trusted either way, and the rest of its config keeps running."
-        : trust.persistent
+      trust.persistent
         ? "Trust it only if you trust whoever wrote it. It stays trusted until `orb trust --revoke`."
         : "Trust it only if you trust whoever wrote it. Trusting a home directory or filesystem root lasts only until Orbit restarts, or on the background service until the service restarts. End it sooner with `orb trust --revoke`.",
-      ...(trust.above.length === 0 ? [] : [aboveNote(trust.above)]),
     ].join("\n\n"),
-    accept: trust.changed === true ? "Trust changes" : trust.persistent ? "Trust this folder" : "Trust until Orbit restarts",
+    accept: trust.persistent ? "Trust this folder" : "Trust until Orbit restarts",
   }
 }
 
 /** What to tell the person once the folder is trusted. */
 export function trusted(grant: TrustGrant) {
-  return [
-    grant.persistent ? `Trusted ${grant.directory}.` : `Trusted ${grant.directory} until Orbit restarts.`,
-    ...(grant.above.length === 0 ? [] : [aboveNote(grant.above)]),
-  ].join(" ")
-}
-
-// Config above the project stays off, and no command is offered for it: a grant always goes to the project's root,
-// which is not always the folder the config sits in, so advice to trust that folder would not always work.
-function aboveNote(folders: ReadonlyArray<string>) {
-  return `Config in ${folders.join(", ")} stays off: each folder is trusted on its own.`
+  return grant.persistent ? `Trusted ${grant.directory}.` : `Trusted ${grant.directory} until Orbit restarts.`
 }
 
 function isWithheld(value: unknown): value is TrustWithheld {
@@ -167,18 +92,6 @@ function isWithheld(value: unknown): value is TrustWithheld {
     typeof value.path === "string" &&
     "kinds" in value &&
     Array.isArray(value.kinds) &&
-    value.kinds.every((kind) => typeof kind === "string") &&
-    (!("directory" in value) || value.directory === undefined || typeof value.directory === "string")
+    value.kinds.every((kind) => typeof kind === "string")
   )
-}
-
-// A kind the protocol has no words for yet is written out as it came.
-function label(kind: string) {
-  return Object.hasOwn(labels, kind) ? labels[kind as TrustKind] : plain(kind)
-}
-
-// A file or directory named from the project's folder when it lies inside it, else by its full path.
-function fromFolder(directory: string, file: string) {
-  const relative = path.relative(directory, file)
-  return relative === "" || path.isAbsolute(relative) || relative.split(path.sep)[0] === ".." ? file : relative
 }

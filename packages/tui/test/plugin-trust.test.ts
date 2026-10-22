@@ -173,14 +173,15 @@ test("a server that takes the first read and never answers does not hold the ter
   })
 }, 20_000)
 
-test("a plugin in a folder above the folder the server calls its project waits until that folder is trusted too", async () => {
+// D7 and class 3: the terminal UI looks for the project's root on its own and finds the repository around `sub`. The
+// server, which could not open that repository, takes `sub` as its project. Nothing above the server's project is read,
+// so the plugin around `sub` never loads, even once the folder that holds it is trusted too. The control is the first row
+// of this file, where the server's project is the repository and the same plugin loads.
+test("a plugin in a folder above the folder the server calls its project never loads", async () => {
   await using fixture = await project()
   await using state = await tmpdir()
   const sub = path.join(fixture.path, "sub")
   await mkdir(sub)
-  let held = true
-  // The terminal UI looks for the project's root on its own and finds the repository around `sub`. The server, which
-  // could not open that repository, takes `sub` as its project, and lists the folder around it as config above.
   await inside(sub, async () => {
     const cwd = process.cwd()
     const above = path.dirname(cwd)
@@ -188,10 +189,7 @@ test("a plugin in a folder above the folder the server calls its project waits u
       state: state.path,
       fetch: (url, request) => {
         if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
-        return json({
-          ...status(cwd, true),
-          withheld: held ? [{ path: path.join(above, ".orbit"), kinds: ["plugins"], directory: above }] : [],
-        })
+        return json(status(cwd, true))
       },
     })
     await setup.ready
@@ -200,12 +198,12 @@ test("a plugin in a folder above the folder the server calls its project waits u
     // The folder in view is trusted, and no dialog asks about the one above it, but its plugin has not run.
     expect(await fixture.marks()).toEqual([])
 
-    held = false
     setup.events.emit({ id: "evt_trust", created: 1, type: "trust.updated", data: { directory: above, trusted: true } })
-    await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
-    expect(await fixture.marks()).toEqual(["loaded"])
+    await setup.flush()
+    await Bun.sleep(500)
+    expect(await fixture.marks()).toEqual([])
   })
-})
+}, 20_000)
 
 test.each([
   ["has no trust route", () => new Response("not found", { status: 404 })],
@@ -262,7 +260,9 @@ test("a plugin planted while the server cannot answer is not imported on the ans
   })
 }, 30_000)
 
-test("a project's tui-only plugin is not imported while the server reports its plugins as changed", async () => {
+// D8: a server older than this client can still list a trusted project's plugins as changed since the grant; they load
+// all the same.
+test("a project's tui-only plugin is imported even while an older server reports its plugins as changed", async () => {
   await using fixture = await project()
   await using state = await tmpdir()
   await inside(fixture.path, async () => {
@@ -278,8 +278,8 @@ test("a project's tui-only plugin is not imported while the server reports its p
     })
     await setup.ready
     await setup.waitForFrame((frame) => promptReady(frame))
-    await Bun.sleep(500)
-    expect(await fixture.marks()).toEqual([])
+    await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
+    expect(await fixture.marks()).toEqual(["loaded"])
   })
 }, 30_000)
 

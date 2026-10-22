@@ -93,30 +93,7 @@ export type LocationTrustGetOutput = {
       | "network"
       | "settings"
     >
-    readonly directory?: AbsolutePath | undefined
-    readonly persistent?: boolean | undefined
   }>
-  readonly changed?:
-    | ReadonlyArray<{
-        readonly path: AbsolutePath
-        readonly kinds: ReadonlyArray<
-          | "hooks"
-          | "mcp"
-          | "plugins"
-          | "commands"
-          | "permissions"
-          | "providers"
-          | "shell"
-          | "env"
-          | "formatter"
-          | "lsp"
-          | "sandbox"
-          | "skills"
-          | "network"
-          | "settings"
-        >
-      }>
-    | undefined
 }
 export type LocationTrustGetOperation<E = never> = (
   input?: LocationTrustGetInput,
@@ -126,7 +103,6 @@ export type LocationTrustUpdateInput = {
   readonly location?: { readonly directory?: string | undefined } | undefined
   readonly trust: boolean
   readonly persist?: boolean | undefined
-  readonly holder?: string | undefined
 }
 export type LocationTrustUpdateOutput = {
   readonly directory: AbsolutePath
@@ -152,30 +128,7 @@ export type LocationTrustUpdateOutput = {
       | "network"
       | "settings"
     >
-    readonly directory?: AbsolutePath | undefined
-    readonly persistent?: boolean | undefined
   }>
-  readonly changed?:
-    | ReadonlyArray<{
-        readonly path: AbsolutePath
-        readonly kinds: ReadonlyArray<
-          | "hooks"
-          | "mcp"
-          | "plugins"
-          | "commands"
-          | "permissions"
-          | "providers"
-          | "shell"
-          | "env"
-          | "formatter"
-          | "lsp"
-          | "sandbox"
-          | "skills"
-          | "network"
-          | "settings"
-        >
-      }>
-    | undefined
 }
 export type LocationTrustUpdateOperation<E = never> = (
   input: LocationTrustUpdateInput,

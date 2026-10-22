@@ -344,8 +344,10 @@ describe("Config", () => {
                 subscriptions.filter((item) => inFixture(global, item.path) || inFixture(link, item.path)),
               ).toEqual([])
             }).pipe(
+              // The project's root is the folder that holds the link, so the walk (which ends there, D7) goes on past the
+              // global root and has folders to watch.
               Effect.provide(
-                testLayer(project, global, project, undefined, undefined, undefined, undefined, { global: false }),
+                testLayer(project, global, tmp.path, undefined, undefined, undefined, undefined, { global: false }),
               ),
             ),
           ),
@@ -1603,7 +1605,8 @@ describe("Config", () => {
     ),
   )
 
-  it.live("loads global and ancestor configuration across the project boundary", () =>
+  // D7 (owner, 2026-10-21: "match refrence"): the walk ends at the project's root, so the `orbit.json` above it is not read.
+  it.live("loads global and ancestor configuration up to the project's root, and none above it", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {
         const global = path.join(tmp.path, "global")
@@ -1657,7 +1660,6 @@ describe("Config", () => {
             expect(yield* compatRoots(tmp.path)).toEqual(expectedRoots)
             expect(documents.map((document) => document.info.$schema)).toEqual([
               "global",
-              "outside",
               "root",
               "parent",
               "directory",
@@ -1667,7 +1669,6 @@ describe("Config", () => {
             expect(entries.map((entry) => (entry.type === "document" ? entry.info.$schema : entry.path))).toEqual([
               "global",
               AbsolutePath.make(global),
-              "outside",
               "root",
               "parent",
               "directory",
@@ -1772,11 +1773,12 @@ function scopeLayer(
   options?: Config.Options,
   remote?: ReturnType<typeof remoteNodes>,
   globalDirectory = path.join(home, ".config", "orbit"),
+  projectDirectory = directory,
 ) {
   return testLayer(
     directory,
     globalDirectory,
-    directory,
+    projectDirectory,
     undefined,
     undefined,
     remote?.credential,
@@ -1825,7 +1827,7 @@ describe("Config scopes", () => {
       })
 
       const entries = yield* Config.Service.use((config) => config.entries()).pipe(
-        Effect.provide(scopeLayer(path.join(tmp.path, "home"), app)),
+        Effect.provide(scopeLayer(path.join(tmp.path, "home"), app, undefined, undefined, undefined, repo)),
       )
 
       // The .orbit directories stay project entries; only their local documents move up to the local scope.
@@ -2046,11 +2048,12 @@ describe("Config scopes", () => {
     }),
   )
 
-  it.live("loads the home directory's orbit files for a project outside home", () =>
+  it.live("loads the home directory's orbit files for a project outside home, and nothing above the project", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
       const home = path.join(tmp.path, "home")
-      const app = path.join(tmp.path, "outside", "repo", "app")
+      const repo = path.join(tmp.path, "outside", "repo")
+      const app = path.join(repo, "app")
       yield* write({
         [path.join(home, "orbit.json")]: marker("home"),
         [path.join(tmp.path, "orbit.json")]: marker("above"),
@@ -2060,26 +2063,25 @@ describe("Config scopes", () => {
       })
 
       const entries = yield* Config.Service.use((config) => config.entries()).pipe(
-        Effect.provide(scopeLayer(home, app)),
+        Effect.provide(scopeLayer(home, app, undefined, undefined, undefined, repo)),
       )
 
-      // Ancestors above a repository outside home are project config like any other.
+      // The walk ends at the repository's root (D7), so the folders above it supply nothing.
       expect(labels(tmp.path, entries)).toEqual([
         "user:dir(home/.config/orbit)",
         "user:home",
-        "project:above",
-        "project:outside",
         "project:repo",
         "project:app",
       ])
     }),
   )
 
-  it.live("keeps ancestors between the home directory and a repository in project scope", () =>
+  it.live("reads the home directory's files as the user's, and no folder between home and a repository", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
       const home = path.join(tmp.path, "home")
-      const app = path.join(home, "work", "repo", "packages", "app")
+      const repo = path.join(home, "work", "repo")
+      const app = path.join(repo, "packages", "app")
       yield* write({
         [path.join(home, "orbit.json")]: marker("home"),
         [path.join(home, "work", "orbit.json")]: marker("work"),
@@ -2088,13 +2090,13 @@ describe("Config scopes", () => {
       })
 
       const entries = yield* Config.Service.use((config) => config.entries()).pipe(
-        Effect.provide(scopeLayer(home, app)),
+        Effect.provide(scopeLayer(home, app, undefined, undefined, undefined, repo)),
       )
 
+      // `work` is above the repository's root, so it supplies nothing (D7).
       expect(labels(tmp.path, entries)).toEqual([
         "user:dir(home/.config/orbit)",
         "user:home",
-        "project:work",
         "project:repo",
         "project:app",
       ])
@@ -2173,14 +2175,15 @@ describe("Config scopes", () => {
           "user:home-local",
         ]
 
-        expect(labels(tmp.path, (yield* load({})).entries)).toEqual([...user, "project:work", "project:project"])
+        // `work` is above the project, so it supplies nothing (D7).
+        expect(labels(tmp.path, (yield* load({})).entries)).toEqual([...user, "project:project"])
 
         // --bare skips the project walk but still loads the user's own config, home files included.
         expect(labels(tmp.path, (yield* load({ project: false })).entries)).toEqual(user)
 
         // Home's files are skipped exactly like the global config directory, even though the walk passes through home.
         const withoutGlobal = yield* load({ global: false })
-        expect(labels(tmp.path, withoutGlobal.entries)).toEqual(["project:work", "project:project"])
+        expect(labels(tmp.path, withoutGlobal.entries)).toEqual(["project:project"])
         expect(
           withoutGlobal.watches.filter(
             (watch) => watch.path === home || inFixture(path.join(home, ".orbit"), watch.path),

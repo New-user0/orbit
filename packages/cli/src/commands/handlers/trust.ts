@@ -9,16 +9,14 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
-import { aboveAdvice, call, heldLines, quoted, unsupported } from "../../util/trust"
+import { call, heldLines, quoted, unsupported } from "../../util/trust"
 import { directory } from "./flow/execute"
 
 export default Runtime.handler(
   Commands.commands.trust,
   Effect.fn("cli.trust")(function* (input) {
-    if (input.list && (input.revoke || Option.isSome(input.directory) || Option.isSome(input.for)))
-      return yield* Effect.fail(new Error("--list takes no folder and cannot be combined with --revoke or --for"))
-    if (input.revoke && Option.isSome(input.for))
-      return yield* Effect.fail(new Error("--for names the location a folder is trusted through, so it cannot be combined with --revoke"))
+    if (input.list && (input.revoke || Option.isSome(input.directory)))
+      return yield* Effect.fail(new Error("--list takes no folder and cannot be combined with --revoke"))
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
@@ -35,22 +33,20 @@ export default Runtime.handler(
     }
 
     const global = yield* Global.Service
-    // The folder named, and the location it is trusted through: its own, unless --for names the location of a project
-    // that the folder is above.
-    const named = path.resolve(directory(), expand(Option.getOrUndefined(input.directory) ?? ".", global.home))
+    // The folder named, which is trusted through a location of its own.
     const location = {
-      directory: Option.isSome(input.for) ? path.resolve(directory(), expand(input.for.value, global.home)) : named,
+      directory: path.resolve(directory(), expand(Option.getOrUndefined(input.directory) ?? ".", global.home)),
     }
-    const holder = Option.isSome(input.for) ? named : undefined
     // A folder on this machine is checked here, where a typo gets a plain answer rather than a server error. The
     // folders of a server given with --server are its own.
-    const folders = [location.directory, ...(holder === undefined ? [] : [holder])]
     const missing =
-      Option.isNone(input.server) ? yield* Effect.promise(() => firstMissing(folders)) : undefined
+      Option.isNone(input.server) && !(yield* Effect.promise(() => isFolder(location.directory)))
+        ? location.directory
+        : undefined
     // A stored grant is ended by name, which the server matches without looking at the disk: a folder that was deleted can
-    // still be revoked, and so can a folder trusted as the holder of config above a project (--for), where opening a
-    // location for it would end the grant of the project it belongs to instead. A folder that is the project of its own
-    // location is ended through the location, as it always was.
+    // still be revoked, and so can a grant stored for a folder that is not the project of its own location (one that an
+    // older `orb trust --for` made), where opening a location for it would end the grant of the project it belongs to
+    // instead. A folder that is the project of its own location is ended through the location, as it always was.
     const holderGrant =
       input.revoke && missing === undefined
         ? (yield* ask((signal) => client.location.trust.list({ signal }))).some((grant) =>
@@ -91,28 +87,7 @@ export default Runtime.handler(
     // Asked before anything is granted: a grant for a home directory or a filesystem root is made in memory and would
     // last only until the server restarts, which is not what this command promises.
     const before = yield* ask((signal) => client.location.trust.get({ location }, { signal }))
-    // A folder above the project is trusted through a location that holds config back for it, and for no other.
-    const held = holder === undefined ? undefined : before.withheld.find((item) => sameFolder(item.directory, holder))
-    if (holder !== undefined && held === undefined && !sameFolder(before.directory, holder)) {
-      process.exitCode = 1
-      return yield* print(
-        [
-          `${plain(holder)} holds no config back for ${plain(location.directory)}, so there is nothing to trust it for there. \`orb trust\` without --for trusts the folder itself.`,
-        ],
-        process.stderr,
-      )
-    }
-    if (held !== undefined && held.persistent === false) {
-      process.exitCode = 1
-      return yield* print(
-        [
-          `${plain(holder ?? "")} is a home directory or a filesystem root, and Orbit never trusts those for good: that would trust every folder below it.`,
-          "To work with it, choose to trust it until Orbit restarts in the terminal UI, or pass --trust to `orb run`, `orb loop`, `orb flow` or `orb eval` for a single run.",
-        ],
-        process.stderr,
-      )
-    }
-    if (holder === undefined && !before.persistent) {
+    if (!before.persistent) {
       process.exitCode = 1
       return yield* print(
         [
@@ -122,36 +97,18 @@ export default Runtime.handler(
         process.stderr,
       )
     }
-    // A folder that is trusted already is trusted again when what it holds changed since, and says what that lifted. One
-    // that only a grant for a folder above covers gets a grant of its own, so it stays trusted when that grant ends.
-    const saved =
-      holder === undefined &&
-      before.source === "saved" &&
-      before.granted === undefined &&
-      (before.changed ?? []).length === 0
-    const status = saved
-      ? before
-      : yield* ask((signal) =>
-          client.location.trust.update({ location, trust: true, ...(holder === undefined ? {} : { holder }) }, { signal }),
-        )
-    // Only what the grant lifted is applied now. A file in a folder above the project is decided by its own folder's
-    // trust, so it is still held back, and the person is told which folder would lift it.
+    // A folder with a saved grant of its own is trusted as it stands, whatever its config holds now (D8). One that only a
+    // grant for a folder above covers gets a grant of its own, so it stays trusted when that grant ends.
+    const saved = before.source === "saved" && before.granted === undefined
+    const status = saved ? before : yield* ask((signal) => client.location.trust.update({ location, trust: true }, { signal }))
+    // Only what the grant lifted is applied now.
     const applied = before.withheld.filter((item) => !status.withheld.some((left) => left.path === item.path))
     return yield* print([
-      saved
-        ? `${plain(status.directory)} is already trusted.`
-        : `Trusted ${plain(holder ?? status.directory)}${(before.changed ?? []).length > 0 ? " again" : ""}`,
+      saved ? `${plain(status.directory)} is already trusted.` : `Trusted ${plain(status.directory)}`,
       ...(applied.length === 0
         ? []
         : ["Orbit now applies the project config it was holding back:", ...heldLines(status.directory, applied)]),
-      ...(status.withheld.length === 0
-        ? []
-        : [
-            "Still held back, because it sits in a folder above the project and each folder is trusted on its own:",
-            ...heldLines(status.directory, status.withheld),
-            `Look it over, then ${aboveAdvice(status.withheld, location.directory)}.`,
-          ]),
-      ...(saved ? [] : revokeAdvice(holder ?? status.directory)),
+      ...(saved ? [] : revokeAdvice(status.directory)),
     ])
   }),
 )
@@ -191,11 +148,6 @@ const isFolder = (target: string) =>
     (info) => info.isDirectory(),
     () => false,
   )
-
-// The first of these that is not a folder on this machine.
-const firstMissing = async (targets: ReadonlyArray<string>) => {
-  for (const target of targets) if (!(await isFolder(target))) return target
-}
 
 // Whether two names are one folder, folding case where the file system does.
 const sameFolder = (a: string | undefined, b: string) =>

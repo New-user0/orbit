@@ -4,7 +4,7 @@ import { allThemes, getOrbitTheme, isThemeSource, parseTheme, type ThemeDocument
 import { ansiToRgba } from "../theme/color"
 import { discoverThemes } from "../theme/discovery"
 import { generateSystem, terminalMode } from "../theme/system"
-import { configDirectories } from "../util/config-directories"
+import { themeDirectories } from "../util/config-directories"
 import { dedupeWith } from "effect/Array"
 import type { EntryKind, RunTuiConfig } from "./types"
 
@@ -309,8 +309,15 @@ async function themeSource(
 ): Promise<ThemeDocumentSource> {
   if (name === "system" && colors) return generateSystem(colors, mode)
   const { Global } = await import("@orbit/util/global")
+  // Mini starts only once the folder is trusted (`trustRefusal`), so the project's own themes are read with the user's,
+  // and nothing above the project's root (D7).
   const custom = await discoverThemes(
-    configDirectories(process.env.ORBIT_CONFIG_DIR ?? Global.Path.config, process.cwd()),
+    await themeDirectories({
+      config: process.env.ORBIT_CONFIG_DIR ?? Global.Path.config,
+      home: Global.Path.home,
+      cwd: process.cwd(),
+      project: {},
+    }),
   )
   const source = custom[name] ?? allThemes()[name] ?? getOrbitTheme()
   return isThemeSource(source) ? source : getOrbitTheme()

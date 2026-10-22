@@ -1,8 +1,8 @@
-import type { TrustKind, TrustStatus } from "@orbit/client"
+import type { TrustStatus } from "@orbit/client"
 import type { Plugin } from "@orbit/plugin/tui"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { batch, createMemo, createSignal, onMount } from "solid-js"
+import { createMemo, createSignal, onMount } from "solid-js"
 import { DialogTrust } from "../../../component/dialog-trust"
 import { StoryFooter } from "./footer"
 import type { Story } from "./index"
@@ -14,56 +14,19 @@ const ROOTS = [
   { label: "filesystem root", directory: "/", persistent: false },
 ] as const
 
-// What the folder holds back, in the order it is listed: its own config, which trusting it turns on.
-const SOURCES: readonly { path: string; kinds: readonly TrustKind[] }[] = [
-  { path: ".orbit", kinds: ["plugins", "commands"] },
-  { path: "orbit.json", kinds: ["hooks", "mcp", "providers"] },
-  { path: ".mcp.json", kinds: ["mcp"] },
-  { path: "orbit.local.jsonc", kinds: ["permissions", "sandbox"] },
-  { path: "packages/web/.orbit", kinds: ["plugins"] },
-  { path: "packages/api/orbit.json", kinds: ["shell", "formatter", "lsp"] },
-  { path: "packages/docs/a-deliberately-long-directory-name/.orbit", kinds: ["network", "settings"] },
-]
-
-// Config in the folders above the project, each with the folder whose own trust turns it on, which trusting the project
-// does not. Discovery goes from the outermost folder in, so these can come ahead of the project's own in what the server
-// reports, and are listed here that way to show that the dialog puts the project's own first.
-const ABOVE: readonly { path: string; kinds: readonly TrustKind[]; directory: string }[] = [
-  { path: "/Users/kit/code/orbit.json", kinds: ["hooks", "mcp"], directory: "/Users/kit/code" },
-  { path: "/Users/kit/code/shared/.orbit", kinds: ["plugins"], directory: "/Users/kit/code/shared" },
-]
-
-// How much is held back: one file, a few, or more than the dialog has room for.
-const AMOUNTS = [1, 3, SOURCES.length] as const
-
-// How much sits above the project: nothing, the files of one folder, or those of two.
-const ABOVE_AMOUNTS = [0, 1, ABOVE.length] as const
-
 function DialogTrustStory(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const theme = props.context.theme
   const [root, setRoot] = createSignal(0)
-  const [amount, setAmount] = createSignal(0)
-  const [above, setAbove] = createSignal(0)
-  // A folder that was trusted and whose config changed since asks "Trust changes?" instead of "Trust this folder?".
-  const [changed, setChanged] = createSignal(false)
   const [message, setMessage] = createSignal("dialog open")
 
-  const status = createMemo<TrustStatus>(() => {
-    const item = ROOTS[root()]
-    const own = SOURCES.slice(0, AMOUNTS[amount()]).map((source) => ({
-      path: `${item.directory.replace(/\/$/, "")}/${source.path}`,
-      kinds: [...source.kinds],
-    }))
-    return {
-      directory: item.directory,
-      trusted: changed(),
-      persistent: item.persistent,
-      ...(changed() ? { source: "saved" as const } : {}),
-      withheld: [...ABOVE.slice(0, ABOVE_AMOUNTS[above()]).map((source) => ({ ...source, kinds: [...source.kinds] })), ...own],
-      changed: changed() ? own : [],
-    }
-  })
+  // Nothing of a folder that is not trusted is read, so the status lists nothing it holds.
+  const status = createMemo<TrustStatus>(() => ({
+    directory: ROOTS[root()].directory,
+    trusted: false,
+    persistent: ROOTS[root()].persistent,
+    withheld: [],
+  }))
 
   // The real dialog, with the answers kept here: nothing is sent to a server, so it is safe to explore.
   const open = () => {
@@ -71,7 +34,6 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
       () => (
         <DialogTrust
           status={status()}
-          location={ROOTS[root()].directory}
           onTrust={(persist) => {
             setMessage(`trust chosen, which sends persist:${persist}`)
             props.context.ui.dialog.clear()
@@ -102,36 +64,13 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
         group: "Storybook",
         run: () => setRoot((value) => (value + 1) % ROOTS.length),
       },
-      {
-        bind: "s",
-        title: "Cycle how much is held back",
-        group: "Storybook",
-        run: () => setAmount((value) => (value + 1) % AMOUNTS.length),
-      },
-      {
-        bind: "a",
-        title: "Cycle how much config sits above the project",
-        group: "Storybook",
-        run: () => setAbove((value) => (value + 1) % ABOVE_AMOUNTS.length),
-      },
-      {
-        bind: "c",
-        title: "Toggle: trusted, with config that changed since",
-        group: "Storybook",
-        run: () => setChanged((value) => !value),
-      },
       { bind: "o,return", title: "Open the dialog", group: "Storybook", run: open },
       {
         bind: "x",
         title: "Reset the fixture",
         group: "Storybook",
         run: () => {
-          batch(() => {
-            setRoot(0)
-            setAmount(0)
-            setAbove(0)
-            setChanged(false)
-          })
+          setRoot(0)
           open()
         },
       },
@@ -150,18 +89,10 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
       <StoryFooter
         context={props.context}
         title="storybook / trust dialog"
-        details={[
-          ROOTS[root()].label,
-          `${AMOUNTS[amount()]} held back`,
-          `${ABOVE_AMOUNTS[above()]} above`,
-          changed() ? "changed since trusted" : "untrusted",
-        ]}
+        details={[ROOTS[root()].label, "untrusted"]}
         message={message()}
         controls={[
           { shortcut: "r", label: "root" },
-          { shortcut: "s", label: "amount held back" },
-          { shortcut: "a", label: "config above" },
-          { shortcut: "c", label: "changed since trusted" },
           { shortcut: "o", label: "open" },
           { shortcut: "x", label: "reset" },
           { shortcut: "esc", label: "back" },

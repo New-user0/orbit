@@ -17,7 +17,6 @@ const clean = (folder: string): TrustStatus => ({
   directory: folder,
   trusted: false,
   persistent: true,
-  changed: [],
   withheld: [],
 })
 const trusted = (folder: string): TrustStatus => ({
@@ -25,7 +24,6 @@ const trusted = (folder: string): TrustStatus => ({
   trusted: true,
   persistent: true,
   source: "saved",
-  changed: [],
   withheld: [],
 })
 

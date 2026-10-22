@@ -4,7 +4,7 @@ import { createSignal, Show } from "solid-js"
 import { useTheme } from "../context/theme"
 import { asksTrust } from "../util/trust"
 
-/** Shown while the folder in view holds something back, because it is untrusted or its config changed since; opens the question of trusting it. */
+/** Shown while the folder in view is not trusted; opens the question of trusting it. */
 export function TrustIndicator(props: { status: TrustStatus | undefined; onOpen: () => void }) {
   const theme = useTheme()
   const dimensions = useTerminalDimensions()
@@ -21,7 +21,7 @@ export function TrustIndicator(props: { status: TrustStatus | undefined; onOpen:
         onMouseUp={props.onOpen}
       >
         <text fg={theme.text.feedback.warning.base} wrapMode="none">
-          {props.status?.trusted ? "⊙ Changed" : "⊙ Untrusted"}
+          ⊙ Untrusted
         </text>
         <Show when={dimensions().width >= 80}>
           <text fg={hovered() ? theme.text.base : theme.text.muted} wrapMode="none">

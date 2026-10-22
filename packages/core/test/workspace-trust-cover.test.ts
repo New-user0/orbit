@@ -81,26 +81,6 @@ describe("WorkspaceTrust coverage", () => {
     }),
   )
 
-  // The executable config a grant approved is recorded for the folder that was granted, so a folder below it that the
-  // grant covers is compared with those records (F18), not with records of its own that no grant made.
-  it.live("a folder that a parent's grant covers is compared with the records that grant made", () =>
-    Effect.gen(function* () {
-      const folders = yield* fixture
-      const source = path.join(folders.child, ".orbit")
-      yield* Effect.promise(() => fs.mkdir(source, { recursive: true }))
-      yield* Effect.gen(function* () {
-        const trust = yield* WorkspaceTrust.Service
-        const observation = { path: source, identity: source, digests: { hooks: "approved" } }
-        yield* trust.grant(folders.parent, { persist: true, via: "test", observations: [observation] })
-        expect(yield* trust.compare(folders.child, [observation])).toEqual([])
-        // The control: a digest the grant did not approve is a change.
-        expect(yield* trust.compare(folders.child, [{ ...observation, digests: { hooks: "edited" } }])).toEqual([
-          { path: source, kinds: ["hooks"] },
-        ])
-      }).pipe(Effect.provide(build(folders)))
-    }),
-  )
-
   it.live("a grant for this process covers the folders below it as well", () =>
     Effect.gen(function* () {
       const folders = yield* fixture
