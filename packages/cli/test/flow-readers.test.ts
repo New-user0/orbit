@@ -5,9 +5,13 @@ import { Cause, Effect, Exit, Option } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import evaluate from "../src/commands/handlers/eval"
 import approve from "../src/commands/handlers/flow/approve"
+import clean from "../src/commands/handlers/flow/clean"
 import cost from "../src/commands/handlers/flow/cost"
 import ls from "../src/commands/handlers/flow/ls"
+import replay from "../src/commands/handlers/flow/replay"
+import resume from "../src/commands/handlers/flow/resume"
 import show from "../src/commands/handlers/flow/show"
 import trace from "../src/commands/handlers/flow/trace"
 import watch from "../src/commands/handlers/flow/watch"
@@ -127,6 +131,72 @@ test("a reader opens no run store above the project's folder the server names", 
     expect(await failure(shown(run))).toBe("No run run_20260101000010_0a1b2c in this repository")
     project.directory = above
     expect(await failure(shown(run))).toBeUndefined()
+  } finally {
+    process.env.PWD = root
+    await located.stop(true)
+  }
+})
+
+// Class 3: the commands that go on from the run store, or clean up after it, find it the same way as the readers, no
+// higher than the project's folder the server names. A git repository above the folder holds a run; with the folder
+// itself as the project each command says it has no such run (clean does not reach the store), and the control, with the
+// repository above as the project, finds it.
+test("resume, replay, eval --resume and clean open no run store above the project's folder the server names", async () => {
+  const above = path.join(root, "above-writers")
+  const inner = path.join(above, "inner")
+  await fs.mkdir(inner, { recursive: true })
+  expect(Bun.spawnSync(["git", "init", "--quiet", above]).exitCode).toBe(0)
+  const id = "run_20260101000011_0a1b2c"
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(above)
+  store.create({ id, workflow: "CLONE-ABOVE", file: "w.yaml", directory: above, input: {} })
+  store.close()
+  const suite = path.join(inner, "suite.json")
+  await Bun.write(suite, JSON.stringify({ name: "suite", tasks: [] }))
+  const project = { directory: inner }
+  const located = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION })
+      const directory = url.searchParams.get("location[directory]") ?? ""
+      if (url.pathname === "/api/location/trust")
+        return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
+      if (url.pathname === "/api/location")
+        return Response.json({
+          directory,
+          project: { id: "proj_test", directory: project.directory, canonical: project.directory },
+        })
+      return new Response("not found", { status: 404 })
+    },
+  })
+  const at = { server: Option.some(located.url.origin), standalone: false, trust: false }
+  const flags = { auto: false, model: Option.none(), maxCost: Option.none(), maxTokens: Option.none() }
+  const commands = () => ({
+    resume: resume({ ...at, ...flags, run: id }),
+    replay: replay({ ...at, run: id, file: Option.none() }),
+    eval: evaluate({
+      ...at,
+      suite,
+      models: Option.none(),
+      concurrency: Option.none(),
+      resume: Option.some(id),
+      auto: false,
+      format: "table",
+    }),
+    clean: clean({ ...at, run: Option.some(id) }),
+  })
+  process.env.PWD = inner
+  try {
+    const missing = `No run ${id} in this repository`
+    // `orb flow clean` starts git no higher than the project's folder either, so it stops before the store.
+    const stopped: Record<string, string> = { clean: "orb flow clean works inside a git repository" }
+    for (const [name, command] of Object.entries(commands()))
+      expect({ name, failure: await failure(command) }).toEqual({ name, failure: stopped[name] ?? missing })
+    project.directory = above
+    for (const [name, command] of Object.entries(commands()))
+      expect({ name, found: (await failure(command)) !== missing }).toEqual({ name, found: true })
   } finally {
     process.env.PWD = root
     await located.stop(true)
