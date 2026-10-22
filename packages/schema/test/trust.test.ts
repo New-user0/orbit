@@ -35,15 +35,10 @@ describe("Trust", () => {
       directory: "/repo",
       trusted: false,
       persistent: true,
-      withheld: [
-        { path: "/repo/orbit.json", kinds: ["hooks", "mcp"] },
-        // A file above the project names the folder whose trust lifts it.
-        { path: "/work/.orbit", kinds: ["plugins"], directory: "/work" },
-      ],
+      withheld: [{ path: "/repo/orbit.json", kinds: ["hooks", "mcp"] }],
     }
     expect<unknown>(encode(decode(untrusted))).toEqual(untrusted)
     expect(encode(decode(untrusted))).not.toHaveProperty("source")
-    expect(encode(decode(untrusted)).withheld[0]).not.toHaveProperty("directory")
     for (const source of ["saved", "session", "implicit"] as const) {
       const trusted = { directory: "/repo", trusted: true, persistent: source === "saved", source, withheld: [] }
       expect<unknown>(encode(decode(trusted))).toEqual(trusted)
@@ -52,25 +47,28 @@ describe("Trust", () => {
     expect(() => decode({ ...untrusted, withheld: [{ path: "/repo/orbit.json", kinds: ["environment"] }] })).toThrow()
   })
 
-  test("round-trips what changed since the grant, and a status from a server that sends no such list", () => {
+  // E7 of trust-first part 2: a server older than this change still sends what changed since the grant and the folder
+  // above the project that holds an entry. Both decode, and neither is kept: nothing reads them any more.
+  test("decodes a status from an older server that lists changes and folders above the project, and drops both", () => {
     const encode = Schema.encodeSync(Trust.Status)
     const decode = Schema.decodeUnknownSync(Trust.Status)
-    const changed = {
+    const older = {
       directory: "/repo",
       trusted: true,
       persistent: true,
       source: "saved",
       withheld: [
         { path: "/repo/orbit.json", kinds: ["hooks"] },
-        // A holder that can never be trusted for good says so.
         { path: "/orbit.json", kinds: ["hooks"], directory: "/", persistent: false },
       ],
       changed: [{ path: "/repo/orbit.json", kinds: ["hooks", "skills"] }],
     }
-    expect<unknown>(encode(decode(changed))).toEqual(changed)
-    const { changed: _, ...older } = changed
-    expect(encode(decode(older))).not.toHaveProperty("changed")
-    expect(() => decode({ ...changed, changed: [{ path: "/repo/orbit.json", kinds: ["environment"] }] })).toThrow()
+    const decoded = encode(decode(older))
+    expect(decoded).not.toHaveProperty("changed")
+    expect(decoded.withheld).toEqual([
+      { path: "/repo/orbit.json", kinds: ["hooks"] },
+      { path: "/orbit.json", kinds: ["hooks"] },
+    ])
   })
 
   test("round-trips a grant and rejects a negative time", () => {
