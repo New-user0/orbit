@@ -94,7 +94,7 @@ import { collapseShellOutput, collapseToolOutput } from "../../util/collapse-too
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { useLocation } from "../../context/location"
-import { useTrustPrompt } from "../../context/trust"
+import { useTrust, useTrustPrompt } from "../../context/trust"
 import { Slot } from "../../plugin/render"
 import { usePlugin } from "../../plugin/context"
 import {
@@ -193,6 +193,7 @@ export function Session(props: {
 
   createEffect(() => currentLocation.set(location()))
   useTrustPrompt()
+  const trust = useTrust()
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -613,7 +614,7 @@ export function Session(props: {
 
   createEffect(() => {
     const current = prompt()
-    if (sent || !current || !synced() || !local.model.ready || !local.model.catalogReady) return
+    if (sent || !current || !synced() || !trust.typing() || !local.model.ready || !local.model.catalogReady) return
     if (!local.agent.current() || !local.model.current()) return
     if (!args.prompt || route.prompt?.text !== args.prompt || current.current.text !== args.prompt) return
     sent = true

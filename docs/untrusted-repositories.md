@@ -1758,7 +1758,8 @@ against a service that was started before the upgrade (#18, #22). The pattern re
 - Parse a switch as its siblings are parsed (`1` and `true`, case-insensitive; `ORBIT_DISABLE_COMPAT` once took only
   `1`).
 - Put a time limit on every check that a UI waits for. The terminal UI's trust reads time out after two seconds and keep
-  the last answer (`packages/tui/src/context/trust.tsx`).
+  the last answer (`packages/tui/src/context/trust.tsx`); a read that fails, times out or does not decode as a trust
+  status keeps its prompts closed and opens the question ('a trust read that … keeps Home's prompt closed').
 - `ConfigTrust.classification` is exhaustive at compile time, and a field it does not know is held back.
 - Bound what a parsed value comes to, not only its text. YAML keeps an alias as one more reference to the node its
   anchor names, so a few hundred bytes can stand for billions of values, or for a value that holds itself, and every
@@ -2360,7 +2361,11 @@ already guarded elsewhere.
   folder with a JSON-RPC error whose `data` is `{ type: "untrusted_folder", directory, persistent }`, and keeps stdout
   for the protocol. `orb mini` refuses before it takes the terminal, and on a server that cannot say. The terminal UI
   asks about the folder it starts in with Trust or Exit, and the server refuses the work of a session in a folder that
-  is not trusted (`UntrustedFolderError`), which covers `orb serve` and SDK hosts.
+  is not trusted (`UntrustedFolderError`), which covers `orb serve` and SDK hosts. The terminal UI's prompts take no
+  keys until the folder in view has been read and, for the start folder, trusted (`trust.typing` in
+  `packages/tui/src/context/trust.tsx`), so a key typed ahead is neither sent nor an answer to the question, which
+  starts on Trust only while they are closed (`packages/tui/test/trust-first.test.ts`, 'typing ahead into Home before
+  the question opens …').
 - `--trust` forces a private server and trusts for its lifetime without storing the grant (it rejects `--server`).
   `orb trust [folder] [--revoke] [--list]` refuses home and filesystem roots.
 - The routes are `GET` and `POST /api/location/trust` and `GET /api/trust` (`client.location.trust.get`, `update` and

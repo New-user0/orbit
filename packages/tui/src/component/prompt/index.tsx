@@ -241,7 +241,10 @@ export function Prompt(props: PromptProps) {
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
 
   const enabled = useInteractivity()
-  const disabled = () => props.disabled || !enabled()
+  const trust = useTrust()
+  // Until the folder's trust is settled the prompt takes no keys at all, so nothing typed ahead is sent or reaches the
+  // question about the folder (`trust.typing`).
+  const disabled = () => props.disabled || !enabled() || !trust.typing()
   const leader = Keymap.useLeaderActive()
   const muted = () => leader() || props.muted
   const local = useLocal()
@@ -260,7 +263,6 @@ export function Prompt(props: PromptProps) {
   const currentLocation = useLocation()
   const args = useArgs()
   const config = useConfig().data
-  const trust = useTrust()
   // With prompt.vim on, Escape leaves insert mode and normal-mode keys move and edit instead of typing.
   // The mode, the half-typed command and the unnamed register live as long as the prompt does; a submit leaves them.
   const [vim, setVim] = createSignal<Vim.State>(Vim.initial)
@@ -1919,7 +1921,8 @@ export function Prompt(props: PromptProps) {
   })
 
   const placeholderText = createMemo(() => {
-    if (props.showPlaceholder === false) return undefined
+    // A prompt that cannot be used yet does not invite typing.
+    if (props.showPlaceholder === false || !trust.typing()) return undefined
     const value = (() => {
       if (store.mode === "shell") {
         if (!shell().length) return undefined

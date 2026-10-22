@@ -1,4 +1,6 @@
 import type { TrustStatus } from "@orbit/client"
+import { Trust } from "@orbit/schema/trust"
+import { Option, Schema } from "effect"
 import { isDeepEqual } from "remeda"
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js"
 import { DialogTrust } from "../component/dialog-trust"
@@ -15,6 +17,7 @@ import { useLog } from "./log"
 import { useTuiPaths } from "./runtime"
 
 const DialogTrustKey = Symbol("DialogTrust")
+const decodeStatus = Schema.decodeUnknownOption(Trust.Status)
 
 /**
  * The trust status of the folder at `directory`, read again whenever the server reports that trust or config changed.
@@ -43,6 +46,11 @@ export function createTrustStatus(input: {
       // A server that takes the request and never answers would otherwise leave the terminal UI on its loading screen,
       // as nothing starts before the first answer. Two seconds, as `orb mini` allows; timing out is a failed read.
       .get({ location: { directory: directory() } }, { signal: AbortSignal.timeout(2_000) })
+      // An answer that is not a trust status is a failed read as well (class 7), not one to draw from.
+      .then((answer) => {
+        if (Option.isNone(decodeStatus(answer))) throw new Error("the answer is not a trust status")
+        return answer
+      })
       .then(
         (next) => {
           if (attempt === generation)
@@ -116,6 +124,16 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     // same folder for both.
     const starting = (status: TrustStatus) =>
       directory() === data.location.default().directory || status.directory === startup.status()?.directory
+    // Whether the prompts take typing. Not until the folder in view has been read and, when it is the folder the terminal
+    // UI started in and is not trusted, the person has trusted it: the reference asks before it draws anything that takes
+    // input, so nothing typed ahead reaches a prompt or answers the question. A read that fails, times out or does not
+    // decode stands for a folder that is not trusted (`asked`), so it keeps the prompts closed too. Once open they stay
+    // open for the run.
+    const typing = createMemo((open: boolean) => {
+      if (open) return true
+      const status = asked()
+      return status !== undefined && (status.trusted || !starting(status))
+    }, false)
     // The folder to ask about, if any. A string, so that a fresh read of the same answer does not ask again.
     const pending = createMemo(() => {
       const status = asked()
@@ -161,12 +179,16 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
       const folder = directory()
       // The folder the terminal UI started in, while it is not trusted, is answered with Trust or Exit.
       const leaving = !status.trusted && starting(status)
+      // Only a question that opens while the prompts are closed can start on Trust, because no keystroke meant for a
+      // prompt can reach it. One that opens later, such as after `orb trust --revoke`, starts on Exit or Not now.
+      const guarded = !typing()
       dialog.replace(
         () => (
           <DialogTrust
             status={asked() ?? status}
             location={folder}
             leave={leaving ? "exit" : "later"}
+            guarded={guarded}
             onTrust={(persist) => grant(folder, persist)}
             onNotNow={() => dialog.clear()}
             onDecline={() => exit(new TrustDeclined(0))}
@@ -200,6 +222,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
       /** The status of the folder in view: the current session's, or Home's. */
       status: current.status,
       held: createMemo(() => asksTrust(asked())),
+      /** Whether the prompts take typing: the folder in view was read, and is trusted unless it is another folder. */
+      typing,
       pending,
       open,
       /**

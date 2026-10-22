@@ -42,6 +42,8 @@ export function DialogTrust(props: {
   /** The folder in view, which the commands that trust a folder above the project go through. */
   location?: string
   leave?: "exit" | "later"
+  /** Whether nothing could be typed before the question opened, so that Enter on Trust is a choice the person saw. */
+  guarded?: boolean
   onTrust: (persist: boolean) => void | Promise<void>
   onNotNow: () => void
   /** The "no" key on the question about the folder the terminal UI started in, which ends it with status 0. */
@@ -113,10 +115,10 @@ export function DialogTrust(props: {
       title={changed() ? "Trust the changes?" : "Trust this folder?"}
       renderFilter={false}
       locked={pending()}
-      // A question about another folder can open while a person is typing, so a stray Enter there must never be what
-      // trusts it. The question about the folder the terminal UI started in comes before anything can be typed, and
-      // starts on Trust, as the reference's does.
-      focusTarget={props.leave === "exit" && !changed() ? "trust" : "later"}
+      // A question can open while a person is typing, so a stray Enter there must never be what trusts it. The question
+      // about the folder the terminal UI started in comes while the prompts take no typing, and starts on Trust, as the
+      // reference's does.
+      focusTarget={props.guarded === true && !changed() ? "trust" : "later"}
       header={
         <box flexDirection="column" gap={1}>
           <text wrapMode="none" truncate>
