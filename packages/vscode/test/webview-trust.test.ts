@@ -63,7 +63,7 @@ beforeAll(async () => {
 // Other files can share this process, so the page's globals go with this one.
 afterAll(() => {
   for (const timer of timers) clearInterval(timer)
-  for (const name of ["acquireVsCodeApi", "document", "window"]) Reflect.deleteProperty(globalThis, name)
+  Object.assign(globalThis, { acquireVsCodeApi: undefined, document: undefined, window: undefined })
 })
 
 const banner = () => body.children.find((node) => node.className === "trust")!
