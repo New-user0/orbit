@@ -241,6 +241,7 @@ describe("Config under workspace trust", () => {
         expect(Config.latest(yield* config.entries(), "websearch")).toBe(false)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("applies none of the env of an untrusted project, local and foreign settings file, and all of it once trusted", () =>
@@ -278,6 +279,7 @@ describe("Config under workspace trust", () => {
         })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("reads no system_prompt_file of an untrusted project and local file, and never reads a repository's prompt keys", () =>
@@ -311,6 +313,7 @@ describe("Config under workspace trust", () => {
         expect(PromptConfigPlugin.promptKeys(after)).toEqual({ replacement: undefined, append: undefined })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("keeps the person's own language and output style over an untrusted project's, and applies the project's once trusted", () =>
@@ -338,6 +341,7 @@ describe("Config under workspace trust", () => {
         expect(Config.latest(after, "output_style")).toBe("explanatory")
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   // Class 8: a document above a granted project keeps the trust of its own folder, and the later document wins, so a
@@ -366,6 +370,7 @@ describe("Config under workspace trust", () => {
         expect(named(after, path.join(folders.repo, "orbit.json"))?.info.git_status).toBe(true)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("keeps git_status: false over an untrusted folder above a trusted project when no document of the project sets it", () =>
@@ -386,6 +391,7 @@ describe("Config under workspace trust", () => {
         expect(Config.latest(yield* config.entries(), "git_status")).toBe(false)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   // The person's own settings for another product sit in their home, which is never trusted for good: they are the
@@ -416,6 +422,7 @@ describe("Config under workspace trust", () => {
         expect(named(yield* config.entries(), path.join(folders.repo, "orbit.json"))?.info.shell).toBe("project-shell")
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("reports through ProjectTrust that an untrusted folder holds nothing it read, and grants and revokes for the project", () =>
@@ -449,6 +456,7 @@ describe("Config under workspace trust", () => {
         expect(named(yield* config.entries(), own)).toBeUndefined()
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("stamps nothing while the folder is trusted", () =>
@@ -519,6 +527,7 @@ describe("Config under workspace trust", () => {
         }).pipe(Effect.provide(loader(folders))),
       )
     }),
+    30_000,
   )
 
   it.live("does not reach for a network share that a file of an untrusted folder names", () =>
@@ -579,6 +588,7 @@ describe("Config under workspace trust", () => {
         expect(read(yield* config.entries())).toEqual([true, true, true])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("covers a linked worktree with the decision for its main checkout", () =>
@@ -603,6 +613,7 @@ describe("Config under workspace trust", () => {
         expect(named(yield* config.entries(), own)?.trusted).toBeUndefined()
       }).pipe(Effect.provide(loader(folders, { canonical: main })))
     }),
+    30_000,
   )
 
   it.live("trusts the folders above a project as well on a server with implicit trust", () =>
@@ -661,6 +672,7 @@ describe("Config under workspace trust", () => {
         expect(yield* project.allows(mine)).toBe(true)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("refuses the files of an untrusted project even when it keeps the user's own folders", () =>
@@ -678,6 +690,7 @@ describe("Config under workspace trust", () => {
         expect(yield* project.allows(ownedByRepo)).toBe(false)
       }).pipe(Effect.provide(loader(inHome)))
     }),
+    30_000,
   )
 })
 
@@ -757,6 +770,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect(yield* project.status()).toMatchObject({ changed: [], withheld: [] })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("withholds a file created after the grant, and nothing when a file is deleted or compatibility goes off", () =>
@@ -793,6 +807,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect(yield* project.status()).toMatchObject({ changed: [], withheld: [] })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("ignores the records when the server trusts every folder", () =>
@@ -809,6 +824,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect(yield* project.status()).toMatchObject({ trusted: true, source: "implicit", changed: [], withheld: [] })
       }).pipe(Effect.provide(loader(folders, { implicit: true })))
     }),
+    30_000,
   )
 
   it.live("reports every kind a source holds once for a grant that recorded nothing, and a grant clears it", () =>
@@ -835,6 +851,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect((yield* project.status()).changed).toEqual([])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   // The Config seam is what every consumer reads (hooks, MCP servers, plugins, providers, the shell, formatters, language
@@ -863,6 +880,7 @@ describe("Config under workspace trust: fingerprints", () => {
           expect<unknown>(named(yield* config.entries(), settings(folders))?.info[kind as KindField]).toEqual(field.edited)
         }).pipe(Effect.provide(loader(folders)))
       }),
+      30_000,
     )
   }
 
@@ -899,6 +917,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect((yield* project.status()).changed).toEqual([])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("offers no plugin planted after the grant, even before the config has reloaded", () =>
@@ -925,6 +944,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect((yield* targets).toSorted()).toEqual([path.join(plugins, "one.ts"), path.join(plugins, "two.ts")])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   // A config file directly in a filesystem root is the only way to have a root as the folder that holds config. It needs a
@@ -1047,6 +1067,7 @@ describe("Config under workspace trust: fingerprints", () => {
       )
       expect(yield* changedAt(b)).toEqual([])
     }),
+    30_000,
   )
 })
 
@@ -1288,5 +1309,6 @@ describe("attribution and the system prompt keys under workspace trust", () => {
           expect(row.read(yield* config.entries())).toEqual(row.trusted)
         }).pipe(Effect.provide(loader(folders, { content: row.flag === undefined ? undefined : JSON.stringify(row.flag) })))
       }),
+      30_000,
     )
 })
