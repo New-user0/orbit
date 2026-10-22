@@ -339,12 +339,19 @@ its agents, commands, skills, output styles and plugins do not appear either. Yo
 
 What changed:
 
-- The terminal UI asks about the folder it starts in whenever that folder is not trusted, whatever the folder holds,
-  before you can work there. The question lists nothing from the folder, because nothing was read; it offers "Trust this
-  folder" (or "Trust until Orbit restarts" for a home directory or a filesystem root) and "Exit". Exit and Escape end
-  the terminal UI with exit status 1. A session in another untrusted folder is asked about with "Trust this folder" and
-  "Not now"; "Not now" keeps the terminal UI open, and the server refuses that session's work. When the trust read fails
-  or times out, the question opens anyway.
+- The terminal UI asks about the folder it starts in whenever that folder is not trusted, whatever the folder holds.
+  The question lists nothing from the folder, because nothing was read; it offers "Trust this folder" (or "Trust until
+  Orbit restarts" for a home directory or a filesystem root) and "Exit", and starts on "Trust this folder", as the
+  reference's does. Exit and Escape end the terminal UI with exit status 1, and `n` with status 0. A session in another
+  untrusted folder is asked about with "Trust this folder" and "Not now"; "Not now" keeps the terminal UI open, and the
+  server refuses that session's work. When the trust read fails, times out or answers with something that is not a
+  trust status, the question opens anyway.
+- The prompt on Home and in a session takes no keys, and shows no placeholder, until the trust of the folder in view
+  has been read and, when it is the folder the terminal UI started in and is not trusted, until you trust it. Whatever
+  you type before then, Enter included, goes nowhere: nothing is sent, and it cannot answer the question. A `--prompt`
+  is sent once the prompt opens. Once open, the prompt stays open for the run; a question about the start folder that
+  opens after that, such as after `orb trust --revoke` in another terminal, starts on "Exit", so an Enter meant for the
+  prompt does not trust the folder.
 - Every headless door refuses an untrusted folder, even one with no config at all: `orb run` (with or without `--bare`),
   `orb -p`, stream-json input, `orb loop`, `orb flow run`, `orb eval`, `orb doctor --probe`, `orb session import`
   (for the folder the session lands in), `orb mini`, an ACP `session/new`,
@@ -402,7 +409,14 @@ What changed:
   a command, a synthetic message or a compaction, or generate text from it: those calls fail with `WorkspaceTrust.UntrustedError`, which names the
   folder.
 - A session that began in a folder that is still untrusted, under an earlier release, takes no more work until the
-  folder is trusted, and is not resumed after a restart until then.
+  folder is trusted, and is not resumed after a restart until then. The same holds for a background subagent whose
+  folder is no longer trusted when the server restarts: it is not resumed, its parent is not told that it failed, and
+  the next start after the folder is trusted resumes it and tells the parent then.
+- Until F18 (the re-ask when a trusted folder's executable config changes after the grant) is removed, a project that
+  a parent folder's grant covers is compared with the records of that grant, which do not list the project's own files.
+  So its hooks, MCP servers and other executable config read as changed since the grant: they stay off, and the
+  terminal UI asks "Trust the changes?". Trusting the project itself (`orb trust` there, or that answer) ends it
+  (FU-M4-379).
 
 **Affects:** scripts, CI jobs and SDK hosts that ran in folders nobody trusted, and anyone who answered "Not now" in the
 terminal UI and kept working.
@@ -997,7 +1011,9 @@ and after it reconnects.
 - **The question:** when the folder in view, on Home or in a session, is untrusted and holds something of its own back,
   a dialog lists the files and directories that hold it, by path from the folder, with what each holds, and offers
   "Trust this folder" or "Not now". Enter on its own is "Not now", so a key typed ahead of the dialog never trusts a
-  folder, and closing the dialog with Esc counts as "Not now". Either one keeps it from opening by itself again for that
+  folder, and closing the dialog with Esc counts as "Not now". (Since trust-first the question about the folder the
+  terminal UI starts in offers Exit, starts on "Trust this folder", and comes while the prompt takes no keys; see
+  "Nothing in a folder loads or runs until you trust it".) Either one keeps it from opening by itself again for that
   folder until the terminal UI restarts. A dialog is about one folder: if another comes into view while it is open,
   such as when a session in another clone opens, it closes without counting as "Not now", and the terminal UI asks
   about the folder now in view once it has the answer for it. A home directory or a filesystem root is offered "Trust
