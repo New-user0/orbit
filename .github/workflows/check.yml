@@ -121,6 +121,15 @@ jobs:
           echo "TEMP=$long" >> "$GITHUB_ENV"
           echo "TMP=$long" >> "$GITHUB_ENV"
           echo "$long"
+      # Git Bash exports SHELL when a developer opens it, and Orbit's session shell on Windows follows SHELL; without it
+      # the session shell is PowerShell and the tests' scripted Bash calls find no Bash tool. The runner's bash steps do
+      # not export it, so it is set to Git Bash here.
+      - name: Use Git Bash as the session shell
+        shell: bash
+        run: |
+          shell="$(cygpath -m "$(command -v bash)")"
+          echo "SHELL=$shell" >> "$GITHUB_ENV"
+          echo "$shell"
       # The Windows image has no ripgrep, and the search tools and their tests use the one on PATH. Chocolatey's bin
       # folder holds only a shim, which stops working once a test copies it into another folder, so the folder of the
       # real rg.exe goes first on PATH. Printing the version fails the step when it is missing.
