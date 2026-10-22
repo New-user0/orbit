@@ -83,6 +83,52 @@ test("a trusted folder's run store is opened by every reader once the server say
     await failure(approve({ ...connection, run: "run-none", gate: "gate", reject: false, note: Option.none() })),
   ).toContain("run-none")
 
-  // Each reader asked about the folder it was started in, before anything else.
-  expect(asked).toEqual([root, root, root, root, root, root])
+  // Each reader asked about the folder it was started in, before anything else, and again for the project whose folder
+  // bounds the store lookup.
+  expect(asked).toEqual(Array.from({ length: 12 }, () => root))
+})
+
+// Class 3: a reader finds the store no higher than the project's folder the server names, which is the folder its trust
+// was decided for. A repository above the folder holds a run; with the folder itself as the project the reader does not
+// see it, and the control, with the repository above as the project, does.
+test("a reader opens no run store above the project's folder the server names", async () => {
+  const above = path.join(root, "above")
+  const inner = path.join(above, "inner")
+  await fs.mkdir(path.join(above, ".git"), { recursive: true })
+  await Bun.write(path.join(above, ".git", "HEAD"), "ref: refs/heads/main\n")
+  await fs.mkdir(inner, { recursive: true })
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(above)
+  store.create({ id: "run_20260101000010_0a1b2c", workflow: "CLONE-ABOVE", file: "w.ts", directory: above, input: {} })
+  store.close()
+  const project = { directory: inner }
+  const located = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION })
+      const directory = url.searchParams.get("location[directory]") ?? ""
+      if (url.pathname === "/api/location/trust")
+        return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
+      if (url.pathname === "/api/location")
+        return Response.json({
+          directory,
+          project: { id: "proj_test", directory: project.directory, canonical: project.directory },
+        })
+      return new Response("not found", { status: 404 })
+    },
+  })
+  process.env.PWD = inner
+  try {
+    const shown = (await import("../src/commands/handlers/flow/show")).default
+    const at = { server: Option.some(located.url.origin), standalone: false, trust: false }
+    const run = { ...at, run: "run_20260101000010_0a1b2c", format: "json" as const }
+    expect(await failure(shown(run))).toBe("No run run_20260101000010_0a1b2c in this repository")
+    project.directory = above
+    expect(await failure(shown(run))).toBeUndefined()
+  } finally {
+    process.env.PWD = root
+    await located.stop(true)
+  }
 })

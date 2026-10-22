@@ -11,7 +11,10 @@ import type { Workflow } from "../src/workflow"
 // Classes 1, 5 and 12: a run store is a file that a clone ships, and a resume reuses the results it records. Each row
 // makes a run, then rewrites one value of its store the way a clone could ship it, then resumes the run with a client
 // that records where it opens sessions and which sessions it prompts. In a folder that is not trusted the resume takes
-// no folder and no session ID from the store; the trusted control takes the same value, which shows the row is live.
+// no folder and no session ID from the store. In a trusted folder it takes a session ID, and a worktree only when it is
+// one of the worktrees runs make in the repository (`Git.owns`): a folder outside them, or a link there that leads out,
+// is not used (class 3, class 5), and a folder below `.orbit/worktrees` is, the control that shows the row is live.
+// Mutation: `Git.owns` answering true fails the trusted outside and link rows.
 // Mutations: taking the reviewer's folder as `work.worktree ?? home` fails the untrusted reviewer row, taking the check's
 // as `checkOptions.in?.worktree ?? home` fails the untrusted check row, and keeping the session of every reused turn
 // (dropping `if (options.trusted || !result.reused)`) fails the untrusted team row, and taking the stored base commit
@@ -73,11 +76,18 @@ function recording(fail: (prompt: string) => boolean = () => false) {
   return { client, created, prompted }
 }
 
-// A repository with one commit, and a clone of it outside, which the store is made to name: it has the same commits, so
-// the trusted control can diff there as it would in a worktree of the run.
-async function repositories(name: string) {
+// Where the folder that the store is made to name lies: outside the repository, below its `.orbit/worktrees` as a run's
+// worktree does, or outside it but named through a link below `.orbit/worktrees`.
+type Place = "outside" | "inside" | "link"
+
+// A repository with one commit, and a clone of it (`victim`), which the store is made to name (`stored`): it has the same
+// commits, so the trusted control can diff there as it would in a worktree of the run.
+async function repositories(name: string, place: Place) {
   const clone = path.join(root, name, "clone")
-  const victim = path.join(root, name, "victim")
+  const worktrees = path.join(clone, ".orbit", "worktrees")
+  const victim = place === "inside" ? path.join(worktrees, "stored", "victim") : path.join(root, name, "victim")
+  // A link named as the victim, so a check that runs through it prints the word as one in the victim does.
+  const stored = place === "link" ? path.join(worktrees, "victim") : victim
   await fs.mkdir(clone, { recursive: true })
   const vcs = (directory: string, ...args: string[]) =>
     expect(Bun.spawnSync(["git", ...args], { cwd: directory }).exitCode).toBe(0)
@@ -87,8 +97,13 @@ async function repositories(name: string) {
   await Bun.write(path.join(clone, "a.txt"), "one\n")
   vcs(clone, "add", "-A")
   vcs(clone, "commit", "-qm", "one", "--no-gpg-sign")
-  vcs(path.join(root, name), "clone", "-q", clone, victim)
-  return { clone, victim }
+  await fs.mkdir(path.dirname(victim), { recursive: true })
+  vcs(path.dirname(victim), "clone", "-q", clone, victim)
+  if (place === "link") {
+    await fs.mkdir(worktrees, { recursive: true })
+    await fs.symlink(victim, stored, process.platform === "win32" ? "junction" : "dir")
+  }
+  return { clone, victim, stored }
 }
 
 // Sets one value in the result that the store records for a node, as a clone can ship its store with any value there.
@@ -122,14 +137,14 @@ const rows: ReadonlyArray<{
   readonly node: string
   readonly key: string
   readonly fail?: (prompt: string) => boolean
-  readonly value: (victim: string) => string
+  readonly value: (stored: string) => string
   // What else the clone ships before the resume, beside the rewritten value.
   readonly prepare?: (clone: string, victim: string) => Promise<void>
   // What the resume did with the value: true when it used it.
   readonly used: (
     resumed: Awaited<ReturnType<typeof run>>,
     seen: ReturnType<typeof recording>,
-    victim: string,
+    places: { readonly stored: string; readonly victim: string },
   ) => boolean
 }> = [
   {
@@ -139,16 +154,16 @@ const rows: ReadonlyArray<{
     key: "worktree",
     // The first run's reviewer fails, so that the resume runs it again rather than reusing it.
     fail: (prompt) => prompt.includes("Review a change another agent made"),
-    value: (victim) => victim,
-    used: (_, seen, victim) =>
-      seen.created.some((item) => item.title.endsWith("v#1.judge") && item.directory === victim),
+    value: (stored) => stored,
+    used: (_, seen, places) =>
+      seen.created.some((item) => item.title.endsWith("v#1.judge") && item.directory === places.stored),
   },
   {
     name: "a check of a verify node",
     workflow: { name: "w", run: (ctx) => ctx.verify("v", { prompt: "x", checks: [where] }) },
     node: "v#1",
     key: "worktree",
-    value: (victim) => victim,
+    value: (stored) => stored,
     // The check prints the folder it ran in. The clone's path does not hold the word.
     used: (resumed) =>
       (resumed.output as { readonly checks: ReadonlyArray<{ readonly output: string }> }).checks[0].output.includes(
@@ -182,40 +197,51 @@ const rows: ReadonlyArray<{
     node: "v#1",
     key: "worktree",
     fail: (prompt) => prompt.includes("Review a change another agent made"),
-    value: (victim) => victim,
+    value: (stored) => stored,
     prepare: monitored,
-    used: (_, __, victim) => existsSync(path.join(path.dirname(victim), "ran")),
+    used: (_, __, places) => existsSync(path.join(path.dirname(places.victim), "ran")),
   },
 ]
 
+// A worktree is used only from a trusted folder and only below its `.orbit/worktrees`; a session ID from a trusted one.
+const places = (row: (typeof rows)[number]): readonly Place[] =>
+  row.key === "worktree" ? ["outside", "inside", "link"] : ["outside"]
+const expected = (row: (typeof rows)[number], trusted: boolean, place: Place) =>
+  trusted && (row.key !== "worktree" || place === "inside")
+
 for (const row of rows)
   for (const trusted of [false, true])
-    test(`a resume ${trusted ? "in a trusted folder uses" : "in an untrusted folder takes no"} ${row.key} from the run store for ${row.name}`, async () => {
-      const { clone, victim } = await repositories(`${row.name.replace(/\W+/g, "-")}-${trusted}`)
-      const file = path.join(clone, "w.ts")
-      const first = await run({
-        client: recording(row.fail).client,
-        directory: clone,
-        trusted,
-        file,
-        workflow: row.workflow,
-      })
-      rewrite(clone, row.node, row.key, row.value(victim))
-      await row.prepare?.(clone, victim)
+    for (const place of places(row))
+      test(`a resume ${trusted ? "in a trusted folder" : "in an untrusted folder"} ${expected(row, trusted, place) ? "uses" : "takes no"} ${row.key} from the run store for ${row.name} (${place})`, async () => {
+        const { clone, victim, stored } = await repositories(
+          `${row.name.replace(/\W+/g, "-")}-${trusted}-${place}`,
+          place,
+        )
+        const file = path.join(clone, "w.ts")
+        const first = await run({
+          client: recording(row.fail).client,
+          directory: clone,
+          trusted,
+          file,
+          workflow: row.workflow,
+        })
+        rewrite(clone, row.node, row.key, row.value(stored))
+        await row.prepare?.(clone, victim)
 
-      const seen = recording()
-      const resumed = await run({
-        client: seen.client,
-        directory: clone,
-        trusted,
-        file,
-        workflow: row.workflow,
-        resume: first.id,
-      })
+        const seen = recording()
+        const resumed = await run({
+          client: seen.client,
+          directory: clone,
+          trusted,
+          file,
+          workflow: row.workflow,
+          resume: first.id,
+        })
 
-      expect({ row: row.name, trusted, used: row.used(resumed, seen, victim) }).toEqual({
-        row: row.name,
-        trusted,
-        used: trusted,
-      })
-    }, 60_000)
+        expect({ row: row.name, trusted, place, used: row.used(resumed, seen, { stored, victim }) }).toEqual({
+          row: row.name,
+          trusted,
+          place,
+          used: expected(row, trusted, place),
+        })
+      }, 60_000)

@@ -42,7 +42,7 @@ export default Runtime.handler(
     // A resumed eval compares the models it started with.
     const recorded = resume
       ? yield* Effect.promise(async () => {
-          const store = await openStore(directory())
+          const store = await openStore(directory(), project?.directory ?? directory())
           const run = store.run(resume)
           store.close()
           return run

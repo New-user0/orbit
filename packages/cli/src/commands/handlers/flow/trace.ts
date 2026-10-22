@@ -4,7 +4,7 @@ import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { requireTrust } from "../../../util/trust"
-import { connect, directory } from "./execute"
+import { connect, directory, runStore } from "./execute"
 
 export default Runtime.handler(
   Commands.commands.flow.commands.trace,
@@ -13,8 +13,8 @@ export default Runtime.handler(
     // folder has to be trusted before the store is opened (classes 1, 5 and 12; FU-M4-202).
     const client = yield* connect(input)
     yield* requireTrust(client, directory(), { grant: input.trust, strict: "recorded" })
-    const { openStore, otlp, spans, timeline } = yield* Effect.promise(() => import("@orbit/flow"))
-    const store = yield* Effect.promise(() => openStore(directory()))
+    const { otlp, spans, timeline } = yield* Effect.promise(() => import("@orbit/flow"))
+    const store = yield* runStore(client)
     const run = store.run(input.run)
     const events = store.events(input.run)
     store.close()

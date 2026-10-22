@@ -1,6 +1,6 @@
 export * as Git from "./git.js"
 
-import { existsSync, statSync } from "node:fs"
+import { existsSync, realpathSync, statSync } from "node:fs"
 import { appendFile, lstat, readdir, readFile, realpath, rm } from "node:fs/promises"
 import path from "node:path"
 import { GitSubmodules } from "@orbit/util/git-submodules"
@@ -97,16 +97,26 @@ export async function root(
  * The folder that holds the `.git` nearest to `directory`, found with `stat` and no process, or undefined outside a
  * repository. The commands that only read the run store use it: starting git in a folder applies the config that the
  * folder ships, which can name programs to run or shares to open, and these commands run before anyone is asked about it.
+ * The walk starts from where `directory` really is and goes no higher than `top`, the folder whose trust was decided
+ * (the project's folder as the server resolved it), so a store above that folder is never opened (class 3, class 4).
  */
-export function holder(directory: string) {
-  const start = path.resolve(directory)
-  for (let folder = start; ; folder = path.dirname(folder)) {
+export function holder(directory: string, top: string) {
+  const start = realOr(directory)
+  const bound = realOr(top)
+  for (let folder = start; within(bound, folder); folder = path.dirname(folder)) {
     const marker = path.join(folder, ".git")
     // Git passes over a `.git` directory with no HEAD and looks in the folder above, as `Git.root` does up to the
     // project's folder.
     if (existsSync(marker) && (!statSync(marker).isDirectory() || existsSync(path.join(marker, "HEAD")))) return folder
     if (path.dirname(folder) === folder) return undefined
   }
+  return undefined
+}
+
+// The real path of a folder, or its resolved spelling when it is not there.
+function realOr(directory: string) {
+  const resolved = path.resolve(directory)
+  return existsSync(resolved) ? realpathSync(resolved) : resolved
 }
 
 export const head = (directory: string) => ok(directory, ["rev-parse", "HEAD"])
@@ -268,6 +278,20 @@ export async function diff(directory: string, base: string, limit = 40_000) {
 function inside(folder: string, candidate: string) {
   const relative = path.relative(folder, candidate)
   return relative !== "" && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative)
+}
+
+/**
+ * Whether `worktree`, a folder that a run store names as a node's worktree, is one of the worktrees that runs make in
+ * `repository`: its real path lies below the repository's own `.orbit/worktrees`, taken from the repository's real path
+ * without following `.orbit` or `.orbit/worktrees`. The store is a file that a clone ships, so a path it names may lead
+ * anywhere, and a check, a reviewer and a diff would run there with that folder's config (class 3, class 5). A link in
+ * `.orbit` itself makes no worktree its own, as `clean` refuses to work through one.
+ */
+export async function owns(repository: string, worktree: string) {
+  const [top, place] = await Promise.all(
+    [realpath(repository), realpath(worktree)].map((item) => item.catch(() => undefined)),
+  )
+  return top !== undefined && place !== undefined && inside(path.join(top, ".orbit", "worktrees"), place)
 }
 
 // Whether `candidate` is `folder` or inside it, compared as `inside` compares.
