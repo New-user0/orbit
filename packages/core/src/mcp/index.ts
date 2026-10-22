@@ -458,26 +458,22 @@ export const layer = (options?: Options) =>
       // organization's servers wait too.
       const place = Effect.fnUntraced(function* (config: Mcp.ServerConfig) {
         if (config.type !== "local") return { config }
-        if (!(yield* trust.trusted()))
-          return { wait: true, error: "Waiting for this project folder to be trusted before it starts." }
+        if (!(yield* trust.trusted())) return { error: "Waiting for this project folder to be trusted before it starts." }
         if (config.cwd === undefined) return { config }
         const cwd = FileAccess.resolveNamed(location.directory, config.cwd)
-        if (cwd === undefined) return { wait: false, error: "Its working folder is not a name a file system takes." }
+        if (cwd === undefined) return { error: "Its working folder is not a name a file system takes." }
         const state = yield* trust.folder(cwd)
         if (state.trusted) return { config: { ...config, cwd } }
-        return {
-          wait: true,
-          error: `Waiting for ${plain(state.directory)}, its working folder, to be trusted before it starts.`,
-        }
+        return { error: `Waiting for ${plain(state.directory)}, its working folder, to be trusted before it starts.` }
       })
-      // Stdio servers that did not start because a folder they need is not trusted.
+      // Stdio servers that did not start. A grant places each again and starts the ones that may start now
+      // (`resumeTrusted`); one whose working folder no file system takes never may.
       const waiting = new Set<ServerName>()
       const startServer = (name: ServerName, entry: ServerEntry) =>
         Effect.gen(function* () {
-          // A grant starts the servers that wait (`resumeTrusted`).
           const placed = yield* place(entry.config)
           if (placed.config === undefined) {
-            if (placed.wait) waiting.add(name)
+            waiting.add(name)
             entry.status = { status: "failed", error: placed.error }
             yield* Effect.logWarning("mcp server does not start", { server: name, reason: placed.error })
             yield* bus.publish(McpEvent.StatusChanged, { server: name })
