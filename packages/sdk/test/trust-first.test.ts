@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
 import { mkdir, realpath } from "node:fs/promises"
-import { join } from "node:path"
+import { homedir } from "node:os"
+import { join, relative } from "node:path"
+import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { Orbit } from "../src"
 
@@ -83,3 +85,63 @@ test("an embedded host gets the typed refusal from every route that starts work 
     await orbit.close()
   }
 }, 30_000)
+
+// The Effect SDK's `sessions.create` and `sessions.move` call core instead of a route, so they meet the check in core:
+// create asks about the folder the session will work in (the one named, or the parent's), and move about the
+// destination, read from the session's own folder however it is spelled (class 3, class 12). Each spelling of an
+// untrusted folder is refused, naming the folder; the control is a trusted folder, where each acts.
+test("the Effect SDK's sessions.create and sessions.move refuse an untrusted folder, however it is spelled", async () => {
+  await using directory = await tmpdir("orbit-sdk-trust-first-effect-")
+  const root = await realpath(directory.path)
+  const config = join(root, "config")
+  const repo = join(root, "repo")
+  const other = join(root, "other")
+  const trusted = join(root, "trusted")
+  for (const folder of [config, repo, other, trusted]) await mkdir(folder)
+  const sdk = await import("../src/effect")
+  const ref = (folder: string) => sdk.Location.Ref.make({ directory: sdk.AbsolutePath.make(folder) })
+  const spellings = (folder: string) => [
+    folder,
+    relative(repo, folder),
+    `~/${relative(homedir(), folder).replaceAll("\\", "/")}`,
+  ]
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const orbit = yield* sdk.Orbit.create({
+          config: { directory: config, content: "{}" },
+          models: { fetch: false },
+          fs: { filewatcher: false },
+          trust: { implicit: false },
+        })
+        const refused = (folder: string) => ({ _tag: "WorkspaceTrust.UntrustedError", directory: folder })
+        expect(yield* orbit.sessions.create({ location: ref(other) }).pipe(Effect.flip)).toMatchObject(refused(other))
+        expect(yield* orbit.sessions.create({ location: ref(repo) }).pipe(Effect.flip)).toMatchObject(refused(repo))
+        yield* orbit.location.trust.update({
+          location: { directory: sdk.AbsolutePath.make(repo) },
+          trust: true,
+          persist: false,
+        })
+        yield* orbit.location.trust.update({
+          location: { directory: sdk.AbsolutePath.make(trusted) },
+          trust: true,
+          persist: false,
+        })
+        const parent = yield* orbit.sessions.create({ location: ref(repo) })
+        expect(String(parent.location.directory)).toBe(repo)
+        expect(String((yield* orbit.sessions.create({ parentID: parent.id })).location.directory)).toBe(repo)
+        for (const spelling of spellings(other)) {
+          const session = yield* orbit.sessions.create({ location: ref(repo) })
+          const refusal = yield* orbit.sessions
+            .move({ sessionID: session.id, directory: sdk.AbsolutePath.make(spelling) })
+            .pipe(Effect.flip)
+          expect({ spelling, refusal }).toMatchObject({ spelling, refusal: refused(other) })
+        }
+        for (const spelling of spellings(trusted)) {
+          const session = yield* orbit.sessions.create({ location: ref(repo) })
+          yield* orbit.sessions.move({ sessionID: session.id, directory: sdk.AbsolutePath.make(spelling) })
+        }
+      }),
+    ),
+  )
+}, 60_000)

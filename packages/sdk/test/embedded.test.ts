@@ -392,6 +392,13 @@ it.live("configures workspace providers through the SDK facade", () =>
         directory: fixture.sdk.AbsolutePath.make("/"),
         workspaceID: workspace.id,
       })
+      // A filesystem root is trusted only by a grant until the host stops, never implicitly; `sessions.create` asks what
+      // the `session.create` route asks (trust-first).
+      yield* orbit.location.trust.update({
+        location: { directory: fixture.sdk.AbsolutePath.make("/") },
+        trust: true,
+        persist: false,
+      })
       const session = yield* orbit.sessions.create({ location: workspaceLocation })
       expect(session.location.workspaceID).toBe(workspace.id)
 

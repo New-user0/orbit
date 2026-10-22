@@ -27,6 +27,8 @@ for (const entrypoint of ["create", "layer"] as const) {
         events: { persist: true },
         models: { fetch: false },
         fs: { filewatcher: false },
+        // The host decides for its folders, as a host that embeds Orbit in a folder it trusts does (trust-first).
+        trust: { implicit: true },
       }
       const client = yield* (
         entrypoint === "create"
