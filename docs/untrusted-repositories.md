@@ -385,7 +385,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   repository's config, so the program the person chose loads code the clone chose. Until `ProjectTrust.trusted()` holds,
   `LifecycleHooksPlugin` runs no hook (one warning per process) and `Mcp` starts no `local` server whatever its `cwd`
   (status `failed`, saying it waits for trust); a `trust.updated` event starts the waiting servers, and hooks read the
-  trust each time one fires. A guard that cannot run never reads as no guard: a `PreToolUse` hook, the one event
+  trust each time one fires. A `local` server whose config names a `cwd` waits as well until that folder, read from the
+  Location's folder, is trusted (`ProjectTrust.folder`), and starts in that folder (class 3). A guard that cannot run never reads as no guard: a `PreToolUse` hook, the one event
   here that can stop a call, that applies to a call (user, managed or any document that reaches the runner) refuses
   it with a reason naming `/trust`, `orb trust` and `--trust`, and no process starts; the other events wait. Proof:
   `test/plugin/lifecycle-hooks-untrusted.test.ts` (scope x trusted x block, allow, error, with a marker and a trusted
@@ -891,17 +892,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
   Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
   class 3), `worktree.create` (the project's folder and the folder it is asked to make the worktree in), `remove` and
-  `refresh`, `mcp.connect`, `fs.write` (the Location and the folder the file really lands in, except Orbit's temporary
-  folder)): `requireTrusted` and `requireTrustedAt` in
+  `refresh`, `mcp.connect`, `mcp.add` (the working folder of a local server), `fs.write` (the Location and the folder
+  the file really lands in, except Orbit's temporary folder)): `requireTrusted` and `requireTrustedAt` in
   `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
   `packages/sdk/test/trust-first.test.ts`.
 - A plugin's session doors, which run in the server process without passing a route (`packages/core/src/plugin/host.ts`):
-  `create` (the folder it names, or the parent's), `move` (the destination), `prompt`, `command`, `synthetic`,
-  `compact` and `generate` (the session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not
-  trusted, decided by `ProjectTrust` of the session's own services (its Instance, or its Location in a host without
-  one) or of the Location named. Proof: `packages/server/test/trust-first.test.ts` 'a plugin of a trusted folder starts
+  `create` (the folder it names, or the parent's), `prompt`, `command`, `synthetic`, `compact` and `generate` (the
+  session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not trusted, decided by
+  `ProjectTrust` of the session's own services (its Instance, or its Location in a host without one) or of the Location
+  named. `move` meets the check in `SessionMove`, which every move goes through (above). Proof: `packages/server/test/trust-first.test.ts` 'a plugin of a trusted folder starts
   no session work in a folder that is not trusted' (CLONE-OTHER-AGENTS does not reach the model; the control drives a
   session in the plugin's own folder) and `packages/core/test/plugin/session-trust.test.ts` (a host without an
   Instance; the grant control).
@@ -1378,13 +1379,26 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
   which work tree, git directory and common directory it would use, never by a copy of git's rules for finding one:
   `ProjectTrust.git` for a Location, `GitAccess.check` for `Project.resolve` and `WorktreeGit`, and `Git.root` for the
   flow runner. Each of the three must lie in a folder whose decision is trusted.
-- A server route that acts on a folder the request names besides its Location checks that folder too, and acts in the
-  folder it checked: the `cwd` of `pty.create` and `shell.create` (a relative one taken from the Location's folder) and
-  of `persistentPty.create` (`requireTrustedAt`), the folder `fs.write` lands in once `ProjectTrust.leads` has followed
-  every link in the path (Orbit's temporary folder excepted, since no repository supplies it), and the `directory` of
-  `worktree.create` (`Worktree.create`). Proof: `packages/server/test/trust-first.test.ts` 'a route that acts on a
-  folder the request names refuses one that is not trusted, however it is spelled, though the Location is trusted'
-  (absolute, relative, link and dangling-link spellings; a file link outside Windows; the grant control).
+- A door that acts on a folder that a request, a plugin, the model or a config names besides its Location reads that
+  name once, with `FileAccess.resolveNamed` against a folder of the door's own (never the server process's working
+  folder), checks the folder it reads, and acts in that same folder. `resolveNamed` refuses a name with a null byte and
+  otherwise gives `FileAccess.resolvePath`'s answer (`~`, the Git Bash, Cygwin and WSL drive forms, `..`, a relative
+  path) in Unicode's composed form. The doors and their folders: the destination of a session's move, in
+  `SessionMove` itself, from the session's folder, so the route, a plugin's `session.move`, the model's `session_move`
+  tool and the worktree tools meet one check; the `cwd` of `pty.create` and `shell.create`, and the path of `fs.write`
+  (once `ProjectTrust.leads` has followed every link in it; Orbit's temporary folder excepted), from the Location's
+  folder; the `cwd` of `persistentPty.create` from the session's folder (only an absolute one for a session Orbit does
+  not know); the `directory` and `from` of `worktree.create`, in `Worktree.create`, from the project's folder; the `cwd`
+  of a local MCP server, in `Mcp` before it starts it (whether a config, a plugin or `mcp.add` named it), from the
+  Location's folder, decided by `ProjectTrust.folder`, with `mcp.add` refusing at once. Proof:
+  `packages/server/test/trust-first-spellings.test.ts` 'every door that takes a folder reads it from its own base,
+  refuses an untrusted one however it is spelled, and acts in a trusted one' (absolute, relative, `~`, link, decomposed
+  and, on Windows, Git Bash spellings for each route, a null byte, and the trusted control) and 'a local MCP server whose
+  config names a working folder that is not trusted waits for it, however it is spelled, and starts there once it is'
+  (with a linked worktree decided by its main checkout); `packages/core/test/plugin/move-spellings.test.ts` (a plugin's
+  move and the `session_move` tool); `packages/server/test/trust-first.test.ts` 'a route that acts on a folder the
+  request names refuses one that is not trusted, however it is spelled, though the Location is trusted' (dangling
+  links, a file link outside Windows, the temporary folder).
 - When the components disagree, take the stricter answer and log it.
 
 **How to test:**

@@ -366,11 +366,27 @@ What changed:
   `--trust` too, and `orb doctor --probe` lists the models of the folder it asks about and probes (the one your shell
   names in `PWD`), not of the folder the process runs in.
 - A terminal or a shell command (`POST /api/shell`) checks the folder it is asked to start in as well as the Location's
-  or the session's folder, and is refused when either is untrusted. A relative `cwd` for `pty.create` and
-  `shell.create` is now taken from the Location's folder, where it used to be taken from the server's working folder.
-  A file write (`fs.write`) is refused when the folder it really lands in, once every link in its path is followed, is
-  not trusted, unless that folder is Orbit's temporary folder. A worktree is not made in a `directory` that is not
-  trusted.
+  or the session's folder, and is refused when either is untrusted. A file write (`fs.write`) is refused when the folder
+  it really lands in, once every link in its path is followed, is not trusted, unless that folder is Orbit's temporary
+  folder. A worktree is not made in a `directory` that is not trusted.
+- A folder that a request, a plugin, the model or a config names besides its Location is read once, from a folder of
+  its own, and the folder checked is the folder acted in. Each reads `~` and `~/...` as your home folder, a Git Bash,
+  Cygwin or WSL drive spelling as that Windows drive, a relative path from its own folder, and the name in Unicode's
+  composed form; a name with a null byte is refused (HTTP 400). What each reads from, where it used to be the server's
+  working folder or the spelling as it came:
+  - A session's move (`POST /api/session/:id/move`, a plugin's `session.move`, the model's `session_move` tool, and the
+    worktree tools' moves): the session's own folder. A move into a folder that is not trusted is refused by each of
+    them, the route with `UntrustedFolderError` and the others with `WorkspaceTrust.UntrustedError`, both naming the
+    folder as it really is.
+  - `pty.create`, `shell.create` and `fs.write`: the Location's folder. `~` is now your home folder, where it used to be
+    a folder named `~` there.
+  - A session's terminal (`persistentPty.create`): the session's folder. For a session Orbit does not know, only an
+    absolute `cwd` is taken (HTTP 400 otherwise).
+  - `worktree.create`: the project's folder, for its `directory` and `from`.
+  - A local MCP server's `cwd`, whether a config, a plugin or `PUT /api/experimental/mcp/:server` names it: the
+    Location's folder. The server waits until that folder's project is trusted as well as the Location's, and its status
+    names the folder it waits for; `PUT /api/experimental/mcp/:server` answers `UntrustedFolderError` (HTTP 403) at once
+    instead of adding it.
 - A plugin can no longer create a session in a folder that is not trusted, move one there, or send a session there a prompt,
   a command, a synthetic message or a compaction, or generate text from it: those calls fail with `WorkspaceTrust.UntrustedError`, which names the
   folder.
