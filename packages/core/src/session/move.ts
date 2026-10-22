@@ -8,11 +8,13 @@ import { Cause, Context, Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
+import { FileAccess } from "../file-access.js"
 import { Instance } from "../instance/service.js"
 import { Location } from "../location.js"
 import { LocationServiceMap } from "../location-service-map.js"
 import { Project } from "../project.js"
 import { AbsolutePath, RelativePath } from "../schema.js"
+import { WorkspaceTrust } from "../workspace-trust.js"
 import { NotFoundError } from "./error.js"
 import { SessionEvent } from "./event.js"
 import { SessionExecution } from "./execution.js"
@@ -45,7 +47,11 @@ export interface Interface {
     delivery?: SessionInbox.Delivery
   }) => Effect.Effect<
     void,
-    NotFoundError | DestinationNotFoundError | DestinationNotDirectoryError | DestinationUnavailableError
+    | NotFoundError
+    | DestinationNotFoundError
+    | DestinationNotDirectoryError
+    | DestinationUnavailableError
+    | WorkspaceTrust.UntrustedError
   >
 }
 
@@ -64,6 +70,7 @@ const layer = Layer.effect(
     const admission = yield* SessionInbox.Service
     const database = yield* Database.Service
     const bus = yield* Bus.Service
+    const trust = yield* WorkspaceTrust.Service
 
     const get = Effect.fn("SessionMove.get")(function* (sessionID: Session.ID) {
       const session = yield* store.get(sessionID)
@@ -75,14 +82,19 @@ const layer = Layer.effect(
       session: Session.Info,
       input: Parameters<Interface["move"]>[0],
     ) {
-      const value = input.directory.trim()
-      const expanded =
-        value === "~" ? global.home : value.startsWith("~/") ? path.join(global.home, value.slice(2)) : value
-      const directory = AbsolutePath.make(path.resolve(session.location.directory, expanded))
+      // The destination is read from the session's own folder, whoever asks (a route, a plugin, the model's tool), and
+      // that one value is both the folder checked below and the folder the session moves to (class 3).
+      const directory = FileAccess.resolveNamed(session.location.directory, input.directory.trim(), global.home)
+      if (directory === undefined) return yield* new DestinationNotFoundError({ directory: input.directory })
       const info = yield* fs.stat(directory).pipe(Effect.orElseSucceed(() => undefined))
       if (!info) return yield* new DestinationNotFoundError({ directory })
       if (info.type !== "Directory") return yield* new DestinationNotDirectoryError({ directory })
       const project = yield* projects.resolve(directory)
+      // The session goes on in the folder it moves to, so that folder's project has to be trusted, decided as for any
+      // Location there: by its canonical folder. Nothing of it is built before that (trust-first, class 12).
+      const state = yield* trust.status(project.canonical)
+      if (!state.trusted)
+        return yield* new WorkspaceTrust.UntrustedError({ directory: state.directory, persistent: state.persistent })
       const destination: SessionInbox.MovePayload = {
         location: Location.Ref.make({ directory, workspaceID: input.workspaceID }),
         projectID: project.id,
@@ -162,6 +174,7 @@ export const node = makeGlobalNode({
     FSUtil.node,
     Global.node,
     Project.node,
+    WorkspaceTrust.node,
     LocationServiceMap.node,
     SessionStore.node,
     SessionExecution.node,

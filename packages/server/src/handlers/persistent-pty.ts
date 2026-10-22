@@ -5,7 +5,8 @@ import { PtyTicket } from "@orbit/core/pty/ticket"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
-import { ForbiddenError, PtyNotFoundError, ServiceUnavailableError } from "@orbit/protocol/errors"
+import { Global } from "@orbit/util/global"
+import { ForbiddenError, InvalidRequestError, PtyNotFoundError, ServiceUnavailableError } from "@orbit/protocol/errors"
 import {
   PTY_CONNECT_TICKET_QUERY,
   PTY_CONNECT_TOKEN_HEADER,
@@ -18,7 +19,7 @@ import { Socket } from "effect/unstable/socket"
 import { Api } from "../api"
 import { CorsConfig, isAllowedRequestOrigin } from "../cors"
 import { runPtySocket } from "./pty-socket"
-import { requireTrustedAt } from "./trust-error"
+import { requireTrustedAt, resolveNamed } from "./trust-error"
 
 export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experimental", (handlers) =>
   Effect.gen(function* () {
@@ -27,6 +28,7 @@ export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experiment
     const pty = yield* PersistentPty.Service
     const sessions = yield* Session.Service
     const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
+    const global = yield* Global.Service
 
     return handlers
       .handle(
@@ -45,10 +47,21 @@ export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experiment
         "persistentPty.create",
         Effect.fn(function* (ctx) {
           // A terminal belongs to a session and starts a program for it in the folder the caller picks, so the session's
-          // folder and that one both have to be trusted (class 3 and 12). The daemon is given the folder that was checked.
+          // folder and that one both have to be trusted (class 3 and 12). The folder is read from the session's folder, and
+          // the daemon is given the folder that was checked. A terminal for a session Orbit does not know has no folder to
+          // read a relative name from, so only an absolute one is taken; without one it starts at the filesystem root.
           const owner = yield* sessions.get(ctx.params.sessionID).pipe(Effect.option)
           if (Option.isSome(owner)) yield* requireTrustedAt(folders, owner.value.location.directory)
-          const cwd = AbsolutePath.make(path.resolve(ctx.payload.cwd ?? "/"))
+          const base = Option.isSome(owner) ? owner.value.location.directory : undefined
+          if (base === undefined && ctx.payload.cwd !== undefined && !path.isAbsolute(ctx.payload.cwd))
+            return yield* new InvalidRequestError({
+              message: "A terminal for a session that is not known needs an absolute cwd",
+              field: "cwd",
+            })
+          const cwd =
+            ctx.payload.cwd === undefined
+              ? AbsolutePath.make(path.resolve("/"))
+              : yield* resolveNamed(base ?? "/", ctx.payload.cwd, global.home, "cwd")
           yield* requireTrustedAt(folders, cwd)
           return {
             data: yield* pty

@@ -125,6 +125,17 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/FileA
 export const resolvePath = (directory: string, input: string, home = Global.Path.home) =>
   FSUtil.resolveFrom(directory, input, home)
 
+/**
+ * A folder or file that a request, a plugin or a config names, resolved once against the folder it is relative to, so
+ * that the folder a door checks and the folder it then acts in are one value (class 3). A name with a null byte, which
+ * no file system takes, gives undefined. Otherwise it is `resolvePath`'s answer (an empty name is `base`, `~` and `~/`
+ * are the home folder, the Git Bash, Cygwin and WSL drive forms are that drive, an absolute path is normalized and a
+ * relative one is read from `base`) in Unicode's composed form. `base` is a folder the door names, such as a session's
+ * or a Location's, never the server process's own.
+ */
+export const resolveNamed = (base: string, input: string, home = Global.Path.home) =>
+  input.includes("\0") ? undefined : AbsolutePath.make(resolvePath(base, input, home).normalize("NFC"))
+
 // A share or device path on Windows: `\\server\share`, `\\?\Volume{...}` or `\\.\...`. `resolvePath` already writes the
 // drive forms of a `\\?\` path as the drive.
 // A path that a walk of links gave up on (`LinkShare.unresolved`) counts as one on every platform.

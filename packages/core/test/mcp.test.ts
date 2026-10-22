@@ -872,7 +872,11 @@ describe("a local MCP server waits for the project folder to be trusted", () => 
               resourceMcpLayer(config, undefined, undefined, {
                 entries: () => Effect.succeed(entries),
                 environment: recordingEnvironmentLayer(spawns),
-                trust: Layer.mock(ProjectTrust.Service, { trusted: () => Effect.sync(() => state.trusted) }),
+                // A working folder outside the project is decided on its own, here the same way as the project.
+                trust: Layer.mock(ProjectTrust.Service, {
+                  trusted: () => Effect.sync(() => state.trusted),
+                  folder: (directory) => Effect.sync(() => ({ directory, trusted: state.trusted, persistent: true })),
+                }),
                 subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
               }),
             ),

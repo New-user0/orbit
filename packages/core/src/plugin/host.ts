@@ -591,11 +591,8 @@ export const make = Effect.fn("PluginHost.make")(function* (
         if (input.permissions !== undefined)
           yield* sessions.setPermissions({ sessionID: input.sessionID, permissions: input.permissions })
       }),
-      // The session goes on in the folder it moves to, so that is the folder that has to be trusted.
-      move: (input) =>
-        requireTrusted(Location.Ref.make({ directory: input.directory })).pipe(
-          Effect.andThen(() => sessions.move(input)),
-        ),
+      // `SessionMove` reads the destination from the session's folder and refuses one that is not trusted.
+      move: sessions.move,
       synthetic: (input) =>
         requireSessionTrusted(input.sessionID).pipe(Effect.andThen(() => sessions.synthetic(input))),
       interrupt: (input) =>

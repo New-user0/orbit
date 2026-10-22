@@ -1,8 +1,9 @@
+import { FileAccess } from "@orbit/core/file-access"
 import { Project } from "@orbit/core/project"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
-import { UntrustedFolderError } from "@orbit/protocol/errors"
+import { InvalidRequestError, UntrustedFolderError } from "@orbit/protocol/errors"
 import { plain } from "@orbit/util/plain"
 import { Effect } from "effect"
 
@@ -45,3 +46,15 @@ export const requireTrustedAt = Effect.fnUntraced(function* (
   const state = yield* services.trust.status(project.canonical)
   if (!state.trusted) return yield* untrustedFolder(state)
 })
+
+/**
+ * A folder or file that the request names besides its Location, read once from `base`, a folder the route names (the
+ * Location's, or the session's), never the server process's own (`FileAccess.resolveNamed`). The route checks this value
+ * and then acts on the same value (class 3). A name with a null byte, which no file system takes, is refused.
+ */
+export function resolveNamed(base: string, input: string, home: string, field: string) {
+  const resolved = FileAccess.resolveNamed(base, input, home)
+  if (resolved === undefined)
+    return Effect.fail(new InvalidRequestError({ message: `${field} is not a name a file system takes`, field }))
+  return Effect.succeed(resolved)
+}

@@ -1,5 +1,5 @@
 import path from "node:path"
-import { requireTrusted, requireTrustedAt } from "./trust-error"
+import { requireTrusted, requireTrustedAt, resolveNamed } from "./trust-error"
 import { FileSystem } from "@orbit/core/filesystem"
 import { Location } from "@orbit/core/location"
 import { Project } from "@orbit/core/project"
@@ -62,12 +62,14 @@ export const FileSystemHandler = HttpApiBuilder.group(Api, "server.fs", (handler
             // A write can land outside the Location, through `..`, an absolute path or a link, so the folder it really
             // lands in has to be trusted as well (class 3, class 4). `leads` follows every link in the path, and one that
             // leads nowhere by where it points. Orbit's own temporary folder, where clients stage files, holds nothing a
-            // repository supplies, so a write there needs no grant.
-            const leads = yield* trust.leads(path.resolve(location.directory, ctx.query.path))
+            // repository supplies, so a write there needs no grant. The path is read once from the Location's folder, and
+            // the file is written at that same path.
+            const file = yield* resolveNamed(location.directory, ctx.query.path, global.home, "path")
+            const leads = yield* trust.leads(file)
             if (!FSUtil.contains(yield* trust.leads(global.tmp), leads))
               yield* requireTrustedAt(folders, AbsolutePath.make(path.dirname(leads)))
             const fs = yield* FileSystem.Service
-            return yield* fs.write({ path: ctx.query.path, data: ctx.payload })
+            return yield* fs.write({ path: file, data: ctx.payload })
           }),
         ),
       )

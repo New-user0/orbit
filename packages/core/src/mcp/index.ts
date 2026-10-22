@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from "node:util"
 import { Cause, Context, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
 import { Trust } from "@orbit/schema/trust"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { plain } from "@orbit/util/plain"
 import { Credential } from "../credential.js"
 import { Bus } from "../bus.js"
 import { Environment } from "../environment/index.js"
@@ -19,6 +20,7 @@ import { Config } from "../config.js"
 import { ConfigEnv } from "../config/env.js"
 import { Location } from "../location.js"
 import { ManagedPolicy } from "../managed-policy.js"
+import { FileAccess } from "../file-access.js"
 import { ProjectTrust } from "../project-trust.js"
 import { McpRestriction } from "./restriction.js"
 import { waitForAbort } from "@orbit/util/process"
@@ -448,17 +450,36 @@ export const layer = (options?: Options) =>
         connection.onResourcesChanged(() => live(bus.publish(McpEvent.ResourcesChanged, { server: name })))
       }
 
-      // Stdio servers that did not start because the project folder is not trusted.
+      // Where a server starts, or why it may not start now. A stdio server starts in the project's folder unless its config
+      // names another working folder, and the programs it runs (bun, npx, uvx, git) read that folder's own files first. So
+      // the project's folder has to be trusted, and so does the folder the config names, which is read once from the
+      // Location's folder (`FileAccess.resolveNamed`) and decided as a Location there would be, by its project's canonical
+      // folder: the stricter answer wins (class 3). The server is then started in that very folder. The user's and the
+      // organization's servers wait too.
+      const place = Effect.fnUntraced(function* (config: Mcp.ServerConfig) {
+        if (config.type !== "local") return { config }
+        if (!(yield* trust.trusted()))
+          return { wait: true, error: "Waiting for this project folder to be trusted before it starts." }
+        if (config.cwd === undefined) return { config }
+        const cwd = FileAccess.resolveNamed(location.directory, config.cwd)
+        if (cwd === undefined) return { wait: false, error: "Its working folder is not a name a file system takes." }
+        const state = yield* trust.folder(cwd)
+        if (state.trusted) return { config: { ...config, cwd } }
+        return {
+          wait: true,
+          error: `Waiting for ${plain(state.directory)}, its working folder, to be trusted before it starts.`,
+        }
+      })
+      // Stdio servers that did not start because a folder they need is not trusted.
       const waiting = new Set<ServerName>()
       const startServer = (name: ServerName, entry: ServerEntry) =>
         Effect.gen(function* () {
-          // A stdio server starts with the project's folder as its working folder unless its config says otherwise, and the
-          // programs it runs (bun, npx, uvx, git) read that folder's own files first. Until the person trusts the folder none
-          // starts, the user's and the organization's included; a grant starts them (`resumeTrusted`).
-          if (entry.config.type === "local" && !(yield* trust.trusted())) {
-            waiting.add(name)
-            entry.status = { status: "failed", error: "Waiting for this project folder to be trusted before it starts." }
-            yield* Effect.logWarning("mcp server waits for the project folder to be trusted", { server: name })
+          // A grant starts the servers that wait (`resumeTrusted`).
+          const placed = yield* place(entry.config)
+          if (placed.config === undefined) {
+            if (placed.wait) waiting.add(name)
+            entry.status = { status: "failed", error: placed.error }
+            yield* Effect.logWarning("mcp server does not start", { server: name, reason: placed.error })
             yield* bus.publish(McpEvent.StatusChanged, { server: name })
             return
           }
@@ -475,7 +496,7 @@ export const layer = (options?: Options) =>
           // leaving it connected with a silently empty tool list and no path to recover.
           const load = McpClient.connect(
             name,
-            entry.config,
+            placed.config,
             location.directory,
             authProvider,
             elicitation,
@@ -680,7 +701,7 @@ export const layer = (options?: Options) =>
           (name) =>
             Effect.gen(function* () {
               const entry = entries.get(name)
-              if (!entry || !waiting.has(name) || !(yield* trust.trusted())) return
+              if (!entry || !waiting.has(name) || (yield* place(entry.config)).config === undefined) return
               yield* startServer(name, entry)
             }).pipe(locks.withLock(name)),
           { discard: true },

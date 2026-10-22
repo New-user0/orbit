@@ -1,11 +1,10 @@
-import path from "node:path"
-import { requireTrusted, requireTrustedAt } from "./trust-error"
+import { requireTrusted, requireTrustedAt, resolveNamed } from "./trust-error"
 import { Project } from "@orbit/core/project"
 import { Pty } from "@orbit/core/pty"
 import { PtyProtocol } from "@orbit/core/pty/protocol"
 import { PtyTicket } from "@orbit/core/pty/ticket"
 import { Location } from "@orbit/core/location"
-import { AbsolutePath } from "@orbit/core/schema"
+import { Global } from "@orbit/util/global"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Effect, Queue } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -34,6 +33,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
     const cors = yield* CorsConfig
     const environment = yield* PtyEnvironment.Service
     const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
+    const global = yield* Global.Service
 
     return handlers
       .handle(
@@ -49,10 +49,13 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
           yield* requireTrusted()
           const pty = yield* Pty.Service
           const location = yield* Location.Service
-          const cwd = ctx.payload.cwd ? path.resolve(location.directory, ctx.payload.cwd) : location.directory
-          // The caller picks where the terminal starts, which can be another folder than the Location's: that folder has
-          // to be trusted as well, and the terminal starts in the very folder that was checked (class 3).
-          yield* requireTrustedAt(folders, AbsolutePath.make(cwd))
+          // The caller picks where the terminal starts, read from the Location's folder, which can be another folder than
+          // the Location's: that folder has to be trusted as well, and the terminal starts in the very folder that was
+          // checked (class 3).
+          const cwd = ctx.payload.cwd
+            ? yield* resolveNamed(location.directory, ctx.payload.cwd, global.home, "cwd")
+            : location.directory
+          yield* requireTrustedAt(folders, cwd)
           return yield* response(
             pty.create({
               ...ctx.payload,

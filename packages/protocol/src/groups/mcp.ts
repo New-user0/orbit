@@ -28,14 +28,15 @@ export const McpGroup = HttpApiGroup.make("server.mcp")
       // represent a top-level union payload.
       payload: Schema.Struct({ config: Mcp.ServerConfig }),
       success: HttpApiSchema.NoContent,
-      error: ForbiddenError,
+      error: [ForbiddenError, UntrustedFolderError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
           identifier: "experimental.mcp.add",
           summary: "Add MCP server",
-          description: "Add an MCP server at runtime or replace an existing one, connecting it immediately.",
+          description:
+            "Add an MCP server at runtime or replace an existing one, connecting it immediately. A local server's working folder is read from the location's folder and must be trusted.",
         }),
       ),
   )

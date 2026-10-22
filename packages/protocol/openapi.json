@@ -2594,7 +2594,7 @@
             }
           }
         },
-        "description": "Move a session to another project directory at the requested delivery boundary.",
+        "description": "Move a session to another project directory at the requested delivery boundary. A relative directory, or one that starts with ~, is read from the session's own folder, and the folder must be trusted.",
         "summary": "Move session",
         "requestBody": {
           "content": {
@@ -7694,17 +7694,24 @@
             }
           },
           "403": {
-            "description": "ForbiddenError",
+            "description": "ForbiddenError | UntrustedFolderError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ForbiddenErrorEncoded"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                    }
+                  ]
                 }
               }
             }
           }
         },
-        "description": "Add an MCP server at runtime or replace an existing one, connecting it immediately.",
+        "description": "Add an MCP server at runtime or replace an existing one, connecting it immediately. A local server's working folder is read from the location's folder and must be trusted.",
         "summary": "Add MCP server",
         "requestBody": {
           "content": {

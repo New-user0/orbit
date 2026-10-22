@@ -42,6 +42,10 @@ test.each([
   ],
   ["pty.create", () => client.pty.create({ location })],
   ["mcp.connect", () => client.mcp.connect({ server: "docs", location })],
+  [
+    "mcp.add",
+    () => client.mcp.add({ server: "docs", location, config: { type: "local", command: ["docs"], cwd: "../other" } }),
+  ],
   ["fs.write", () => client.file.write({ location, path: "a.txt", payload: new TextEncoder().encode("a") })],
   ["worktree.create", () => client.worktree.create({ projectID: "prj_test" })],
   ["worktree.remove", () => client.worktree.remove({ projectID: "prj_test", directory: "/projects/app-wt" })],

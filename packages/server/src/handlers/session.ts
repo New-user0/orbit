@@ -26,7 +26,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { Project } from "@orbit/core/project"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { failedMessageDecode, failedSnapshot, missingMessage, missingSession } from "./session-error"
-import { requireTrusted, requireTrustedAt } from "./trust-error"
+import { requireTrusted, requireTrustedAt, untrustedFolder } from "./trust-error"
 
 const DefaultSessionsLimit = 50
 
@@ -302,8 +302,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.move",
         Effect.fn(function* (ctx) {
-          // The session goes on in the folder it moves to, so that is the folder that has to be trusted (class 3).
-          yield* requireTrustedAt(folders, ctx.payload.directory)
+          // `SessionMove` reads the destination from the session's own folder and refuses one that is not trusted, the
+          // same check a plugin's or the model's move meets (class 3).
           yield* session
             .move({
               sessionID: ctx.params.sessionID,
@@ -312,6 +312,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             })
             .pipe(
               Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("WorkspaceTrust.UntrustedError", (error) => Effect.fail(untrustedFolder(error))),
               Effect.catchTag("Session.DestinationNotFoundError", (error) =>
                 Effect.fail(new InvalidRequestError({ message: `Directory does not exist: ${error.directory}` })),
               ),

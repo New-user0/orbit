@@ -390,7 +390,8 @@ export const makeSessionGroup = <
         OpenApi.annotations({
           identifier: "session.move",
           summary: "Move session",
-          description: "Move a session to another project directory at the requested delivery boundary.",
+          description:
+            "Move a session to another project directory at the requested delivery boundary. A relative directory, or one that starts with ~, is read from the session's own folder, and the folder must be trusted.",
         }),
       ),
     )
