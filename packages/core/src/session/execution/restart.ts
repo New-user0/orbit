@@ -167,6 +167,10 @@ export const layer = (options?: Options) =>
           return
         }
         if (yield* execution.isActive(recovery.childSessionID)) return
+        // A child whose folder is no longer trusted is not resumed, and nothing failed: its job stays pending and its
+        // claim stays (the sweep spares a recoverable child's), so a later start resumes it once the folder is trusted,
+        // and its parent hears about it then (trust-first, class 7 and 12).
+        if (!(yield* SessionExecution.permitted(child).pipe(instances.provide(child)))) return
         if (!(yield* prepareResume(recovery.childSessionID))) {
           yield* notify({ status: "error", error: RESUME_EXHAUSTED.message })
           return
