@@ -363,3 +363,24 @@ test("holder looks no higher than the folder trust was decided for, and walks up
   expect(await Bun.file(path.join(inner, ".orbit", "runs.db")).exists()).toBe(true)
   expect(await Bun.file(path.join(directory, ".orbit", "runs.db")).exists()).toBe(false)
 })
+
+// Class 3: on Windows a folder can be spelled with its 8.3 short name, as a temporary folder under a long user name is
+// (`C:\Users\RUNNER~1\...`). The server names the project by its long real path, so the walk has to write the start in
+// full too, or the start never lies within the bound and the run store above it is missed.
+test.skipIf(process.platform !== "win32")("holder reads a start spelled with an 8.3 short name as the server does", async () => {
+  const directory = await repository("short-name-repository")
+  const inner = path.join(directory, "inner")
+  await fs.mkdir(inner, { recursive: true })
+  // The system's own cmd.exe by its full path: a bare name would be looked up in the working folder first (class 10).
+  const cmd = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
+  const listing = Bun.spawnSync([cmd, "/d", "/c", "dir", "/x", root]).stdout.toString()
+  const short = listing
+    .split(/\r?\n/)
+    .find((line) => line.trimEnd().endsWith(" short-name-repository"))
+    ?.match(/\s([A-Z0-9_-]+~\d+)\s/)?.[1]
+  // A volume with 8.3 names turned off has no short spelling to test.
+  if (short === undefined) return
+  const real = await fs.realpath(directory)
+
+  expect(Git.holder(path.join(root, short, "inner"), real)).toBe(real)
+})

@@ -113,10 +113,12 @@ export function holder(directory: string, top: string) {
   return undefined
 }
 
-// The real path of a folder, or its resolved spelling when it is not there.
+// The real path of a folder, or its resolved spelling when it is not there. `native` writes a Windows 8.3 short name
+// (`RUNNER~1`) in full, as the server's `realpath` does; the other one keeps it, and the start then never lies within
+// a bound the server named.
 function realOr(directory: string) {
   const resolved = path.resolve(directory)
-  return existsSync(resolved) ? realpathSync(resolved) : resolved
+  return existsSync(resolved) ? realpathSync.native(resolved) : resolved
 }
 
 export const head = (directory: string) => ok(directory, ["rev-parse", "HEAD"])
