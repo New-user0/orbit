@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import { makeSession, rpcError, startWire } from "./wire-fixture"
 
 // trust-first over the wire, in this process: the editor picks the folder of each ACP session, and no session opens in a
@@ -79,5 +80,52 @@ describe("acp trust-first over the wire", () => {
 
     await acp.request("session/load", { cwd: "/workspace", sessionId: "ses_saved", mcpServers: [] })
     expect(acp.server.requests.some((request) => request.path === "/api/location/trust")).toBe(true)
+  })
+
+  // An additional directory is granted to the session's tools, so every door that takes one asks about each of them
+  // too: one that is not trusted is refused with the same typed error, naming it, before a session is created, forked
+  // or given a grant (class 3, class 12). The control is a trusted additional directory, which each door grants.
+  test("every door that takes additional directories refuses one that is not trusted, and grants a trusted one", async () => {
+    // The agent reads each one as an absolute path of this platform, so the server is asked about that spelling.
+    const untrusted = path.resolve("/other")
+    await using acp = await startWire({
+      fetch: (request) =>
+        request.path === "/api/location/trust" && request.query["location[directory]"] === untrusted
+          ? Response.json({ directory: untrusted, trusted: false, persistent: true, withheld: [], changed: [] })
+          : undefined,
+    })
+    acp.server.sessions.set("ses_saved", makeSession("ses_saved"))
+    await acp.initialize()
+    const methods = ["session/new", "session/load", "session/resume", "session/fork"] as const
+    const call = (method: (typeof methods)[number], directory: string) =>
+      method === "session/new"
+        ? acp.request(method, { cwd: "/workspace", mcpServers: [], additionalDirectories: [directory] })
+        : acp.request(method, {
+            cwd: "/workspace",
+            sessionId: "ses_saved",
+            mcpServers: [],
+            additionalDirectories: [directory],
+          })
+    const changes = () =>
+      acp.server.requests.filter(
+        (request) =>
+          (request.method === "POST" && /^\/api\/session(\/[^/]+\/fork)?$/.test(request.path)) ||
+          request.method === "PATCH",
+      ).length
+    for (const method of methods) {
+      const before = changes()
+      const error = await rpcError(call(method, untrusted))
+      expect({ method, error }).toMatchObject({
+        method,
+        error: { code: -32600, data: { type: "untrusted_folder", directory: untrusted } },
+      })
+      expect({ method, changed: changes() - before }).toEqual({ method, changed: 0 })
+    }
+    // The control: a trusted additional directory, one for each door, is granted by it.
+    for (const method of methods) {
+      const before = changes()
+      await call(method, path.resolve(`/trusted-${method.replace("/", "-")}`))
+      expect({ method, changed: changes() > before }).toEqual({ method, changed: true })
+    }
   })
 })
