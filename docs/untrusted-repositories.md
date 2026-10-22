@@ -1399,6 +1399,21 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
   move and the `session_move` tool); `packages/server/test/trust-first.test.ts` 'a route that acts on a folder the
   request names refuses one that is not trusted, however it is spelled, though the Location is trusted' (dangling
   links, a file link outside Windows, the temporary folder).
+- Doors outside the server that act on a folder besides the one they were asked about: the Effect SDK's
+  `sessions.create` checks the folder named, or the parent's, before it calls core (`packages/sdk/src/internal/host.ts`),
+  and its `sessions.move` meets `SessionMove` (proof: `packages/sdk/test/trust-first.test.ts` 'the Effect SDK's
+  sessions.create and sessions.move refuse an untrusted folder, however it is spelled'); ACP `session/new`, `load`,
+  `resume` and `fork` ask the server about each additional directory before they grant it (proof:
+  `packages/cli/test/acp/trust-first.test.ts` 'every door that takes additional directories refuses one that is not
+  trusted, and grants a trusted one'); a resumed flow or eval run uses a worktree that its run store names only when its
+  real path is below the repository's own `.orbit/worktrees` (`Git.owns`; proof: `packages/flow/test/
+  runner-resume-untrusted.test.ts`, its outside, inside and link rows); the run store is found no higher than the
+  project's folder the server resolved, from where the folder really is (`Git.holder` with a bound, used by every `orb
+  flow` reader, `orb eval` and the runner; proof: `packages/flow/test/git.test.ts` 'holder looks no higher than the
+  folder trust was decided for, and walks up from where the folder really is'); and the terminal UI's runs dialog reads
+  and decides a run store only once the folder in view is trusted, within the same bound (proof:
+  `packages/tui/test/component/dialog-flow-runs.test.tsx` 'reads no run store of an untrusted folder or above the
+  project's folder, and does once both hold').
 - When the components disagree, take the stricter answer and log it.
 
 **How to test:**

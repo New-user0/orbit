@@ -387,6 +387,17 @@ What changed:
     Location's folder. The server waits until that folder's project is trusted as well as the Location's, and its status
     names the folder it waits for; `PUT /api/experimental/mcp/:server` answers `UntrustedFolderError` (HTTP 403) at once
     instead of adding it.
+- The Effect SDK's `sessions.create` refuses a folder that is not trusted (the one named, or the parent's) with
+  `WorkspaceTrust.UntrustedError`, as `sessions.move` does for its destination; it used to create the session.
+- ACP `session/new`, `session/load`, `session/resume` and `session/fork` refuse an additional directory that is not
+  trusted, with the same `untrusted_folder` error as for the session's own folder, and grant nothing.
+- A resumed `orb flow` or `orb eval` run uses a worktree that its run store names only when it lies below the
+  repository's `.orbit/worktrees`; any other folder, or a link there that leads out, is not used (one log line), and the
+  check or reviewer runs where the run does.
+- `orb flow ls`, `show`, `cost`, `trace`, `watch`, `approve`, `resume`, `replay`, `clean`, `orb eval` and the terminal
+  UI's runs dialog look for the run store no higher than the project's folder, starting from where the folder really
+  is, so a store in a repository above it is not opened. The runs dialog shows and decides nothing in a folder that is
+  not trusted.
 - A plugin can no longer create a session in a folder that is not trusted, move one there, or send a session there a prompt,
   a command, a synthetic message or a compaction, or generate text from it: those calls fail with `WorkspaceTrust.UntrustedError`, which names the
   folder.
