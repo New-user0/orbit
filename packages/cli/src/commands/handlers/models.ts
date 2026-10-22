@@ -18,7 +18,7 @@ export default Runtime.handler(
       baseUrl: server.endpoint.url,
       headers: Service.headers(server.endpoint),
     })
-    const models = (yield* Effect.promise(() => settledModels(client, process.cwd())))
+    const models = (yield* Effect.promise(() => settledModels(client)))
       .map((model) => `${model.providerID}/${model.id}`)
       .toSorted((a, b) => a.localeCompare(b))
     if (models.length > 0) return process.stdout.write(models.join(EOL) + EOL)

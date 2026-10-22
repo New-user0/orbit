@@ -1,11 +1,11 @@
 import type { Orbit } from "@orbit/client"
 
 /**
- * The server's model list for `directory`, once it has stopped changing: providers such as Ollama are discovered after
- * the server starts, so a first read can be empty. Returns as soon as `target` (provider/model) appears, and after 15
- * seconds at most.
+ * The server's model list for `directory` (the process's folder unless given), once it has stopped changing: providers
+ * such as Ollama are discovered after the server starts, so a first read can be empty. Returns as soon as `target`
+ * (provider/model) appears, and after 15 seconds at most.
  */
-export async function settledModels(client: ReturnType<typeof Orbit.make>, directory: string, target?: string) {
+export async function settledModels(client: ReturnType<typeof Orbit.make>, target?: string, directory = process.cwd()) {
   const deadline = Date.now() + 15_000
   const poll = async (
     previous: string,
