@@ -655,6 +655,21 @@ test("orb trust names a folder that is not there instead of passing a server err
   expect(result.stderr).toContain(`Not a folder: ${path.join(repository, "porject")}`)
 }, 120_000)
 
+test("orb trust --list takes no folder and no --revoke, and changes nothing when given either", async () => {
+  const repository = await hooked("list-combined")
+
+  for (const given of [["--list", "--revoke"], ["--list", repository]]) {
+    const result = await orb(repository, ["trust", "--standalone", ...given])
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("--list takes no folder and cannot be combined with --revoke")
+  }
+  // The control: --list alone lists, and nothing was trusted by the refused calls.
+  const listed = await orb(repository, ["trust", "--standalone", "--list"])
+  succeeded(listed)
+  expect(listed.stdout).not.toContain(repository)
+}, 120_000)
+
 // trust-first: a repository is refused whatever it holds, because nothing of a folder loads and no work starts there until
 // it is trusted, and --bare, which only leaves the config unread, is refused the same way.
 test("a repository with nothing withheld stops without being trusted, as does --bare, and --trust works in the home directory", async () => {
