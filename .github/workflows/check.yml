@@ -112,12 +112,26 @@ jobs:
       # The tests compare file contents byte for byte, so checkouts keep the line endings agents wrote.
       - name: Configure git
         run: git config --global core.autocrlf false
-      # The Windows image has no ripgrep, and the search tools and their tests use the one on PATH. Chocolatey puts a
-      # shim in its bin folder, which is already on PATH. Printing the version fails the step when the shim is missing.
+      # The runner's TEMP is an 8.3 short name (C:\Users\RUNNER~1\...). Tests compare the folders they make under it
+      # with the real paths Orbit resolves, which use the long name, as TEMP does on a developer's machine.
+      - name: Use the long name of the temp folder
+        shell: bash
+        run: |
+          long="$(cygpath -w -l "$TEMP")"
+          echo "TEMP=$long" >> "$GITHUB_ENV"
+          echo "TMP=$long" >> "$GITHUB_ENV"
+          echo "$long"
+      # The Windows image has no ripgrep, and the search tools and their tests use the one on PATH. Chocolatey's bin
+      # folder holds only a shim, which stops working once a test copies it into another folder, so the folder of the
+      # real rg.exe goes first on PATH. Printing the version fails the step when it is missing.
       - name: Install ripgrep
+        shell: bash
         run: |
           choco install ripgrep --yes --no-progress
-          rg --version
+          real="$(find /c/ProgramData/chocolatey/lib/ripgrep -name rg.exe | head -n1)"
+          test -n "$real"
+          cygpath -w "$(dirname "$real")" >> "$GITHUB_PATH"
+          "$real" --version
       # The full suite, as on Linux: Windows semantics (path.win32, .exe heads, UNC paths, junctions, program lookup in
       # the working folder) are only exercised here. Git Bash runs it, as the core tests expect.
       - name: Test
