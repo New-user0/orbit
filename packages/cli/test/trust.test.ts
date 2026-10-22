@@ -658,7 +658,10 @@ test("orb trust names a folder that is not there instead of passing a server err
 test("orb trust --list takes no folder and no --revoke, and changes nothing when given either", async () => {
   const repository = await hooked("list-combined")
 
-  for (const given of [["--list", "--revoke"], ["--list", repository]]) {
+  for (const given of [
+    ["--list", "--revoke"],
+    ["--list", repository],
+  ]) {
     const result = await orb(repository, ["trust", "--standalone", ...given])
     expect(result.code).toBe(1)
     expect(result.stdout).toBe("")

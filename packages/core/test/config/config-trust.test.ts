@@ -395,12 +395,38 @@ describe("Config under workspace trust", () => {
           source: "saved",
           withheld: [],
         })
+        // The grant reads the config before it answers, so a client that starts work on the answer finds it applied.
+        expect(named(yield* config.entries(), own)?.info.hooks).toBeDefined()
         yield* Fiber.join(granted)
         expect(yield* project.status()).toMatchObject({ trusted: true, source: "saved", withheld: [] })
         expect(named(yield* config.entries(), own)?.info.hooks).toBeDefined()
 
         const revoked = yield* nextUpdate
         expect(yield* project.revoke()).toMatchObject({ directory: folders.repo, trusted: false, withheld: [] })
+        yield* Fiber.join(revoked)
+        expect(named(yield* config.entries(), own)).toBeUndefined()
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+    30_000,
+  )
+
+  // A revoke can come from somewhere other than this Location: another Location of the project, or the trust store
+  // itself, as here. The config hears of it through trust.updated, asks the store again about the folder it decided for,
+  // and reads the config again. The wait lets the reloads that the grant itself started finish first, so that only the
+  // revoke can cause the update this waits for.
+  it.live("reads the config again when a revoke made elsewhere ends the folder's trust", () =>
+    Effect.gen(function* () {
+      const folders = yield* layout
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const trust = yield* WorkspaceTrust.Service
+        const own = path.join(folders.repo, "orbit.json")
+        yield* grantFolder(folders.repo, { persist: true, via: "test" })
+        expect(named(yield* config.entries(), own)?.info.hooks).toBeDefined()
+        yield* Effect.sleep("1 second")
+
+        const revoked = yield* nextUpdate
+        yield* trust.revoke(folders.repo)
         yield* Fiber.join(revoked)
         expect(named(yield* config.entries(), own)).toBeUndefined()
       }).pipe(Effect.provide(loader(folders)))

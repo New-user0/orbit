@@ -224,7 +224,10 @@ describe("config sources that are skipped", () => {
       const layout = yield* folders
       const elsewhere = path.join(path.dirname(layout.work), "elsewhere")
       const moved = path.join(elsewhere, "orbit.json")
+      // A start folder outside the project is walked alone: the folder above it is not even a source to skip.
+      const aboveMoved = path.join(path.dirname(elsewhere), "orbit.json")
       yield* Effect.promise(() => Bun.write(moved, JSON.stringify({ username: "MOVED-OUT-USER" })))
+      yield* Effect.promise(() => Bun.write(aboveMoved, JSON.stringify({ username: "ABOVE-MOVED-USER" })))
       yield* Effect.gen(function* () {
         const trust = yield* WorkspaceTrust.Service
         yield* trust.grant(layout.repo, { persist: true, via: "test" })
@@ -241,11 +244,13 @@ describe("config sources that are skipped", () => {
         yield* reread
         const read = yield* listed
         expect(read).not.toContain(moved)
+        expect(read).not.toContain(aboveMoved)
         expect(read).not.toContain(path.join(layout.inner, "orbit.json"))
       }).pipe(Effect.provide(loader({ ...layout, directory: layout.inner })))
       expect(logged.filter((item) => item.path === moved)).toEqual([
         { path: moved, reason: "it is outside the project's folders" },
       ])
+      expect(logged.filter((item) => item.path === aboveMoved)).toEqual([])
     }).pipe(Effect.provide(Logger.layer([logger])))
   })
 })
