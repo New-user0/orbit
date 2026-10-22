@@ -25,6 +25,7 @@ import { Skill } from "@orbit/core/skill"
 import { Event } from "@orbit/schema/event"
 import { testEffect } from "./lib/effect"
 import { globalProjectNode } from "./lib/project"
+import { trustedProject } from "./fixture/project-trust"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const info = Skill.Info.make({
@@ -49,6 +50,8 @@ const locations = makeGlobalNode({
             list: () => Effect.succeed([info]),
           }),
           Layer.mock(Plugin.Service, { awaitActivation: Effect.void }),
+          // A drain starts only in a trusted folder (trust-first).
+          trustedProject,
         ) as unknown as Layer.Layer<LocationServices>,
     ),
   ),

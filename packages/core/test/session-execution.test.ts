@@ -10,6 +10,7 @@ import { KV } from "@orbit/core/kv"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import type { LocationServices } from "@orbit/core/location-services"
 import { Project } from "@orbit/core/project"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { ProjectTable } from "@orbit/core/project/sql"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
@@ -25,6 +26,7 @@ import { SessionStore } from "@orbit/core/session/store"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { trustedProject, untrustedProject } from "./fixture/project-trust"
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -1094,6 +1096,78 @@ describe("SessionRestart background recovery", () => {
       expect(yield* restarted.pendingBackground).toEqual([])
     }),
   )
+
+  // trust-first: a background subagent whose folder is no longer trusted is not resumed at startup, and that is not a
+  // failure: its parent is not told it was interrupted repeatedly, and its job and claim stay, so the next start in a
+  // trusted folder resumes it and tells the parent then.
+  it.effect("leaves a background subagent in a folder no longer trusted pending, and resumes it once trusted", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const jobs = yield* Job.Service
+      const parent = Session.ID.make("ses_subagent_untrusted_parent")
+      const child = Session.ID.make("ses_subagent_untrusted_child")
+      yield* seedSessions(database, [parent])
+      yield* seedSessions(database, [child], { parent_id: parent, time_suspended: Date.now(), resume_attempts: 1 })
+      yield* jobs.start({
+        id: child,
+        type: "subagent",
+        recovery: {
+          kind: "subagent",
+          parentSessionID: parent,
+          childSessionID: child,
+          agent: "explore",
+          description: "Inspect an untrusted folder",
+        },
+        run: Effect.never,
+      })
+      yield* jobs.background(child)
+
+      // A start in which the folder is not trusted: nothing a real `WorkspaceTrust` with implicit trust off has granted.
+      const drained: Session.ID[] = []
+      const untrusted = yield* Scope.make()
+      const first = yield* Job.make.pipe(Effect.provideService(Scope.Scope, untrusted))
+      const blocked = yield* buildExecution(
+        untrusted,
+        ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
+        undefined,
+        first,
+        untrustedProject({ directory: "/project" }),
+      )
+      yield* Context.get(blocked, SessionRestart.Service).resumeSuspendedSessions
+      expect(drained).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
+      expect((yield* claims(database))[child]).toBe(true)
+      expect(yield* attempts(database, child)).toBe(1)
+      expect(yield* first.pendingBackground).toMatchObject([{ id: child, status: "running" }])
+      yield* Scope.close(untrusted, Exit.void)
+
+      // The control: the next start, in a folder trusted by then, resumes the child and tells its parent.
+      const parentWoken = yield* Deferred.make<void>()
+      const trusted = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(trusted, Exit.void))
+      const next = yield* Job.make.pipe(Effect.provideService(Scope.Scope, trusted))
+      const resumed = yield* buildExecution(
+        trusted,
+        ({ sessionID }) =>
+          Effect.sync(() => void drained.push(sessionID)).pipe(
+            Effect.andThen(sessionID === parent ? Deferred.succeed(parentWoken, undefined) : Effect.void),
+          ),
+        undefined,
+        next,
+      )
+      yield* Context.get(resumed, SessionRestart.Service).resumeSuspendedSessions
+      yield* Deferred.await(parentWoken)
+      expect(drained).toEqual([child, parent])
+      expect(yield* SessionInbox.list(database.db, parent)).toMatchObject([
+        {
+          payload: {
+            description: "Inspect an untrusted folder",
+            metadata: { source: "subagent", childID: child, agent: "explore", state: "completed" },
+          },
+        },
+      ])
+    }),
+  )
 })
 
 describe("SessionExecution interrupt continuation", () => {
@@ -1345,6 +1419,8 @@ function buildExecution(
   drain: (input: Parameters<SessionRunner.Interface["drain"]>[0]) => Effect.Effect<void, SessionRunner.RunError>,
   options?: SessionRestart.Options,
   overrideJobs?: Job.Interface,
+  // What every Session's folder answers about trust: trusted, unless a test says otherwise.
+  trust: Layer.Layer<ProjectTrust.Service> = trustedProject,
 ) {
   return Effect.gen(function* () {
     const database = yield* Database.Service
@@ -1375,9 +1451,10 @@ function buildExecution(
       LocationServiceMap.Service,
       LayerMap.make(
         () =>
-          // The local execution test only needs the Session runner from the Location graph.
+          // The local execution test only needs the Session runner from the Location graph, and the trust that lets a
+          // drain start (trust-first).
           // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-          runner as unknown as Layer.Layer<LocationServices>,
+          Layer.merge(runner, trust) as unknown as Layer.Layer<LocationServices>,
       ),
     )
     return yield* Layer.buildWithScope(

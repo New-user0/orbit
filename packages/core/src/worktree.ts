@@ -5,6 +5,8 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm"
 import path from "path"
 import { AbsolutePath } from "./schema.js"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Global } from "@orbit/util/global"
+import { FileAccess } from "./file-access.js"
 import { Git } from "./git.js"
 import { Node } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -68,8 +70,18 @@ export class StrategyUnavailableError extends Schema.TaggedError<StrategyUnavail
   { strategy: StrategyID },
 ) {}
 
+/**
+ * The project's folder is not trusted, so no worktree is made or removed for it: both run its version control, whose
+ * config can name programs (trust-first, class 1). Or the folder a caller asked to make the worktree in is not trusted.
+ */
+export class UntrustedError extends Schema.TaggedError<UntrustedError>()("Worktree.UntrustedError", {
+  directory: AbsolutePath,
+  persistent: Schema.Boolean,
+}) {}
+
 export type Error =
   | Project.NotFoundError
+  | UntrustedError
   | SourceDirectoryNotFoundError
   | DestinationExistsError
   | DirectoryUnavailableError
@@ -113,6 +125,20 @@ const layer = Layer.effect(
     const processService = yield* AppProcess.Service
     const locations = yield* LocationServiceMap.Service
     const gitStrategy = yield* WorktreeGit.make
+    const trust = yield* WorkspaceTrust.Service
+    const global = yield* Global.Service
+    const requireTrusted = Effect.fnUntraced(function* (directory: AbsolutePath) {
+      const state = yield* trust.status(directory)
+      if (!state.trusted) return yield* new UntrustedError({ directory: state.directory, persistent: state.persistent })
+    })
+    // A folder the caller names, read from the project's folder (`FileAccess.resolveNamed`). A name no file system takes
+    // is refused as an invalid directory.
+    const resolveNamed = (base: AbsolutePath, input: string) => {
+      const directory = FileAccess.resolveNamed(base, input, global.home)
+      return directory === undefined
+        ? Effect.fail(new InvalidDirectoryError({ directory: AbsolutePath.make(input) }))
+        : Effect.succeed(directory)
+    }
     const project = Effect.fnUntraced(function* (projectID: Project.ID) {
       const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, projectID)).get().pipe(Effect.orDie)
       if (!row) return yield* new Project.NotFoundError({ projectID })
@@ -204,10 +230,20 @@ const layer = Layer.effect(
 
     const create = Effect.fn("Worktree.create")(function* (input: CreateInput, current?: WorktreeStrategies.Interface) {
       const row = yield* project(input.projectID)
+      yield* requireTrusted(row.worktree)
+      // The caller can name the folder the worktree is made in, which can be another than the project's. A worktree
+      // belongs to a project, not to a Location, so the name is read once from the project's folder, never the process's,
+      // and that one value is the folder checked, the folder made and the folder the worktree is written into. It has to
+      // be trusted as well, decided by where it really is (class 3, class 4).
+      const named = input.directory === undefined ? undefined : yield* resolveNamed(row.worktree, input.directory)
+      if (named !== undefined) yield* requireTrusted(named)
       const settings = yield* load(row.worktree, current)
       const selected = yield* getStrategy(settings.selected, settings.strategies)
-      const directory = input.directory ?? settings.directory
-      const sourceDirectory = yield* source(input.projectID, input.from ?? row.worktree)
+      const directory = named ?? settings.directory
+      const sourceDirectory = yield* source(
+        input.projectID,
+        input.from === undefined ? row.worktree : yield* resolveNamed(row.worktree, input.from),
+      )
       yield* fs.makeDirectory(directory, { recursive: true }).pipe(Effect.orDie)
       const name = input.name ?? Slug.create()
       let suffix = 1
@@ -257,6 +293,7 @@ const layer = Layer.effect(
 
     const remove = Effect.fn("Worktree.remove")(function* (input: RemoveInput, current?: WorktreeStrategies.Interface) {
       const row = yield* project(input.projectID)
+      yield* requireTrusted(row.worktree)
       const worktreeDirectory = yield* canonical(fs, input.directory)
       const stored = yield* ops.find(input.projectID, worktreeDirectory)
       if (!stored?.strategy) return yield* new InvalidDirectoryError({ directory: worktreeDirectory })
@@ -276,6 +313,8 @@ const layer = Layer.effect(
       current?: WorktreeStrategies.Interface,
     ) {
       const row = yield* project(input.projectID)
+      // Refreshing loads the folder's worktree strategies and runs git in it, so it waits for a grant as create does.
+      yield* requireTrusted(row.worktree)
       const settings = yield* load(row.worktree, current)
       const stored = yield* ops.list(input.projectID)
       const checked = yield* Effect.forEach(
@@ -342,7 +381,16 @@ const layer = Layer.effect(
 export const node: LayerNode.Provider<Service, never, typeof Node.tags.values.global> = Node.makeGlobalNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Git.node, Bus.node, Database.node, AppProcess.node, LocationServiceMap.node, WorkspaceTrust.node],
+  deps: [
+    FSUtil.node,
+    Global.node,
+    Git.node,
+    Bus.node,
+    Database.node,
+    AppProcess.node,
+    LocationServiceMap.node,
+    WorkspaceTrust.node,
+  ],
 })
 
 function operationError(strategy: StrategyID, operation: string, error: unknown) {

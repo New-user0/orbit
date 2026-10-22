@@ -709,6 +709,13 @@ function startServer(options: WireOptions, changed: () => void) {
           )
         }),
       },
+      // Every folder of these tests is trusted: ACP opens no session in one that is not (trust-first).
+      "/api/location/trust": {
+        GET: route((_req, query) => {
+          const directory = query["location[directory]"] ?? "/workspace"
+          return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
+        }),
+      },
       "/api/model": { GET: catalogRoute("model") },
       "/api/model/default": { GET: catalogRoute("default") },
       "/api/agent": { GET: catalogRoute("agent") },

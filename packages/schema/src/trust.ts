@@ -68,6 +68,10 @@ export const Status = Schema.Struct({
       "Whether a grant for this folder can be stored on disk. False for the home directory and for filesystem roots, which can only be trusted until the serving process restarts.",
   }),
   source: Source.pipe(optional),
+  granted: AbsolutePath.annotate({
+    description:
+      "The folder above this one whose grant makes it trusted, set only when the grant is that folder's and not this one's own. A grant for a folder covers every folder below it, except a grant for the home directory or a filesystem root, which covers that folder alone. Revoking this folder leaves it trusted while that grant stands. Unset by a server older than this field.",
+  }).pipe(optional),
   withheld: Schema.Array(Withheld).annotate({
     description:
       "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do, and names that folder as its `directory`.",

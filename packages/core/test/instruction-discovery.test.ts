@@ -2469,10 +2469,9 @@ describe("ConfigInstructionPlugin.Plugin lets a trusted holder import from outsi
       yield* write(shared, "SHARED MARKER")
       yield* Effect.gen(function* () {
         const discovery = yield* start()
-        // With `code` trusted and the project not, the file above is not read at all.
-        yield* rescanAfter(grantFolder(code))
+        // While the project is not trusted, the file above is not read at all. (A grant for `code` would cover the
+        // project below it as well, so the project cannot be left untrusted under a trusted `code`.)
         expect(placesOf(yield* discovery.list())).not.toContain(above)
-        yield* rescanAfter(revokeFolder(code))
         yield* rescanAfter(grantProject)
         expect(placesOf(yield* discovery.list())).toContain(above)
         expect(placesOf(yield* discovery.list())).not.toContain(shared)

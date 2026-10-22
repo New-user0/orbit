@@ -33,6 +33,7 @@ import {
   SessionNotFoundError,
   SkillNotFoundError,
   UnknownError,
+  UntrustedFolderError,
 } from "../errors.js"
 import { Agent } from "@orbit/schema/agent"
 import { Skill } from "@orbit/schema/skill"
@@ -231,7 +232,7 @@ export const makeSessionGroup = <
           permissions: Permission.Ruleset.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.create",
@@ -248,7 +249,7 @@ export const makeSessionGroup = <
           location: Location.PublicRef.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "experimental.session.import",
@@ -315,7 +316,7 @@ export const makeSessionGroup = <
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ before: SessionMessage.ID.pipe(Schema.optional) }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError],
+        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -368,7 +369,7 @@ export const makeSessionGroup = <
           permissions: Permission.Ruleset.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -384,12 +385,13 @@ export const makeSessionGroup = <
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ ...Location.PublicRef.fields, delivery: SessionInbox.Delivery.pipe(Schema.optional) }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, InvalidRequestError],
+        error: [SessionNotFoundError, InvalidRequestError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.move",
           summary: "Move session",
-          description: "Move a session to another project directory at the requested delivery boundary.",
+          description:
+            "Move a session to another project directory at the requested delivery boundary. A relative directory, or one that starts with ~, is read from the session's own folder, and the folder must be trusted.",
         }),
       ),
     )
@@ -405,7 +407,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.User }),
-        error: [ConflictError, InvalidRequestError, SessionNotFoundError],
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -425,7 +427,7 @@ export const makeSessionGroup = <
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError],
+        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -444,7 +446,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, SkillNotFoundError],
+        error: [SessionNotFoundError, SkillNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -467,7 +469,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.Synthetic }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -486,7 +488,7 @@ export const makeSessionGroup = <
           command: Schema.String,
         }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -506,7 +508,7 @@ export const makeSessionGroup = <
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.Compaction }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -659,7 +661,7 @@ export const makeSessionGroup = <
             blocked: Schema.optional(Schema.Array(Schema.String)),
           }).annotate({ identifier: "SessionInstructionsPreview" }),
         }),
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [SessionNotFoundError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -738,7 +740,7 @@ export const makeSessionGroup = <
         success: Schema.Struct({
           data: Schema.Struct({ text: Schema.String }),
         }).annotate({ identifier: "SessionGenerateResponse" }),
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [SessionNotFoundError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

@@ -241,7 +241,10 @@ export function Prompt(props: PromptProps) {
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
 
   const enabled = useInteractivity()
-  const disabled = () => props.disabled || !enabled()
+  const trust = useTrust()
+  // Until the folder's trust is settled the prompt takes no keys at all, so nothing typed ahead is sent or reaches the
+  // question about the folder (`trust.typing`).
+  const disabled = () => props.disabled || !enabled() || !trust.typing()
   const leader = Keymap.useLeaderActive()
   const muted = () => leader() || props.muted
   const local = useLocal()
@@ -260,7 +263,6 @@ export function Prompt(props: PromptProps) {
   const currentLocation = useLocation()
   const args = useArgs()
   const config = useConfig().data
-  const trust = useTrust()
   // With prompt.vim on, Escape leaves insert mode and normal-mode keys move and edit instead of typing.
   // The mode, the half-typed command and the unnamed register live as long as the prompt does; a submit leaves them.
   const [vim, setVim] = createSignal<Vim.State>(Vim.initial)
@@ -1833,6 +1835,21 @@ export function Prompt(props: PromptProps) {
   // The command is handed this folder as `cwd` and `project_dir`, and programs it starts there (git, bun) read what the
   // folder chose, so it is a folder the person has to trust as well. It is not always the one the terminal UI started in.
   const statusLineTrusted = trust.folder(() => statusLineLocation().directory)
+  const placeholderText = createMemo(() => {
+    // A prompt that cannot be used yet does not invite typing.
+    if (props.showPlaceholder === false || !trust.typing()) return undefined
+    const value = (() => {
+      if (store.mode === "shell") {
+        if (!shell().length) return undefined
+        return `Run a command… "${shell()[store.placeholder % shell().length]}"`
+      }
+      if (!list().length) return undefined
+      return `Ask anything… "${list()[store.placeholder % list().length]}"`
+    })()
+    if (!value) return undefined
+    const width = dimensions().width < 44 ? dimensions().width - 5 : Math.min(75, dimensions().width - 4) - 5
+    return Locale.takeWidth(value, Math.max(1, width)).trimEnd()
+  })
   // A user-configured status line command, shown under the prompt footer.
   const statusLine = (
     <StatusLine
@@ -1918,20 +1935,6 @@ export function Prompt(props: PromptProps) {
     showDetails: store.interrupt === 0 || dimensions().width >= 80,
   })
 
-  const placeholderText = createMemo(() => {
-    if (props.showPlaceholder === false) return undefined
-    const value = (() => {
-      if (store.mode === "shell") {
-        if (!shell().length) return undefined
-        return `Run a command… "${shell()[store.placeholder % shell().length]}"`
-      }
-      if (!list().length) return undefined
-      return `Ask anything… "${list()[store.placeholder % list().length]}"`
-    })()
-    if (!value) return undefined
-    const width = dimensions().width < 44 ? dimensions().width - 5 : Math.min(75, dimensions().width - 4) - 5
-    return Locale.takeWidth(value, Math.max(1, width)).trimEnd()
-  })
   const footerLocation = createMemo(() => {
     if (!props.sessionID) {
       // No session yet: show where the next session will be created.

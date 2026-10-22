@@ -25,6 +25,7 @@ function host(): MiniHost {
     terminal: { stdin: process.stdin },
     platform: "linux",
     stdout: { write() {} },
+    stderr: { write() {} },
     files: { readText: async () => "" },
     editor: { open: async () => undefined },
     paths: { home: "/home/test" },

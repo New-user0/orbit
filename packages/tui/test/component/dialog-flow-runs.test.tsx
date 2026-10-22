@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import fs from "node:fs/promises"
+import path from "node:path"
 import { InputRenderable } from "@opentui/core"
 import { Store } from "@orbit/flow"
 import { DialogFlowGate, DialogFlowRuns } from "../../src/component/dialog-flow-runs"
@@ -208,3 +210,60 @@ test("writes out the control characters of a gate in its dialog, its note prompt
     variant: "error",
   })
 })
+
+// Class 3 and 12: the dialog reads and writes the run store of the folder in view only once that folder is trusted, and
+// finds it no higher than the project's folder the server resolved. A store in a repository above that folder, and one
+// in a folder that is not trusted, are not listed and not decided; the control is the same store reached as the
+// project's own, in a trusted folder.
+test("reads no run store of an untrusted folder or above the project's folder, and does once both hold", async () => {
+  await using dir = await tmpdir()
+  const above = dir.path
+  const directory = path.join(above, "inner")
+  await fs.mkdir(directory, { recursive: true })
+  // A repository above the folder in view, which holds a run waiting at a gate.
+  await fs.mkdir(path.join(above, ".git", "objects"), { recursive: true })
+  await Bun.write(path.join(above, ".git", "HEAD"), "ref: refs/heads/main\n")
+  const run = "run_20260101000009_0a1b2c"
+  const seeded = Store.at(above)
+  seeded.create({ id: run, workflow: "CLONE-ABOVE", file: "w.ts", directory: above, input: {} })
+  seeded.append(run, "ship", "gate.pending", { message: "Ship it?" })
+  seeded.status(run, "waiting")
+  seeded.close()
+  const answering = (project: string, trusted: boolean) => async (url: URL) => {
+    if (url.pathname === "/api/location")
+      return json({ directory, project: { id: "proj_test", directory: project, canonical: project } })
+    if (url.pathname === "/api/location/trust")
+      return json({ directory: project, trusted, persistent: true, withheld: [], changed: [] })
+    return undefined
+  }
+  const listed = async (project: string, trusted: boolean) => {
+    await using setup = await renderLocal({ directory, fetch: answering(project, trusted) })
+    setup.dialog.replace(() => <DialogFlowRuns />)
+    return (await poll(setup, (frame) => frame.includes("CLONE-ABOVE"), 3_000)) !== undefined
+  }
+  // Untrusted, with the repository above as the project: nothing is read.
+  expect(await listed(above, false)).toBe(false)
+  // Trusted, but the project is the folder in view: the store above it is not taken.
+  expect(await listed(directory, true)).toBe(false)
+  // The control: trusted, with the repository above as the project.
+  expect(await listed(above, true)).toBe(true)
+
+  // A gate is not decided in an untrusted folder.
+  let toast!: ReturnType<typeof useToast>
+  const Gate = () => {
+    toast = useToast()
+    return <DialogFlowGate run={run} gate="ship" message="Ship it?" />
+  }
+  await using setup = await renderLocal({ directory, fetch: answering(above, false) })
+  setup.dialog.replace(() => <Gate />)
+  await frameWhen(setup, (frame) => frame.includes("Approve with a note"))
+  await pressUntil(
+    setup,
+    () => setup.mockInput.pressEnter(),
+    () => toast.currentToast !== null,
+  )
+  expect(toast.currentToast).toMatchObject({ title: "Not decided", message: "This folder is not trusted." })
+  const after = Store.at(above)
+  expect(after.nodes(run).get("ship")?.status).toBe("waiting")
+  after.close()
+}, 60_000)

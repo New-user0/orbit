@@ -28,17 +28,26 @@ const labels: Record<TrustKind, string> = {
 }
 
 /**
- * Asks whether to trust the folder whose project config is held back. `onTrust` receives whether the grant can be kept
- * on disk, which it cannot for a home directory or a filesystem root: those are trusted only until Orbit restarts, and
- * the dialog offers nothing else for them. Config in a folder above it is listed after the folder's own, with the
- * command that trusts the folder that holds it, because trusting this one does not turn it on.
+ * Asks whether to trust a folder. A folder that is not trusted has had nothing read from it, so the question lists
+ * nothing: it names the folder, asks whether it is the person's own or one they trust, and says what trusting it lets
+ * Orbit do, as the reference's question does in its own words. A trusted folder whose executable config changed since
+ * is asked about again, with what changed listed, and config in a folder above it after the folder's own, with the
+ * command that trusts the folder that holds it. `onTrust` receives whether the grant can be kept on disk, which it
+ * cannot for a home directory or a filesystem root: those are trusted only until Orbit restarts, and the dialog offers
+ * nothing else for them. `leave` names the other answer: Exit for the folder the terminal UI started in, Not now for any
+ * other, and `onNotNow` takes either.
  */
 export function DialogTrust(props: {
   status: TrustStatus
   /** The folder in view, which the commands that trust a folder above the project go through. */
   location?: string
+  leave?: "exit" | "later"
+  /** Whether nothing could be typed before the question opened, so that Enter on Trust is a choice the person saw. */
+  guarded?: boolean
   onTrust: (persist: boolean) => void | Promise<void>
   onNotNow: () => void
+  /** The "no" key on the question about the folder the terminal UI started in, which ends it with status 0. */
+  onDecline?: () => void
 }) {
   const dialog = useDialog()
   const theme = useTheme().surface("dialog")
@@ -50,12 +59,14 @@ export function DialogTrust(props: {
   const intro = createMemo(() =>
     changed()
       ? "This folder's config changed since you trusted it, and Orbit is leaving out what changed:"
-      : "Orbit is leaving out what could run code or reach the network:",
+      : "Do you know where this folder came from? If you are not sure, read through its files before you go on.\nOrbit can read, change and run the files here, and nothing here loads until you trust it.",
   )
-  const held = createMemo(() => ({
-    ...groupWithheld(props.status.withheld),
-    ...(changed() ? { own: changedOwn(props.status) } : {}),
-  }))
+  // Nothing of a folder that is not trusted was read, so there is nothing to list for it.
+  const held = createMemo(() =>
+    changed()
+      ? { ...groupWithheld(props.status.withheld), own: changedOwn(props.status) }
+      : { own: [], above: [] },
+  )
   const outro = createMemo(() =>
     [
       changed()
@@ -104,8 +115,10 @@ export function DialogTrust(props: {
       title={changed() ? "Trust the changes?" : "Trust this folder?"}
       renderFilter={false}
       locked={pending()}
-      // The dialog can open while a person is typing, so a stray Enter must never be what trusts the folder.
-      focusTarget="later"
+      // A question can open while a person is typing, so a stray Enter there must never be what trusts it. The question
+      // about the folder the terminal UI started in comes while the prompts take no typing, and starts on Trust, as the
+      // reference's does.
+      focusTarget={props.guarded === true && !changed() ? "trust" : "later"}
       header={
         <box flexDirection="column" gap={1}>
           <text wrapMode="none" truncate>
@@ -146,9 +159,14 @@ export function DialogTrust(props: {
               : "Trust until Orbit restarts",
           value: "trust",
         },
-        { title: "Not now", value: "later" },
+        { title: props.leave === "exit" && !changed() ? "Exit" : "Not now", value: "later" },
       ]}
       onSelect={(option) => (option.value === "trust" ? void trust() : props.onNotNow())}
+      bindings={
+        props.leave === "exit" && !changed() && props.onDecline !== undefined
+          ? [{ bind: "n", title: "No, exit", group: "Trust", run: props.onDecline }]
+          : []
+      }
     />
   )
 }

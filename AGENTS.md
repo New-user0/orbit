@@ -42,7 +42,7 @@ Valid types are `feat`, `fix`, `docs`, `chore`, `refactor`, and `test`. Scopes a
 
 Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributing guide`, `chore(sdk): regenerate types`.
 
-Agents never merge a pull request or delete a remote branch. A stack lands bottom-up, only after the review of each head commit approves, and a child is retargeted to `main` (`gh pr edit <n> --base main`) before its parent's branch is deleted, because GitHub closes a child whose base is deleted.
+An agent merges a task's pull request into its milestone integration branch (for example `m5-integration`) only after the Opus review approves its head commit and every gate is green on the merged result. Agents never merge into `main` and never delete a remote branch; the owner merges the integration branch into `main`. A stack lands bottom-up, only after the review of each head commit approves, and a child is retargeted to its parent's base (`gh pr edit <n> --base <base>`) before its parent's branch is deleted, because GitHub closes a child whose base is deleted.
 
 Regenerate the PR body from the commit list and the last gate run after every push. A PR that names helpers only another open PR provides has `depends on #<n>` in its title until that PR merges.
 

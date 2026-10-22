@@ -40,6 +40,9 @@ export async function createAppFixture(
   const events = createEventStream()
   const calls = createFetch(input.fetch, events)
   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  // The terminal UI sets the process's exit status when a person declines to trust its folder; the test process's own
+  // status is put back when the app is disposed.
+  const exitCode = process.exitCode
   const task = Effect.runPromise(
     run({
       app: { name: "test", version: "test", channel: "test" },
@@ -63,6 +66,8 @@ export async function createAppFixture(
     ...setup,
     events,
     ready: ready.promise,
+    /** Settles when the terminal UI has ended and done what it does at the end. */
+    ended: task,
     async [Symbol.asyncDispose]() {
       try {
         if (!setup.renderer.isDestroyed) setup.renderer.destroy()
@@ -70,6 +75,8 @@ export async function createAppFixture(
       } finally {
         // Drafts live in a module-level stash, so they would reach the next app of the same process.
         clearDrafts()
+        // Bun ignores an assignment of undefined, so the status before the app was nothing becomes 0.
+        process.exitCode = exitCode ?? 0
         await server.stop()
         await state?.[Symbol.asyncDispose]()
       }

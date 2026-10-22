@@ -144,6 +144,13 @@ export interface Interface {
    * trust changes, and the trust of each folder is read at every call. A refusal is logged once.
    */
   readonly git: (directory?: string) => Effect.Effect<boolean>
+  /**
+   * Whether a folder other than this Location's is trusted now, such as the working folder that a config names for a
+   * program it starts, decided as it would be for a Location there: by its project's canonical folder. `directory` is
+   * absolute, read by the caller from the folder it is relative to (`FileAccess.resolveNamed`), and the caller acts in
+   * that same folder (class 3).
+   */
+  readonly folder: (directory: AbsolutePath) => Effect.Effect<WorkspaceTrust.State>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ProjectTrust") {}
@@ -155,6 +162,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const location = yield* Location.Service
     const fs = yield* FSUtil.Service
+    const projects = yield* Project.Service
     // Trust is decided for the project's canonical root, so its linked worktrees share the decision.
     const root = location.project.canonical
     // The folders that decision covers.
@@ -403,6 +411,8 @@ const layer = Layer.effect(
     })
 
     const report = Effect.fnUntraced(function* (state: WorkspaceTrust.State) {
+      // Nothing of an untrusted folder is read, so there is nothing to list as held back for it.
+      if (!state.trusted) return { ...state, withheld: [], changed: [] } satisfies Trust.Status
       const entries = yield* config.entries()
       const changed = yield* differences()
       const listed = yield* Effect.forEach(entries, (entry) =>
@@ -440,6 +450,9 @@ const layer = Layer.effect(
     return Service.of({
       trusted: Effect.fn("ProjectTrust.trusted")(() => trust.status(root).pipe(Effect.map((state) => state.trusted))),
       status: Effect.fn("ProjectTrust.status")(() => trust.status(root).pipe(Effect.flatMap(report))),
+      folder: Effect.fn("ProjectTrust.folder")(function* (directory) {
+        return yield* trust.status((yield* projects.resolve(directory)).canonical)
+      }),
       grant: Effect.fn("ProjectTrust.grant")(function* (input) {
         // The folder to trust is the project's, or the one a held-back file above it names; nothing else is trusted
         // through a Location, so that a client cannot use this to grant an arbitrary path.
@@ -448,11 +461,23 @@ const layer = Layer.effect(
           yield* Effect.logWarning("trust grant refused", { holder: input.holder, reason: "holds nothing back here" })
           return yield* report(yield* trust.status(root))
         }
-        const state = yield* trust.grant(target, {
+        const fresh = !(yield* trust.status(target)).trusted
+        const granted = yield* trust.grant(target, {
           persist: input.persist,
           via: input.via,
           observations: yield* observationsOf(target),
         })
+        // Nothing of a folder that was not trusted had been read, so the grant had nothing to record. Once the config
+        // has read the folder, the grant records what it holds now, so that its hooks and plugins are what was trusted
+        // and not taken for changes since (F18), and the config is read once more to apply them before this returns.
+        const reload = config.reload
+        const recorded = fresh && reload !== undefined ? yield* reload().pipe(Effect.andThen(observationsOf(target))) : []
+        const state =
+          recorded.length === 0 || reload === undefined
+            ? granted
+            : yield* trust
+                .grant(target, { persist: input.persist, via: input.via, observations: recorded })
+                .pipe(Effect.tap(() => reload()))
         return yield* report(target === root ? state : yield* trust.status(root))
       }),
       revoke: Effect.fn("ProjectTrust.revoke")(() => trust.revoke(root).pipe(Effect.flatMap(report))),
@@ -562,5 +587,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [WorkspaceTrust.node, Config.node, Location.node, FSUtil.node, Git.node, Bus.node],
+  deps: [WorkspaceTrust.node, Config.node, Location.node, FSUtil.node, Git.node, Bus.node, Project.node],
 })

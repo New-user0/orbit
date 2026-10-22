@@ -45,26 +45,21 @@ type Options = {
 }
 
 /**
- * What stops a command before it does any work: its folder is untrusted and its project config holds something back,
- * so a run would quietly go without the project's hooks, MCP servers and plugins and not be the run it asked for. This
- * is the text that says so, or undefined when the command may go ahead, as it may in a folder that holds nothing back
- * whether or not it is trusted. A command that imports a file, named by `imports`, is stopped by an untrusted folder
- * whatever it holds back, because importing the file runs its code and there is nothing to leave out of that run. So is
- * one that is about to run what a workflow or suite file defines, named by `defines`: shell commands, which no
- * permission rule is asked about, nodes that approve what their agents ask permission for, and nodes that run as an
- * agent the file names, whose own rules are added after the user's global ones and win. The last two settle the user's
- * own rules in the file's favour. The code and the commands come from the folder that holds the file, which need not be
- * the one the run happens in and can belong to another project, so that folder has to be trusted as well, whatever it
- * holds back, because the run applies none of its config and the file is all it takes from it. It is asked after the
- * folder of the run, which settled that project already, so it is left out when the file is in that very folder. With
- * `grant` (the `--trust` flag) an untrusted folder is first trusted for as long as the serving process lives, which
- * callers make a private one that ends with the run, and so is the folder that holds the file. The folder is the one the
- * run happens in: `directory` unless `session` names a session that exists, which runs in its own folder wherever the
- * command was started. A server older than workspace trust has no such route and holds nothing back, so a command that
- * only checks what is held back goes ahead, with a line on stderr that says nothing was checked. One that imports a file
- * or runs what a file defines does not: that server cannot say whether the folder is trusted, and this process would run
- * the file or the commands itself, so the text says so and names the ways to get an answer. A trusted folder whose
- * config above it is still held back goes ahead, with a line that says what stays off.
+ * What stops a command before it does any work: its folder is not trusted, whatever the folder holds, because nothing a
+ * folder supplies loads and no work starts there until the person trusts it (trust-first, class 12). A trusted folder
+ * whose executable config changed since the grant stops it too, until the changes are trusted. This is the text that
+ * says so, or undefined when the command may go ahead. What the refusal explains depends on what the command was about
+ * to do: import a file (`imports`), run what a workflow or suite file defines (`defines`: shell commands, nodes that
+ * approve what their agents ask permission for, nodes that run as an agent the file names, and the models it picks),
+ * send the folder to a model (`strict`), or go on from a run the folder's run store records (`strict: "recorded"`).
+ * The code and the commands of a file come from the folder that holds it, which need not be the one the run happens in
+ * and can belong to another project, so that folder has to be trusted as well. It is asked after the folder of the run,
+ * so it is left out when the file is in that very folder. With `grant` (the `--trust` flag) an untrusted folder is first
+ * trusted for as long as the serving process lives, which callers make a private one that ends with the run, and so is
+ * the folder that holds the file. The folder is the one the run happens in: `directory` unless `session` names a
+ * session that exists, which runs in its own folder wherever the command was started. A server older than workspace
+ * trust cannot say whether the folder is trusted, so the command stops, and the text names the ways to get an answer
+ * (class 7). A trusted folder whose config above it is still held back goes ahead, with a line that says what stays off.
  */
 export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
   client: OrbitClient,
@@ -88,20 +83,9 @@ export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
     Effect.catchIf(unsupported, () => Effect.succeed(undefined)),
     Effect.mapError(unchecked(location.directory)),
   )
-  if (current === undefined) {
-    if (options.imports !== undefined || defined !== undefined || options.strict)
-      return unanswered(location.directory, options.imports, defined, options.strict)
-    yield* Effect.sync(() =>
-      process.stderr.write(
-        `Warning: this server is older than workspace trust, so it applies a folder's project config without asking whether the folder is trusted, and nothing was checked. Restart it to get the check; for the background service that is \`orb service restart\`.${EOL}`,
-      ),
-    )
-    return undefined
-  }
-  const status =
-    options.grant && (!current.trusted || (current.changed ?? []).length > 0) ? yield* grant(client, location) : current
-  if (blocked(status, options.imports, defined, options.strict))
-    return refusal(status, options.imports, defined, options.strict, location.directory)
+  if (current === undefined) return unanswered(location.directory, options.imports, defined, options.strict)
+  const status = options.grant && blocked(current) ? yield* grant(client, location) : current
+  if (blocked(status)) return refusal(status, options.imports, defined, options.strict, location.directory)
   if (status.withheld.length > 0)
     yield* Effect.sync(() => process.stderr.write(`Warning: ${notice(status, location.directory)}${EOL}`))
   // The folder that holds the file is the run's own unless the command was given a path elsewhere, and another project
@@ -149,13 +133,6 @@ export const trustedProject = Effect.fn("cli.trust.project")(function* (client: 
   return location?.project
 })
 
-/** For a command that cannot stop, such as `orb acp` whose stdout belongs to the protocol: says on stderr what is held back. */
-export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: OrbitClient, directory: string) {
-  const status = yield* call((signal) => client.location.trust.get({ location: { directory } }, { signal }))
-  if (status.withheld.length === 0) return
-  process.stderr.write(`orb acp: ${notice(status, directory)}${EOL}`)
-})
-
 /**
  * What a refusal says: the folder is not trusted, and what that holds up. That is the project config it finds, which
  * holds something back, and, when the command loads a file from the folder, what running that file does: the code
@@ -175,8 +152,8 @@ export function refusal(
   const loads = imports ?? defines?.file
   // A command that goes on from the run store is stopped by the folder itself, whatever it holds back.
   const recorded = strict === "recorded" && loads === undefined
-  // A strict command stopped by a folder that holds nothing back: there is no list to show, only the folder itself.
-  const quiet = strict === true && status.withheld.length === 0 && loads === undefined
+  // A command stopped by a folder that holds nothing back: there is no list to show, only the folder itself.
+  const quiet = status.withheld.length === 0 && loads === undefined && !recorded
   // What there is to look over before trusting the folder.
   const review =
     loads === undefined
@@ -194,7 +171,7 @@ export function refusal(
       status.directory,
       imports,
       defines,
-      recorded ? "recorded" : quiet ? "prompt" : undefined,
+      recorded ? "recorded" : quiet ? (strict === true ? "prompt" : "folder") : undefined,
     ),
     ...(status.withheld.length === 0
       ? []
@@ -211,8 +188,8 @@ export function refusal(
       ? []
       : [
           status.persistent
-            ? `Look ${review} over, then trust the folder for good with \`orb trust\`, or for this run only with --trust.`
-            : "That folder is a home directory or a filesystem root, which Orbit never trusts for good, so `orb trust` refuses it. Pass --trust to trust it for this run only, or run from inside a project folder.",
+            ? `Look ${review} over, then trust the folder for good with \`orb trust\`, or for this run only with --trust. Starting \`orb\` there asks the same question.`
+            : "That folder is a home directory or a filesystem root, which Orbit never trusts for good, so `orb trust` refuses it. Pass --trust to trust it for this run only, start `orb` there to trust it until Orbit restarts, or run from inside a project folder.",
         ]),
     ...(above.length === 0
       ? []
@@ -268,7 +245,7 @@ export function unanswered(directory: string, imports?: string, defines?: Define
           ? "recorded"
           : strict === true
             ? "prompt"
-            : undefined,
+            : "folder",
     ),
     "",
     "Restart the server to get an answer, which for the background service is `orb service restart`. Or run on a current private server instead: --standalone starts one that checks the folder, and --trust starts one that trusts the folder for this run only.",
@@ -418,13 +395,14 @@ function fromFolder(directory: string, file: string) {
 // What the folder's missing trust holds up, first of all: the code the command imports, what the file it reads defines
 // (shell commands, nodes that approve what their agents ask permission for, and nodes that run as an agent the file
 // names), the run store that a command goes on from (`recorded`), the model that a strict command sends the folder to
-// (`prompt`), or else the config it finds. `heading` is what comes before: why the folder is not enough as it stands.
+// (`prompt`), the folder itself when the command would only start work there (`folder`), or else the config it finds.
+// `heading` is what comes before: why the folder is not enough as it stands.
 function lead(
   heading: string,
   directory: string,
   imports: string | undefined,
   defines: Defined | undefined,
-  reason?: "prompt" | "recorded",
+  reason?: "prompt" | "recorded" | "folder",
 ) {
   if (imports !== undefined)
     return [
@@ -433,6 +411,10 @@ function lead(
   if (reason === "recorded")
     return [
       `${heading}, and this command goes on from a run that the folder's run store (.orbit/runs.db) records. A clone can ship that file with any run in it, and a resumed run picks up the folders, sessions and models it records, so the command does not open the store until the folder is trusted.`,
+    ]
+  if (reason === "folder")
+    return [
+      `${heading}. Nothing a folder holds is read, and no work starts there, until the folder is trusted: its instructions and files steer the model, and its config can name programs to run.`,
     ]
   if (reason === "prompt")
     return [
@@ -502,22 +484,7 @@ const grant = Effect.fnUntraced(function* (client: OrbitClient, location: { read
 })
 
 /**
- * Whether the folder is held to a trust it lacks: untrusted, and either something is held back that a grant would let
- * through, or the command loads a file from it that runs code (a module it imports) or carries out what the file defines
- * (shell commands, approvals of what agents ask permission for, and the choice of which agents run), which a folder that
- * holds nothing back does not excuse. A strict command is held to it whatever the folder holds back: one that sends the
- * folder to a model, and one that goes on from a run the folder's run store records.
+ * Whether the folder is held to a trust it lacks: it is not trusted, whatever it holds, or it is trusted and its
+ * executable config changed since the grant.
  */
-const blocked = (
-  status: TrustStatus,
-  imports: string | undefined,
-  defines: Defined | undefined,
-  strict: boolean | "recorded" | undefined,
-) =>
-  status.trusted
-    ? (status.changed ?? []).length > 0
-    : strict === true ||
-      strict === "recorded" ||
-      imports !== undefined ||
-      defines !== undefined ||
-      status.withheld.length > 0
+const blocked = (status: TrustStatus) => !status.trusted || (status.changed ?? []).length > 0

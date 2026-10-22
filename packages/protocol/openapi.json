@@ -613,6 +613,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "503": {
             "description": "ServiceUnavailableError",
             "content": {
@@ -624,7 +634,7 @@
             }
           }
         },
-        "description": "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
+        "description": "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A folder that is not trusted is refused with an untrusted-folder error, whatever the scope, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
         "summary": "Add an instruction note",
         "requestBody": {
           "content": {
@@ -1489,6 +1499,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -1772,6 +1792,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -2143,6 +2173,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -2265,6 +2305,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -2523,6 +2573,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -2534,7 +2594,7 @@
             }
           }
         },
-        "description": "Move a session to another project directory at the requested delivery boundary.",
+        "description": "Move a session to another project directory at the requested delivery boundary. A relative directory, or one that starts with ~, is read from the session's own folder, and the folder must be trusted.",
         "summary": "Move session",
         "requestBody": {
           "content": {
@@ -2622,6 +2682,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -2773,6 +2843,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError | CommandNotFoundError",
             "content": {
@@ -2899,6 +2979,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError | SkillNotFoundError",
             "content": {
@@ -3001,6 +3091,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -3138,6 +3238,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -3238,6 +3348,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -4166,6 +4286,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -4483,6 +4613,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -7554,17 +7694,24 @@
             }
           },
           "403": {
-            "description": "ForbiddenError",
+            "description": "ForbiddenError | UntrustedFolderError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ForbiddenErrorEncoded"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                    }
+                  ]
                 }
               }
             }
           }
         },
-        "description": "Add an MCP server at runtime or replace an existing one, connecting it immediately.",
+        "description": "Add an MCP server at runtime or replace an existing one, connecting it immediately. A local server's working folder is read from the location's folder and must be trusted.",
         "summary": "Add MCP server",
         "requestBody": {
           "content": {
@@ -7739,6 +7886,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -9398,9 +9555,19 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
           }
         },
-        "description": "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location. Experimental: may change without compatibility guarantees.",
+        "description": "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location, but the folder it really lands in, once every link in the path is followed, must be trusted as the location must, unless it is Orbit's temporary folder. Experimental: may change without compatibility guarantees.",
         "summary": "Write file",
         "requestBody": {
           "content": {
@@ -9984,6 +10151,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -10787,6 +10964,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -11609,9 +11796,19 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
           }
         },
-        "description": "Spawn one non-interactive shell command for a location. Combined stdout/stderr is captured to a file pageable via output.",
+        "description": "Spawn one non-interactive shell command for a location, in `cwd` (taken from the location's folder when relative) or else the location's folder. The location and the folder the command runs in must both be trusted. Combined stdout/stderr is captured to a file pageable via output.",
         "summary": "Run shell command",
         "requestBody": {
           "content": {
@@ -12246,6 +12443,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "ProjectNotFoundError",
             "content": {
@@ -12302,6 +12509,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -12364,6 +12581,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -21865,6 +22092,10 @@
           "source": {
             "$ref": "#/components/schemas/Trust.Source"
           },
+          "granted": {
+            "type": "string",
+            "description": "The folder above this one whose grant makes it trusted, set only when the grant is that folder's and not this one's own. A grant for a folder covers every folder below it, except a grant for the home directory or a filesystem root, which covers that folder alone. Revoking this folder leaves it trusted while that grant stands. Unset by a server older than this field."
+          },
           "withheld": {
             "type": "array",
             "items": {
@@ -21942,6 +22173,26 @@
           }
         },
         "required": ["_tag", "message"],
+        "additionalProperties": false
+      },
+      "UntrustedFolderErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["UntrustedFolderError"]
+          },
+          "directory": {
+            "type": "string"
+          },
+          "persistent": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "directory", "persistent", "message"],
         "additionalProperties": false
       },
       "V2EventEncoded": {

@@ -18,9 +18,21 @@ function untrusted(root: string): TrustStatus {
   }
 }
 
-test("Home asks about an untrusted folder once, and the indicator and /trust ask again", async () => {
+// trust-first: the folder the terminal UI starts in can no longer be put off while it is untrusted (its question offers
+// Trust or Exit, `trust-first.test.ts`). A trusted folder whose own config changed since is still asked once, with Not
+// now, and the indicator and /trust ask again.
+test("Home asks about a trusted folder whose config changed once, and the indicator and /trust ask again", async () => {
   await using state = await tmpdir()
-  let status = untrusted("/tmp/orbit")
+  const changedTitle = "Trust the changes?"
+  const file = "/tmp/orbit/orbit.json"
+  let status: TrustStatus = {
+    directory: "/tmp/orbit",
+    trusted: true,
+    persistent: true,
+    source: "saved",
+    changed: [{ path: file, kinds: ["hooks"] }],
+    withheld: [{ path: file, kinds: ["hooks"] }],
+  }
   const updates: unknown[] = []
   await using setup = await createAppFixture({
     state: state.path,
@@ -28,32 +40,33 @@ test("Home asks about an untrusted folder once, and the indicator and /trust ask
       if (url.pathname !== "/api/location/trust") return undefined
       if (request.method === "GET") return json(status)
       updates.push(await request.json())
-      status = { ...status, trusted: true, source: "saved", withheld: [], changed: [] }
+      status = { ...status, withheld: [], changed: [] }
       return json(status)
     },
   })
 
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await setup.waitForFrame((frame) => frame.includes(changedTitle))
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => !frame.includes(title) && frame.includes("⊙ Untrusted"))
+  await setup.waitForFrame((frame) => !frame.includes(changedTitle) && frame.includes("⊙ Changed"))
 
   // The indicator in the prompt's footer asks again.
   const lines = setup.captureCharFrame().split("\n")
-  const row = lines.findIndex((line) => line.includes("⊙ Untrusted"))
-  await setup.mockMouse.click(lines[row]!.indexOf("⊙ Untrusted"), row)
-  await setup.waitForFrame((frame) => frame.includes(title))
+  const row = lines.findIndex((line) => line.includes("⊙ Changed"))
+  await setup.mockMouse.click(lines[row]!.indexOf("⊙ Changed"), row)
+  await setup.waitForFrame((frame) => frame.includes(changedTitle))
   setup.mockInput.pressEscape()
-  await setup.waitForFrame((frame) => !frame.includes(title))
+  await setup.waitForFrame((frame) => !frame.includes(changedTitle))
+  expect(setup.renderer.isDestroyed).toBe(false)
 
   // So does the command, which is offered only while there is something to trust.
   await setup.mockInput.typeText("/trust")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await setup.waitForFrame((frame) => frame.includes(changedTitle))
   expect(updates).toEqual([])
 
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => !frame.includes(title) && !frame.includes("⊙ Untrusted"))
+  await setup.waitForFrame((frame) => !frame.includes(changedTitle) && !frame.includes("⊙ Changed"))
   expect(updates).toEqual([{ trust: true, persist: true }])
 })
 
@@ -63,7 +76,7 @@ const above = { path: "/tmp/orbit.json", kinds: ["hooks"], directory: "/tmp" }
 test.each([
   ["a trusted folder", { ...untrusted("/tmp/orbit"), trusted: true, source: "saved", withheld: [], changed: [] }],
   ["a trusted folder with config above it held back", { ...untrusted("/tmp/orbit"), trusted: true, withheld: [above] }],
-  ["an untrusted folder whose only held-back config is above it", { ...untrusted("/tmp/orbit"), withheld: [above] }],
+  // An untrusted folder is asked about whatever it holds since trust-first (`trust-first.test.ts`).
 ])("%s is not asked about and has no indicator", async (_, answer) => {
   await using state = await tmpdir()
   let reads = 0

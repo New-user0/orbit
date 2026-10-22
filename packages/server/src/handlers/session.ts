@@ -23,7 +23,10 @@ import {
   SkillNotFoundError,
 } from "@orbit/protocol/errors"
 import { AbsolutePath } from "@orbit/core/schema"
+import { Project } from "@orbit/core/project"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { failedMessageDecode, failedSnapshot, missingMessage, missingSession } from "./session-error"
+import { requireTrusted, requireTrustedAt, untrustedFolder } from "./trust-error"
 
 const DefaultSessionsLimit = 50
 
@@ -34,6 +37,8 @@ function missingForm(id: Form.ID) {
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
+    // What decides whether a folder is trusted, for the routes that act on a folder other than the request's own.
+    const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
     const transfer = yield* SessionTransfer.Service
     const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
       const form = yield* Form.Service
@@ -124,6 +129,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
+          // A session is created where it will work: the folder the request names, or its parent's folder.
+          const location =
+            ctx.payload.parentID === undefined
+              ? (ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) })
+              : (yield* session.get(ctx.payload.parentID).pipe(Effect.catchTag("Session.NotFoundError", missingSession)))
+                  .location
+          yield* requireTrustedAt(folders, location.directory)
           return {
             data: yield* session
               .create({
@@ -144,11 +156,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.import",
         Effect.fn(function* (ctx) {
+          // An imported session works where it lands, as a created one does, so that folder has to be trusted (class 12).
+          const location = ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) }
+          yield* requireTrustedAt(folders, location.directory)
           return {
             data: yield* transfer
               .import({
                 data: { info: ctx.payload.info, messages: ctx.payload.messages },
-                location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+                location,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", missingSession),
@@ -224,6 +239,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.fork",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           return {
             data: yield* session.fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before }).pipe(
               // Only exact forks can fail this way, and the payload cannot ask for one.
@@ -266,6 +282,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 .rename({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
                 .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
             } else {
+              // An empty title asks the model for one, with the session's folder and its instructions.
+              yield* requireTrusted()
               const title = yield* SessionTitle.Service
               yield* title.generate(ctx.params.sessionID)
             }
@@ -284,6 +302,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.move",
         Effect.fn(function* (ctx) {
+          // `SessionMove` reads the destination from the session's own folder and refuses one that is not trusted, the
+          // same check a plugin's or the model's move meets (class 3).
           yield* session
             .move({
               sessionID: ctx.params.sessionID,
@@ -292,6 +312,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             })
             .pipe(
               Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("WorkspaceTrust.UntrustedError", (error) => Effect.fail(untrustedFolder(error))),
               Effect.catchTag("Session.DestinationNotFoundError", (error) =>
                 Effect.fail(new InvalidRequestError({ message: `Directory does not exist: ${error.directory}` })),
               ),
@@ -308,6 +329,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           return {
             data: yield* session
               .prompt({
@@ -349,6 +371,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.command",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           yield* session
             .command({
               sessionID: ctx.params.sessionID,
@@ -384,6 +407,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.skill",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           yield* session
             .skill({
               sessionID: ctx.params.sessionID,
@@ -402,6 +426,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.synthetic",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const data = yield* session
             .synthetic({
               id: ctx.payload.id,
@@ -429,6 +454,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.shell",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           yield* session
             .shell({ sessionID: ctx.params.sessionID, id: ctx.payload.id, command: ctx.payload.command })
             .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
@@ -438,6 +464,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           return {
             data: yield* session
               .compact({ sessionID: ctx.params.sessionID, id: ctx.payload.id, delivery: ctx.payload.delivery })
@@ -572,6 +599,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.instructions.preview",
         Effect.fn(function* (ctx) {
+          // The preview reads the folder's instruction files, and nothing of a folder is read before it is trusted.
+          yield* requireTrusted()
           const preview = yield* session
             .instructions(ctx.params.sessionID)
             .pipe(
@@ -610,6 +639,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.generate",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const text = yield* session
             .generate({ sessionID: ctx.params.sessionID, prompt: ctx.payload.prompt })
             .pipe(

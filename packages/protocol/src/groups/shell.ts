@@ -2,7 +2,7 @@ import { Shell } from "@orbit/schema/shell"
 import { Location } from "@orbit/schema/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { ShellNotFoundError } from "../errors.js"
+import { ShellNotFoundError, UntrustedFolderError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const ShellGroup = HttpApiGroup.make("server.shell")
@@ -25,6 +25,7 @@ export const ShellGroup = HttpApiGroup.make("server.shell")
       query: LocationQuery,
       payload: Shell.CreateInput,
       success: Location.response(Shell.Info),
+      error: UntrustedFolderError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -32,7 +33,7 @@ export const ShellGroup = HttpApiGroup.make("server.shell")
           identifier: "shell.create",
           summary: "Run shell command",
           description:
-            "Spawn one non-interactive shell command for a location. Combined stdout/stderr is captured to a file pageable via output.",
+            "Spawn one non-interactive shell command for a location, in `cwd` (taken from the location's folder when relative) or else the location's folder. The location and the folder the command runs in must both be trusted. Combined stdout/stderr is captured to a file pageable via output.",
         }),
       ),
   )

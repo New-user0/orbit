@@ -36,7 +36,8 @@ const layout = Effect.gen(function* () {
   return folders
 })
 
-it.live("lists what an untrusted repository holds back, then trusts it for good and lists the grant", () =>
+// trust-first: nothing of an untrusted repository is read, so its status lists nothing as held back, whatever it holds.
+it.live("lists nothing an untrusted repository holds, then trusts it for good and lists the grant", () =>
   Effect.gen(function* () {
     const folders = yield* layout
     const server = yield* startServer(folders.config, untrusted)
@@ -48,10 +49,7 @@ it.live("lists what an untrusted repository holds back, then trusts it for good 
         directory: folders.repo,
         trusted: false,
         persistent: true,
-        withheld: [
-          { path: path.join(folders.repo, "orbit.json"), kinds: ["hooks"] },
-          { path: path.join(folders.repo, ".orbit"), kinds: ["plugins"] },
-        ],
+        withheld: [],
         changed: [],
       })
       expect(await api.location.trust.list()).toEqual([])

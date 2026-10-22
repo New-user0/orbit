@@ -41,6 +41,7 @@ test("embedded worktree APIs use project IDs and SDK-registered strategies", asy
     config: { directory: directory.path, project: false },
     models: { fetch: false },
     fs: { filewatcher: false },
+    trust: { implicit: true },
   })
   const session = await orbit.sessions.create({ location: { directory: directory.path } })
   const projectID = session.projectID

@@ -5,7 +5,7 @@ import path from "node:path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { requireTrust } from "../../../util/trust"
-import { connect, directory, load } from "./execute"
+import { connect, directory, load, runStore } from "./execute"
 
 export default Runtime.handler(
   Commands.commands.flow.commands.replay,
@@ -14,8 +14,8 @@ export default Runtime.handler(
     // that a clone ships, so the folder has to be trusted before the store is opened, which only a server can say.
     const client = yield* connect(input)
     yield* requireTrust(client, directory(), { grant: input.trust, strict: "recorded" })
-    const { importsModule, openStore, run } = yield* Effect.promise(() => import("@orbit/flow"))
-    const store = yield* Effect.promise(() => openStore(directory()))
+    const { importsModule, run } = yield* Effect.promise(() => import("@orbit/flow"))
+    const store = yield* runStore(client)
     const recorded = store.run(input.run)
     store.close()
     if (!recorded) return yield* Effect.fail(new Error(`No run ${input.run} in this repository`))

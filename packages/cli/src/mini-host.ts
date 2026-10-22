@@ -146,6 +146,11 @@ export function createMiniHost(input: {
         process.stdout.write(value)
       },
     },
+    stderr: {
+      write(value) {
+        process.stderr.write(value)
+      },
+    },
     files: {
       readText: (url) => readFile(new URL(url), "utf8"),
     },

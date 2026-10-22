@@ -1,0 +1,204 @@
+import { NodeFileSystem } from "@effect/platform-node"
+import { Global } from "@orbit/util/global"
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import { Cause, Effect, Exit, Option } from "effect"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import evaluate from "../src/commands/handlers/eval"
+import approve from "../src/commands/handlers/flow/approve"
+import clean from "../src/commands/handlers/flow/clean"
+import cost from "../src/commands/handlers/flow/cost"
+import ls from "../src/commands/handlers/flow/ls"
+import replay from "../src/commands/handlers/flow/replay"
+import resume from "../src/commands/handlers/flow/resume"
+import show from "../src/commands/handlers/flow/show"
+import trace from "../src/commands/handlers/flow/trace"
+import watch from "../src/commands/handlers/flow/watch"
+import { ORBIT_VERSION } from "../src/version"
+
+// The readers of a folder's run store (`orb flow ls`, `show`, `cost`, `trace`, `watch`, `approve`) ask the server whether
+// the folder is trusted before they open the store (trust-first, class 12; FU-M4-202). `trust-first.test.ts` runs each
+// one in an untrusted folder as a separate process and sees it stop before the store; these run the same handlers in this
+// process against a server that answers "trusted", and see each one go on to the store, which it creates when there is
+// none. A server that does not say the folder is trusted would stop them before that (the refusal exits the process).
+const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-readers-")))
+const asked: string[] = []
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch(request) {
+    const url = new URL(request.url)
+    if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION })
+    if (url.pathname === "/api/location/trust") {
+      const directory = url.searchParams.get("location[directory]") ?? ""
+      asked.push(directory)
+      return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
+    }
+    return new Response("not found", { status: 404 })
+  },
+})
+const before = process.env.PWD
+
+beforeAll(() => {
+  // The readers take their folder from PWD, as `orb` started in that folder would.
+  process.env.PWD = root
+})
+
+afterAll(async () => {
+  if (before === undefined) delete process.env.PWD
+  else process.env.PWD = before
+  await server.stop(true)
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+})
+
+const connection = { server: Option.some(server.url.origin), standalone: false, trust: false }
+
+const failure = async (effect: Effect.Effect<unknown, unknown, Effect.Services<ReturnType<typeof ls>>>) => {
+  const exit = await Effect.runPromiseExit(
+    effect.pipe(
+      Effect.scoped,
+      Effect.provide(Global.layerWith({ config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(NodeFileSystem.layer),
+    ),
+  )
+  if (Exit.isSuccess(exit)) return undefined
+  const error = Cause.squash(exit.cause)
+  return error instanceof Error ? error.message : String(error)
+}
+
+test("a trusted folder's run store is opened by every reader once the server says the folder is trusted", async () => {
+  expect(await failure(ls({ ...connection, format: "json" }))).toBeUndefined()
+  // The store did not exist; the reader made it, which it does only after the trust check.
+  expect(await Bun.file(path.join(root, ".orbit", "runs.db")).exists()).toBe(true)
+
+  // The other readers ask for a run the store does not have, so each one fails only after it read the store.
+  expect(await failure(show({ ...connection, run: "run-none", format: "table" }))).toBe(
+    "No run run-none in this repository",
+  )
+  expect(await failure(cost({ ...connection, run: "run-none", format: "table" }))).toBe(
+    "No run run-none in this repository",
+  )
+  expect(
+    await failure(trace({ ...connection, run: "run-none", format: "timeline", otlp: Option.none() })),
+  ).toBe("No run run-none in this repository")
+  expect(await failure(watch({ ...connection, run: Option.none() }))).toBe("No runs in this repository yet")
+  expect(
+    await failure(approve({ ...connection, run: "run-none", gate: "gate", reject: false, note: Option.none() })),
+  ).toContain("run-none")
+
+  // Each reader asked about the folder it was started in, before anything else, and again for the project whose folder
+  // bounds the store lookup.
+  expect(asked).toEqual(Array.from({ length: 12 }, () => root))
+})
+
+// Class 3: a reader finds the store no higher than the project's folder the server names, which is the folder its trust
+// was decided for. A repository above the folder holds a run; with the folder itself as the project the reader does not
+// see it, and the control, with the repository above as the project, does.
+test("a reader opens no run store above the project's folder the server names", async () => {
+  const above = path.join(root, "above")
+  const inner = path.join(above, "inner")
+  await fs.mkdir(path.join(above, ".git"), { recursive: true })
+  await Bun.write(path.join(above, ".git", "HEAD"), "ref: refs/heads/main\n")
+  await fs.mkdir(inner, { recursive: true })
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(above)
+  store.create({ id: "run_20260101000010_0a1b2c", workflow: "CLONE-ABOVE", file: "w.ts", directory: above, input: {} })
+  store.close()
+  const project = { directory: inner }
+  const located = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION })
+      const directory = url.searchParams.get("location[directory]") ?? ""
+      if (url.pathname === "/api/location/trust")
+        return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
+      if (url.pathname === "/api/location")
+        return Response.json({
+          directory,
+          project: { id: "proj_test", directory: project.directory, canonical: project.directory },
+        })
+      return new Response("not found", { status: 404 })
+    },
+  })
+  process.env.PWD = inner
+  try {
+    const shown = (await import("../src/commands/handlers/flow/show")).default
+    const at = { server: Option.some(located.url.origin), standalone: false, trust: false }
+    const run = { ...at, run: "run_20260101000010_0a1b2c", format: "json" as const }
+    expect(await failure(shown(run))).toBe("No run run_20260101000010_0a1b2c in this repository")
+    project.directory = above
+    expect(await failure(shown(run))).toBeUndefined()
+  } finally {
+    process.env.PWD = root
+    await located.stop(true)
+  }
+})
+
+// Class 3: the commands that go on from the run store, or clean up after it, find it the same way as the readers, no
+// higher than the project's folder the server names. A git repository above the folder holds a run; with the folder
+// itself as the project each command says it has no such run (clean does not reach the store), and the control, with the
+// repository above as the project, finds it.
+test("resume, replay, eval --resume and clean open no run store above the project's folder the server names", async () => {
+  const above = path.join(root, "above-writers")
+  const inner = path.join(above, "inner")
+  await fs.mkdir(inner, { recursive: true })
+  expect(Bun.spawnSync(["git", "init", "--quiet", above]).exitCode).toBe(0)
+  const id = "run_20260101000011_0a1b2c"
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(above)
+  store.create({ id, workflow: "CLONE-ABOVE", file: "w.yaml", directory: above, input: {} })
+  store.close()
+  const suite = path.join(inner, "suite.json")
+  await Bun.write(suite, JSON.stringify({ name: "suite", tasks: [] }))
+  const project = { directory: inner }
+  const located = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION })
+      const directory = url.searchParams.get("location[directory]") ?? ""
+      if (url.pathname === "/api/location/trust")
+        return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
+      if (url.pathname === "/api/location")
+        return Response.json({
+          directory,
+          project: { id: "proj_test", directory: project.directory, canonical: project.directory },
+        })
+      return new Response("not found", { status: 404 })
+    },
+  })
+  const at = { server: Option.some(located.url.origin), standalone: false, trust: false }
+  const flags = { auto: false, model: Option.none(), maxCost: Option.none(), maxTokens: Option.none() }
+  const commands = () => ({
+    resume: resume({ ...at, ...flags, run: id }),
+    replay: replay({ ...at, run: id, file: Option.none() }),
+    eval: evaluate({
+      ...at,
+      suite,
+      models: Option.none(),
+      concurrency: Option.none(),
+      resume: Option.some(id),
+      auto: false,
+      format: "table",
+    }),
+    clean: clean({ ...at, run: Option.some(id) }),
+  })
+  process.env.PWD = inner
+  try {
+    const missing = `No run ${id} in this repository`
+    // `orb flow clean` starts git no higher than the project's folder either, so it stops before the store.
+    const stopped: Record<string, string> = { clean: "orb flow clean works inside a git repository" }
+    for (const [name, command] of Object.entries(commands()))
+      expect({ name, failure: await failure(command) }).toEqual({ name, failure: stopped[name] ?? missing })
+    project.directory = above
+    for (const [name, command] of Object.entries(commands()))
+      expect({ name, found: (await failure(command)) !== missing }).toEqual({ name, found: true })
+  } finally {
+    process.env.PWD = root
+    await located.stop(true)
+  }
+})

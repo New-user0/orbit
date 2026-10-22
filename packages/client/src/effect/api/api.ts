@@ -74,6 +74,7 @@ export type LocationTrustGetOutput = {
   readonly trusted: boolean
   readonly persistent: boolean
   readonly source?: ("saved" | "session" | "implicit") | undefined
+  readonly granted?: AbsolutePath | undefined
   readonly withheld: ReadonlyArray<{
     readonly path: AbsolutePath
     readonly kinds: ReadonlyArray<
@@ -132,6 +133,7 @@ export type LocationTrustUpdateOutput = {
   readonly trusted: boolean
   readonly persistent: boolean
   readonly source?: ("saved" | "session" | "implicit") | undefined
+  readonly granted?: AbsolutePath | undefined
   readonly withheld: ReadonlyArray<{
     readonly path: AbsolutePath
     readonly kinds: ReadonlyArray<

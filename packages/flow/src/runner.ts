@@ -109,7 +109,12 @@ export async function run(options: RunOptions): Promise<RunResult> {
   const repository = found.root
   // Whether git may run here: the folder is trusted, and so is every folder of the repository that git uses.
   const versioned = options.trusted && found.outside === undefined
-  const home = repository ?? Git.holder(options.directory) ?? path.resolve(options.directory)
+  // Outside a repository git may use, the store is found from the files, no higher than the folder the trust decision
+  // covers, or than the run's own folder when there is none.
+  const home =
+    repository ??
+    Git.holder(options.directory, options.project?.directory ?? options.directory) ??
+    path.resolve(options.directory)
   if (repository) await Git.exclude(repository)
   const store = Store.at(home)
   // The title stays in the user's session database and is shown by `orb session list` and the terminal UI, which set it
@@ -132,6 +137,16 @@ export async function run(options: RunOptions): Promise<RunResult> {
       : previous
         ? (store.events(id).find((event) => event.type === "run.started")?.data.base as string | undefined)
         : await Git.head(repository)
+  // The worktree a result names, when it is one of the worktrees runs make in this repository (`Git.owns`). On a resume
+  // the result can come from the run store, a file a clone ships, which may name any folder, trusted or not; a check, a
+  // reviewer and its diff would run there with that folder's config (class 3, class 5). Anything else is refused with one
+  // log line, and the work runs where the run does.
+  const reused = async (worktree: string | undefined) => {
+    if (repository === undefined || worktree === undefined) return undefined
+    if (await Git.owns(repository, worktree)) return worktree
+    log(`! ${plain(worktree)} is not a worktree of this run, so nothing runs there`)
+    return undefined
+  }
   // A resume keeps the budget and default model the run was started (or last resumed) with unless it sets new ones.
   const setting = (key: "budget" | "model") =>
     store
@@ -371,8 +386,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
     if (source) return fromRecording(node).result as unknown as CheckResult
     store.append(id, node, "node.started", { command: checkOptions.command })
     // On a resume `in` can be a result reused from the run store, a file a clone ships, so its worktree is a folder the
-    // store names. Only a repository in a trusted folder has worktrees; anywhere else the check runs where the run does.
-    const directory = (repository ? checkOptions.in?.worktree : undefined) ?? home
+    // store names (`reused`). Only a repository in a trusted folder has worktrees; anywhere else the check runs where the
+    // run does.
+    const directory = (await reused(checkOptions.in?.worktree)) ?? home
     const result = await shell(checkOptions.command, directory, checkOptions.timeout)
     store.append(
       id,
@@ -421,6 +437,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
         if (!result.ok) break
       }
       const failed = checks.filter((result) => !result.ok)
+      // As for a check: a reused iteration's worktree comes from the run store.
+      const tree = failed.length === 0 && judge ? await reused(work.worktree) : undefined
       const review =
         failed.length === 0 && judge
           ? await agent(
@@ -430,10 +448,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
                 agent: judge.agent,
                 permissions: "reject",
                 onError: "continue",
-                prompt: await reviewPrompt(verifyOptions.prompt, judge.criteria, work, base),
+                prompt: await reviewPrompt(verifyOptions.prompt, judge.criteria, { ...work, worktree: tree }, base),
               },
-              // As for a check: a reused iteration's worktree comes from the run store.
-              { directory: (repository ? work.worktree : undefined) ?? home },
+              { directory: tree ?? home },
             )
           : undefined
       if (review) add(review)
@@ -791,10 +808,11 @@ export async function run(options: RunOptions): Promise<RunResult> {
 
 /**
  * The run store for `directory`: the one at its repository root, or in the directory itself outside a repository. The
- * root is found from the files, so that reading a store starts no git in a folder that is not trusted.
+ * root is found from the files, so that reading a store starts no git in a folder that is not trusted, and no higher than
+ * `top`, the folder whose trust was decided (`Git.holder`).
  */
-export async function openStore(directory: string) {
-  return Store.at(Git.holder(directory) ?? path.resolve(directory))
+export async function openStore(directory: string, top: string) {
+  return Store.at(Git.holder(directory, top) ?? path.resolve(directory))
 }
 
 // A reviewer gets the task and the diff in its prompt, so it needs no tools and cannot change the work it judges.

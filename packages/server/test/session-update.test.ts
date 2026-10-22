@@ -13,6 +13,7 @@ it.live("updates session metadata through PATCH", () =>
       database: { path: ":memory:" },
       fs: { filewatcher: false },
       models: { fetch: false },
+      trust: { implicit: true },
     })
     const request = (path: string, method: string, body?: unknown) =>
       Effect.promise(async () => {

@@ -52,7 +52,10 @@ export interface Difference {
 export type State = Omit<Trust.Status, "withheld" | "changed">
 
 export interface Interface {
-  /** Whether the folder is trusted now, and why. Never waits for a person: it reads at most one stored grant. */
+  /**
+   * Whether the folder is trusted now, and why: a grant of its own, a server that trusts every folder, or a grant for a
+   * folder above it (`granted`). Never waits for a person: it reads at most one stored grant per folder on the way up.
+   */
   readonly status: (root: string) => Effect.Effect<State>
   /**
    * Trusts the folder and publishes `trust.updated`. The grant is stored on disk only when `persist` is set and the
@@ -65,7 +68,10 @@ export interface Interface {
     root: string,
     input: { readonly persist: boolean; readonly via: string; readonly observations?: readonly Observation[] },
   ) => Effect.Effect<State>
-  /** Ends every grant for the folder, and the records beside them, and publishes `trust.updated`. A server with implicit trust keeps trusting it. */
+  /**
+   * Ends every grant for the folder, and the records beside them, and publishes `trust.updated`. A server with implicit
+   * trust keeps trusting it, and so does a grant for a folder above it, which the answer names as `granted`.
+   */
   readonly revoke: (root: string) => Effect.Effect<State>
   /** The grants stored on disk, ordered by key. Grants that last until the process restarts are not listed. */
   readonly list: () => Effect.Effect<readonly Trust.Grant[]>
@@ -85,6 +91,15 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/WorkspaceTrust") {}
+
+/**
+ * Work was asked for in a folder that is not trusted, through a door that no server route stands in front of, such as a
+ * plugin's (trust-first, class 12). It names the folder whose grant would let the work through.
+ */
+export class UntrustedError extends Schema.TaggedError<UntrustedError>()("WorkspaceTrust.UntrustedError", {
+  directory: AbsolutePath,
+  persistent: Schema.Boolean,
+}) {}
 
 export interface Options {
   /**
@@ -144,21 +159,64 @@ export function layer(options?: Options) {
         return page()
       }
 
+      // The grant a folder holds in its own right, by key: one stored on disk, or one for this process.
+      const own = Effect.fnUntraced(function* (id: string, persistent: boolean) {
+        if (persistent && Option.isSome(decodeGrant(yield* kv.get(prefix + id)))) return "saved" as const
+        return session.has(id) ? ("session" as const) : undefined
+      })
+
+      // The nearest folder above `directory` whose grant covers it, as the reference's walk up the parents finds one. The
+      // home directory and filesystem roots hold everything below them, so their grant covers themselves alone and the
+      // walk passes over them (class 3). `directory` is a real path (`real` below), so a link is covered by where it leads
+      // (class 4).
+      const covering = (
+        directory: string,
+      ): Effect.Effect<{ readonly directory: AbsolutePath; readonly source: Trust.Source } | undefined> => {
+        const parent = path.dirname(directory)
+        if (parent === directory) return Effect.succeed(undefined)
+        const id = key(parent)
+        if (id === home || path.dirname(id) === id) return covering(parent)
+        return own(id, true).pipe(
+          Effect.flatMap((source) =>
+            source === undefined ? covering(parent) : Effect.succeed({ directory: AbsolutePath.make(parent), source }),
+          ),
+        )
+      }
+
+      // Where the walk up the parents starts. `identify` keeps the spelled path of a part that is not there, and a walk up
+      // that spelling would let a missing folder below a link be covered by the folder the link sits in (class 4). So the
+      // longest part that exists is made real and the rest is added to it. A part that is there but leads nowhere, such
+      // as a dangling link, or that cannot be read, gives no start, and only the folder's own grant counts.
+      const real = (directory: string): Effect.Effect<string | undefined> =>
+        fs.realPath(directory).pipe(
+          Effect.catchReason("PlatformError", "NotFound", () =>
+            fs.readLink(directory).pipe(
+              Effect.as(undefined),
+              Effect.catchReason("PlatformError", "NotFound", () => {
+                const parent = path.dirname(directory)
+                if (parent === directory) return Effect.succeed(undefined)
+                return real(parent).pipe(
+                  Effect.map((found) => (found === undefined ? undefined : path.join(found, path.basename(directory)))),
+                )
+              }),
+            ),
+          ),
+          Effect.orElseSucceed(() => undefined),
+        )
+
       const status = Effect.fn("WorkspaceTrust.status")(function* (root: string) {
         const folder = yield* identify(root)
-        const saved = folder.persistent && Option.isSome(decodeGrant(yield* kv.get(prefix + folder.id)))
-        const source: Trust.Source | undefined = saved
-          ? "saved"
-          : session.has(folder.id)
-            ? "session"
-            : implicit && folder.persistent
-              ? "implicit"
-              : undefined
+        const mine = yield* own(folder.id, folder.persistent)
+        const implied = mine === undefined && implicit && folder.persistent ? ("implicit" as const) : undefined
+        const start = mine === undefined && implied === undefined ? yield* real(folder.directory) : undefined
+        const cover = start === undefined ? undefined : yield* covering(FSUtil.normalizePath(start))
+        const source = mine ?? implied ?? cover?.source
         return {
           directory: folder.directory,
           trusted: source !== undefined,
           persistent: folder.persistent,
           ...(source === undefined ? {} : { source }),
+          ...(cover === undefined ? {} : { granted: cover.directory }),
         } satisfies State
       })
 
@@ -267,10 +325,12 @@ export function layer(options?: Options) {
         // A server that trusts every folder compares nothing, even for a folder that also has a saved grant: revoking
         // that grant would otherwise turn withholding on for a server that is configured to trust everything.
         if (!state.trusted || (implicit && folder.persistent)) return []
-        const records = session.has(folder.id) ? memory.get(folder.id) : undefined
+        // The records are those of the folder whose grant applies, which is a folder above this one when it covers it.
+        const holder = state.granted === undefined ? folder.id : key(state.granted)
+        const records = session.has(holder) ? memory.get(holder) : undefined
         const differences = yield* Effect.forEach(observations, (observation) =>
           Effect.gen(function* () {
-            const name = recordKey(folder.id, observation.identity)
+            const name = recordKey(holder, observation.identity)
             const record = Option.getOrUndefined(
               decodeRecord(records === undefined ? yield* kv.get(name) : records.get(name)),
             )

@@ -872,13 +872,68 @@ describe("a local MCP server waits for the project folder to be trusted", () => 
               resourceMcpLayer(config, undefined, undefined, {
                 entries: () => Effect.succeed(entries),
                 environment: recordingEnvironmentLayer(spawns),
-                trust: Layer.mock(ProjectTrust.Service, { trusted: () => Effect.sync(() => state.trusted) }),
+                // A working folder outside the project is decided on its own, here the same way as the project.
+                trust: Layer.mock(ProjectTrust.Service, {
+                  trusted: () => Effect.sync(() => state.trusted),
+                  folder: (directory) => Effect.sync(() => ({ directory, trusted: state.trusted, persistent: true })),
+                }),
                 subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
               }),
             ),
           ),
         )
       })
+
+  // A grant of some other folder places each waiting server again, and one whose working folder is still not trusted, or
+  // is no name a file system takes, is left as it was: it neither starts nor reports its status again.
+  test("a trust update that does not cover a server's working folder leaves it waiting, and the grant of that folder starts it", async () => {
+    const spawns: Array<ChildProcess.Command> = []
+    const published: string[] = []
+    const state = { folder: false }
+    const updates = Effect.runSync(PubSub.unbounded<unknown>())
+    const servers = {
+      resources: new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: os.tmpdir() }),
+      unnamed: new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: `${os.tmpdir()}\0x` }),
+    }
+    const entries = [new Document({ type: "document", info: new Info({ mcp: new ConfigMCP.Info({ servers }) }) })]
+    const changes = () => published.filter((type) => type === McpEvent.StatusChanged.type).length
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        expect((yield* settled(service))?.status).toBe("failed")
+        expect((yield* settled(service, "unnamed"))?.status).toBe("failed")
+        const before = changes()
+        yield* PubSub.publish(updates, {})
+        yield* Effect.promise(() => Bun.sleep(300))
+        expect({ spawns: spawns.length, changes: changes() }).toEqual({ spawns: 0, changes: before })
+
+        state.folder = true
+        yield* PubSub.publish(updates, {})
+        yield* Effect.gen(function* () {
+          const status = (yield* service.servers()).find((server) => server.name === "resources")?.status
+          if (status?.status !== "connected") return yield* Effect.fail(status)
+        }).pipe(Effect.retry({ times: 300, schedule: Schedule.spaced("10 millis") }))
+        expect(spawns).toHaveLength(1)
+        expect((yield* service.servers()).find((server) => server.name === "unnamed")?.status).toEqual({
+          status: "failed",
+          error: "Its working folder is not a name a file system takes.",
+        })
+      }).pipe(
+        Effect.provide(
+          resourceMcpLayer(servers.resources, undefined, undefined, {
+            entries: () => Effect.succeed(entries),
+            environment: recordingEnvironmentLayer(spawns),
+            published,
+            trust: Layer.mock(ProjectTrust.Service, {
+              trusted: () => Effect.succeed(true),
+              folder: (directory) => Effect.sync(() => ({ directory, trusted: state.folder, persistent: true })),
+            }),
+            subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+          }),
+        ),
+      ),
+    )
+  })
 })
 test("reports a local MCP server as failed when the location has no execution plane", async () => {
   const config = new ConfigMCP.Local({ type: "local", command: ["example-mcp"] })

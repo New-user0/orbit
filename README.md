@@ -58,7 +58,8 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   32768) for Ollama; Orbit's prompt and tools alone need about 5k tokens. Models without native tool calling get their
   tools through the prompt; any model can opt in with `"compatibility": { "toolCalling": "text" }`.
 - **Check:** `orb doctor` reports TLS, proxy, ripgrep and provider settings by name; `orb doctor --probe` sends one
-  short request to one model per available provider, and `--model provider/model` probes one model.
+  short request to one model per available provider, and `--model provider/model` probes one model. A probe needs the
+  current folder trusted, or `--trust` for that run.
 
 ## Workflows
 

@@ -166,6 +166,16 @@ describe("mini command", () => {
           })
         if (url.pathname === "/api/location")
           return Response.json({ directory: process.cwd(), project: { id: "global", directory: process.cwd() } })
+        // The folder is trusted: a server that cannot say stops the run before any session (trust-first).
+        if (url.pathname === "/api/location/trust")
+          return Response.json({
+            directory: process.cwd(),
+            trusted: true,
+            persistent: true,
+            source: "saved",
+            withheld: [],
+            changed: [],
+          })
         if (url.pathname === "/api/session") {
           session = await request.json()
           return new Response("boom", { status: 500 })

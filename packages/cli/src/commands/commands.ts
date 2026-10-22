@@ -445,6 +445,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Check network, TLS, provider settings and, with --probe, reachability of each provider",
       params: {
         ...ServerParams,
+        ...TrustParams,
         probe: Flag.boolean("probe").pipe(
           Flag.withDescription("Send one short request to one model per available provider"),
           Flag.withDefault(false),
@@ -513,6 +514,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("approve", {
           description: "Decide a gate a run is waiting on; then resume the run",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             gate: Argument.string("gate").pipe(Argument.withDescription("Gate ID")),
             reject: Flag.boolean("reject").pipe(
@@ -525,6 +528,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("cost", {
           description: "Show tokens and cost of a run by node and model",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             format: Flag.choice("format", ["table", "json"]).pipe(Flag.withDefault("table")),
           },
@@ -547,6 +552,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("watch", {
           description: "Show a run's nodes live until it stops",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(
               Argument.withDescription("Run ID; the newest run when omitted"),
               Argument.optional,
@@ -556,6 +563,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("trace", {
           description: "Show a run's timeline, or export it as OpenTelemetry traces",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             format: Flag.choice("format", ["timeline", "otlp"]).pipe(
               Flag.withDescription("timeline (default) or OTLP JSON on stdout"),
@@ -582,12 +591,16 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("ls", {
           description: "List recent runs in this repository",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             format: Flag.choice("format", ["table", "json"]).pipe(Flag.withDefault("table")),
           },
         }),
         Spec.make("show", {
           description: "Show the nodes and events of a run",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             format: Flag.choice("format", ["table", "json"]).pipe(Flag.withDefault("table")),
           },
@@ -807,6 +820,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           description: "Import session data from a JSON file or URL",
           params: {
             ...ServerParams,
+            ...TrustParams,
             file: Argument.string("file").pipe(Argument.withDescription("JSON file or URL to import")),
             directory: Flag.string("directory").pipe(
               Flag.withDescription("Directory in which to import the session"),

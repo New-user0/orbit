@@ -250,7 +250,7 @@ async function repo(name: string) {
 }
 
 async function runID(directory: string) {
-  return JSON.parse((await orb(directory, ["flow", "ls", "--format", "json"])).stdout)[0].id as string
+  return JSON.parse((await orb(directory, ["flow", "ls", "--standalone", "--format", "json"])).stdout)[0].id as string
 }
 
 async function branches(directory: string) {

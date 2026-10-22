@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { AbsolutePath } from "@orbit/schema/schema"
 import { Skill } from "@orbit/schema/skill"
 
 export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>()(
@@ -257,4 +258,20 @@ export class ShellNotFoundError extends Schema.TaggedError<ShellNotFoundError>()
     message: Schema.String,
   },
   { httpApiStatus: 404 },
+) {}
+
+/**
+ * The request would start work in a folder that is not trusted: a session, a prompt, a command, a terminal, a worktree.
+ * Nothing a folder supplies loads, and no work starts there, until a person trusts it. `directory` is the folder to
+ * trust, the project's canonical root, and `persistent` whether a grant for it can be stored on disk (false for the home
+ * directory and filesystem roots).
+ */
+export class UntrustedFolderError extends Schema.TaggedError<UntrustedFolderError>()(
+  "UntrustedFolderError",
+  {
+    directory: AbsolutePath,
+    persistent: Schema.Boolean,
+    message: Schema.String,
+  },
+  { httpApiStatus: 403 },
 ) {}

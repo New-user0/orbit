@@ -3,6 +3,7 @@ export * as SessionRestart from "./restart.js"
 import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../../bus.js"
+import { Instance } from "../../instance/service.js"
 import { Job } from "../../job.js"
 import { Session } from "../../session.js"
 import { SessionEvent } from "../event.js"
@@ -71,10 +72,16 @@ export const layer = (options?: Options) =>
       const bus = yield* Bus.Service
       const jobs = yield* Job.Service
       const sessions = yield* Session.Service
+      const instances = yield* Instance.Service
       const scope = yield* Effect.scope
       const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
 
       const prepareResume = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+        // A Session whose folder is no longer trusted is not resumed, and its claim and its count of attempts stay as
+        // they are, so a later start resumes it once the folder is trusted (trust-first, class 3: its own folder).
+        const session = yield* store.get(sessionID)
+        if (session !== undefined && !(yield* SessionExecution.permitted(session).pipe(instances.provide(session))))
+          return false
         // Durable before the resume runs, so a crash inside the resumed turn is
         // counted by the next sweep and the budget cannot be dodged.
         const attempts = yield* store.countResume(sessionID)
@@ -160,6 +167,10 @@ export const layer = (options?: Options) =>
           return
         }
         if (yield* execution.isActive(recovery.childSessionID)) return
+        // A child whose folder is no longer trusted is not resumed, and nothing failed: its job stays pending and its
+        // claim stays (the sweep spares a recoverable child's), so a later start resumes it once the folder is trusted,
+        // and its parent hears about it then (trust-first, class 7 and 12).
+        if (!(yield* SessionExecution.permitted(child).pipe(instances.provide(child)))) return
         if (!(yield* prepareResume(recovery.childSessionID))) {
           yield* notify({ status: "error", error: RESUME_EXHAUSTED.message })
           return
@@ -236,5 +247,5 @@ export const layer = (options?: Options) =>
 export const node = makeGlobalNode({
   service: Service,
   layer: layer(),
-  deps: [SessionStore.node, SessionExecution.node, Bus.node, Job.node, Session.node],
+  deps: [SessionStore.node, SessionExecution.node, Bus.node, Job.node, Session.node, Instance.node],
 })

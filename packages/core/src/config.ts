@@ -105,6 +105,11 @@ export interface Interface {
   /** Updates supported global config fields while preserving unrelated JSONC content. */
   readonly update?: (patch: Patch) => Effect.Effect<void, FSUtil.Error>
   /**
+   * Reads the config again now, and returns once the new entries and fingerprints are in place. A grant for a folder
+   * that was not trusted asks it, because nothing of that folder was read before.
+   */
+  readonly reload?: () => Effect.Effect<void>
+  /**
    * The executable config of every project and local source the last load read, wherever the folder is not trusted
    * implicitly: what a grant records, and what `WorkspaceTrust.compare` is asked about. Empty when the server trusts
    * every folder.
@@ -210,6 +215,8 @@ export const layer = (options?: Options) =>
         ),
       ]
       const reloadLock = Semaphore.makeUnsafe(1)
+      // What a reload asked for from outside the layer runs with, as the ones the layer starts itself do.
+      const context = yield* Effect.context<FSUtil.Service | Global.Service | Location.Service>()
       const updateLock = Semaphore.makeUnsafe(1)
       const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
       const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
@@ -275,6 +282,38 @@ export const layer = (options?: Options) =>
         const persistent = (yield* trust.status(holder)).persistent
         const roots = ConfigTrust.reach({ holder, container: directory, persistent })
         return { roots, directory, root: holder, trusted: yield* ask(holder) }
+      })
+
+      // The sources already reported as skipped, so that a folder nobody trusts is logged once and not at every reload.
+      const skipped = new Set<string>()
+      // Whether the folder that holds a project or local source is trusted, so that the source may be read at all: as the
+      // reference does, nothing a folder supplies is read until the person trusts it (class 1). A source above the
+      // project waits for a grant that covers its own folder (D7). One that is skipped is logged once (class 7).
+      const readable = Effect.fnUntraced(function* (source: string, folder: string) {
+        if ((yield* standing(folder, decide)).trusted) return true
+        if (!skipped.has(source)) {
+          skipped.add(source)
+          yield* Effect.logInfo("config source skipped", { path: source, reason: "its folder is not trusted" })
+        }
+        return false
+      })
+      // The project and local sources of a discovery that may be read now, and the rest of it as it is.
+      const trustedSources = Effect.fnUntraced(function* (sources: ConfigDiscovery.Sources) {
+        const files = (items: readonly AbsolutePath[]) => Effect.filter(items, (item) => readable(item, path.dirname(item)))
+        const compatMcp =
+          sources.compatMcp !== undefined && (yield* readable(sources.compatMcp, path.dirname(sources.compatMcp)))
+            ? sources.compatMcp
+            : undefined
+        return {
+          ...sources,
+          direct: yield* files(sources.direct),
+          local: yield* files(sources.local),
+          project: yield* Effect.filter(sources.project, (root) => readable(root.path, root.path)),
+          compat: yield* Effect.filter(sources.compat, (root) =>
+            root.scope === "user" ? Effect.succeed(true) : readable(root.path, root.path),
+          ),
+          compatMcp,
+        } satisfies ConfigDiscovery.Sources
       })
 
       const loadFile = Effect.fnUntraced(function* (filepath: string, scope: Scope) {
@@ -437,16 +476,27 @@ export const layer = (options?: Options) =>
       // A root of another product carries the verdict for the folder that holds it, unless it is the user's own, which is
       // never subject to trust. The verdict is the store's now, where the entries are those of the last load: whoever asks
       // for the roots right after a grant does not have to wait for a reload.
-      const stampRoot = (root: CompatRoots.Root): Effect.Effect<CompatRoot> =>
+      // A root of a folder that is not trusted is not listed at all, so nothing reads it.
+      const stampRoot = (root: CompatRoots.Root): Effect.Effect<readonly CompatRoot[]> =>
         root.scope === "user"
-          ? Effect.succeed(root)
-          : standing(root.path, decideNow).pipe(
-              Effect.map((place): CompatRoot => (place.trusted ? root : { ...root, trusted: false })),
-            )
+          ? Effect.succeed([root])
+          : standing(root.path, decideNow).pipe(Effect.map((place) => (place.trusted ? [root] : [])))
 
-      const load = Effect.fn("Config.load")(function* (sources: ConfigDiscovery.Sources) {
+      const load = Effect.fn("Config.load")(function* (discovered: ConfigDiscovery.Sources) {
         decisions.clear()
         states.clear()
+        const sources = yield* trustedSources(discovered)
+        // The files of a folder that is not trusted are not read, but they stay that folder's: naming one as the explicit
+        // file must not load it in the flag scope, where the folder's trust no longer applies (class 4).
+        const skipped = [
+          ...discovered.direct.filter((item) => !sources.direct.includes(item)),
+          ...discovered.local.filter((item) => !sources.local.includes(item)),
+          ...discovered.project
+            .filter((root) => !sources.project.includes(root))
+            .flatMap((root) =>
+              [...ConfigDiscovery.names, ...ConfigDiscovery.localNames].map((name) => path.join(root.path, name)),
+            ),
+        ]
         const globalEntries = sources.global
           ? yield* loadDirectory(sources.global, userScopes).pipe(Effect.orDie)
           : undefined
@@ -467,12 +517,16 @@ export const layer = (options?: Options) =>
         const explicit = explicitFile
           ? yield* Effect.gen(function* () {
               const explicitIdentity = yield* identity(explicitFile)
-              const claimed = yield* Effect.forEach(
-                [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
-                  entries ? [...entries.base, ...entries.local] : [],
-                ),
-                (entry) => (entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined)),
-              )
+              const claimed = [
+                ...(yield* Effect.forEach(
+                  [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
+                    entries ? [...entries.base, ...entries.local] : [],
+                  ),
+                  (entry) =>
+                    entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined),
+                )),
+                ...(yield* Effect.forEach(skipped, identity)),
+              ]
               if (claimed.includes(explicitIdentity)) return []
               return yield* loadFile(explicitFile, "flag").pipe(
                 Effect.map((config) => (config ? [config] : [])),
@@ -714,12 +768,17 @@ export const layer = (options?: Options) =>
           const enabled = compatOn(configs)
           if (!enabled) return { enabled, roots: [] }
           const present = yield* Effect.filter(sources.compat, (root) => fs.isDir(root.path))
-          return { enabled, roots: yield* Effect.forEach(present, stampRoot) }
+          return { enabled, roots: (yield* Effect.forEach(present, stampRoot)).flat() }
         }),
         changes: () => Stream.fromPubSub(updates),
         notify: (paths) =>
           Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
         update,
+        reload: () =>
+          reload().pipe(
+            Effect.catchCause((cause) => Effect.logError("failed to reload config", { cause })),
+            Effect.provide(context),
+          ),
         fingerprints: () => Effect.sync(() => observed),
         pluginsChanged: Effect.fn("Config.pluginsChanged")(function* (directory) {
           const entry = configs.find(

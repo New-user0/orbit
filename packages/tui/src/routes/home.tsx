@@ -11,7 +11,7 @@ import { useLocal } from "../context/local"
 import { useEditorContext } from "../context/editor"
 import { useData } from "../context/data"
 import { useLocation } from "../context/location"
-import { useTrustPrompt } from "../context/trust"
+import { useTrust, useTrustPrompt } from "../context/trust"
 import { FormPrompt } from "./session/form"
 import { Slot } from "../plugin/render"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -54,6 +54,7 @@ export function Home() {
     untrack(() => location.set(target))
   })
   useTrustPrompt()
+  const trust = useTrust()
 
   onMount(() => {
     editor.clearSelection()
@@ -74,11 +75,11 @@ export function Home() {
     untrack(() => composer.set(prompt))
   })
 
-  // Wait for everything submit needs before auto-submitting --prompt; it runs once.
+  // Wait for everything submit needs before auto-submitting --prompt, the folder's trust among it; it runs once.
   createEffect(() => {
     const r = ref()
     if (sent) return
-    if (!r) return
+    if (!r || !trust.typing()) return
     if (!local.model.ready || !local.model.catalogReady) return
     if (!local.agent.current() || !local.model.current()) return
     if (!args.prompt) return

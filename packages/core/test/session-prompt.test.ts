@@ -33,6 +33,7 @@ import { Snapshot } from "@orbit/core/snapshot"
 import { Skill } from "@orbit/core/skill"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { trustedProject } from "./fixture/project-trust"
 
 const executionCalls: Session.ID[] = []
 const interruptCalls: Session.ID[] = []
@@ -89,6 +90,8 @@ const locations = makeGlobalNode({
               restore: () => Effect.void,
             }),
             Layer.mock(Plugin.Service, { awaitActivation: Effect.void }),
+            // A drain starts only in a trusted folder (trust-first).
+            trustedProject,
           ).pipe(Layer.fresh) as unknown as Layer.Layer<LocationServices>,
       )
     }),

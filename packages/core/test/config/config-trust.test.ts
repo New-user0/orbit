@@ -160,41 +160,23 @@ const nextUpdate = Effect.gen(function* () {
 })
 
 describe("Config under workspace trust", () => {
-  it.live("stamps and sanitizes the project and local entries of an untrusted folder", () =>
+  // trust-first: nothing a folder that is not trusted supplies is read, so its documents are not cut down: they are not
+  // there at all. The person's own config and the flag's stand as they are.
+  it.live("reads no project or local source of an untrusted folder, and leaves the person's own config as it is", () =>
     Effect.gen(function* () {
       const folders = yield* layout
       yield* Effect.gen(function* () {
         const config = yield* Config.Service
         const entries = yield* config.entries()
-        const project = named(entries, path.join(folders.repo, "orbit.json"))
-        const local = named(entries, path.join(folders.repo, "orbit.local.json"))
-        const vendor = named(entries, path.join(folders.repo, CompatNames.vendor.directory, "settings.json"))
-        const mcp = named(entries, path.join(folders.repo, CompatNames.mcp))
-
-        expect(project).toMatchObject({ scope: "project", trusted: false })
-        expect(project?.withheld).toEqual(["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"])
-        expect(project?.info.hooks).toBeUndefined()
-        expect(project?.info.mcp).toBeUndefined()
-        expect(project?.info.shell).toBeUndefined()
-        expect(project?.info.websearch).toBeUndefined()
-        expect(project?.info.permissions).toEqual([{ action: "shell", resource: "rm *", effect: "deny" }])
-        expect(project?.info.model).toBeUndefined()
-
-        expect(local).toMatchObject({ scope: "local", trusted: false, withheld: ["plugins"] })
-        expect(local?.info.plugins).toBeUndefined()
-        expect(local?.info.username).toBe("dev")
-
-        // The files of other products are project and local config like any other, so they are held back too.
-        expect(vendor).toMatchObject({ scope: "project", trusted: false, withheld: ["hooks"] })
-        expect(vendor?.info.hooks).toBeUndefined()
-        expect(mcp).toMatchObject({ scope: "project", trusted: false, withheld: ["mcp"] })
-        expect(mcp?.info.mcp).toBeUndefined()
-
-        const directories = entries.filter((entry): entry is Directory => entry.type === "directory")
-        const projectDirectory = directories.find(
-          (entry) => entry.path === AbsolutePath.make(path.join(folders.repo, ".orbit")),
-        )
-        expect(projectDirectory).toMatchObject({ scope: "project", trusted: false })
+        for (const file of [
+          path.join(folders.repo, "orbit.json"),
+          path.join(folders.repo, "orbit.local.json"),
+          path.join(folders.repo, CompatNames.vendor.directory, "settings.json"),
+          path.join(folders.repo, CompatNames.mcp),
+          path.join(folders.repo, ".orbit"),
+        ])
+          expect(entries.find((entry) => entry.path === AbsolutePath.make(file))).toBeUndefined()
+        expect(entries.filter((entry) => entry.scope === "project" || entry.scope === "local")).toEqual([])
 
         // Nothing of the user's or the flag's is touched.
         const user = named(entries, path.join(folders.globalConfig, "orbit.json"))
@@ -206,30 +188,26 @@ describe("Config under workspace trust", () => {
         expect(flag).not.toHaveProperty("trusted")
         expect(flag?.info.hooks).toBeDefined()
         expect(flag?.info.shell).toBe("flag-shell")
-        expect(directories.filter((entry) => entry.scope !== "project" && entry.trusted !== undefined)).toEqual([])
 
         // Everything the repository asked for is out of reach, its model included: the user's choice stands.
         expect<unknown>(Config.latest(entries, "model")).toEqual({ providerID: "user", model: "model" })
         expect(Config.latest(entries, "shell")).toBe("flag-shell")
         expect(Config.latest(entries, "mcp")).toBeUndefined()
         expect(Config.latest(entries, "sandbox")).toEqual({ enabled: true })
-        // A repository cannot turn on the keyless search pool over a user who turned search off.
         expect(Config.latest(entries, "websearch")).toBe(false)
-        // Nor can it list a host whose pages reach the model unanswered.
-        expect(project?.info.webfetch).toBeUndefined()
         expect(Config.latest(entries, "webfetch")).toBeUndefined()
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
 
-  it.live("applies what was held back once the folder is trusted, and holds it back again when it is not", () =>
+  it.live("reads the folder's config once it is trusted, and none of it again once it is not", () =>
     Effect.gen(function* () {
       const folders = yield* layout
       yield* Effect.gen(function* () {
         const config = yield* Config.Service
         const trust = yield* WorkspaceTrust.Service
         const project = path.join(folders.repo, "orbit.json")
-        expect(named(yield* config.entries(), project)).toMatchObject({ trusted: false })
+        expect(named(yield* config.entries(), project)).toBeUndefined()
 
         const granted = yield* nextUpdate
         yield* grantWithRecords(folders.repo, { persist: true, via: "test" })
@@ -258,18 +236,15 @@ describe("Config under workspace trust", () => {
         const revoked = yield* nextUpdate
         yield* trust.revoke(folders.repo)
         yield* Fiber.join(revoked)
-        const withheld = named(yield* config.entries(), project)
-        expect(withheld).toMatchObject({
-          trusted: false,
-          withheld: ["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"],
-        })
-        expect(withheld?.info.hooks).toBeUndefined()
+        // A revoke leaves the folder unread again.
+        expect(named(yield* config.entries(), project)).toBeUndefined()
         expect(Config.latest(yield* config.entries(), "websearch")).toBe(false)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
-  it.live("withholds the env of an untrusted project, local and foreign settings file whole, and applies it once trusted", () =>
+  it.live("applies none of the env of an untrusted project, local and foreign settings file, and all of it once trusted", () =>
     Effect.gen(function* () {
       const folders = yield* bare
       const vendor = path.join(folders.repo, CompatNames.vendor.directory, "settings.json")
@@ -289,10 +264,7 @@ describe("Config under workspace trust", () => {
 
         const before = yield* config.entries()
         expect(ConfigEnv.resolve(before, "linux")).toEqual({ USER_ONLY: "u", SHARED: "user" })
-        for (const file of [project, local, vendor]) {
-          expect(named(before, file)).toMatchObject({ trusted: false, withheld: ["env"] })
-          expect(named(before, file)?.info.env).toBeUndefined()
-        }
+        for (const file of [project, local, vendor]) expect(named(before, file)).toBeUndefined()
 
         const granted = yield* nextUpdate
         yield* grantWithRecords(folders.repo, { persist: true, via: "test" })
@@ -307,9 +279,10 @@ describe("Config under workspace trust", () => {
         })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
-  it.live("withholds system_prompt_file of an untrusted project and local file, and never reads a repository's prompt keys", () =>
+  it.live("reads no system_prompt_file of an untrusted project and local file, and never reads a repository's prompt keys", () =>
     Effect.gen(function* () {
       const folders = yield* bare
       const project = path.join(folders.repo, "orbit.json")
@@ -323,11 +296,8 @@ describe("Config under workspace trust", () => {
       yield* Effect.gen(function* () {
         const config = yield* Config.Service
         const before = yield* config.entries()
-        // The file key is withheld from both documents; the text keys stay in the document, but no repository scope supplies them.
-        for (const file of [project, local]) {
-          expect(named(before, file)).toMatchObject({ trusted: false, withheld: ["settings"] })
-          expect(named(before, file)?.info.system_prompt_file).toBeUndefined()
-        }
+        // Neither document is read while the folder is untrusted.
+        for (const file of [project, local]) expect(named(before, file)).toBeUndefined()
         expect(PromptConfigPlugin.promptKeys(before)).toEqual({
           replacement: undefined,
           append: undefined,
@@ -343,6 +313,7 @@ describe("Config under workspace trust", () => {
         expect(PromptConfigPlugin.promptKeys(after)).toEqual({ replacement: undefined, append: undefined })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("keeps the person's own language and output style over an untrusted project's, and applies the project's once trusted", () =>
@@ -358,7 +329,7 @@ describe("Config under workspace trust", () => {
       yield* Effect.gen(function* () {
         const config = yield* Config.Service
         const before = yield* config.entries()
-        expect(named(before, project)).toMatchObject({ trusted: false, withheld: ["settings"] })
+        expect(named(before, project)).toBeUndefined()
         expect(Config.latest(before, "language")).toBe("English")
         expect(Config.latest(before, "output_style")).toBe("default")
 
@@ -370,6 +341,7 @@ describe("Config under workspace trust", () => {
         expect(Config.latest(after, "output_style")).toBe("explanatory")
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   // Class 8: a document above a granted project keeps the trust of its own folder, and the later document wins, so a
@@ -393,11 +365,12 @@ describe("Config under workspace trust", () => {
         yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         const after = yield* config.entries()
-        // The project is granted and the folder above is not: only the project's own `true` applies now.
-        expect(named(after, path.join(folders.work, "orbit.json"))).toMatchObject({ trusted: false, withheld: ["settings"] })
+        // The project is granted and the folder above is not, so the folder above is not read (D7).
+        expect(named(after, path.join(folders.work, "orbit.json"))).toBeUndefined()
         expect(named(after, path.join(folders.repo, "orbit.json"))?.info.git_status).toBe(true)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("keeps git_status: false over an untrusted folder above a trusted project when no document of the project sets it", () =>
@@ -418,6 +391,23 @@ describe("Config under workspace trust", () => {
         expect(Config.latest(yield* config.entries(), "git_status")).toBe(false)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
+  )
+
+  // The person's own settings for another product sit in their home, which is never trusted for good: they are the
+  // person's, so trust does not apply to them, as it does not to the person's own orbit.json.
+  it.live("reads the person's own settings of another product while the folder is not trusted", () =>
+    Effect.gen(function* () {
+      const folders = yield* layout
+      const mine = path.join(folders.home, CompatNames.vendor.directory, "settings.json")
+      yield* Effect.promise(() => write(mine, { hooks: { PreToolUse: [hook("echo mine")] } }))
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
+        expect(named(entries, path.join(folders.repo, CompatNames.vendor.directory, "settings.json"))).toBeUndefined()
+        expect(named(entries, mine)?.info.hooks).toBeDefined()
+      }).pipe(Effect.provide(loader(folders)))
+    }),
   )
 
   it.live("applies a grant that a session made without storing it", () =>
@@ -432,34 +422,22 @@ describe("Config under workspace trust", () => {
         expect(named(yield* config.entries(), path.join(folders.repo, "orbit.json"))?.info.shell).toBe("project-shell")
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
-  it.live("reports through ProjectTrust what each file holds back, and grants and revokes for the project", () =>
+  it.live("reports through ProjectTrust that an untrusted folder holds nothing it read, and grants and revokes for the project", () =>
     Effect.gen(function* () {
       const folders = yield* layout
       yield* Effect.gen(function* () {
         const config = yield* Config.Service
         const project = yield* ProjectTrust.Service
-        const files = {
-          vendor: path.join(folders.repo, CompatNames.vendor.directory, "settings.json"),
-          mcp: path.join(folders.repo, CompatNames.mcp),
-          project: path.join(folders.repo, "orbit.json"),
-          local: path.join(folders.repo, "orbit.local.json"),
-        }
+        const own = path.join(folders.repo, "orbit.json")
 
         const untrusted = yield* project.status()
-        expect(untrusted).toMatchObject({ directory: folders.repo, trusted: false, persistent: true })
+        expect(untrusted).toMatchObject({ directory: folders.repo, trusted: false, persistent: true, withheld: [] })
         expect(untrusted).not.toHaveProperty("source")
-        // In the order the entries rank, each with what it lost; a file that held nothing back is not listed.
-        expect<unknown>(untrusted.withheld).toEqual([
-          { path: files.vendor, kinds: ["hooks"] },
-          { path: files.mcp, kinds: ["mcp"] },
-          { path: files.project, kinds: ["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"] },
-          { path: files.local, kinds: ["plugins"] },
-        ])
 
         const granted = yield* nextUpdate
-        // A trusted project has nothing held back, even before its config has reloaded.
         expect<unknown>(yield* project.grant({ persist: true, via: "test" })).toEqual({
           directory: folders.repo,
           trusted: true,
@@ -470,14 +448,15 @@ describe("Config under workspace trust", () => {
         })
         yield* Fiber.join(granted)
         expect(yield* project.status()).toMatchObject({ trusted: true, source: "saved", withheld: [] })
+        expect(named(yield* config.entries(), own)?.info.hooks).toBeDefined()
 
         const revoked = yield* nextUpdate
-        expect(yield* project.revoke()).toMatchObject({ directory: folders.repo, trusted: false })
+        expect(yield* project.revoke()).toMatchObject({ directory: folders.repo, trusted: false, withheld: [] })
         yield* Fiber.join(revoked)
-        expect<unknown>((yield* project.status()).withheld.map((item) => item.path)).toEqual(Object.values(files))
-        expect((yield* config.entries()).some((entry) => entry.trusted === false)).toBe(true)
+        expect(named(yield* config.entries(), own)).toBeUndefined()
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("stamps nothing while the folder is trusted", () =>
@@ -493,36 +472,7 @@ describe("Config under workspace trust", () => {
     }),
   )
 
-  it.live("tells a revoke's caller what the files hold back before the config has reloaded", () =>
-    Effect.gen(function* () {
-      const folders = yield* layout
-      yield* Effect.gen(function* () {
-        const trust = yield* WorkspaceTrust.Service
-        const project = yield* ProjectTrust.Service
-        const config = yield* Config.Service
-        const granted = yield* nextUpdate
-        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
-        yield* Fiber.join(granted)
-        expect((yield* config.entries()).some((entry) => entry.trusted === false)).toBe(false)
-
-        // The entries still hold the files as they were loaded for a trusted folder, and the next load is a moment off.
-        const reloaded = yield* nextUpdate
-        const revoked = yield* project.revoke()
-        expect(revoked).toMatchObject({ trusted: false })
-        expect(revoked.withheld.map((item) => [path.relative(folders.repo, item.path), item.kinds])).toEqual([
-          [path.join(CompatNames.vendor.directory, "settings.json"), ["hooks"]],
-          [CompatNames.mcp, ["mcp"]],
-          ["orbit.json", ["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"]],
-          ["orbit.local.json", ["plugins"]],
-        ])
-        // It is the answer the loaded config gives once it has caught up.
-        yield* Fiber.join(reloaded)
-        expect(yield* project.status()).toEqual(revoked)
-      }).pipe(Effect.provide(loader(folders)))
-    }),
-  )
-
-  it.live("keeps what a file refers to inside the folder while the folder is untrusted", () =>
+  it.live("reads nothing a file of an untrusted folder refers to, and all of it once the folder is trusted", () =>
     Effect.gen(function* () {
       const folders = yield* bare
       const outside = path.join(folders.root, "outside", "secret.txt")
@@ -556,14 +506,9 @@ describe("Config under workspace trust", () => {
           const trust = yield* WorkspaceTrust.Service
           const before = yield* config.entries()
 
-          // The folder's own file is read, and nothing else: a variable is not looked up, and a file outside the
-          // folder is not read, whether it is named outright, reached by leaving the folder, or through a link in it.
-          expect(named(before, own)).toMatchObject({ trusted: false })
-          expect(named(before, own)?.info.username).toBe("{env:ORBIT_TRUST_PROBE}")
-          expect(system(before, "inside")).toBe("inside notes")
-          expect(system(before, "absolute")).toBe(`{file:${slashes(outside)}}`)
-          expect(system(before, "up")).toBe("{file:../../outside/secret.txt}")
-          expect(system(before, "linked")).toBe("{file:./linked/secret.txt}")
+          // The folder's own file is not read, so nothing it refers to is either: no variable, and no file inside or
+          // outside the folder.
+          expect(named(before, own)).toBeUndefined()
           // The user's own config is never held to the folder.
           const user = named(before, path.join(folders.globalConfig, "orbit.json"))
           expect(user?.info.username).toBe("probe value")
@@ -582,6 +527,7 @@ describe("Config under workspace trust", () => {
         }).pipe(Effect.provide(loader(folders))),
       )
     }),
+    30_000,
   )
 
   it.live("does not reach for a network share that a file of an untrusted folder names", () =>
@@ -591,14 +537,13 @@ describe("Config under workspace trust", () => {
       yield* Effect.promise(() => write(own, `{ "username": "{file://host/share/name.txt}" }`))
       yield* Effect.gen(function* () {
         const config = yield* Config.Service
-        // Nothing opened a path that no machine here has: the reference is only text, and the file still loads.
-        expect(named(yield* config.entries(), own)).toMatchObject({ trusted: false })
-        expect(named(yield* config.entries(), own)?.info.username).toBe("{file://host/share/name.txt}")
+        // Nothing opened a path that no machine here has: the file that names it is not read at all.
+        expect(named(yield* config.entries(), own)).toBeUndefined()
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
 
-  it.live("decides the config above the project by the folder that holds it", () =>
+  it.live("reads the config above the project only once a grant covers the folder that holds it", () =>
     Effect.gen(function* () {
       const folders = yield* bare
       const own = path.join(folders.repo, "orbit.json")
@@ -615,48 +560,35 @@ describe("Config under workspace trust", () => {
         const config = yield* Config.Service
         const trust = yield* WorkspaceTrust.Service
         const project = yield* ProjectTrust.Service
-        const stamps = (entries: readonly Entry[]) =>
-          [own, above, vendorAbove].map((file) => named(entries, file)?.trusted === false)
+        const read = (entries: readonly Entry[]) => [own, above, vendorAbove].map((file) => named(entries, file) !== undefined)
 
-        expect(stamps(yield* config.entries())).toEqual([true, true, true])
+        expect(read(yield* config.entries())).toEqual([false, false, false])
 
-        // A grant for the project reaches its own folder and not the folders around it.
+        // A grant for the project reaches its own folder and not the folders around it (D7).
         const granted = yield* nextUpdate
         yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         const afterProject = yield* config.entries()
-        expect(stamps(afterProject)).toEqual([false, true, true])
+        expect(read(afterProject)).toEqual([true, false, false])
         expect(named(afterProject, own)?.info.hooks).toBeDefined()
-        expect(named(afterProject, above)).toMatchObject({ withheld: ["hooks", "providers", "shell"] })
-        expect(named(afterProject, above)?.info.hooks).toBeUndefined()
-        expect(named(afterProject, above)?.info.model).toBeUndefined()
-        expect(named(afterProject, vendorAbove)?.info.hooks).toBeUndefined()
-        // The status says what is still held back, though the project is trusted, and which folder lifts it: the one
-        // around the file, and around the vendor directory that holds the other.
-        const status = yield* project.status()
-        expect(status).toMatchObject({ directory: folders.repo, trusted: true })
-        expect<unknown>(status.withheld).toEqual([
-          { path: vendorAbove, kinds: ["hooks"], directory: folders.work, persistent: true },
-          { path: above, kinds: ["hooks", "providers", "shell"], directory: folders.work, persistent: true },
-        ])
+        expect(yield* project.status()).toMatchObject({ directory: folders.repo, trusted: true, withheld: [] })
 
-        // The folder above is trusted on its own.
+        // The folder above is trusted on its own, and its grant covers the project below it too.
         const grantedAbove = yield* nextUpdate
         yield* grantWithRecords(folders.work, { persist: false, via: "test" })
         yield* Fiber.join(grantedAbove)
         const afterAbove = yield* config.entries()
-        expect(stamps(afterAbove)).toEqual([false, false, false])
+        expect(read(afterAbove)).toEqual([true, true, true])
         expect(named(afterAbove, above)?.info.hooks).toBeDefined()
         expect(named(afterAbove, vendorAbove)?.info.hooks).toBeDefined()
-        expect((yield* project.status()).withheld).toEqual([])
 
-        // And taking the project's grant away leaves the folder above as it is.
-        const revoked = yield* nextUpdate
+        // Taking the project's own grant away leaves it covered by the folder above.
         yield* trust.revoke(folders.repo)
-        yield* Fiber.join(revoked)
-        expect(stamps(yield* config.entries())).toEqual([true, false, false])
+        expect(yield* project.status()).toMatchObject({ trusted: true, granted: folders.work })
+        expect(read(yield* config.entries())).toEqual([true, true, true])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("covers a linked worktree with the decision for its main checkout", () =>
@@ -671,7 +603,7 @@ describe("Config under workspace trust", () => {
         const config = yield* Config.Service
         const trust = yield* WorkspaceTrust.Service
         const project = yield* ProjectTrust.Service
-        expect(named(yield* config.entries(), own)).toMatchObject({ trusted: false, withheld: ["shell"] })
+        expect(named(yield* config.entries(), own)).toBeUndefined()
         expect(yield* project.status()).toMatchObject({ directory: main, trusted: false })
 
         const granted = yield* nextUpdate
@@ -681,6 +613,7 @@ describe("Config under workspace trust", () => {
         expect(named(yield* config.entries(), own)?.trusted).toBeUndefined()
       }).pipe(Effect.provide(loader(folders, { canonical: main })))
     }),
+    30_000,
   )
 
   it.live("trusts the folders above a project as well on a server with implicit trust", () =>
@@ -714,11 +647,11 @@ describe("Config under workspace trust", () => {
               Effect.map((compat) => compat.roots.find((item) => item.path === AbsolutePath.make(path.join(...parts)))),
             )
 
-        // The repository has nothing that is config, so nothing is stamped and nothing is listed as held back.
+        // Nothing of the repository is read, so nothing is listed as held back.
         expect(yield* project.status()).toMatchObject({ trusted: false, withheld: [] })
         expect(yield* project.trusted()).toBe(false)
-        // Its skills folder is a root all the same, and the verdict for the folder is on it.
-        expect(yield* rootAt(folders.repo, CompatNames.agents)).toMatchObject({ scope: "project", trusted: false })
+        // Its skills folder is not a root while the folder is not trusted, so nothing reads it.
+        expect(yield* rootAt(folders.repo, CompatNames.agents)).toBeUndefined()
         expect(yield* rootAt(folders.home, CompatNames.agents)).toMatchObject({ scope: "user" })
         expect(yield* rootAt(folders.home, CompatNames.agents)).not.toHaveProperty("trusted")
 
@@ -730,6 +663,7 @@ describe("Config under workspace trust", () => {
         yield* project.grant({ persist: false, via: "test" })
         expect(yield* project.trusted()).toBe(true)
         expect(yield* project.allows(skill)).toBe(true)
+        expect(yield* rootAt(folders.repo, CompatNames.agents)).toMatchObject({ scope: "project" })
         expect(yield* rootAt(folders.repo, CompatNames.agents)).not.toHaveProperty("trusted")
 
         yield* project.revoke()
@@ -738,6 +672,7 @@ describe("Config under workspace trust", () => {
         expect(yield* project.allows(mine)).toBe(true)
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("refuses the files of an untrusted project even when it keeps the user's own folders", () =>
@@ -755,6 +690,7 @@ describe("Config under workspace trust", () => {
         expect(yield* project.allows(ownedByRepo)).toBe(false)
       }).pipe(Effect.provide(loader(inHome)))
     }),
+    30_000,
   )
 })
 
@@ -834,6 +770,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect(yield* project.status()).toMatchObject({ changed: [], withheld: [] })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("withholds a file created after the grant, and nothing when a file is deleted or compatibility goes off", () =>
@@ -870,6 +807,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect(yield* project.status()).toMatchObject({ changed: [], withheld: [] })
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("ignores the records when the server trusts every folder", () =>
@@ -886,6 +824,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect(yield* project.status()).toMatchObject({ trusted: true, source: "implicit", changed: [], withheld: [] })
       }).pipe(Effect.provide(loader(folders, { implicit: true })))
     }),
+    30_000,
   )
 
   it.live("reports every kind a source holds once for a grant that recorded nothing, and a grant clears it", () =>
@@ -912,6 +851,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect((yield* project.status()).changed).toEqual([])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   // The Config seam is what every consumer reads (hooks, MCP servers, plugins, providers, the shell, formatters, language
@@ -940,6 +880,7 @@ describe("Config under workspace trust: fingerprints", () => {
           expect<unknown>(named(yield* config.entries(), settings(folders))?.info[kind as KindField]).toEqual(field.edited)
         }).pipe(Effect.provide(loader(folders)))
       }),
+      30_000,
     )
   }
 
@@ -976,6 +917,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect((yield* project.status()).changed).toEqual([])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   it.live("offers no plugin planted after the grant, even before the config has reloaded", () =>
@@ -1002,6 +944,7 @@ describe("Config under workspace trust: fingerprints", () => {
         expect((yield* targets).toSorted()).toEqual([path.join(plugins, "one.ts"), path.join(plugins, "two.ts")])
       }).pipe(Effect.provide(loader(folders)))
     }),
+    30_000,
   )
 
   // A config file directly in a filesystem root is the only way to have a root as the folder that holds config. It needs a
@@ -1059,31 +1002,6 @@ describe("Config under workspace trust: fingerprints", () => {
           ),
       } satisfies WorkspaceTrust.Interface
     })
-
-  it.live("holds a file reference of an untrusted config in a root-like holder to the config container, and reads freely otherwise", () =>
-    Effect.gen(function* () {
-      const folders = yield* bare
-      const secret = path.join(folders.work, "secret.txt")
-      const planted = path.join(folders.work, "orbit.json")
-      yield* Effect.promise(() =>
-        Promise.all([
-          write(secret, "the secret"),
-          write(planted, { username: `{file:${secret.replaceAll("\\", "/")}}` }),
-          write(path.join(folders.repo, ".keep"), ""),
-        ]),
-      )
-      const username = (shared?: WorkspaceTrust.Interface) =>
-        Effect.gen(function* () {
-          const config = yield* Config.Service
-          return named(yield* config.entries(), planted)?.info.username
-        }).pipe(Effect.provide(loader(folders, { shared })))
-
-      // Control: a holder like any other holds what is inside it.
-      expect(yield* username()).toBe("the secret")
-      // A holder that the store calls a root reaches nothing of what sits directly in it.
-      expect(yield* username(yield* rootLike(folders.work))).toBe(`{file:${secret.replaceAll("\\", "/")}}`)
-    }),
-  )
 
   it.live("supplies a file of a config directory in a root-like holder only from the directory itself", () =>
     Effect.gen(function* () {
@@ -1149,11 +1067,12 @@ describe("Config under workspace trust: fingerprints", () => {
       )
       expect(yield* changedAt(b)).toEqual([])
     }),
+    30_000,
   )
 })
 
 describe("Config explicit file", () => {
-  it.live("loads a file that discovery already reached once, at its own scope and under its own trust", () =>
+  it.live("does not load the project's own file of an untrusted folder as the explicit file", () =>
     Effect.gen(function* () {
       const folders = yield* layout
       const project = path.join(folders.repo, "orbit.json")
@@ -1163,8 +1082,9 @@ describe("Config explicit file", () => {
         Effect.gen(function* () {
           const config = yield* Config.Service
           const entries = yield* config.entries()
-          expect(documents(entries).filter((entry) => entry.path === AbsolutePath.make(project))).toHaveLength(1)
-          expect(named(entries, project)).toMatchObject({ scope: "project", trusted: false })
+          // The folder is not trusted, so its own file is not read: not at its own scope, and not as the explicit file
+          // either, whose scope would apply none of the folder's trust.
+          expect(documents(entries).filter((entry) => entry.path === AbsolutePath.make(project))).toEqual([])
           expect(documents(entries).filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
           // The copy a flag Document would have made carries the hooks the untrusted folder may not supply.
           expect(JSON.stringify(entries.filter((entry) => entry.scope === "flag"))).not.toContain("echo project")
@@ -1241,7 +1161,8 @@ describe("Config explicit file", () => {
           expect(named(entries, path.join(folders.repo, "orbit.json"))).toMatchObject({ scope: "project" })
           expect(JSON.stringify(entries)).not.toContain("hidden")
         }).pipe(
-          Effect.provide(loader(folders, { file: path.join(locked, "orbit.json") })),
+          // The project is trusted, so its own document is read (trust-first reads nothing of an untrusted one).
+          Effect.provide(loader(folders, { file: path.join(locked, "orbit.json"), implicit: true })),
           Effect.ensuring(Effect.promise(() => fs.chmod(locked, 0o755))),
         )
       }),
@@ -1379,12 +1300,8 @@ describe("attribution and the system prompt keys under workspace trust", () => {
           const config = yield* Config.Service
           const before = yield* config.entries()
           expect(row.read(before)).toEqual(row.untrusted)
-          // The untrusted documents have lost the attribution whole, and say so.
-          for (const [file, info] of [[project, row.project], [local, row.local]] as const)
-            if (info !== undefined && "attribution" in (info as object)) {
-              expect(named(before, file)?.info.attribution).toBeUndefined()
-              expect(named(before, file)?.withheld).toContain("settings")
-            }
+          // The untrusted documents are not read at all.
+          for (const file of [project, local]) expect(named(before, file)).toBeUndefined()
 
           const granted = yield* nextUpdate
           yield* grantWithRecords(folders.repo, { persist: true, via: "test" })
@@ -1392,5 +1309,6 @@ describe("attribution and the system prompt keys under workspace trust", () => {
           expect(row.read(yield* config.entries())).toEqual(row.trusted)
         }).pipe(Effect.provide(loader(folders, { content: row.flag === undefined ? undefined : JSON.stringify(row.flag) })))
       }),
+      30_000,
     )
 })

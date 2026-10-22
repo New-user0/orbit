@@ -11,6 +11,7 @@ test("Promise host uses the embedded router", async () => {
   const orbit = await Orbit.create({
     events: { persist: true },
     config: { directory: config, project: false, content: "{}" },
+    trust: { implicit: true },
   })
 
   try {
@@ -38,7 +39,7 @@ test("Promise event streams support cancellation", async () => {
   const config = join(directory.path, "config")
   await mkdir(config)
   {
-    await using orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } })
+    await using orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } , trust: { implicit: true } })
     const controller = new AbortController()
     const events = orbit.events.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
     expect(await events.next()).toMatchObject({ value: { type: "server.connected" }, done: false })
@@ -54,7 +55,7 @@ test("closing cancels active Promise event streams", async () => {
   await using directory = await tmpdir("orbit-promise-stream-close-")
   const config = join(directory.path, "config")
   await mkdir(config)
-  const orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } })
+  const orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } , trust: { implicit: true } })
   const events = orbit.events.subscribe()[Symbol.asyncIterator]()
   expect(await events.next()).toMatchObject({ value: { type: "server.connected" }, done: false })
   const pending = events.next()

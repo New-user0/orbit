@@ -82,7 +82,9 @@ test.each(spellings)("no status line runs in an untrusted start folder: $name", 
 
 // A change of the prompt's vim mode asks the status line for a run, and the ask only helps if the gate says yes: in an
 // untrusted start folder it starts nothing, and the same change in a trusted one does (the control).
-test("a vim mode change in an untrusted start folder starts no status line command", async () => {
+// trust-first: the terminal UI asks about an untrusted start folder before anything can be typed, so no mode change
+// reaches the prompt; while the question is open no status line command runs, and once the folder is trusted it does.
+test("an untrusted start folder starts no status line command while its question is open", async () => {
   await using clone = await tmpdir()
   await using state = await tmpdir()
   await using scripts = await tmpdir()
@@ -117,12 +119,8 @@ console.log("MODE-" + input.vim_mode)
       },
     })
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
-    setup.mockInput.pressEscape()
-    await Bun.sleep(1_000)
-    await setup.renderOnce()
-    setup.mockInput.pressKey("i")
-    await Bun.sleep(1_000)
+    await setup.waitForFrame((frame) => frame.includes("Trust this folder?"))
+    await Bun.sleep(2_000)
     await setup.renderOnce()
     expect(await Bun.file(marker).exists()).toBe(false)
     expect(setup.captureCharFrame()).not.toContain("MODE-")
@@ -130,7 +128,7 @@ console.log("MODE-" + input.vim_mode)
     // The control: once trusted, the same mode change runs the command and the line shows the new mode.
     trusted = true
     setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
-    await setup.waitForFrame((frame) => frame.includes("MODE-insert"))
+    await setup.waitForFrame((frame) => !frame.includes("Trust this folder?") && frame.includes("MODE-insert"))
     setup.mockInput.pressEscape()
     await setup.waitForFrame((frame) => frame.includes("MODE-normal"))
   } finally {
