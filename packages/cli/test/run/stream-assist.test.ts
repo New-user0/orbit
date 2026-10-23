@@ -259,7 +259,9 @@ test.each([
 ])(
   "a batch settled by $settle gets a label: $labelled",
   async (row) => {
-    const write = { tool: { name: "Write", input: { file_path: path.join(asking, "out.txt"), content: OUTPUT_MARK } } }
+    // Each row writes a file of its own: a file the other row wrote already would be refused before it is asked about.
+    const file = path.join(asking, `${row.settle}-out.txt`)
+    const write = { tool: { name: "Write", input: { file_path: file, content: OUTPUT_MARK } } }
     await scripted([write, "done"], { label: () => "Wrote out.txt" }, async (own, home) => {
       const run = controller(home, own, { args: ["--tool-labels"], workspace: asking })
       run.send({ type: "user", text: "write it" })

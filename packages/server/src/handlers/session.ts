@@ -2,6 +2,7 @@ import { Session } from "@orbit/core/session"
 import { SessionStats } from "@orbit/core/session/stats"
 import { SessionTitle } from "@orbit/core/session/title"
 import { SessionTransfer } from "@orbit/core/session/transfer"
+import { SessionAssist } from "@orbit/core/session/assist"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
 import { Form } from "@orbit/core/form"
 import { DateTime, Effect, Stream } from "effect"
@@ -40,6 +41,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
     // What decides whether a folder is trusted, for the routes that act on a folder other than the request's own.
     const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
     const transfer = yield* SessionTransfer.Service
+    const assist = yield* SessionAssist.Service
     const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
       const form = yield* Form.Service
       const info = yield* form.get(formID).pipe(Effect.catchTag("Form.NotFoundError", () => missingForm(formID)))
@@ -650,6 +652,28 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             )
           return { data: { text } }
+        }),
+      )
+      .handle(
+        "session.assist.label",
+        Effect.fn(function* (ctx) {
+          // Both assist routes ask the model about the folder's content (tool output, history and instruction files),
+          // so the folder is trusted first; the session's own Location is the one checked and the one asked in.
+          yield* requireTrusted()
+          const label = yield* assist
+            .label({ sessionID: ctx.params.sessionID, ...ctx.payload })
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { data: label }
+        }),
+      )
+      .handle(
+        "session.assist.suggestion",
+        Effect.fn(function* (ctx) {
+          yield* requireTrusted()
+          const suggestion = yield* assist
+            .suggestion(ctx.params.sessionID)
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { data: suggestion }
         }),
       )
       .handle(

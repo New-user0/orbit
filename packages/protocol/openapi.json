@@ -4665,6 +4665,197 @@
         }
       }
     },
+    "/api/session/{sessionID}/assist/label": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.assist.label",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionAssistLabelResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionAssistLabelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the side model for a short label of a finished batch of the session's tool calls. Nothing is stored or sent to the session. The label is model text, so escape it before printing it. The session's folder must be trusted.",
+        "summary": "Label a batch of tool calls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string",
+                    "pattern": "^msg_",
+                    "description": "The assistant message that made the calls."
+                  },
+                  "toolCallIDs": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "description": "The tool calls of the finished batch, at most 64."
+                  }
+                },
+                "required": ["messageID", "toolCallIDs"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/session/{sessionID}/assist/suggestion": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.assist.suggestion",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionAssistSuggestionResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionAssistSuggestionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the session's model, with the session's history, what the person might type next. Nothing is stored or sent to the session; a newer request or a prompt admitted meanwhile cancels it. The suggestion is model text, so escape it before printing it. The session's folder must be trusted.",
+        "summary": "Suggest the next prompt"
+      }
+    },
     "/api/experimental/session/{sessionID}/log": {
       "get": {
         "tags": ["session"],
@@ -19961,6 +20152,96 @@
         "required": ["_tag", "message"],
         "additionalProperties": false
       },
+      "Session.Assist.Label": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": ["label"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "null"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/Session.Assist.LabelSkip"
+              }
+            },
+            "required": ["label", "reason"],
+            "additionalProperties": false
+          }
+        ],
+        "description": "A short label for a finished batch of tool calls, or null with the reason there is none. The label is model text: escape it before printing it."
+      },
+      "Session.Assist.LabelSkip": {
+        "type": "string",
+        "enum": ["subagent", "not_found", "unsettled", "aborted", "empty", "unavailable"],
+        "description": "Why there is no label: the session is a subagent's, the calls are not in the message, a call has not finished, the calls were interrupted, the model answered nothing, or the model could not be asked."
+      },
+      "Session.Assist.Suggestion": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "suggestion": {
+                "type": "string"
+              }
+            },
+            "required": ["suggestion"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "suggestion": {
+                "type": "null"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/Session.Assist.SuggestionSkip"
+              }
+            },
+            "required": ["suggestion", "reason"],
+            "additionalProperties": false
+          }
+        ],
+        "description": "What the person might type next, or null with the reason there is none. The suggestion is model text: escape it before printing it."
+      },
+      "Session.Assist.SuggestionSkip": {
+        "type": "string",
+        "enum": [
+          "subagent",
+          "early_conversation",
+          "last_response_error",
+          "cache_cold",
+          "pending_permission",
+          "elicitation_active",
+          "plan_mode",
+          "busy",
+          "aborted",
+          "unavailable",
+          "empty",
+          "done",
+          "meta_text",
+          "meta_wrapped",
+          "error_message",
+          "prefixed_label",
+          "too_few_words",
+          "too_many_words",
+          "too_long",
+          "multiple_sentences",
+          "has_formatting",
+          "evaluative",
+          "assistant_voice"
+        ],
+        "description": "Why there is no suggestion: a state of the session that rules one out, a request cancelled by a newer one or by a prompt, a model that could not be asked, or a filter that dropped the text the model wrote."
+      },
       "Session.ForkBoundary": {
         "anyOf": [
           {
@@ -21392,6 +21673,26 @@
           }
         },
         "required": ["type"],
+        "additionalProperties": false
+      },
+      "SessionAssistLabelResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Session.Assist.Label"
+          }
+        },
+        "required": ["data"],
+        "additionalProperties": false
+      },
+      "SessionAssistSuggestionResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Session.Assist.Suggestion"
+          }
+        },
+        "required": ["data"],
         "additionalProperties": false
       },
       "SessionBusyErrorEncoded": {

@@ -58,6 +58,10 @@ export type StreamInput = {
   thinking: boolean
   /** A line for every text, reasoning and tool input fragment as it streams. */
   partial?: boolean
+  /** A tool_label line for each finished batch of the root session's tool calls, before its result. */
+  labels?: boolean
+  /** A prompt_suggestion line after each result that was not interrupted. */
+  suggestions?: boolean
   /** A JSON Schema the answer of every admitted message must follow. */
   jsonSchema?: unknown
   /** Limits and a fallback model for every admitted message; the cost limit is shared by the whole process. */
@@ -129,6 +133,13 @@ export async function runStream(input: StreamInput) {
   const accounted = new Set<string>()
   const tools = new Map<string, ToolState>()
   const starts = new Map<string, { id: string; timestamp: number }>()
+  // --tool-labels: the calls of each assistant message of the period (true once settled) and whether its step has ended,
+  // and the label requests that the next result waits for.
+  const batches = new Map<string, Batch>()
+  const labelling = new Set<Promise<void>>()
+  let labelsStopped = new AbortController()
+  // --prompt-suggestions: the request for the suggestion after the last result, which newer input makes stale.
+  let suggesting: { controller: AbortController; done: Promise<void>; state: { dropped: boolean } } | undefined
   let accountedChanged = Promise.withResolvers<void>()
   let rejected: { action: string; resources: string[] }[] = []
   let period: Period | undefined
@@ -146,6 +157,8 @@ export async function runStream(input: StreamInput) {
   const fatal = async (message: string, type = "unknown") => {
     if (fatalError) return
     fatalError = true
+    labelsStopped.abort()
+    suggesting?.controller.abort()
     reading = false
     inputStopped.resolve()
     closed = true
@@ -305,6 +318,55 @@ export async function runStream(input: StreamInput) {
     emit("request_cancelled", Date.now(), { kind: entry.kind, id, sessionID: entry.sessionID })
   }
 
+  // ---- labels and suggestions -----------------------------------------------------------------------------------
+
+  const warn = (error: unknown) =>
+    UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL + progress(errorMessage(error)))
+
+  // A batch is asked about once its step has ended and every call in it has settled; the server gives no label to a batch
+  // that an interruption ended. The request runs beside the next step, and the result of the period waits for it.
+  const track = (messageID: string, update: (batch: Batch) => void) => {
+    if (!input.labels) return
+    const batch = batches.get(messageID) ?? { calls: new Map(), ended: false }
+    batches.set(messageID, batch)
+    update(batch)
+    if (!batch.ended || [...batch.calls.values()].some((settled) => !settled)) return
+    batches.delete(messageID)
+    const [first, ...rest] = batch.calls.keys()
+    if (first === undefined) return
+    const toolIDs: [string, ...string[]] = [first, ...rest]
+    const signal = labelsStopped.signal
+    const request: Promise<void> = input.client.session.assist
+      .label({ sessionID, messageID, toolCallIDs: toolIDs }, { signal })
+      .then((answer) => {
+        if (answer.label !== null && !signal.aborted)
+          emit("tool_label", Date.now(), { messageID, toolIDs, label: answer.label })
+      })
+      .catch((error) => {
+        if (!signal.aborted) warn(error)
+      })
+      .finally(() => labelling.delete(request))
+    labelling.add(request)
+  }
+
+  // Asked after a result; the answer is dropped when newer input arrives first. A `user` line only drops it: the server
+  // cancels the request itself when it admits that message, and an interrupt, a signal or a fatal stop abort it here.
+  const suggest = () => {
+    suggesting?.controller.abort()
+    const controller = new AbortController()
+    const state = { dropped: false }
+    const done = input.client.session.assist
+      .suggestion({ sessionID }, { signal: controller.signal })
+      .then((answer) => {
+        if (answer.suggestion !== null && !controller.signal.aborted && !state.dropped)
+          emit("prompt_suggestion", Date.now(), { suggestion: answer.suggestion })
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) warn(error)
+      })
+    suggesting = { controller, done, state }
+  }
+
   // ---- results --------------------------------------------------------------------------------------------------
 
   const readPeriod = async (first: string, until?: string, everything = false) => {
@@ -347,6 +409,7 @@ export async function runStream(input: StreamInput) {
     period = undefined
     tools.clear()
     starts.clear()
+    batches.clear()
     const history = closing.first ? await readPeriod(closing.first, until).catch(() => undefined) : undefined
     const messages = history?.messages ?? []
     const text = answerText(messages)
@@ -378,6 +441,12 @@ export async function runStream(input: StreamInput) {
     }
     const interrupted = end.kind === "interrupted"
     const failed = end.kind !== "succeeded" || failure !== undefined
+    // A batch's label comes before the result of its period, unless the period was interrupted.
+    if (interrupted) {
+      labelsStopped.abort()
+      labelsStopped = new AbortController()
+    }
+    await Promise.all(labelling)
     writeResult({
       failed,
       outcome: interrupted ? "interrupted" : failed ? "failed" : "succeeded",
@@ -396,6 +465,8 @@ export async function runStream(input: StreamInput) {
       userInterrupt: interrupted && end.reason === "user",
       periodState: closing,
     })
+    // Started before the period counts as accounted, so the end of the input finds it in flight and waits for it.
+    if (input.suggestions && !interrupted) suggest()
     closing.ids.forEach((id) => {
       unaccounted.delete(id)
       accounted.add(id)
@@ -622,6 +693,7 @@ export async function runStream(input: StreamInput) {
         metadata: {},
         content: [],
       })
+      track(event.data.assistantMessageID, (batch) => batch.calls.set(event.data.id, false))
       return
     }
     if (event.type === "session.tool.progress") {
@@ -656,6 +728,7 @@ export async function runStream(input: StreamInput) {
         },
       }
       emit("tool_use", time, { part })
+      track(event.data.assistantMessageID, (batch) => batch.calls.set(event.data.id, true))
       return
     }
     if (event.type === "session.tool.failed") {
@@ -682,6 +755,8 @@ export async function runStream(input: StreamInput) {
         },
       }
       emit("tool_use", time, { part })
+      // A call that an interruption ended is settled too; the server answers that its batch has no label.
+      track(event.data.assistantMessageID, (batch) => batch.calls.set(event.data.id, true))
       return
     }
     if (event.type === "session.step.ended") {
@@ -696,6 +771,9 @@ export async function runStream(input: StreamInput) {
           cost: event.data.cost,
           tokens: event.data.tokens,
         },
+      })
+      track(event.data.assistantMessageID, (batch) => {
+        batch.ended = true
       })
       return
     }
@@ -724,9 +802,7 @@ export async function runStream(input: StreamInput) {
         await reconnect("error" in next ? next.error : undefined)
         continue
       }
-      await handle(next.value.value).catch((error) => {
-        UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL + progress(errorMessage(error)))
-      })
+      await handle(next.value.value).catch(warn)
     }
   }
 
@@ -900,6 +976,9 @@ export async function runStream(input: StreamInput) {
   }
 
   const perform = async (message: Input) => {
+    // New input makes the suggestion for the last result stale.
+    if (message.type === "user" && suggesting) suggesting.state.dropped = true
+    if (message.type === "interrupt") suggesting?.controller.abort()
     if (message.type === "user")
       return admit(
         message.text,
@@ -1063,6 +1142,7 @@ export async function runStream(input: StreamInput) {
     exitCode = 130
     reading = false
     inputStopped.resolve()
+    suggesting?.controller.abort()
     void input.client.session.interrupt({ sessionID }).catch(() => {})
   }
   process.on("SIGINT", onSigint)
@@ -1079,11 +1159,14 @@ export async function runStream(input: StreamInput) {
     closed = true
     await settleAll()
     await settled()
+    // A suggestion still being written when the input ends gets a short grace before the run exits.
+    if (suggesting) await Promise.race([suggesting.done, Bun.sleep(5_000)])
   } catch (error) {
     await fatal(errorMessage(error))
   } finally {
     finished = true
     stopped.resolve()
+    suggesting?.controller.abort()
     process.off("SIGINT", onSigint)
     if (!input.write) process.stdout.off("error", onStdoutError)
     events.controller.abort()
@@ -1093,6 +1176,8 @@ export async function runStream(input: StreamInput) {
   if (exitCode === 0 && (fatalError || lastFailed)) exitCode = 1
   return exitCode
 }
+
+type Batch = { calls: Map<string, boolean>; ended: boolean }
 
 type ToolState = {
   id: string

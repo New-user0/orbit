@@ -384,6 +384,58 @@ it.live(
   90_000,
 )
 
+// A call still waiting for its approval has not finished, and a call the interruption ended is not labelled, as in the
+// reference; the model is not asked for either. The finished batches above are the control.
+it.live(
+  "a label is null for a call that has not finished (unsettled) and for one an interruption ended (aborted)",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const id = await createSession(server, folders.repo)
+        llm.script.steps.push({
+          tool: { name: "Write", input: { file_path: path.join(folders.repo, "out.txt"), content: OUTPUT_MARK } },
+        })
+        expect(
+          (await request(server, "POST", `/api/session/${id}/prompt`, { body: { text: "write it" } })).status,
+        ).toBe(200)
+        const deadline = Date.now() + 30_000
+        while (
+          ((await request(server, "GET", `/api/session/${id}/permission`)).body?.data as unknown as unknown[])
+            .length === 0
+        ) {
+          if (Date.now() > deadline) throw new Error("The write never asked")
+          await Bun.sleep(50)
+        }
+        const call = async () => {
+          const [batch] = await assistants(server, id)
+          const part = batch?.content.find((item) => item.type === "tool")
+          return { messageID: String(batch?.id), toolCallIDs: [String(part?.id)], status: part?.state.status }
+        }
+        const asked = llm.requests.length
+
+        const waiting = await call()
+        expect(waiting.status).toBe("running")
+        expect(
+          (await label(server, id, { messageID: waiting.messageID, toolCallIDs: waiting.toolCallIDs })).body,
+        ).toEqual({
+          data: { label: null, reason: "unsettled" },
+        })
+
+        expect((await request(server, "POST", `/api/session/${id}/interrupt`)).status).toBe(200)
+        expect((await request(server, "POST", `/api/experimental/session/${id}/wait`)).status).toBe(204)
+        const ended = await call()
+        expect(ended.status).toBe("error")
+        expect((await label(server, id, { messageID: ended.messageID, toolCallIDs: ended.toolCallIDs })).body).toEqual({
+          data: { label: null, reason: "aborted" },
+        })
+        expect(llm.requests.length).toBe(asked)
+      })
+    }),
+  60_000,
+)
+
 // ---- suggestions ----------------------------------------------------------------------------------------------------
 
 it.live(

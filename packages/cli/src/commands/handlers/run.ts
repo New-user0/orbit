@@ -42,6 +42,8 @@ type HeadlessInput = {
   readonly maxCost: Option.Option<number>
   readonly maxTokens: Option.Option<number>
   readonly fallbackModel: Option.Option<string>
+  readonly toolLabels: boolean
+  readonly promptSuggestions: boolean
   readonly auto: boolean
   readonly yolo: boolean
   readonly dangerouslySkipPermissions: boolean
@@ -58,6 +60,13 @@ export function headlessInput(input: HeadlessInput) {
   const stream = Option.getOrUndefined(input.inputFormat) === "stream-json"
   if (stream && input.format !== "stream-json")
     return Effect.fail(new Error("--input-format stream-json requires --format stream-json"))
+  // Labels and suggestions are lines of the stream-json envelope that the driver of stream input writes, and each asks
+  // the model, so a run that could not print them refuses them before any server starts.
+  if (input.toolLabels && input.format !== "stream-json")
+    return Effect.fail(new Error("--tool-labels requires --format stream-json"))
+  if (input.toolLabels && !stream) return Effect.fail(new Error("--tool-labels requires --input-format stream-json"))
+  if (input.promptSuggestions && !stream)
+    return Effect.fail(new Error("--prompt-suggestions requires --input-format stream-json"))
   if (stream && input.file.length > 0 && input.message.length === 0)
     return Effect.fail(new Error("--file needs a message when --input-format is stream-json"))
   const envelope = input.envelope || stream
@@ -189,6 +198,8 @@ export function headlessInput(input: HeadlessInput) {
         maxCost: Option.getOrUndefined(input.maxCost),
         maxTokens: Option.getOrUndefined(input.maxTokens),
         fallbackModel: Option.getOrUndefined(input.fallbackModel),
+        labels: input.toolLabels,
+        suggestions: input.promptSuggestions,
         auto: bypass.auto,
       }),
     )
