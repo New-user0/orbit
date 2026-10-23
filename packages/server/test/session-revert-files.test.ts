@@ -426,12 +426,72 @@ it.live("does not restore through a folder that became a link after the checkpoi
       await fs.rename(path.join(repo, "dir"), path.join(root, "moved-dir"))
       await fs.symlink(outside, path.join(repo, "dir"), process.platform === "win32" ? "junction" : "dir")
     })
+    // The dry run lists only what the restore will write: not the file behind the link.
+    expect(yield* session.rewind(prompt, true)).toMatchObject({
+      status: 200,
+      body: { data: { canRewind: true, filesChanged: [path.join(repo, "tracked.txt")] } },
+    })
     expect((yield* session.rewind(prompt)).status).toBe(200)
     expect({
       outside: yield* read(path.join(outside, "x.txt")),
       link: yield* Effect.promise(() => fs.lstat(path.join(repo, "dir")).then((info) => info.isSymbolicLink())),
       tracked: yield* read(path.join(repo, "tracked.txt")),
     }).toEqual({ outside: "outside\n", link: true, tracked: "one\n" })
+  }),
+)
+
+// The file a tool edited can itself become a link (a junction on Windows) after the checkpoint, through a shell command
+// or a script of the repository. Git would write the file by removing the junction's target files on Windows, or
+// replace the link elsewhere; the rewind leaves the link and the outside folder, and restores the control.
+it.live("does not restore over a file whose name became a link to an outside folder, and restores the control", () =>
+  Effect.gen(function* () {
+    const server = yield* setup()
+    const { root, repo } = yield* repository({ "leaf.txt": "leaf one\n", "tracked.txt": "one\n" })
+    const outside = path.join(root, "outside")
+    const session = yield* server.session(repo)
+    const prompt = yield* session.prompt([
+      {
+        tools: [edited("leaf.txt"), edited("tracked.txt")],
+        edit: async () => {
+          await Bun.write(path.join(repo, "leaf.txt"), "leaf two\n")
+          await Bun.write(path.join(repo, "tracked.txt"), "two\n")
+        },
+      },
+    ])
+    yield* Effect.promise(async () => {
+      await fs.mkdir(outside, { recursive: true })
+      await Bun.write(path.join(outside, "victim.txt"), "outside\n")
+      await fs.rm(path.join(repo, "leaf.txt"))
+      await fs.symlink(outside, path.join(repo, "leaf.txt"), process.platform === "win32" ? "junction" : "dir")
+    })
+    expect(yield* session.rewind(prompt, true)).toMatchObject({
+      status: 200,
+      body: { data: { canRewind: true, filesChanged: [path.join(repo, "tracked.txt")] } },
+    })
+    expect((yield* session.rewind(prompt)).status).toBe(200)
+    expect({
+      victim: yield* read(path.join(outside, "victim.txt")),
+      link: yield* Effect.promise(() => fs.lstat(path.join(repo, "leaf.txt")).then((info) => info.isSymbolicLink())),
+      tracked: yield* read(path.join(repo, "tracked.txt")),
+    }).toEqual({ victim: "outside\n", link: true, tracked: "one\n" })
+  }),
+)
+
+// Two prompts sent while a step runs are delivered together, as steers, and the step that follows works for both. The
+// earlier prompt's checkpoint is that step's start, as a staged revert of the same prompt picks it.
+it.live("rewinds the earlier of two prompts delivered together to the checkpoint of the step after them", () =>
+  Effect.gen(function* () {
+    const server = yield* setup()
+    const { repo } = yield* repository({ "tracked.txt": "one\n" })
+    const session = yield* server.session(repo)
+    const first = yield* session.prompt([], false)
+    yield* session.prompt([{ tools: [edited("tracked.txt")], edit: write(path.join(repo, "tracked.txt"), "two\n") }])
+    expect(yield* session.rewind(first, true)).toEqual({
+      status: 200,
+      body: { data: { canRewind: true, filesChanged: [path.join(repo, "tracked.txt")], insertions: 1, deletions: 1 } },
+    })
+    expect(yield* session.rewind(first)).toEqual({ status: 200, body: { data: { canRewind: true } } })
+    expect(yield* read(path.join(repo, "tracked.txt"))).toBe("one\n")
   }),
 )
 

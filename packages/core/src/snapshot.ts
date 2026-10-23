@@ -1,6 +1,7 @@
 export * as Snapshot from "./snapshot.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { lstat } from "fs/promises"
 import path from "path"
 import { Context, Effect, Fiber, Layer, Schema, Scope } from "effect"
 import { FileDiff } from "@orbit/schema/file-diff"
@@ -63,11 +64,15 @@ export interface Interface extends State.Transformable<Editor> {
 
   /**
    * Restore selected project-relative paths from their associated trees. A path
-   * absent from its selected tree is removed unless it is a folder; paths outside
-   * the map are untouched. A path whose folder no longer leads where its name says
-   * is skipped and logged.
+   * absent from its selected tree is removed; paths outside the map are untouched.
+   * A path whose folder no longer leads where its name says, or that is now a link
+   * or a folder, is skipped and logged. A file that fails to go back is logged, the
+   * others still go back, and the restore then fails.
    */
   readonly restore: (input: RestoreInput) => Effect.Effect<void, Error>
+
+  /** The paths among `files` that `restore` would write or remove now, by the same per-path decision. */
+  readonly restorable: (files: readonly RelativePath[]) => Effect.Effect<readonly RelativePath[], Error>
 
   /** The real work tree that the paths of `files`, `diff` and `restore` are relative to. */
   readonly root: () => Effect.Effect<AbsolutePath, Error>
@@ -237,21 +242,32 @@ const layer = Layer.effect(
       return diffs.filter((file) => !skipped.has(RelativePath.make(file.file)))
     })
 
-    // Each path is decided where it would be written, at the moment of the restore (class 4): the folder that holds it
-    // must really be the folder its name says, inside the work tree. A folder that became a link after the checkpoint (a
-    // junction, a dangling link, or a link to a share, which `leads` names without opening it) would carry the write or
-    // the deletion out of the project, so that path is skipped with one log line and the others still go back (class 7).
+    // Each path is decided where it would be written, at the moment of the restore (class 4). It must name a place inside
+    // the work tree, and the folder that holds it must really be the folder its name says: a folder that became a link
+    // after the checkpoint (a junction, a dangling link, or a link to a share, which `leads` names without opening it)
+    // would carry the write or the deletion out of the project. The path itself must be neither a link nor a folder: git
+    // writes a file there by removing what stands in its way, and on Windows it takes a junction for a folder and removes
+    // the files it leads to; a folder would go with everything in it.
+    const placed = Effect.fnUntraced(function* (worktree: AbsolutePath, file: RelativePath) {
+      const absolute = path.join(worktree, file)
+      if (absolute === worktree || !FSUtil.contains(worktree, absolute)) return false
+      const parent = path.dirname(absolute)
+      // A folder's real place cannot lie below its own name, so "inside" here means "the same folder", with case
+      // compared as the system compares it.
+      if (!FSUtil.contains(parent, yield* trust.leads(parent))) return false
+      const found = yield* Effect.promise(() => lstat(absolute).catch(() => undefined))
+      return !found?.isSymbolicLink() && !found?.isDirectory()
+    })
+
+    // A path that may not be written is skipped with one log line, and the others still go back (class 7).
     const plan = Effect.fnUntraced(function* (worktree: AbsolutePath, input: RestoreInput) {
       const files = new Map<RelativePath, Git.TreeID>()
       for (const [file, snapshot] of input.files) {
         const tree = yield* treeID("restore", snapshot)
-        const absolute = path.join(worktree, file)
-        const parent = path.dirname(absolute)
-        const real = yield* trust.leads(parent)
-        // A folder's real place cannot lie below its own name, so "inside" here means "the same folder", with case
-        // compared as the system compares it.
-        if (absolute === worktree || !FSUtil.contains(worktree, absolute) || !FSUtil.contains(parent, real)) {
-          yield* Effect.logWarning("restore skipped a path whose folder does not stay in the project", { file })
+        if (!(yield* placed(worktree, file))) {
+          yield* Effect.logWarning("restore skipped a path that is not a plain file in its own folder of the project", {
+            file,
+          })
           continue
         }
         files.set(file, tree)
@@ -269,11 +285,25 @@ const layer = Layer.effect(
         .pipe(Effect.mapError((cause) => failure("restore", cause)))
     })
 
+    const restorable = Effect.fn("Snapshot.restorable")(function* (files: readonly RelativePath[]) {
+      const repo = yield* repository("restore").pipe(Effect.mapError((cause) => failure("restore", cause)))
+      return yield* Effect.filter(files, (file) => placed(repo.worktree, file))
+    })
+
     const root = Effect.fn("Snapshot.root")(function* () {
       return (yield* repository("files").pipe(Effect.mapError((cause) => failure("files", cause)))).worktree
     })
 
-    return Service.of({ transform: state.transform, reload: state.reload, capture, files, diff, restore, root })
+    return Service.of({
+      transform: state.transform,
+      reload: state.reload,
+      capture,
+      files,
+      diff,
+      restore,
+      restorable,
+      root,
+    })
   }).pipe(Effect.withSpan("Snapshot.boot")),
 )
 
@@ -292,6 +322,7 @@ export const noopLayer = Layer.succeed(
     files: () => Effect.succeed([]),
     diff: () => Effect.succeed([]),
     restore: () => Effect.void,
+    restorable: () => Effect.succeed([]),
     root: () => Effect.fail(new Error({ operation: "files", message: "Snapshots are disabled" })),
   }),
 )

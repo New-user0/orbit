@@ -1660,4 +1660,28 @@ describe("PatchTool records every file it changed, for code rewind", () => {
       }),
     ),
   )
+
+  // A patch that fails part way changed the files before the failure and was changing one when it failed: the failed
+  // call names them all, a move's source included, so a rewind puts back what it wrote.
+  it.live("names the files it changed, and a move's source, when removing that source fails", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "first.txt"), "first\n"))
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "old.txt"), "before\n"))
+        failRemoveErrorTarget = "old.txt"
+        const failure = yield* registry.snapshot().pipe(
+          Effect.flatMap((tools) =>
+            tools.execute(
+              call(
+                "*** Begin Patch\n*** Update File: first.txt\n@@\n-first\n+second\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-before\n+after\n*** End Patch",
+              ),
+            ),
+          ),
+          Effect.flip,
+        )
+        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "new.txt"), "utf8"))).toBe("after\n")
+        expect(failure.metadata?.files).toEqual([{ file: "first.txt" }, { file: "new.txt", from: "old.txt" }])
+      }),
+    ),
+  )
 })

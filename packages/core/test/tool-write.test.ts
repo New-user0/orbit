@@ -727,4 +727,27 @@ describe("WriteTool records the file it changed, for code rewind", () => {
       ),
     ),
   )
+
+  // A Write that fails after it wrote (here a formatter leaves something Write cannot read back) still changed the file,
+  // so the failed call names it too, and a rewind puts it back.
+  it.live("names the file in a call that failed after writing", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      fixture.formatFile = (target) =>
+        Effect.promise(async () => {
+          await fs.rm(target)
+          await fs.mkdir(target)
+          return true
+        })
+      return withTool(tmp.path, fixture, (registry) =>
+        Effect.gen(function* () {
+          const failure = yield* registry.snapshot().pipe(
+            Effect.flatMap((tools) => tools.execute(call({ file_path: "src/new.txt", content: "created\n" }))),
+            Effect.flip,
+          )
+          expect(failure.metadata?.files).toEqual([{ file: "src/new.txt" }])
+        }),
+      )
+    }),
+  )
 })

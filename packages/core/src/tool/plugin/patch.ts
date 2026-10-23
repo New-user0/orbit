@@ -108,10 +108,14 @@ export const Plugin = {
           execute: (input, context) => {
             const applied: Array<typeof Applied.Type> = []
             const parsed = Patch.parse(input.patchText)
+            // Each file is named here before the patch writes or removes it, and a failure carries the names in
+            // `metadata.files`, so that a code rewind puts back what the patch changed before it failed.
+            const touched: Array<{ file: string; from?: string }> = []
             const fail = (operation: string, error: unknown) => {
               const completed = applied.map((item) => item.resource).join(", ")
               return new ToolFailure({
                 message: `${operation}: ${errorMessage(error)}${completed ? `. Completed before failure: ${completed}` : ""}`,
+                metadata: { files: touched },
               })
             }
             return Effect.gen(function* () {
@@ -323,6 +327,7 @@ export const Plugin = {
                   (change) =>
                     Effect.gen(function* () {
                       if (change.type === "delete") {
+                        touched.push({ file: change.target.resource })
                         yield* environment.files
                           .remove(change.target.absolute)
                           .pipe(Effect.mapError((error) => fail(`Failed to delete ${change.target.resource}`, error)))
@@ -335,6 +340,7 @@ export const Plugin = {
                       }
                       if (change.type === "update" && change.moveTarget) {
                         const moveTarget = change.moveTarget
+                        touched.push({ file: moveTarget.resource, from: change.target.resource })
                         yield* environment.files
                           .write(moveTarget.absolute, new TextEncoder().encode(change.content))
                           .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
@@ -355,6 +361,7 @@ export const Plugin = {
                         })
                         return
                       }
+                      touched.push({ file: change.target.resource })
                       yield* environment.files
                         .write(change.target.absolute, new TextEncoder().encode(change.content))
                         .pipe(Effect.mapError((error) => fail(`Failed to write ${change.target.resource}`, error)))

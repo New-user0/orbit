@@ -203,6 +203,77 @@ describe("Snapshot.restore through a link made after the checkpoint", () => {
     ),
   )
 
+  // The file's own name can become the link. Git writes a file there by removing what stands in its way, and on Windows
+  // it takes a junction for a folder and removes the files it leads to; elsewhere it would replace the link.
+  it.live("does not write over, or through, a file whose name became a link to an outside folder", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(fixture.outside, "victim.txt"), "outside\n")
+          await fs.rm(path.join(fixture.project, "safe.txt"))
+          await fs.symlink(fixture.outside, path.join(fixture.project, "safe.txt"), linkType)
+          await fs.writeFile(path.join(fixture.project, "sub", "keep.txt"), "keep two\n")
+        })
+        yield* restore([
+          ["safe.txt", tree],
+          ["sub/keep.txt", tree],
+        ])
+        expect({
+          victim: yield* text(path.join(fixture.outside, "victim.txt")),
+          link: yield* isLink(path.join(fixture.project, "safe.txt")),
+          keep: yield* text(path.join(fixture.project, "sub", "keep.txt")),
+        }).toEqual({ victim: "outside\n", link: true, keep: "keep one\n" })
+      }),
+    ),
+  )
+
+  // Git checks a file out over a folder by removing the folder with what it holds; the person's file in it stays.
+  it.live("does not replace a folder that now stands where the checkpoint had a file", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.rm(path.join(fixture.project, "safe.txt"))
+          await fs.mkdir(path.join(fixture.project, "safe.txt"))
+          await fs.writeFile(path.join(fixture.project, "safe.txt", "mine.txt"), "mine\n")
+          await fs.writeFile(path.join(fixture.project, "sub", "keep.txt"), "keep two\n")
+        })
+        yield* restore([
+          ["safe.txt", tree],
+          ["sub/keep.txt", tree],
+        ])
+        expect({
+          mine: yield* text(path.join(fixture.project, "safe.txt", "mine.txt")),
+          keep: yield* text(path.join(fixture.project, "sub", "keep.txt")),
+        }).toEqual({ mine: "mine\n", keep: "keep one\n" })
+      }),
+    ),
+  )
+
+  // A file that git cannot put back (here its checkpoint is a tree the repository does not hold) costs only itself: the
+  // control after it still goes back, and the restore then fails, so its caller knows it was partial (class 7).
+  it.live("restores the other files when one file fails, and then fails", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+          await fs.writeFile(path.join(fixture.project, "sub", "keep.txt"), "keep two\n")
+        })
+        const result = yield* restore([
+          ["safe.txt", Snapshot.ID.make("0".repeat(40))],
+          ["sub/keep.txt", tree],
+        ]).pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "succeeded" }))
+        expect({
+          result,
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+          keep: yield* text(path.join(fixture.project, "sub", "keep.txt")),
+        }).toEqual({ result: "Snapshot.Error", safe: "safe two\n", keep: "keep one\n" })
+      }),
+    ),
+  )
+
   // A stored path (a staged revert keeps the names it restored) that names the work tree itself would make git check
   // out every file of the tree, and one that climbs out of it would delete a file elsewhere; each is skipped alone.
   it.live("skips a path that names the work tree itself or leaves it, and restores the control", () =>
@@ -298,6 +369,44 @@ describe("Snapshot.capture after a tracked folder became a link", () => {
         expect(changed.map((file) => [file.file, file.status])).toEqual([
           ["safe.txt", "modified"],
           ["sub/keep.txt", "deleted"],
+        ])
+      }),
+    ),
+  )
+
+  // On Windows git lists the files inside a junction as untracked files of the work tree, and adds them when asked to
+  // add the junction: their contents, which lie outside the project, would be stored in the snapshot and shown in diffs.
+  it.live("does not capture the files a link leads to", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const snapshot = yield* Snapshot.Service
+        const before = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(fixture.outside, "victim.txt"), "outside\n")
+          await fs.rm(path.join(fixture.project, "safe.txt"))
+          await fs.symlink(fixture.outside, path.join(fixture.project, "safe.txt"), linkType)
+        })
+        expect(yield* snapshot.files({ from: before, to: yield* capture })).toEqual([RelativePath.make("safe.txt")])
+      }),
+    ),
+  )
+})
+
+// A dry run of a rewind lists the files that a restore would write, by the same per-path decision as the restore.
+describe("Snapshot.restorable", () => {
+  it.live("drops a path with a link on the way or a link or folder at its name, and keeps the control", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const snapshot = yield* Snapshot.Service
+        yield* Effect.promise(async () => {
+          await fs.symlink(fixture.outside, path.join(fixture.project, "linked"), linkType)
+          await fs.symlink(fixture.outside, path.join(fixture.project, "leaf"), linkType)
+          await fs.mkdir(path.join(fixture.project, "folder"))
+        })
+        const names = ["linked/victim.txt", "leaf", "folder", "../outside/x.txt", "safe.txt", "gone.txt"]
+        expect(yield* snapshot.restorable(names.map((name) => RelativePath.make(name)))).toEqual([
+          RelativePath.make("safe.txt"),
+          RelativePath.make("gone.txt"),
         ])
       }),
     ),

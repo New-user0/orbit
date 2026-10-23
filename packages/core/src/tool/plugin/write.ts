@@ -103,18 +103,30 @@ export const Plugin = {
                   source,
                 })
                 yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, current)
-                const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
-                const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
-                const final = (yield* formatter.file(target.absolute))
-                  ? yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom).pipe(
-                      Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
-                    )
-                  : written
-                yield* ledger.recordWrite(context.sessionID, target.absolute, final)
-                const files = [
-                  fileDiff(result.resource, current?.text ?? "", final.text, current ? "modified" : "added"),
-                ]
-                return { output: result, files }
+                return yield* Effect.gen(function* () {
+                  const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
+                  const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+                  const final = (yield* formatter.file(target.absolute))
+                    ? yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom).pipe(
+                        Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
+                      )
+                    : written
+                  yield* ledger.recordWrite(context.sessionID, target.absolute, final)
+                  const files = [
+                    fileDiff(result.resource, current?.text ?? "", final.text, current ? "modified" : "added"),
+                  ]
+                  return { output: result, files }
+                }).pipe(
+                  // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
+                  Effect.mapError(
+                    (error) =>
+                      new ToolFailure({
+                        message: `Unable to write ${input.file_path}`,
+                        error,
+                        metadata: { files: [{ file: target.resource }] },
+                      }),
+                  ),
+                )
               }).pipe(fileMutation.withLock([target.absolute]))
             }).pipe(
               Effect.map((written) => ({

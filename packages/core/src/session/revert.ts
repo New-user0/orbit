@@ -112,7 +112,11 @@ export const files = Effect.fn("SessionRevert.files")(function* (input: {
     if (!checkpoint) return yield* refuse("no-checkpoint")
     return yield* Effect.gen(function* () {
       const names = yield* toolNames(database.db, input.session.id)
-      const changed = (yield* snapshot.files({ from: checkpoint, to: now })).filter((file) => names.has(file))
+      // A dry run lists only what the restore would really write: the same per-path decision drops a path that has a
+      // link on the way or is now a link or a folder (class 4).
+      const changed = yield* snapshot.restorable(
+        (yield* snapshot.files({ from: checkpoint, to: now })).filter((file) => names.has(file)),
+      )
       if (!input.dryRun) {
         if (changed.length > 0)
           yield* snapshot.restore({ files: new Map(changed.map((file) => [file, checkpoint] as const)) })
@@ -211,7 +215,8 @@ const toolEdits = Effect.fnUntraced(function* (
 })
 
 /**
- * A prompt's checkpoint: the start snapshot of the first step recorded after it, before the next prompt. A step that
+ * A prompt's checkpoint: the start snapshot of the first step recorded after it. Prompts delivered together (steers sent
+ * while a step ran) share the checkpoint of the step that follows them all, as a staged revert picks it. A step that
  * recorded none, or a location switch after it (its tree lives in another folder's repository), leaves the prompt
  * without one.
  */
@@ -221,8 +226,8 @@ const checkpointOf = Effect.fnUntraced(function* (
   seq: number,
 ) {
   const after = rows.filter((row) => row.seq > seq)
-  const step = after.find((row) => row.type === "assistant" || row.type === "user")
-  if (step?.type !== "assistant") return undefined
+  const step = after.find((row) => row.type === "assistant")
+  if (!step) return undefined
   if (after.some((row) => row.type === "location-switched" && row.seq > step.seq)) return undefined
   const stored = yield* db
     .select({ data: SessionMessageTable.data })
