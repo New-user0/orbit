@@ -67,6 +67,10 @@ export const AssertInput = Schema.Struct({
   // Set on the deny-only checks a shell command makes for the files it names: the rules that a mode puts on an agent
   // (`Agent.modeRule`) do not apply to them, since the mode asks about the command itself.
   probe: Schema.Boolean.pipe(Schema.optional),
+  // Set on the folder question a shell command asks for the places it names (`ShellGuard.prepare`). The memory folder is
+  // prompt-free for the file tools only, so a command that reaches into it is asked about as it would be anywhere else.
+  // It stays off the public Request.
+  shell: Schema.Boolean.pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -192,6 +196,7 @@ interface Pending {
   readonly aliases?: AssertInput["aliases"]
   readonly escaped?: AssertInput["escaped"]
   readonly leads?: AssertInput["leads"]
+  readonly shell?: AssertInput["shell"]
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
   // The tool call that was executing when the request was made, for deciding and explaining it. Never on the public Request.
   readonly call?: ToolCurrentCall.Call
@@ -252,11 +257,11 @@ const layer = Layer.effect(
     // Whether a file tool's request is for the project's memory folder (context-memory-9): the place it names is in the
     // folder by one of its spellings, and every real place it leads to is in the real folder, so a link inside the folder
     // that points out of it is not (class 4). A call that a link of an untrusted project leads in is the person's to
-    // decide (`escaped`). A shell command is never one: it is decided by the shell's own rules.
-    const inMemory = (input: Pick<AssertInput, "action" | "escaped" | "leads">, resource: string) => {
+    // decide (`escaped`). A shell command is never one, nor the folder question it asks: the shell's own rules decide it.
+    const inMemory = (input: Pick<AssertInput, "action" | "escaped" | "leads" | "shell">, resource: string) => {
       const canonical = ToolNames.canonical(input.action)
       if (canonical !== "external_directory" && canonical !== "Read" && canonical !== "Edit") return false
-      if (input.escaped?.includes(resource)) return false
+      if (input.shell || input.escaped?.includes(resource)) return false
       const place = path.isAbsolute(resource) ? resource : path.resolve(location.directory, resource)
       return (
         [memory.folder, memory.real].some((folder) => FSUtil.contains(folder, place)) &&
@@ -264,16 +269,19 @@ const layer = Layer.effect(
       )
     }
     const decide = (
-      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads">,
+      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads" | "shell">,
       resource: string,
       rules: Permission.Ruleset,
       approvals: Permission.Ruleset = [],
     ) => {
       // The allow for a scratchpad or the memory folder is written for the spelling that a call gives, and a link inside
       // the folder can lead out of it, so the allow decides only a call whose real place is in the folder too. A link that
-      // points out is decided by the rules for the place it points to (class 4).
+      // points out is decided by the rules for the place it points to (class 4). The memory allow is for the file tools,
+      // so it never decides the folder question of a shell command (class 8).
       const scratch = (rule: Permission.Rule) => {
-        const folders = Agent.scratchpadFolders(rule) ?? Agent.memoryFolders(rule)
+        const memoryFolders = Agent.memoryFolders(rule)
+        if (memoryFolders !== undefined && input.shell) return false
+        const folders = Agent.scratchpadFolders(rule) ?? memoryFolders
         return (
           folders === undefined ||
           (input.leads?.[resource] ?? []).every((lead) => folders.some((folder) => FSUtil.contains(folder, lead)))
@@ -365,7 +373,7 @@ const layer = Layer.effect(
 
     // The last managed rule that matches a resource decides it. No match leaves the resource to the hooks and the rest.
     function managedEffect(
-      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads">,
+      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads" | "shell">,
       resource: string,
       written: Permission.Ruleset,
     ): Permission.Effect | undefined {
@@ -426,7 +434,7 @@ const layer = Layer.effect(
     }
 
     function anyDenied(
-      input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped" | "leads">,
+      input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped" | "leads" | "shell">,
       rules: Permission.Ruleset,
     ) {
       return input.resources.some((resource) => decide(input, resource, rules).effect === "deny")
@@ -535,7 +543,7 @@ const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, input: Pick<AssertInput, "agent" | "aliases" | "escaped" | "leads">) =>
+    const create = (request: Request, input: Pick<AssertInput, "agent" | "aliases" | "escaped" | "leads" | "shell">) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
@@ -545,6 +553,7 @@ const layer = Layer.effect(
             aliases: input.aliases,
             escaped: input.escaped,
             leads: input.leads,
+            shell: input.shell,
             deferred,
             call: yield* ToolCurrentCall.Current,
           }
@@ -669,6 +678,7 @@ const layer = Layer.effect(
               aliases: item.aliases,
               escaped: item.escaped,
               leads: item.leads,
+              shell: item.shell,
             }).pipe(Effect.catchTag("Session.NotFoundError", () => Effect.undefined))
             if (result?.effect !== "allow") continue
             yield* bus.publish(Permission.Event.Replied, {

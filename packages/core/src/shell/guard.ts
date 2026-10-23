@@ -423,7 +423,9 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
     ...(fragmentary ? [...fragmentWords(input.command, ps), ...fragmentWords(input.command, ps, true)] : []),
   ]
   const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, native(operand))))
-  const external = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
+  const folders = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
+  // The folder question of a command, which the memory folder's carve-out for the file tools does not decide.
+  const external = folders && { ...folders, shell: true }
   const requested = request(analysis, input.command, scanned, gathered.findings)
   const shell: Permission.AssertInput | undefined = requested && {
     action: "Bash",

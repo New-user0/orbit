@@ -1,7 +1,7 @@
 // context-memory-9, classes 3, 4 and 8: the memory folder of the project is prompt-free for the file tools, end to end
 // through the real Agent layer, FileAccess and Permission, as the reference's write and read carve-outs make it. A
-// write or read there is allowed ahead of the person's ask rules, while any deny of theirs, the session's or an agent's
-// own still wins. The allow decides only a call whose real place is in the real memory folder, so a link inside the
+// write or read there is allowed ahead of the person's ask rules, while a deny of theirs, the session's or an agent's
+// own wins over any ask and over a mode (a later allow of the person's lifts it, as elsewhere). The allow decides only a call whose real place is in the real memory folder, so a link inside the
 // folder cannot carry a prompt-free write out (the M5 verification line "An edit through a link inside a memory folder
 // is not prompt-free"). Every row that expects a question also checks a plain file of the memory folder in the same
 // run, so the row cannot pass because nothing is prompt-free.
@@ -10,6 +10,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer, Schema, type Types } from "effect"
 import { Document, Info, type Entry, type Scope } from "@orbit/schema/config"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Agent } from "@orbit/core/agent"
@@ -30,6 +31,8 @@ import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { SessionStore } from "@orbit/core/session/store"
+import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
+import { ShellGuard } from "@orbit/core/shell/guard"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
@@ -82,6 +85,8 @@ const provide = (l: Layout, global: Partial<Global.Interface> = {}, entries: Ent
         Global.node,
         FileAccess.node,
         ProjectTrust.node,
+        FSUtil.node,
+        Location.node,
       ]),
       [
         Global.node.replace(Global.layerWith({ tmp: l.tmp, data: l.data, config: l.config, ...global })),
@@ -137,6 +142,29 @@ const decide = (file: string, action: "Edit" | "Read" = "Edit", agent: Agent.ID 
   })
 
 const allowEdit = { effect: "allow", stage: "Edit" }
+
+// Adds the built-in agents. The plugin edits the agent itself, as the server's plugin host lets it: `agentHost` edits a
+// copy, which carries none of the marks of Orbit's own rules.
+const builtIns = Effect.gen(function* () {
+  const agents = yield* Agent.Service
+  yield* AgentPlugin.Plugin.effect(
+    host({
+      agent: {
+        ...agentHost(agents),
+        transform: (callback) =>
+          agents.transform((editor) =>
+            callback({
+              list: () => editor.list() as Types.DeepMutable<Agent.Info>[],
+              get: (id) => editor.get(Agent.ID.make(id)) as Types.DeepMutable<Agent.Info> | undefined,
+              default: (id) => editor.default(id === undefined ? undefined : Agent.ID.make(id)),
+              update: (id, update) => editor.update(Agent.ID.make(id), update),
+              remove: (id) => editor.remove(Agent.ID.make(id)),
+            }),
+          ),
+      },
+    }),
+  )
+})
 
 describe("the memory folder of the project", () => {
   // A file anywhere below the folder, MEMORY.md included, is written without a question.
@@ -210,8 +238,8 @@ describe("the memory folder of the project", () => {
     timeout,
   )
 
-  // Deny wins, as in the reference, whatever comes after it: a deny for one memory file stays a deny under a later,
-  // broader ask that the last-match order would otherwise let decide.
+  // A deny wins over any ask and over a mode: a deny for one memory file stays a deny under a later, broader ask that the
+  // last-match order would otherwise let decide. As everywhere else in Orbit, a later allow of the person's lifts it.
   it.live(
     "denies a memory file under the person's deny, even with a broader ask after it",
     () =>
@@ -228,16 +256,27 @@ describe("the memory folder of the project", () => {
             agent: probe,
             permission: [{ action: "Edit", resource: path.join(l.memory, "*"), effect: "deny" }],
           })
+          yield* insertSession({
+            id: "ses_memory_lifted",
+            directory: l.project,
+            agent: probe,
+            permission: [
+              { action: "Edit", resource: path.join(l.memory, "*"), effect: "deny" },
+              { action: "Edit", resource: "*", effect: "allow" },
+            ],
+          })
           return {
             denied: yield* decide(path.join(l.memory, "secret.md")),
             neighbour: yield* decide(path.join(l.memory, "other.md")),
             session: yield* decide(path.join(l.memory, "other.md"), "Edit", probe, "ses_memory_denied"),
+            lifted: yield* decide(path.join(l.memory, "other.md"), "Edit", probe, "ses_memory_lifted"),
           }
         }).pipe(provide(l))
         expect(out).toEqual({
           denied: { effect: "deny", stage: "Edit" },
           neighbour: allowEdit,
           session: { effect: "deny", stage: "Edit" },
+          lifted: allowEdit,
         })
       }),
     timeout,
@@ -275,8 +314,7 @@ describe("the memory folder of the project", () => {
         Effect.gen(function* () {
           const l = yield* layout
           const out = yield* Effect.gen(function* () {
-            const agents = yield* Agent.Service
-            yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agents) }))
+            yield* builtIns
             yield* seed(l, [], [Agent.ID.make(row.agent), probe])
             return {
               write: (yield* decide(path.join(l.memory, "a.md"), "Edit", Agent.ID.make(row.agent))).effect,
@@ -316,6 +354,56 @@ describe("the memory folder of the project", () => {
           }
         }).pipe(provide(l))
         expect(out).toEqual({ shell: "ask", script: "ask", control: allowEdit })
+      }),
+    timeout,
+  )
+
+  // The default agent allows every command and asks only about a folder outside the project, so that folder question is
+  // all that stands between a command and the memory folder. The shell guard's question is asked, and stays asked when
+  // an "always" for another folder makes the pending questions be decided again; a file tool's write there is not.
+  it.live(
+    "asks the default agent about a shell command that reaches the memory folder, also after an always elsewhere",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const out = yield* Effect.gen(function* () {
+          const build = Agent.ID.make("build")
+          const base = { sessionID: SessionSchema.ID.make(main), agent: build }
+          yield* builtIns
+          yield* insertSession({ id: main, directory: l.project, agent: build })
+          const access = yield* FileAccess.Service
+          const permission = yield* Permission.Service
+          const cwd = yield* access.resolve({ path: l.project, kind: "directory" })
+          const folder = (command: string) =>
+            Effect.gen(function* () {
+              const prepared = yield* ShellGuard.prepare({ command, shell: "sh", cwd, env: {}, portable: true, base })
+              if (!prepared.external) return { effect: "none", id: undefined }
+              return yield* permission.ask({ ...prepared.external, id: Permission.ID.create() })
+            }).pipe(
+              Effect.provideService(
+                PowerShellParse.Service,
+                PowerShellParse.Service.of({ parse: () => Effect.succeed({ valid: false, reason: "no-host" }) }),
+              ),
+            )
+          const file = path.join(l.memory, "a.md").replaceAll("\\", "/")
+          const rm = yield* folder(`rm ${file}`)
+          const cat = yield* folder(`cat ${file}`)
+          const other = access.externalRequest(
+            [yield* access.resolve({ path: path.join(l.elsewhere, "a.md"), kind: "file" })],
+            base,
+          )
+          const elsewhere = yield* permission.ask({ ...other!, id: Permission.ID.create() })
+          yield* permission.reply({ requestID: elsewhere.id, reply: "always" })
+          const pending = (yield* permission.list()).map((request) => request.id)
+          return {
+            rm: rm.effect,
+            cat: cat.effect,
+            elsewhere: elsewhere.effect,
+            stillAsked: pending.includes(rm.id!),
+            write: yield* decide(path.join(l.memory, "a.md"), "Edit", build),
+          }
+        }).pipe(provide(l))
+        expect(out).toEqual({ rm: "ask", cat: "ask", elsewhere: "ask", stillAsked: true, write: allowEdit })
       }),
     timeout,
   )
@@ -525,8 +613,7 @@ describe("memory.directory", () => {
 
   // Class 3: Explore denies everything and then keeps Orbit's own folders, the memory folder among them, so it reads a
   // memory file by either spelling of a configured folder that is a link, still writes none, and asks about another
-  // project's memory folder. The plugin edits the agent itself, as the server's plugin host lets it: `agentHost` edits a
-  // copy, which carries none of the marks of Orbit's own rules.
+  // project's memory folder.
   it.live(
     "lets the built-in explore agent read by either spelling of a configured folder that is a link",
     () =>
@@ -541,24 +628,7 @@ describe("memory.directory", () => {
         })
         const explore = Agent.ID.make("explore")
         const out = yield* Effect.gen(function* () {
-          const agents = yield* Agent.Service
-          yield* AgentPlugin.Plugin.effect(
-            host({
-              agent: {
-                ...agentHost(agents),
-                transform: (callback) =>
-                  agents.transform((editor) =>
-                    callback({
-                      list: () => editor.list() as Types.DeepMutable<Agent.Info>[],
-                      get: (id) => editor.get(Agent.ID.make(id)) as Types.DeepMutable<Agent.Info> | undefined,
-                      default: (id) => editor.default(id === undefined ? undefined : Agent.ID.make(id)),
-                      update: (id, update) => editor.update(Agent.ID.make(id), update),
-                      remove: (id) => editor.remove(Agent.ID.make(id)),
-                    }),
-                  ),
-              },
-            }),
-          )
+          yield* builtIns
           yield* seed(l, [], [explore, probe])
           return {
             spelled: (yield* decide(path.join(linked, "a.md"), "Read", explore)).effect,
