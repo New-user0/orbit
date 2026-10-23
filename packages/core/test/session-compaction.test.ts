@@ -340,6 +340,80 @@ it.effect("auto compaction estimates current content against the buffered prompt
   }),
 )
 
+// tool-runtime-8: a saved result reaches the model as its wrapper, so compaction measures and summarizes the wrapper and
+// not the full text that is in the file.
+const savedResult = (sessionID: Session.ID, tokens?: number) =>
+  Schema.decodeUnknownSync(SessionMessage.Assistant)({
+    id: SessionMessage.ID.create(),
+    type: "assistant",
+    agent: Agent.defaultID,
+    model: { id: "summary-model", providerID: "test" },
+    content: [
+      {
+        type: "tool",
+        id: "call_saved",
+        name: "Grep",
+        state: {
+          status: "completed",
+          input: {},
+          content: [{ type: "text", text: "r".repeat(60_000) }],
+          metadata: {
+            persisted: { session: sessionID, name: "msg_0123abc-call_saved-1a2b3c4d.txt", size: 60_000, format: 1 },
+          },
+        },
+        time: { created: 0 },
+      },
+    ],
+    ...(tokens === undefined ? {} : { tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }),
+    time: { created: 0, completed: 0 },
+  })
+
+it.effect("auto compaction measures a saved tool result by its wrapper", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make("ses_saved_estimate"))
+    const context = (message: SessionMessage.Info) => ({
+      ...loaded(session, [message]),
+      model: SessionRunnerModel.resolved(model, {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        cost: [],
+        limit: { context: 100_000, output: 10_000 },
+      }),
+    })
+    const saved = savedResult(session.id, 80_000)
+    const due = (message: SessionMessage.Info) =>
+      compaction
+        .compact({ reason: "auto", context: context(message) })
+        .pipe(Effect.map((outcome) => outcome.status !== "skipped"))
+    // The whole text would pass the 84,000-token ceiling; the wrapper stays under it.
+    expect(yield* due(saved)).toBe(false)
+    const content = saved.content.map((part) =>
+      part.type === "tool" && part.state.status === "completed"
+        ? { ...part, state: { ...part.state, metadata: {} } }
+        : part,
+    )
+    expect(yield* due({ ...saved, content } as SessionMessage.Info)).toBe(true)
+  }),
+)
+
+it.effect("summary compaction sends a saved tool result as its wrapper", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_saved_summary"))
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Search the code",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compactManually(session, [user, savedResult(session.id)])).toEqual({ status: "completed" })
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).toContain("<saved-output>")
+    expect(sent).toContain("msg_0123abc-call_saved-1a2b3c4d.txt")
+    expect(sent).not.toContain("r".repeat(2_001))
+  }),
+)
+
 /** Seeds the global project plus one session row, returning the projected session. */
 const insertSession = (id: Session.ID, overrides?: Partial<typeof SessionTable.$inferInsert>) =>
   Effect.gen(function* () {

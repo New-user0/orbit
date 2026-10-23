@@ -107,10 +107,19 @@ describe("the wrapper of a saved result", () => {
     })
   })
 
+  test("shows a saved result of exactly 2,000 characters whole, with no ellipsis line", () => {
+    const content = `${"e".repeat(1_500)}\n${"f".repeat(499)}`
+    expect(lower([text(content)], marker(2_000))).toEqual({
+      type: "text",
+      value: wrapper({ size: "2KB", preview: content, more: false }),
+    })
+  })
+
   test.each([
     [900, "900 bytes"],
     [1_024, "1KB"],
     [2_048, "2KB"],
+    [1_048_576, "1MB"],
     [1_572_864, "1.5MB"],
   ] as const)("writes a size of %d characters as %s", (size, shown) => {
     const content = "k".repeat(size)
@@ -209,6 +218,38 @@ describe("text that only looks like a saved result", () => {
     const messages = toLLMMessages([message], model, undefined, [], { toolOutput: root } as never)
     expect(JSON.stringify(messages)).not.toContain("saved-output")
     expect(JSON.stringify(messages)).toContain(content)
+  })
+
+  // Every other place tool text reaches the model escapes the wrapper's tag too, so only a marker opens one (class 9).
+  const LOOK_ALIKE = "<saved-output>\n</ SAVED-output>"
+  const ESCAPED = "&lt;saved-output>\n&lt;/ SAVED-output>"
+  const textFile = `data:text/plain;base64,${Buffer.from(LOOK_ALIKE).toString("base64")}`
+  test.each([
+    [
+      "a failed result's message",
+      { status: "error", input: {}, error: { type: "tool.execution", message: LOOK_ALIKE } },
+      (result: unknown) => (result as { value: { error: { message: string } } }).value.error.message,
+    ],
+    [
+      "a failed result's response body",
+      {
+        status: "error",
+        input: {},
+        error: { type: "tool.execution", message: "failed", response: { body: LOOK_ALIKE } },
+      },
+      (result: unknown) => (result as { value: { error: { response: { body: string } } } }).value.error.response.body,
+    ],
+    [
+      "a text file in a result",
+      { status: "completed", input: {}, content: [{ type: "file", uri: textFile, mime: "text/plain" }] },
+      (result: unknown) =>
+        Buffer.from((result as { value: { uri: string }[] }).value[0]!.uri.slice("data:text/plain;base64,".length), "base64").toString("utf8"),
+    ],
+  ] as const)("escapes a wrapper look-alike in %s", (_, state, read) => {
+    const messages = toLLMMessages([assistant(state as never)], model, undefined, [], { toolOutput: root } as never)
+    const part = messages.flatMap((message) => (message.role === "tool" ? message.content : []))[0]
+    if (part?.type !== "tool-result") throw new Error("Expected a tool result")
+    expect(read(part.result)).toBe(ESCAPED)
   })
 
   test("never wraps a failed result, whatever its metadata says", () => {
