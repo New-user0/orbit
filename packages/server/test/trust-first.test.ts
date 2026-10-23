@@ -132,6 +132,8 @@ it.live("a session whose folder is no longer trusted takes no more work, though 
         ["fork", "POST", `/api/session/${id}/fork`, {}],
         // These ask the model from the session's context, or read the folder's instruction files.
         ["generate", "POST", `/api/session/${id}/generate`, { prompt: "hi" }],
+        // clients-ux-27: the away summary asks the small model from the session's history.
+        ["recap", "POST", `/api/session/${id}/recap`, {}],
         ["title", "PATCH", `/api/session/${id}`, { title: "" }],
         ["instructions", "GET", `/api/experimental/session/${id}/instructions`, undefined],
         // A terminal for the session starts a program in its folder.

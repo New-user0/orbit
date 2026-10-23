@@ -260,3 +260,96 @@ describe("attention in Mini", () => {
     }
   })
 })
+
+// clients-ux-27: Mini is an interactive client too, so it asks for the away summary as the full TUI does: once the
+// terminal has been blurred for session.recap.after_minutes, after the session's turn has ended, and never once the
+// person is back. The server decides whether a recap is due, so Mini sends only the request.
+describe("away summary in Mini", () => {
+  async function recapHarness(afterMinutes = 0.001, answer?: () => Promise<void>) {
+    const app = await createTestRenderer({
+      width: 100,
+      height: 24,
+      screenMode: "split-footer",
+      footerHeight: 4,
+      externalOutputMode: "capture-stdout",
+    })
+    const asked: AbortSignal[] = []
+    const lifecycle = await createRuntimeLifecycle({
+      host: host("linux"),
+      createRenderer: async () => app.renderer as CliRenderer,
+      getDirectory: () => "/project",
+      findFiles: async () => [],
+      agents: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
+      references: [],
+      sessionID: "ses_1",
+      first: true,
+      history: [],
+      agent: "build",
+      model: undefined,
+      variant: undefined,
+      tuiConfig: createTuiResolvedConfig({ session: { recap: { after_minutes: afterMinutes } } }),
+      onPermissionReply: () => {},
+      onFormReply: () => {},
+      onFormCancel: () => {},
+      recap: (signal: AbortSignal) => {
+        asked.push(signal)
+        return answer ? answer() : new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()))
+      },
+    })
+    return {
+      app,
+      lifecycle,
+      asked,
+      [Symbol.dispose]() {
+        lifecycle.footer.destroy()
+        app.renderer.destroy()
+      },
+    }
+  }
+
+  test("asks once after the delay and drops the request when the person comes back", async () => {
+    using harness = await recapHarness()
+    harness.app.renderer.emit("blur")
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
+    harness.app.renderer.emit("focus")
+    expect(harness.asked[0]?.aborted).toBe(true)
+  })
+
+  test("waits for the turn's end, asks nothing while focus is unknown, and 0 turns it off", async () => {
+    {
+      using harness = await recapHarness()
+      harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+      harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect(harness.asked).toHaveLength(1)
+    }
+    {
+      using harness = await recapHarness()
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+    }
+    {
+      using harness = await recapHarness(0)
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+    }
+  })
+
+  // Class 13: a refused recap (an untrusted folder, a server that is gone) is silent, as the reference's failures are.
+  test("a refused recap shows nothing and leaves Mini running", async () => {
+    using harness = await recapHarness(0.001, () => Promise.reject(new Error("UntrustedFolderError")))
+    harness.app.renderer.emit("blur")
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
+    await Bun.sleep(100)
+    expect(harness.app.renderer.isDestroyed).toBe(false)
+  })
+})
