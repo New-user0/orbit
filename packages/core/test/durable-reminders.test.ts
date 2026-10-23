@@ -832,6 +832,36 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
+  // Review row (class 3, 4): a file outside the project that the session wrote, swapped for a link into another outside
+  // folder, now leads to a place nobody allowed, which the read tool would ask about, so it is skipped although no rule
+  // denies it. A file in the allowed folder changed in place is the control and is still reported (owner Q2).
+  linked("an outside file swapped for a link into another outside folder is skipped", () =>
+    Effect.gen(function* () {
+      const allowed = (yield* tmpdirScoped()).path
+      const other = (yield* tmpdirScoped()).path
+      const h = yield* setup([
+        allowAll,
+        { action: "external_directory", resource: "*", effect: "ask" },
+        { action: "external_directory", resource: `${slash(allowed)}/*`, effect: "allow" },
+      ])
+      const swapped = path.join(allowed, "out.txt")
+      const control = path.join(allowed, "control.txt")
+      const credentials = path.join(other, "credentials")
+      yield* h.write(swapped, text(twenty))
+      yield* h.write(control, text(twenty))
+      yield* Effect.promise(async () => {
+        await fs.writeFile(credentials, text(["KEY-MARKER"]))
+        await fs.rm(swapped)
+        await fs.symlink(credentials, swapped)
+      })
+      yield* h.stamp(credentials)
+      yield* h.change(control, text(["changed"]))
+      const rows = yield* h.changes()
+      expect(labels(rows)).toEqual([expect.stringContaining(control)])
+      expect(JSON.stringify(rows)).not.toContain("KEY-MARKER")
+    }),
+  )
+
   linked("a file swapped for a link that points nowhere is forgotten, as a deleted one is", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -1329,6 +1359,56 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
+  // Review row (class 4, 5): a name in history may never have been read by the session (the call failed, or the store was
+  // imported), so a project file that the read tool would ask about first is neither seeded nor read: the built-in `.env`
+  // asks, a rule the person wrote, and a link onto such a file, each named by a failed write, a write, a read and an edit
+  // at time 0. Each history runs in its own session, with a project file the same history wrote as the reported control.
+  it.live("seeds no file that the read tool would ask about, whatever call named it", () =>
+    Effect.gen(function* () {
+      const h = yield* setup([
+        allowAll,
+        { action: "Read", resource: "*.env", effect: "ask" },
+        { action: "Read", resource: "*.env.*", effect: "ask" },
+        { action: "Read", resource: "secrets/*", effect: "ask" },
+      ])
+      const control = h.inside("control.txt")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(h.inside("secrets"))
+        await fs.writeFile(h.inside(".env"), "API_KEY=ENV-MARKER\n")
+        await fs.writeFile(h.inside(".env.local"), "API_KEY=LOCAL-MARKER\n")
+        await fs.writeFile(h.inside("secrets/key.txt"), "SECRET-MARKER\n")
+        if (canLinkFile) await fs.symlink(h.inside(".env"), h.inside("env-link.txt"))
+      })
+      yield* h.change(control, text(["changed"]))
+      const names = [".env", ".env.local", "secrets/key.txt", ...(canLinkFile ? ["env-link.txt"] : [])]
+      const calls = {
+        "failed write": (name: string, id: string) =>
+          toolPart(id, "Write", { file_path: name, content: "x\n" }, { error: "declined" }, 0),
+        write: (name: string, id: string) => toolPart(id, "Write", { file_path: name, content: "x\n" }, {}, 0),
+        read: (name: string, id: string) =>
+          toolPart(id, "Read", { file_path: name }, { text: readResult(name, ["x"]), metadata: { truncated: false } }, 0),
+        edit: (name: string, id: string) =>
+          toolPart(id, "Edit", { file_path: name, old_string: "a", new_string: "b" }, {}, 0),
+      }
+      for (const [kind, call] of Object.entries(calls)) {
+        const session = yield* h.create()
+        const messages = history([
+          assistant("msg_0000000001", [
+            ...names.map((name, index) => call(name, `n${index}`)),
+            toolPart("c", "Write", { file_path: "control.txt", content: text(["old"]) }, {}, 0),
+          ]),
+        ])
+        const rows = yield* h.changes(messages, { session })
+        expect({ kind, labels: labels(rows) }).toEqual({ kind, labels: [expect.stringContaining(control)] })
+        expect(JSON.stringify(rows)).not.toMatch(/ENV-MARKER|LOCAL-MARKER|SECRET-MARKER/)
+        expect({ kind, watched: (yield* h.ledger.watched(session.id)).map((file) => file.path) }).toEqual({
+          kind,
+          watched: [],
+        })
+      }
+    }),
+  )
+
   const linkedRebuild = canLinkFile ? it.live : it.live.skip
   // Gate's row (class 4): while the project is not trusted, a project file that is a link leading out is placed outside
   // the project, so the rebuild reads nothing through it. Not seeded, it is not reported once the project is trusted
@@ -1542,7 +1622,7 @@ describe("the output-style reminder", () => {
         yield* h.settings.setEntries([styled(name)])
         const rows = styleRows(yield* h.collect())
         expect(rows).toHaveLength(1)
-        expect(rows[0].harness).toContain(shown)
+        expect(rows[0].harness).toBe(`Your replies follow the ${shown} output style; keep to its guidelines.`)
         expect(rows[0].label).toBeUndefined()
         expect(rows[0].description).toBeUndefined()
       }),

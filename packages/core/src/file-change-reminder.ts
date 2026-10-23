@@ -4,6 +4,7 @@ import { structuredPatch } from "diff"
 import { DateTime, Effect, Cause } from "effect"
 import type { Agent } from "@orbit/schema/agent"
 import type { Session } from "@orbit/schema/session"
+import { FSUtil } from "@orbit/util/fs-util"
 import type { Environment } from "./environment/index.js"
 import { FileAccess } from "./file-access.js"
 import { FileLedger } from "./file-ledger.js"
@@ -86,9 +87,9 @@ export const durable = (services: Services): Durable => ({
  * The target a path stands for, when a read of it needs nobody's answer and no deny rule stops it, and undefined
  * otherwise. It is resolved once, as the read tool resolves it (a share or device spelling is refused before any disk is
  * read), and the checks are made on that same target: the project's containment at this moment (`reachable`, which
- * follows links), whether a name in the project now leads out of it, the Read deny rules on the file and on where it
- * leads, and the deny rules for the folder outside the project it is in. An ask rule does not stop it: the reference
- * consults deny rules only.
+ * follows links), whether a name now leads out of the folder the session wrote it in, the Read deny rules on the file and
+ * on where it leads, and the deny rules for the folder outside the project it is in. An ask rule does not stop it: the
+ * reference consults deny rules only.
  */
 export const gate = Effect.fnUntraced(function* (
   services: Pick<Services, "access" | "permission" | "trust">,
@@ -99,27 +100,34 @@ export const gate = Effect.fnUntraced(function* (
   const target = yield* services.access.locate(file, "file").pipe(Effect.orElseSucceed(() => undefined))
   if (target === undefined) return undefined
   if (!(yield* services.trust.reachable(target.absolute))) return undefined
-  // The resolver gives a target a place other than its name only when a name in the project's folders leads out of them.
-  // The session wrote a file of the project, and nobody allowed the place it leads to now (the read tool would ask), so
-  // it is skipped. A file outside the project that the session wrote keeps its own name as its place and is still read.
-  if (target.externalDirectory !== undefined && target.place !== target.absolute) return undefined
+  if (target.externalDirectory !== undefined) {
+    // The resolver gives a target a place other than its name only when a name in the project's folders leads out of
+    // them, and a name outside the project keeps its place and has `leads` set when a link takes it elsewhere. Either way
+    // the file now leads to a place nobody allowed (the read tool would ask), so it is skipped. A file that stays in the
+    // outside folder the session wrote it in is still read. Both sides of the comparison are real paths.
+    if (target.place !== target.absolute) return undefined
+    const folder = yield* services.trust.leads(target.externalDirectory.directory)
+    if (target.leads !== undefined && !FSUtil.contains(folder, target.leads)) return undefined
+  }
   const base = { sessionID, agent }
   const external = services.access.externalRequest([target], base)
-  const requests: Permission.AssertInput[] = [
-    {
-      action: "Read",
-      resources: [target.resource],
-      save: ["*"],
-      metadata: { paths: [target.place] },
-      ...FileAccess.leadsOf([target]),
-      ...base,
-    },
-    ...(external === undefined ? [] : [external]),
-  ]
+  const requests = [readRequest(target, base), ...(external === undefined ? [] : [external])]
   const denied = yield* Effect.forEach(requests, (request) =>
     services.permission.denied(request).pipe(Effect.orElseSucceed(() => true)),
   )
   return denied.some(Boolean) ? undefined : target
+})
+
+const readRequest = (
+  target: FileAccess.Target,
+  base: Pick<Permission.AssertInput, "sessionID" | "agent">,
+): Permission.AssertInput => ({
+  action: "Read",
+  resources: [target.resource],
+  save: ["*"],
+  metadata: { paths: [target.place] },
+  ...FileAccess.leadsOf([target]),
+  ...base,
 })
 
 const changed = Effect.fnUntraced(function* (services: Services, input: Input, file: FileLedger.Watched) {
@@ -198,8 +206,8 @@ const shown = (text: string) =>
  * count, later calls winning: a whole read that was not a repeat or truncated (the text it showed, stamped with its
  * time), a write whatever its outcome (the text it was given, stamped with its time) and an edit that did not fail (the
  * file as it is now). A path in history may come from an imported session, so it is resolved as the read tool resolves
- * it, a share or device spelling is refused before any disk is read, and only a file inside the project that `reachable`
- * accepts is kept. Of those, only the newest `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop
+ * it, a share or device spelling is refused before any disk is read, and only a file inside the project that passes
+ * `gate` and that the read tool would read without a question is kept. Of those, only the newest `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop
  * the rest. A record that is already there wins over one from history. The session is claimed before the rebuild starts,
  * so one that runs past the producer's deadline is not tried again in this process.
  */
@@ -209,10 +217,15 @@ const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
   const resolved = yield* Effect.forEach(
     Array.from(bySpelling.values()),
     Effect.fnUntraced(function* (found) {
-      const target = yield* services.access.locate(found.path, "file").pipe(Effect.orElseSucceed(() => undefined))
+      const target = yield* gate(services, input.session.id, input.agent.id, found.path)
       if (target === undefined || target.externalDirectory !== undefined) return []
-      if (!(yield* services.trust.reachable(target.absolute))) return []
-      return [{ ...found, target }]
+      // The session may never have read this file: the call can have failed, and the store can be imported. So a file
+      // that the read tool would ask about first (the built-in `.env` ask, a rule the person wrote, a link onto such a
+      // file) is not seeded, and nothing of it is read (class 5).
+      const quiet = yield* services.permission
+        .allowed(readRequest(target, { sessionID: input.session.id, agent: input.agent.id }))
+        .pipe(Effect.orElseSucceed(() => false))
+      return quiet ? [{ ...found, target }] : []
     }),
     { concurrency: 8 },
   )
