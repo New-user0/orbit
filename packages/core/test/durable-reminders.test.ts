@@ -732,6 +732,28 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
+  linked("a file swapped for a link that points nowhere is forgotten, as a deleted one is", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const dangling = h.inside("dangling.txt")
+      const control = h.inside("control.txt")
+      yield* h.write(dangling, text(twenty))
+      yield* h.write(control, text(twenty))
+      yield* Effect.promise(async () => {
+        await fs.rm(dangling)
+        await fs.symlink(h.inside("missing-target.txt"), dangling)
+      })
+      yield* h.change(control, text(["changed"]))
+      expect(labels(yield* h.changes())).toEqual([expect.stringContaining(control)])
+      // Forgotten: the target that appears later is not reported, and an edit needs a read first.
+      yield* h.change(h.inside("missing-target.txt"), text(["appeared"]))
+      expect(yield* h.changes()).toEqual([])
+      expect(errorType(yield* h.run("Edit", { file_path: dangling, old_string: "appeared", new_string: "x" }))).toBe(
+        "file.unread",
+      )
+    }),
+  )
+
   it.live("one entry that fails costs only itself", () =>
     Effect.gen(function* () {
       const h = yield* setup()
