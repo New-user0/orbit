@@ -1642,3 +1642,22 @@ describe("PatchTool", () => {
     ),
   )
 })
+
+// clients-ux-5: a code restore puts back only what the session's own file tools changed, and learns which files those
+// were from the calls it recorded. A move changes two files, so the recorded call names the source it removed as well as
+// the destination it wrote; without the source, a restore would leave the moved file at its new name only.
+describe("PatchTool records every file it changed, for code rewind", () => {
+  it.live("names a move's source beside its destination in the completed call", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "old.txt"), "before\n"))
+        const settled = yield* executeTool(
+          registry,
+          call("*** Begin Patch\n*** Update File: old.txt\n*** Move to: moved.txt\n@@\n-before\n+after\n*** End Patch"),
+        )
+        expect(settled.status).toBe("completed")
+        expect(settled.metadata?.files).toEqual([expect.objectContaining({ file: "moved.txt", from: "old.txt" })])
+      }),
+    ),
+  )
+})

@@ -1,0 +1,258 @@
+import { $ } from "bun"
+import { describe, expect } from "bun:test"
+import fs from "fs/promises"
+import path from "path"
+import { Effect, Layer } from "effect"
+import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Global } from "@orbit/util/global"
+import { Location } from "@orbit/core/location"
+import { AbsolutePath, RelativePath } from "@orbit/core/schema"
+import { Snapshot } from "@orbit/core/snapshot"
+import { canLinkFile } from "./fixture/symlink"
+import { tmpdir } from "./fixture/tmpdir"
+import { testEffect } from "./lib/effect"
+
+// clients-ux-5: a code restore writes and deletes files in the project from a checkpoint taken earlier. Between the
+// checkpoint and the restore, a folder on the way to a file can have become a link (a junction on Windows, which needs no
+// privilege) that leads out of the project. A restore decides each file on its real path at the moment it writes it
+// (class 4): a file with a link on the way is skipped with one log line, and nothing is written, deleted or replaced
+// through it; the other files of the same restore still go back (class 7). A deletion removes only a file or a link,
+// never a folder with what is in it. Every row plants a marker outside the project and has a plain file in the same
+// restore as its control.
+
+const it = testEffect(Layer.empty)
+const linkType = process.platform === "win32" ? "junction" : "dir"
+
+type Fixture = {
+  readonly root: string
+  readonly project: string
+  readonly outside: string
+}
+
+const withProject = <A, E>(body: (fixture: Fixture) => Effect.Effect<A, E, Snapshot.Service>) =>
+  Effect.acquireUseRelease(
+    Effect.promise(() => tmpdir("orbit-restore-links-")),
+    (tmp) =>
+      Effect.gen(function* () {
+        const root = yield* Effect.promise(() => fs.realpath(tmp.path))
+        const fixture = { root, project: path.join(root, "project"), outside: path.join(root, "outside") }
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(fixture.project, "sub"), { recursive: true })
+          await fs.mkdir(fixture.outside, { recursive: true })
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe one\n")
+          await fs.writeFile(path.join(fixture.project, "sub", "keep.txt"), "keep one\n")
+          await $`git init -q`.cwd(fixture.project).quiet()
+          await $`git -c core.fsmonitor=false add .`.cwd(fixture.project).quiet()
+        })
+        return yield* body(fixture).pipe(
+          Effect.provide(
+            AppNodeBuilder.build(Snapshot.node, [
+              Location.node.replace(
+                Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(fixture.project) })),
+              ),
+              Global.node.replace(
+                Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config") }),
+              ),
+            ]),
+          ),
+        )
+      }),
+    (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+  )
+
+const capture = Effect.gen(function* () {
+  const snapshot = yield* Snapshot.Service
+  const tree = yield* snapshot.capture()
+  if (!tree) throw new Error("snapshot missing")
+  return tree
+})
+
+const text = (file: string) => Effect.promise(() => fs.readFile(file, "utf8").catch(() => undefined))
+const isLink = (file: string) =>
+  Effect.promise(() =>
+    fs.lstat(file).then(
+      (info) => info.isSymbolicLink(),
+      () => false,
+    ),
+  )
+const exists = (file: string) =>
+  Effect.promise(() =>
+    fs.stat(file).then(
+      () => true,
+      () => false,
+    ),
+  )
+const restore = (files: ReadonlyArray<readonly [string, Snapshot.ID]>) =>
+  Effect.gen(function* () {
+    const snapshot = yield* Snapshot.Service
+    yield* snapshot.restore({ files: new Map(files.map(([file, tree]) => [RelativePath.make(file), tree])) })
+  })
+
+describe("Snapshot.restore through a link made after the checkpoint", () => {
+  it.live("does not delete a file outside the project through a folder link, and restores the control", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(fixture.outside, "victim.txt"), "outside\n")
+          await fs.symlink(fixture.outside, path.join(fixture.project, "linked"), linkType)
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        // `linked/victim.txt` is absent from the checkpoint, so a restore that followed the link would delete it.
+        yield* restore([
+          ["linked/victim.txt", tree],
+          ["safe.txt", tree],
+        ])
+        expect({
+          victim: yield* text(path.join(fixture.outside, "victim.txt")),
+          link: yield* isLink(path.join(fixture.project, "linked")),
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+        }).toEqual({ victim: "outside\n", link: true, safe: "safe one\n" })
+      }),
+    ),
+  )
+
+  it.live("does not write through, or replace, a folder that became a link after the checkpoint", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.rename(path.join(fixture.project, "sub"), path.join(fixture.root, "moved-sub"))
+          await fs.symlink(fixture.outside, path.join(fixture.project, "sub"), linkType)
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        yield* restore([
+          ["sub/keep.txt", tree],
+          ["safe.txt", tree],
+        ])
+        expect({
+          written: yield* exists(path.join(fixture.outside, "keep.txt")),
+          link: yield* isLink(path.join(fixture.project, "sub")),
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+        }).toEqual({ written: false, link: true, safe: "safe one\n" })
+      }),
+    ),
+  )
+
+  it.live("does not make the folder a dangling link points at, and leaves the link", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        const later = path.join(fixture.outside, "later")
+        yield* Effect.promise(async () => {
+          await fs.rename(path.join(fixture.project, "sub"), path.join(fixture.root, "moved-sub"))
+          await fs.symlink(later, path.join(fixture.project, "sub"), linkType)
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        yield* restore([
+          ["sub/keep.txt", tree],
+          ["safe.txt", tree],
+        ])
+        expect({
+          made: yield* exists(later),
+          link: yield* isLink(path.join(fixture.project, "sub")),
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+        }).toEqual({ made: false, link: true, safe: "safe one\n" })
+      }),
+    ),
+  )
+
+  it.live("removes no folder, and nothing in it, where the checkpoint had no file", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(fixture.project, "grown"))
+          await fs.writeFile(path.join(fixture.project, "grown", "inner.txt"), "inner\n")
+          await fs.writeFile(path.join(fixture.project, "created.txt"), "created\n")
+        })
+        // `grown` is a folder now and absent from the checkpoint; `created.txt` is the file control, which goes.
+        yield* restore([
+          ["grown", tree],
+          ["created.txt", tree],
+        ])
+        expect({
+          inner: yield* text(path.join(fixture.project, "grown", "inner.txt")),
+          created: yield* exists(path.join(fixture.project, "created.txt")),
+        }).toEqual({ inner: "inner\n", created: false })
+      }),
+    ),
+  )
+
+  // A link to a network share is decided by the share it names, without opening it. Windows needs the privilege to link
+  // to one (CI's runner has it), and the share must answer, or a restore that followed the link would delete nothing.
+  const share = process.platform === "win32" && canLinkFile ? it.live : it.live.skip
+  share("does not delete a file on a share that a folder link leads to", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const unc = `\\\\localhost\\${fixture.outside[0]}$${fixture.outside.slice(2)}`
+        if (!(yield* exists(unc))) return
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(fixture.outside, "victim.txt"), "outside\n")
+          await fs.symlink(unc, path.join(fixture.project, "share"), "dir")
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        yield* restore([
+          ["share/victim.txt", tree],
+          ["safe.txt", tree],
+        ])
+        expect({
+          victim: yield* text(path.join(fixture.outside, "victim.txt")),
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+        }).toEqual({ victim: "outside\n", safe: "safe one\n" })
+      }),
+    ),
+  )
+
+  // Control, not a mutation target: a folder whose name changed case is the same folder on Windows and macOS, so its
+  // files are not taken for files behind a link and still go back.
+  const caseless = process.platform === "win32" || process.platform === "darwin" ? it.live : it.live.skip
+  caseless("restores a file in a folder whose name changed case after the checkpoint", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.rename(path.join(fixture.project, "sub"), path.join(fixture.project, "Sub-renaming"))
+          await fs.rename(path.join(fixture.project, "Sub-renaming"), path.join(fixture.project, "Sub"))
+          await fs.writeFile(path.join(fixture.project, "Sub", "keep.txt"), "keep two\n")
+        })
+        yield* restore([["sub/keep.txt", tree]])
+        expect(yield* text(path.join(fixture.project, "Sub", "keep.txt"))).toBe("keep one\n")
+      }),
+    ),
+  )
+})
+
+// A checkpoint ID comes from a session's stored steps, and an imported session's steps are whatever its file says (class
+// 5). Git reads a value that starts with `-` as an option, and `--output=<file>` makes `git diff` write that file, so a
+// value that is not a tree ID is refused before git starts, by every operation that takes one. The marker is the file
+// that git would write; a real tree in the same call is the control that the operation still works.
+describe("Snapshot with a checkpoint ID that is not a tree", () => {
+  const operations = [
+    ["files", (from: Snapshot.ID, to: Snapshot.ID) => Effect.flatMap(Snapshot.Service, (s) => s.files({ from, to }))],
+    ["diff", (from: Snapshot.ID, to: Snapshot.ID) => Effect.flatMap(Snapshot.Service, (s) => s.diff({ from, to }))],
+    [
+      "restore",
+      (from: Snapshot.ID, _to: Snapshot.ID) =>
+        Effect.flatMap(Snapshot.Service, (s) => s.restore({ files: new Map([[RelativePath.make("safe.txt"), from]]) })),
+    ],
+  ] as const
+
+  for (const [name, operation] of operations)
+    it.live(`${name} refuses an option-shaped ID and writes no file`, () =>
+      withProject((fixture) =>
+        Effect.gen(function* () {
+          const tree = yield* capture
+          const marker = path.join(fixture.root, `${name}.marker`)
+          const forged = Snapshot.ID.make(`--output=${marker}`)
+          const refused = yield* operation(forged, tree).pipe(
+            Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "succeeded" }),
+          )
+          expect({ refused, marker: yield* exists(marker) }).toEqual({ refused: "Snapshot.Error", marker: false })
+          // The control: a real tree goes through the same operation.
+          yield* operation(tree, tree)
+        }),
+      ),
+    )
+})
