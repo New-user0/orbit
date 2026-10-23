@@ -205,6 +205,38 @@ test("a plugin in a folder above the folder the server calls its project never l
   })
 }, 20_000)
 
+// Class 3: the folder the server decides trust for can change while the folder stays trusted, such as when the server
+// stops taking the repository around `sub` as its project. The plugins are reconciled again with the new answer, so the
+// plugin above the new project unloads. The control is the first answer, under which the same plugin loads.
+test("a project's plugins are reconciled again when the folder the server decides trust for changes", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  const sub = path.join(fixture.path, "sub")
+  await mkdir(sub)
+  await inside(sub, async () => {
+    const cwd = process.cwd()
+    // First the repository around `sub`, where the plugin is.
+    let decided = path.dirname(cwd)
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        return json(status(decided, true))
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
+    expect(await fixture.marks()).toEqual(["loaded"])
+
+    const before = decided
+    decided = cwd
+    setup.events.emit({ id: "evt_trust", created: 1, type: "trust.updated", data: { directory: before, trusted: true } })
+    await setup.waitFor(async () => (await fixture.marks()).length > 1, { maxPasses: 400 })
+    expect(await fixture.marks()).toEqual(["loaded", "unloaded"])
+  })
+}, 30_000)
+
 test.each([
   ["has no trust route", () => new Response("not found", { status: 404 })],
   ["fails", () => new Response("unavailable", { status: 503 })],
