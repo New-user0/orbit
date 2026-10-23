@@ -56,8 +56,13 @@ const layout = Effect.gen(function* () {
     await fs.writeFile(path.join(data, "tool-output", "tool_0123456789ab"), "legacy")
     await fs.mkdir(path.join(data, "tool-output-evil", ids.own), { recursive: true })
     await fs.writeFile(path.join(data, "tool-output-evil", ids.own, "x.txt"), "evil")
-    // A link inside the session's own folder that leads out of it.
+    // A link inside the session's own folder that leads out of it, one that leads to a place Orbit allows anyway (the
+    // temporary folder), and one that leads to another session's folder.
     await fs.symlink(outside, path.join(data, "tool-output", ids.own, "escape"), linkType)
+    await fs.mkdir(path.join(root, "tmp", "plain"), { recursive: true })
+    await fs.writeFile(path.join(root, "tmp", "plain", "note.txt"), "note")
+    await fs.symlink(path.join(root, "tmp", "plain"), path.join(data, "tool-output", ids.own, "to-tmp"), linkType)
+    await fs.symlink(path.dirname(saved(ids.other)), path.join(data, "tool-output", ids.own, "to-other"), linkType)
     await fs.symlink(data, dataLink, linkType)
   })
   return { root, project, data, dataLink, outside, saved }
@@ -157,6 +162,20 @@ describe("the prompt-free read of saved results", () => {
       name: "a file a link inside the session's folder leads out to",
       session: ids.own,
       file: (l) => path.join(l.data, "tool-output", ids.own, "escape", "secret.txt"),
+      effect: "ask",
+    },
+    // The temporary folder is allowed on its own, so only the real-path check keeps the session's allow from deciding a
+    // call that its name puts in the session's folder (class 4).
+    {
+      name: "a file a link inside the session's folder leads to in the temporary folder",
+      session: ids.own,
+      file: (l) => path.join(l.data, "tool-output", ids.own, "to-tmp", "note.txt"),
+      effect: "ask",
+    },
+    {
+      name: "another session's file a link inside the session's folder leads to",
+      session: ids.own,
+      file: (l) => path.join(l.data, "tool-output", ids.own, "to-other", path.basename(l.saved(ids.other))),
       effect: "ask",
     },
     {

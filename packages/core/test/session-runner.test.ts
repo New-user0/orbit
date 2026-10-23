@@ -10624,6 +10624,24 @@ describe("SessionRunnerLLM saved tool results", () => {
     expect(toolResults(s.requests[2])).toEqual(toolResults(s.requests[1]))
   })
 
+  // The prompt the runner measures for the output limit is the one it sends: the wrapper, not the 300,000 characters
+  // (about 75,000 tokens) that were saved, which would leave a window of 100,000 tokens room for far less output.
+  savedScenario("fits the output limit to the wrapper the request carries, not to the saved content", function* (s) {
+    s.currentModel = fittedOutputModel
+    yield* s.admit("Repeat it")
+    yield* s.llm.push(
+      TestLLM.tool("call_fitted", "emit", { text: "r", count: 300_000 }),
+      TestLLM.text("Done", "done-fitted"),
+    )
+    yield* s.resume
+
+    const [result] = toolResults(s.requests[1])
+    expect(result?.result.type === "text" ? String(result.result.value).split("\n")[0] : undefined).toBe(
+      "<saved-output>",
+    )
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([64_000, 64_000])
+  })
+
   savedScenario("sends a result that returned nothing as the empty marker", function* (s) {
     yield* s.admit("Run the quiet tools")
     yield* s.llm.push(

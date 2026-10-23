@@ -175,6 +175,19 @@ describe("text that only looks like a saved result", () => {
     ["a session that is not a session ID", { session: "../x", name: NAME, size: 60_000, format: 1 }],
     ["a name that climbs out", { session: SESSION, name: "../../.ssh/id_rsa", size: 60_000, format: 1 }],
     ["a name with a path after it", { session: SESSION, name: `${NAME}/../x`, size: 60_000, format: 1 }],
+    // The shape's head and tail hold, but the call part between them climbs out of the session's folder.
+    [
+      "a name whose call part climbs out",
+      { session: SESSION, name: "msg_0a-x/../../../.ssh/id_rsa-1a2b3c4d.txt", size: 60_000, format: 1 },
+    ],
+    [
+      "a name whose call part climbs out with backslashes",
+      { session: SESSION, name: "msg_0a-x\\..\\..\\..\\.ssh\\id_rsa-1a2b3c4d.txt", size: 60_000, format: 1 },
+    ],
+    [
+      "a name whose message part climbs out",
+      { session: SESSION, name: "msg_0a/../../x-call-1a2b3c4d.txt", size: 60_000, format: 1 },
+    ],
     ["a device name", { session: SESSION, name: "CON.txt", size: 60_000, format: 1 }],
     ["a size that is not a number", { session: SESSION, name: NAME, size: "big", format: 1 }],
     ["a format this build does not know", { session: SESSION, name: NAME, size: 60_000, format: 2 }],
