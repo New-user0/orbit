@@ -933,11 +933,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the client mounts. The project's `<folder>/.orbit/themes`, from the project's root down to the start folder and never
   above it, is read by the terminal UI only once `trust.startup` says the start folder is trusted (a read that failed or
   did not decode is untrusted), and by Mini once `trustRefusal` lets it start. A custom theme replaces a built-in one of
-  the same name, so a folder's theme read before trust could restyle the trust question itself. The walk's root is the
-  stricter of the terminal UI's own and the folder the server decided trust for (class 3). The class 6 rule holds too: a
-  name that is, or leads through a link to, a share is skipped before it is listed or read, and a theme that fails costs
-  only itself. Proof: `packages/tui/test/trust-reference.test.ts` (the three theme rows), `test/mini/theme-project.test.ts`,
-  `test/plugin-discovery.test.ts` (a `.git` file the server rejects) and `test/theme-share.test.ts`.
+  the same name, so a folder's theme read before trust could restyle the trust question itself. In both clients the
+  walk's root is the stricter of the client's own and the folder the server decided trust for (class 3): the terminal UI
+  takes that folder from `trust.startup`, and Mini from the answer `trustRefusal` lets it start with, for its first draw
+  and for a refresh of the theme. The class 6 rule holds too: a name that is, or leads through a link to, a share is
+  skipped before it is listed or read, and a theme that fails costs only itself. Proof: `packages/tui/test/trust-reference.test.ts` (the three theme rows), `test/mini/theme-project.test.ts`,
+  `test/mini/frontend.trust.test.ts` (the server's folder reaches Mini), `test/plugin-discovery.test.ts` (a `.git` file
+  the server rejects) and `test/theme-share.test.ts`.
 - Plugins that the terminal UI imports in its own process: `trustedPluginDirectories` with `trust.startup`, bounded by
   the folder the server decided trust for where that is the narrower root. Proof: `test/plugin-trust.test.ts`,
   `test/plugin-discovery.test.ts`.
@@ -2301,7 +2303,7 @@ already guarded elsewhere.
 **How to comply:**
 
 - `requireTrust` and `trustRefusal` in `packages/cli/src/util/trust.ts` stop a command in any folder that is not
-  trusted, whatever it holds, and in a trusted one whose executable config changed since the grant. The handlers for
+  trusted, whatever it holds. The handlers for
   `run` (with or without `--bare`), `loop`, `flow run`, `flow resume`, `flow replay`, `flow clean`, the store readers
   `flow ls`, `show`, `cost`, `trace`, `watch` and `approve` (before `openStore`), `eval`, `doctor --probe` (before
   its throwaway session), `session import` (for the folder the session lands in) and `orb -p`

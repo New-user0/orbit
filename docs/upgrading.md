@@ -771,7 +771,10 @@ project's config only from the project itself. What changed:
   Instruction files keep their own walk, which is unchanged.
 - A project's custom themes in `.orbit/themes` wait for the folder to be trusted, as everything else it supplies does,
   and come only from the project's root down to the start folder. Your own themes load as before. Mini reads the same
-  folders.
+  folders, and where its own walk would take a `.git` file that the server does not accept as a repository, it starts
+  no higher than the folder the server decided trust for, as the terminal UI does.
+- VS Code's banner for a folder that is not trusted says that nothing there loads, and no work starts there, until you
+  trust it. It used to list what the folder held back, which was empty once nothing of the folder was read.
 - `orb trust <folder> --for <location>` is gone, and so are the `holder` field of `POST /api/location/trust`,
   `Trust.Status.changed`, and the `directory` and `persistent` fields of `Trust.Withheld`. `Trust.Status.withheld` is
   always empty and goes in a later release. A client older than this version reads a status without `changed` as
