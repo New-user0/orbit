@@ -262,6 +262,8 @@ describe("saving a large result", () => {
       saved: 30_001,
       whole: 30_000,
     },
+    // `max_lines` bounds only the shell's own capture now.
+    { name: "an undeclared tool under max_lines alone", toolOutput: { max_lines: 5 }, saved: 50_001, whole: 50_000 },
   ]
   for (const row of thresholds)
     it.live(`applies the threshold of ${row.name}`, () =>

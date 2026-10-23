@@ -689,8 +689,6 @@ describe("ConfigTrust.stamp", () => {
   test.each([
     ["media", { image: { auto_resize: false } }, { image: { auto_resize: true } }],
     ["tool_output", { max_lines: 100 }, { max_lines: 5000 }],
-    // tool-runtime-8: the ceiling on every saved-result threshold.
-    ["tool_output", { max_result_chars: 100 }, { max_result_chars: 200_000 }],
     ["compaction", { auto: false, buffer: 100 }, { auto: true, buffer: 20000 }],
   ] as const)("keeps an untrusted folder from setting %s", (field, projectValue, userValue) => {
     const user = document("user", { [field]: userValue })
@@ -702,6 +700,21 @@ describe("ConfigTrust.stamp", () => {
     expect(Config.latest([user, ConfigTrust.stamp(project, place)], field)).toEqual(userValue)
     // Control: trusted, the project's value stands.
     expect(Config.latest([user, project], field)).toEqual(projectValue)
+  })
+
+  // tool-runtime-8: the ceiling on every saved-result threshold sets how much each request carries, like the rows above.
+  test("keeps an untrusted folder from setting tool_output.max_result_chars", () => {
+    const user = document("user", { tool_output: { max_result_chars: 200_000 } })
+    const project = document("project", { tool_output: { max_result_chars: 100 } })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info.tool_output).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["providers"])
+    expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "tool_output")).toEqual({
+      max_result_chars: 200_000,
+    })
+    // Control: trusted, the project's value stands.
+    expect<unknown>(Config.latest([user, project], "tool_output")).toEqual({ max_result_chars: 100 })
   })
 
   test("keeps a repository from masking the values the user set", () => {
