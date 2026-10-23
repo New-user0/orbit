@@ -3,8 +3,8 @@ import { onCleanup } from "solid-js"
 import { useConfig } from "../../config"
 import { createRecapTrigger } from "../../recap"
 
-// The away summary for the session in view: after the terminal has been unfocused for session.recap.after_minutes, the
-// session asks its server for one recap, which arrives as a `recap` message and is drawn in the transcript.
+// The away summary for the session in view. Once focus has been gone for session.recap.after_minutes, the session asks
+// its server for one recap, which arrives as a `recap` message and is drawn in the transcript.
 export default Plugin.define({
   id: "orbit.recap",
   setup(context) {
@@ -25,14 +25,17 @@ export default Plugin.define({
             return sessionID !== undefined && context.data.session.status(sessionID) === "running"
           },
           // At most one recap per turn of the person's input: a recap after their last prompt or `!` command means
-          // none is due, so a blur after it sends nothing. The server holds the same rule for every client.
+          // none is due, so a blur after it sends nothing. The store holds only the newest page of messages, so when
+          // that page has none of these the server decides; it holds the same rule for every client.
           due: () => {
             const sessionID = current()
             if (!sessionID) return false
-            const last = context.data.session.message
-              .list(sessionID)
-              .findLast((message) => message.type === "user" || message.type === "shell" || message.type === "recap")
-            return last !== undefined && last.type !== "recap"
+            return (
+              context.data.session.message
+                .list(sessionID)
+                .findLast((message) => message.type === "user" || message.type === "shell" || message.type === "recap")
+                ?.type !== "recap"
+            )
           },
           request: async (signal) => {
             const sessionID = current()

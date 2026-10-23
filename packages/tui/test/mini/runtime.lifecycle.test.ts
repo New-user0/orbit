@@ -261,9 +261,9 @@ describe("attention in Mini", () => {
   })
 })
 
-// clients-ux-27: Mini is an interactive client too, so it asks for the away summary as the full TUI does: once the
-// terminal has been blurred for session.recap.after_minutes, after the session's turn has ended, and never once the
-// person is back. The server decides whether a recap is due, so Mini sends only the request.
+// clients-ux-27: Mini is an interactive client too, so it asks for the away summary as the full TUI does: when focus
+// has been gone for session.recap.after_minutes, not before the session's turn is over, and never once the person is
+// back. The server decides whether a recap is due, so Mini sends only the request.
 describe("away summary in Mini", () => {
   async function recapHarness(afterMinutes = 0.001, answer?: () => Promise<void>) {
     const app = await createTestRenderer({
@@ -369,6 +369,34 @@ describe("away summary in Mini", () => {
       harness.app.renderer.emit("blur")
       await Bun.sleep(400)
       expect(harness.asked).toHaveLength(0)
+    }
+  })
+
+  // A session another client is running when Mini attaches sends no execution.started for Mini to see, so the status
+  // read when the session loads holds the request until the turn ends.
+  test("attaching to a session mid-turn holds the request until the turn ends", async () => {
+    {
+      using harness = await recapHarness()
+      harness.lifecycle.setRunning?.(true)
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+      harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect(harness.asked).toHaveLength(1)
+    }
+    {
+      // A reload that finds the turn over (it ended while Mini was disconnected) sends the held request.
+      using harness = await recapHarness()
+      harness.lifecycle.setRunning?.(true)
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+      harness.lifecycle.setRunning?.(false)
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect(harness.asked).toHaveLength(1)
     }
   })
 

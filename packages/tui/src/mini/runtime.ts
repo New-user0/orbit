@@ -815,6 +815,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         footer,
         onCommit: rememberLocal,
         onEvent: (event) => shell.observe?.(event),
+        onActive: (active) => shell.setRunning?.(active),
         onSessionTitle: (title) => {
           state.sessionTitle = title
           shell.setTitle(title)

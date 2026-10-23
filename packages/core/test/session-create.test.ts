@@ -1481,6 +1481,33 @@ describe("SessionTransfer", () => {
     }),
   )
 
+  // The away summary restates the person's task and next step, so a sanitized export redacts it like a prompt.
+  it.effect("a sanitized export redacts the away summary's text", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const template = yield* session.create({ location })
+      const sessionID = Session.ID.create()
+      const recapID = SessionMessage.ID.create()
+      yield* transfer.import({
+        data: {
+          info: { ...template, id: sessionID },
+          messages: [
+            { id: recapID, type: "recap", text: "Shipping the secret plan. Next: deploy.", time: { created: DateTime.makeUnsafe(1) } },
+          ],
+        },
+        location,
+      })
+
+      expect((yield* transfer.export({ sessionID })).messages).toMatchObject([
+        { id: recapID, type: "recap", text: "Shipping the secret plan. Next: deploy." },
+      ])
+      expect((yield* transfer.export({ sessionID, sanitize: true })).messages).toMatchObject([
+        { id: recapID, type: "recap", text: `[redacted:recap:${recapID}]` },
+      ])
+    }),
+  )
+
   it.effect("rejects an existing session ID without changing its transcript", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

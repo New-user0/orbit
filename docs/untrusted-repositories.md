@@ -842,7 +842,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Every server route that starts work, reads the folder's instruction files or runs something in a folder
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
   the destination of `move`, `generate`, `recap` (the away summary, which reads the session's history into a call on
-  the small model), `update` when it clears the title for the model to write one, `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
+  the small model, refused before that read), `update` when it clears the title for the model to write one,
+  `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
   Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
   class 3), `worktree.create` (the project's folder and the folder it is asked to make the worktree in), `remove` and
   `refresh`, `mcp.connect`, `mcp.add` (the working folder of a local server), `fs.write` (the Location and the folder
@@ -850,7 +851,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
-  `packages/sdk/test/trust-first.test.ts`.
+  `packages/sdk/test/trust-first.test.ts`, and for `recap` before the model call,
+  `packages/server/test/session-recap.test.ts`.
 - A plugin's session doors, which run in the server process without passing a route (`packages/core/src/plugin/host.ts`):
   `create` (the folder it names, or the parent's), `prompt`, `command`, `synthetic`, `compact` and `generate` (the
   session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not trusted, decided by

@@ -275,6 +275,8 @@ function sanitizeMessage(message: SessionMessage.Info): SessionMessage.Info {
     }
   if (message.type === "system") return { ...message, metadata: meta, text: redact("system", message.id, message.text) }
   if (message.type === "skill") return { ...message, metadata: meta, text: redact("skill", message.id, message.text) }
+  // The away summary restates the task and the next step, so it is transcript content like any other.
+  if (message.type === "recap") return { ...message, metadata: meta, text: redact("recap", message.id, message.text) }
   if (message.type === "shell")
     return {
       ...message,

@@ -554,6 +554,28 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
+  // The away summary waits for a turn that was already running when Mini attached, which only this read reveals.
+  test.each([true, false])("reports whether its session is running when it loads it (running: %s)", async (running) => {
+    const events = feed()
+    events.push(connected())
+    const seen: boolean[] = []
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        streams: [events],
+        active: (): Record<string, { type: "running" }> => (running ? { ses_1: { type: "running" } } : {}),
+        messages: { ses_1: [] },
+      }),
+      sessionID: "ses_1",
+      thinking: false,
+      footer: footer().api,
+      onActive: (active) => seen.push(active),
+    })
+    const deadline = Date.now() + 3000
+    while (seen.length === 0 && Date.now() < deadline) await Bun.sleep(5)
+    expect(seen).toEqual([running])
+    await transport.close()
+  })
+
   test("shows an active compaction boundary before live summary output without history replay", async () => {
     const events = feed()
     events.push(connected())

@@ -96,6 +96,8 @@ export type Lifecycle = {
   footer: FooterApi
   /** Reports a session event that may need the person, so Mini notifies like the TUI does. */
   observe?(event: { type: string; data?: unknown }): void
+  /** Whether Mini's own session is running a turn, as read from the server when the session is loaded or reloaded. */
+  setRunning?(active: boolean): void
   onResize(fn: () => void): () => void
   refreshTheme(): void
   setTitle(title?: string): void
@@ -223,8 +225,13 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     pending: () => footer.hasPending(),
   })
   renderer.keyInput.on("keypress", attentionEvents.keypress)
-  // Whether Mini's own session is running a turn, from the execution events it observes.
+  // Whether Mini's own session is running a turn: read from the server when the session loads, so a turn already under
+  // way when Mini attaches holds the recap, and then kept from the execution events Mini observes.
   let running = false
+  const setRunning = (active: boolean) => {
+    running = active
+    if (!active) recap?.idle()
+  }
   const recap = input.recap
     ? createRecapTrigger({
         renderer,
@@ -390,11 +397,10 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
           event.type === "session.execution.failed" ||
           event.type === "session.execution.interrupted") &&
         event.data.sessionID === (input.getSessionID?.() ?? input.sessionID)
-      ) {
-        running = event.type === "session.execution.started"
-        if (!running) recap?.idle()
-      }
+      )
+        setRunning(event.type === "session.execution.started")
     },
+    setRunning,
     refreshTheme() {
       footer.refreshTheme()
     },

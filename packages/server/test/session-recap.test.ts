@@ -73,7 +73,9 @@ const recordingModel = Effect.acquireRelease(
   (llm) => Effect.promise(() => llm.server.stop(true)),
 )
 
-const setup = Effect.gen(function* () {
+// The server trusts every folder, unless `granted` is set: then no folder is trusted until the repo is granted, so a
+// test can revoke it again.
+const setup = (options: { granted?: boolean } = {}) => Effect.gen(function* () {
   const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-recap-route-")))
   const root = yield* Effect.promise(() => fs.realpath(tmp.path))
   const folders = { config: path.join(root, "config"), repo: path.join(root, "repo") }
@@ -104,7 +106,8 @@ const setup = Effect.gen(function* () {
       }),
     )
   })
-  const server = yield* startServer(folders.config)
+  const server = yield* startServer(folders.config, options.granted ? { trust: { implicit: false } } : {})
+  if (options.granted) yield* Effect.promise(() => trust(server, folders.repo, true))
   const created = yield* Effect.promise(() =>
     request(server, "POST", "/api/session", { directory: folders.repo, body: { location: { directory: folders.repo } } }),
   )
@@ -123,11 +126,46 @@ const recaps = (server: Server, id: string) =>
     ((response.body?.data ?? []) as Array<{ type: string; text?: string }>).filter((message) => message.type === "recap"),
   )
 
+function trust(server: Server, directory: string, trusted: boolean) {
+  return request(server, "POST", "/api/location/trust", {
+    directory,
+    body: trusted ? { trust: true, persist: false } : { trust: false },
+  })
+}
+
+// Classes 1 and 12: the recap reads the session's history into a model call, so a folder revoked after the prompt gets
+// a refusal before that history is read, not a refusal after the call. The same request recaps once trust is back.
+it.live(
+  "a session whose folder was revoked after its prompt is refused before the model is asked, and recapped once trusted",
+  () =>
+    Effect.gen(function* () {
+      const { server, llm, id, folders } = yield* setup({ granted: true })
+      yield* Effect.promise(async () => {
+        const before = llm.bodies.length
+        expect((await trust(server, folders.repo, false)).status).toBe(200)
+        expect(await request(server, "POST", `/api/session/${id}/recap`, { body: {} })).toEqual({
+          status: 403,
+          body: expect.objectContaining({ _tag: "UntrustedFolderError", directory: folders.repo }),
+        })
+        expect(llm.bodies.length).toBe(before)
+        expect(await recaps(server, id)).toEqual([])
+
+        expect((await trust(server, folders.repo, true)).status).toBe(200)
+        expect(await request(server, "POST", `/api/session/${id}/recap`, { body: {} })).toEqual({
+          status: 200,
+          body: { recorded: true },
+        })
+        expect(llm.bodies.length).toBe(before + 1)
+      })
+    }),
+  60_000,
+)
+
 it.live(
   "the recap route records one recap per user turn and sends the model no tools and no system prompt",
   () =>
     Effect.gen(function* () {
-      const { server, llm, id } = yield* setup
+      const { server, llm, id } = yield* setup()
       yield* Effect.promise(async () => {
         const before = llm.bodies.length
         const first = await request(server, "POST", `/api/session/${id}/recap`, { body: {} })
@@ -159,7 +197,7 @@ it.live(
 
 it.live("a session that does not exist answers 404 and asks no model", () =>
   Effect.gen(function* () {
-    const { server, llm } = yield* setup
+    const { server, llm } = yield* setup()
     yield* Effect.promise(async () => {
       const before = llm.bodies.length
       expect(await request(server, "POST", "/api/session/ses_recap_missing/recap", { body: {} })).toEqual({
@@ -176,7 +214,7 @@ it.live(
   "a recap request the client drops records nothing, as the reference drops a recap when the person comes back",
   () =>
     Effect.gen(function* () {
-      const { server, llm, id } = yield* setup
+      const { server, llm, id } = yield* setup()
       yield* Effect.promise(async () => {
         llm.state.hold = Promise.withResolvers<void>()
         llm.state.started = Promise.withResolvers<void>()

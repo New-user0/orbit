@@ -1,6 +1,5 @@
-// clients-ux-27: the away summary in the terminal UI. After the terminal has been blurred for
-// `session.recap.after_minutes` (cli.json, default 5, 0 turns it off), the session in view asks the server for a recap
-// once; the recap is drawn as a dimmed `※` row through the body sanitizer. A refocus cancels the timer and drops a
+// clients-ux-27: the away summary in the terminal UI. Once focus has been gone for `session.recap.after_minutes`
+// (cli.json, default 5, 0 turns it off), the session in view asks the server for a recap once; the recap is drawn as a dimmed `※` row through the body sanitizer. A refocus cancels the timer and drops a
 // request in flight, a turn in progress defers it to the turn's end, and a terminal that never reports focus never asks.
 import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
@@ -21,6 +20,8 @@ async function start(input: {
   messages: Message[]
   afterMinutes?: number
   width?: number
+  /** Text the first frame shows once the transcript has loaded. */
+  ready?: string
   /** What the recap route does with a request; the default records it. */
   recap?: (request: Request) => Response | Promise<Response>
 }) {
@@ -41,8 +42,15 @@ async function start(input: {
   const calls = createFetch(async (url, request) => {
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-    if (url.pathname === `/api/session/${sessionID}/message`)
-      return json({ data: input.messages.toReversed(), cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/message`) {
+      // Pages newest first, as the server does, so a long session's first page can leave its last prompt out.
+      const offset = Number(url.searchParams.get("cursor") ?? 0)
+      const end = offset + Number(url.searchParams.get("limit") ?? input.messages.length)
+      return json({
+        data: input.messages.toReversed().slice(offset, end),
+        cursor: end < input.messages.length ? { next: String(end) } : {},
+      })
+    }
     if (url.pathname.endsWith("/inbox") || url.pathname.endsWith("/permission")) return json({ data: [] })
     if (request.method === "POST" && url.pathname === `/api/session/${sessionID}/recap`) {
       requests.push(request)
@@ -68,7 +76,7 @@ async function start(input: {
       log: () => {},
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
-  await setup.waitForFrame((frame) => frame.includes("Fix the build"))
+  await setup.waitForFrame((frame) => frame.includes(input.ready ?? "Fix the build"))
   let seq = 100
   return {
     ...setup,
@@ -148,6 +156,24 @@ test("after the delay the session asks for one recap, and blur cycles with no ne
   app.blur()
   await Bun.sleep(400)
   expect(app.requests).toHaveLength(1)
+})
+
+// The client loads only the newest page of a long session, so a prompt behind many steps or notices is not in it. The
+// server holds the transcript and decides, as the reference, which holds the whole transcript, would ask.
+test("a prompt older than the loaded page of messages still lets the session ask", async () => {
+  const notices = Array.from(
+    { length: 30 },
+    (_, index): Message => ({
+      id: `msg_notice_${index + 2}`,
+      type: "synthetic",
+      text: `notice ${index + 2}`,
+      description: `notice ${index + 2}`,
+      time: { created: index + 2 },
+    }),
+  )
+  await using app = await start({ messages: [user("Fix the build"), ...notices], ready: "notice 31" })
+  app.blur()
+  expect(await until(() => app.requests.length === 1)).toBe(true)
 })
 
 test("a session resumed with a recap after its last prompt asks for none", async () => {

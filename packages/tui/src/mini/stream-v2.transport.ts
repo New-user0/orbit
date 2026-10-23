@@ -56,6 +56,8 @@ type StreamInput = {
   onSessionTitle?: (title: string) => void
   /** Sees every live event of the session tree, for attention notifications. */
   onEvent?: (event: RunV2Event) => void
+  /** Whether the session is running a turn, each time the transport loads or reloads it. */
+  onActive?: (active: boolean) => void
   trace?: Trace
   signal?: AbortSignal
   onCatalogRefresh?: (signal?: AbortSignal) => unknown | Promise<unknown>
@@ -1003,6 +1005,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       ? globals.data.filter((form) => form.sessionID === "global").map((form) => globalForm(form, globals.location))
       : []
     state.rootActive = input.sessionID in active
+    input.onActive?.(state.rootActive)
     syncBlockers()
     await subagents.hydrate({
       sdk: client,
