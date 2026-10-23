@@ -14,6 +14,7 @@ import { SessionProviderContext } from "./provider-context.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionReminders } from "./reminders.js"
 import type { SessionRunnerModel } from "./runner/model.js"
+import { toLLMMessages } from "./runner/to-llm-message.js"
 import { SessionEvent } from "./event.js"
 import type { SessionSchema } from "./schema.js"
 import { SessionUsage } from "./usage.js"
@@ -48,6 +49,34 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
     system: base.system,
     messages: [...base.messages, ...(history.instructionUpdate ? [Message.system(history.instructionUpdate)] : [])],
   }
+})
+
+/**
+ * The last `count` messages of the settled Session history, lowered for `model` as the runner lowers them, with no
+ * system prompt, instructions or system message. The window never opens on a tool result whose call it cut off.
+ */
+export const recent = Effect.fn("SessionGenerate.recent")(function* (
+  sessionID: SessionSchema.ID,
+  model: SessionRunnerModel.Resolved,
+  count: number,
+) {
+  const database = yield* Database.Service
+  const messages = yield* SessionHistory.load(
+    database.db,
+    sessionID,
+    SessionProviderContext.provenance(model) ?? "local",
+  )
+  // An active assistant may hold a tool call that has no result yet, so only the settled prefix is sent.
+  const unsettled = messages.findIndex((message) => message.type === "assistant" && message.time.completed === undefined)
+  const window = toLLMMessages(
+    unsettled === -1 ? messages : messages.slice(0, unsettled),
+    model.ref,
+    model.model.route.providerMetadataKey ?? model.model.provider,
+  )
+    .filter((message) => message.role !== "system")
+    .slice(-count)
+  const start = window.findIndex((message) => message.role !== "tool")
+  return start === -1 ? [] : window.slice(start)
 })
 
 /** Generates text from current Session context without mutating the Session. */

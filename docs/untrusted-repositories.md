@@ -841,8 +841,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/acp/trust-first.subprocess.test.ts`, `packages/tui/test/mini/trust-first.shared.test.ts`.
 - Every server route that starts work, reads the folder's instruction files or runs something in a folder
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
-  the destination of `move`, `generate`, `update` when it clears the title for the model to write one,
-  `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
+  the destination of `move`, `generate`, `recap` (the away summary, which reads the session's history into a call on
+  the small model), `update` when it clears the title for the model to write one, `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
   Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
   class 3), `worktree.create` (the project's folder and the folder it is asked to make the worktree in), `remove` and
   `refresh`, `mcp.connect`, `mcp.add` (the working folder of a local server), `fs.write` (the Location and the folder

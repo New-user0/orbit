@@ -530,7 +530,6 @@ describe("V2 mini transport", () => {
       footer: ui.api,
     })
 
-    // @ts-expect-error clients-ux-27 adds the event; remove the directive with the build.
     events.push({
       id: "evt_recap_live",
       created: 3,

@@ -257,6 +257,7 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
         appendMessage(event.id.replace(/^evt_/, "msg_"))
     }),
     data.on("session.shell.started", message),
+    data.on("session.recap.recorded", message),
     data.on("session.agent.selected", message),
     data.on("session.model.selected", message),
     data.on("session.text.delta", (event) => {

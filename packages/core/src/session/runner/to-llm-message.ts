@@ -393,6 +393,8 @@ function toLLMMessage(
   switch (message.type) {
     case "agent-switched":
     case "idle":
+    // The away summary is written for the person, never for a model.
+    case "recap":
       return []
     case "model-switched":
       return modelSwitched(message, model)

@@ -52,13 +52,10 @@ async function start(input: {
   }, events)
   const server = Bun.serve({ port: 0, idleTimeout: 0, fetch: (request) => calls.fetch(request) })
   const { run } = await import("../../src/app")
-  const config: Config.Info = {
+  const config = {
     animations: false,
-    tabs: { mode: "off" },
-    session: {
-      // @ts-expect-error clients-ux-27 adds session.recap; remove the directive with the build.
-      recap: { after_minutes: input.afterMinutes ?? delay },
-    },
+    tabs: { mode: "off" as const },
+    session: { recap: { after_minutes: input.afterMinutes ?? delay } },
   }
   const task = Effect.runPromise(
     run({
@@ -80,7 +77,6 @@ async function start(input: {
     focus: () => setup.renderer.emit("focus"),
     recorded(text: string) {
       seq++
-      // @ts-expect-error clients-ux-27 adds the event; remove the directive with the build.
       events.emit({
         id: `evt_recap_${seq}`,
         created: Date.now(),
@@ -128,11 +124,10 @@ async function until(check: () => boolean, ms = 3000) {
 }
 
 test("session.recap.after_minutes defaults to the reference's five minutes and takes 0 to turn the recap off", () => {
-  const resolved = (input: unknown) => Config.resolve(input as Config.Info, { terminalSuspend: true }).session
-  // @ts-expect-error clients-ux-27 adds session.recap; remove the directive with the build.
-  expect(resolved({}).recap.after_minutes).toBe(5)
-  // @ts-expect-error clients-ux-27 adds session.recap; remove the directive with the build.
-  expect(resolved({ session: { recap: { after_minutes: 0 } } }).recap).toEqual({ after_minutes: 0 })
+  expect(Config.resolve({}, { terminalSuspend: true }).session.recap.after_minutes).toBe(5)
+  expect(Config.resolve({ session: { recap: { after_minutes: 0 } } }, { terminalSuspend: true }).session.recap).toEqual({
+    after_minutes: 0,
+  })
   const decode = Schema.decodeUnknownOption(Config.Info)
   expect(decode({ session: { recap: { after_minutes: 2.5 } } })._tag).toBe("Some")
   expect(decode({ session: { recap: { after_minutes: -1 } } })._tag).toBe("None")

@@ -57,12 +57,21 @@ export interface TextInput {
   /** Instructions for the model. With `history`, they follow the Session's own system prompt. */
   readonly system: string
   readonly prompt: string
-  /** `small` (default) prefers the small model of the Session's provider; `primary` uses the Session's model. */
-  readonly model?: "small" | "primary"
-  /** Sends the Session's settled transcript before the prompt. Off by default. */
-  readonly history?: boolean
+  /**
+   * `small` (default) prefers the small model of the Session's provider; `primary` uses the Session's model.
+   * `small-only` takes the side agent's own model or the small model, and is unavailable when there is neither.
+   */
+  readonly model?: "small" | "primary" | "small-only"
+  /**
+   * Sends the Session's settled transcript before the prompt. Off by default. `{ recent }` sends only its last
+   * `recent` messages, with no system prompt at all (`system` and what plugin hooks add are dropped) and no tool
+   * definitions.
+   */
+  readonly history?: boolean | { readonly recent: number }
   /** Defaults to 30 seconds. */
   readonly timeout?: Duration.Duration
+  /** The request's prompt cache policy; the provider's default when absent. */
+  readonly cache?: LLMRequest["cache"]
 }
 
 export interface ObjectInput<S extends Tool.ToolSchema<any>> extends TextInput {
@@ -118,10 +127,19 @@ export const layer = Layer.effect(
         yield* Plugin.awaitActivation
         const context = yield* SessionContext.Service
         const auxiliary = yield* context.selectAuxiliary(session, SIDE)
-        const model = input.model === "primary" ? auxiliary?.primary : auxiliary?.selected
+        const model =
+          input.model === "primary"
+            ? auxiliary?.primary
+            : input.model === "small-only"
+              ? auxiliary?.preferred
+              : auxiliary?.selected
         if (!model) return yield* new UnavailableError({ message: "No model is available for a side query" })
-        const selection = input.history ? yield* context.select(session.id) : undefined
-        const history = selection ? yield* SessionGenerate.transcript(selection, model) : undefined
+        const selection = input.history === true ? yield* context.select(session.id) : undefined
+        const history = selection
+          ? yield* SessionGenerate.transcript(selection, model)
+          : typeof input.history === "object"
+            ? { system: [], messages: yield* SessionGenerate.recent(session.id, model, input.history.recent) }
+            : undefined
         const prepared = yield* context.request.generate({
           session,
           agent: SIDE,
@@ -132,7 +150,7 @@ export const layer = Layer.effect(
           system: [...(history?.system ?? []), ...(input.system ? [SystemPart.make(input.system)] : [])],
           messages: [...(history?.messages ?? []), Message.user(input.prompt)],
         })
-        const request = tool
+        const chosen = tool
           ? LLMRequest.update(prepared.request, {
               tools: [...prepared.request.tools, ...toDefinitions({ [RESULT_TOOL]: tool })],
               toolChoice: ToolChoice.named(RESULT_TOOL),
@@ -140,6 +158,12 @@ export const layer = Layer.effect(
           : prepared.request.tools.length > 0
             ? LLMRequest.update(prepared.request, { toolChoice: ToolChoice.make("none") })
             : prepared.request
+        // A recent window goes out bare: the system parts that `generate` hooks add, such as the model's identity, are
+        // dropped with the Session's own.
+        const request = LLMRequest.update(chosen, {
+          ...(typeof input.history === "object" ? { system: [] } : {}),
+          ...(input.cache ? { cache: input.cache } : {}),
+        })
         // A call the deadline cuts off was probably billed, and its usage never arrives: the whole prompt and, with no
         // reply to measure, the largest reply the request allows.
         sent = SessionUsage.estimate(model.cost, {

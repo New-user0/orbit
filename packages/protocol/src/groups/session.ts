@@ -752,6 +752,22 @@ export const makeSessionGroup = <
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.recap", "/api/session/:sessionID/recap", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ recorded: Schema.Boolean }).annotate({ identifier: "SessionRecapResponse" }),
+        error: [SessionNotFoundError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.recap",
+            summary: "Record an away summary",
+            description:
+              "Ask the small model for a short recap of the session for a person returning to it, at most once per turn of their input. Answers recorded: false when no recap was due, another request is writing one, no small model is available, or the call failed.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.log", "/api/experimental/session/:sessionID/log", {
         params: { sessionID: Session.ID },
         query: {

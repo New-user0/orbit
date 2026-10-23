@@ -419,6 +419,11 @@ function skillCommits(messageID: string, skills: FooterQueuedPrompt["skills"] = 
   )
 }
 
+// The away summary, led by the reference mark the full TUI draws in its gutter.
+function recapCommit(messageID: string, text: string): StreamCommit {
+  return { kind: "system", source: "system", messageID, partID: "recap", text: `※ ${text}`, phase: "start" }
+}
+
 function compactionCommit(messageID: string): StreamCommit {
   return {
     kind: "system",
@@ -824,6 +829,12 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (completed && state.shellWait?.id === message.shellID) state.shellWait.resolve()
       return
     }
+    if (message.type === "recap") {
+      const visible = state.messageIDs.has(message.id)
+      state.messageIDs.add(message.id)
+      if (render && !visible) write([recapCommit(message.id, message.text)])
+      return
+    }
     if (message.type === "compaction") {
       const visible = state.messageIDs.has(message.id)
       state.messageIDs.add(message.id)
@@ -1085,6 +1096,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     if (event.type === "session.step.started") {
       state.stepModel = { providerID: event.data.model.providerID, modelID: event.data.model.id }
       write([], { phase: "running", status: "assistant responding" })
+      return
+    }
+    if (event.type === "session.recap.recorded") {
+      const messageID = messageIDFromEvent(event.id)
+      if (state.messageIDs.has(messageID)) return
+      state.messageIDs.add(messageID)
+      write([recapCommit(messageID, event.data.text)])
       return
     }
     if (event.type === "session.skill.activated") {

@@ -171,6 +171,15 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
           }),
         )
       },
+      "session.recap.recorded": (event) =>
+        adapter.appendMessage(
+          SessionMessage.Recap.make({
+            id: SessionMessage.ID.fromEvent(event.id),
+            type: "recap",
+            text: event.data.text,
+            time: { created },
+          }),
+        ),
       "session.skill.activated": (event) => {
         return adapter.appendMessage(
           SessionMessage.Skill.make({

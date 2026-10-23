@@ -312,6 +312,20 @@ export const Synthetic = Event.durable({
 })
 export type Synthetic = typeof Synthetic.Type
 
+// The away summary: a short recap for a person returning to the session, written by a small model. Only its text is
+// recorded; where it falls in the history says which turn it summarizes.
+export const RecapRecorded = Event.durable({
+  type: "session.recap.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    text: Schema.String.annotate({
+      description: "The recap, with control and bidirectional characters already written out as escapes.",
+    }),
+  },
+})
+export type RecapRecorded = typeof RecapRecorded.Type
+
 export namespace Skill {
   export const Activated = Event.durable({
     type: "session.skill.activated",
@@ -697,6 +711,7 @@ export const Definitions = Event.inventory(
   Execution.Interrupted,
   InstructionsUpdated,
   Synthetic,
+  RecapRecorded,
   Skill.Activated,
   Shell.Started,
   Shell.Ended,
