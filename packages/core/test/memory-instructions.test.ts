@@ -454,6 +454,36 @@ describe("memory written before v2", () => {
         expect(out.text).toContain("Saved before trust")
       }),
     )
+
+  // Class 4: the carry-over adds its lines to MEMORY.md only when that file's real path is in the folder, so a MEMORY.md
+  // that links out of it is not written through. The rows above, whose index is a plain file, are the control.
+  if (canLinkFile)
+    it.live("adds nothing to a MEMORY.md that is a link to a file outside the folder", () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const trustedID = Project.ID.make("b".repeat(40))
+        const target = path.join(l.data, "memory", trustedID)
+        const outside = path.join(l.root, "outside", "notes.md")
+        yield* write(path.join(l.data, "memory", pathID(canonical), "before-trust.md"), "# Saved before trust\n")
+        yield* write(outside, "OUTSIDE-MARKER\n")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(target, { recursive: true })
+          await fs.symlink(outside, path.join(target, "MEMORY.md"))
+        })
+        yield* Effect.gen(function* () {
+          yield* sessions(l)
+          yield* readInitial(yield* load(first, { guide: false }))
+        }).pipe(
+          provide(l, [], {
+            directory: canonical,
+            project: { id: trustedID, directory: canonical, canonical },
+            vcs: undefined,
+          }),
+        )
+        expect(yield* exists(path.join(target, "before-trust.md"))).toBe(true)
+        expect(yield* Effect.promise(() => fs.readFile(outside, "utf8"))).toBe("OUTSIDE-MARKER\n")
+      }),
+    )
 })
 
 // The carry-over and the old tool's notes belong to the default folder: a folder that memory.directory names may be
