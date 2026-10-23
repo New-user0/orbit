@@ -63,7 +63,8 @@ test("orb doctor reports Tachyon settings by name and probes the configured mode
   const origin = `http://127.0.0.1:${mock.server.port}`
   const local = await run(origin, {}, ["doctor"])
   expect(local.stdout).toMatch(/ok tachyon\s+set: TACHYON_CHAT_COMPLETION_BASE_URL/)
-  expect(local.stdout).toMatch(/ok git\s+\S*git/)
+  // The path may hold spaces (C:\Program Files\Git\...), so the line is matched up to its end.
+  expect(local.stdout).toMatch(/ok git\s+[^\r\n]*git/)
   expect(local.stdout).not.toContain("api-key")
   expect(mock.calls).toEqual([])
 
