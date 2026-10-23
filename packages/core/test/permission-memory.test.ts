@@ -9,7 +9,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer, Schema } from "effect"
-import { Document, Info, type Scope } from "@orbit/schema/config"
+import { Document, Info, type Entry, type Scope } from "@orbit/schema/config"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Agent } from "@orbit/core/agent"
@@ -67,7 +67,7 @@ const configured = (scope: Scope, memory: Record<string, unknown>) =>
     info: decodeInfo({ memory }),
   })
 
-const provide = (l: Layout, global: Partial<Global.Interface> = {}, entries: Config.Entry[] = []) =>
+const provide = (l: Layout, global: Partial<Global.Interface> = {}, entries: Entry[] = []) =>
   Effect.provide(
     AppNodeBuilder.build(
       LayerNode.group([

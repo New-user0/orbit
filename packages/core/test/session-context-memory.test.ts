@@ -30,7 +30,7 @@ import { SessionSchema } from "@orbit/core/session/schema"
 import { SessionStore } from "@orbit/core/session/store"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Tool } from "@orbit/core/tool"
-import { Document, Info } from "@orbit/schema/config"
+import { Document, Info, type Entry } from "@orbit/schema/config"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
@@ -72,7 +72,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
     ),
 })
 
-const harness = (entries: Config.Entry[] = []) =>
+const harness = (entries: Entry[] = []) =>
   testEffect(
     AppNodeBuilder.build(
       LayerNode.group([

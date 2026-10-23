@@ -10,7 +10,7 @@ import path from "path"
 import { Effect, Layer, Schema } from "effect"
 import { $ } from "bun"
 import { Hash } from "@orbit/util/hash"
-import { Document, Info, type Scope } from "@orbit/schema/config"
+import { Document, Info, type Entry, type Scope } from "@orbit/schema/config"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Bus } from "@orbit/core/bus"
@@ -67,7 +67,7 @@ type Layout = Effect.Success<typeof layout>
 
 const provide = (
   l: Layout,
-  entries: Config.Entry[] = [],
+  entries: Entry[] = [],
   bound: Location.Interface = {
     directory: AbsolutePath.make(l.project),
     project: {

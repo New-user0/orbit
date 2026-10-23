@@ -6,7 +6,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer, Schema } from "effect"
-import { Document, Info } from "@orbit/schema/config"
+import { Document, Info, type Entry } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -64,7 +64,7 @@ const readToolNode = makeLocationNode({
   ],
 })
 
-const harness = (entries: Config.Entry[] = []) => {
+const harness = (entries: Entry[] = []) => {
   const config = Config.testLayer(entries)
   return testEffect(
     AppNodeBuilder.build(
