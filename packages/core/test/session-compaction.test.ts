@@ -210,7 +210,7 @@ test("compaction prompts prohibit task execution", () => {
     expect(SessionCompaction.buildPrompt(update)).toContain("Do not continue the task or call tools")
 })
 
-it.effect("auto compaction estimates current content against the buffered prompt ceiling", () =>
+it.effect("auto compaction estimates current content against the threshold below the effective window", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service
     const session = yield* insertSession(Session.ID.make("ses_input_limit"))
@@ -248,27 +248,27 @@ it.effect("auto compaction estimates current content against the buffered prompt
     const due = (context: SessionContext.Loaded) =>
       compaction.compact({ reason: "auto", context }).pipe(Effect.map((outcome) => outcome.status !== "skipped"))
 
-    // 90% of the input limit, which takes precedence over the context window.
+    // The input limit takes precedence over the context window.
     const inputLimited = { context: 400_000, input: 272_000, output: 128_000 }
-    expect(yield* due(input(244_799, inputLimited))).toBe(false)
-    expect(yield* due(input(244_800, inputLimited))).toBe(true)
+    expect(yield* due(input(238_999, inputLimited))).toBe(false)
+    expect(yield* due(input(239_000, inputLimited))).toBe(true)
     const native = (tokens: number, limit: { context: number; input?: number; output: number } = inputLimited) => {
       const selected = input(tokens, limit)
       return { ...selected, model: { ...selected.model, compaction: { type: "native" as const } } }
     }
-    expect(yield* due(native(244_799))).toBe(false)
-    expect(yield* due(native(244_800))).toBe(true)
+    expect(yield* due(native(238_999))).toBe(false)
+    expect(yield* due(native(239_000))).toBe(true)
     expect(yield* due(native(1_000_000, { context: 0, input: undefined, output: 0 }))).toBe(false)
 
-    // The summary's 16k output limit is more than 10% of a 100k window, so it sets the ceiling.
+    // The summary keeps the model's 10k output limit free and 13k more below that.
     const contextLimited = { context: 100_000, output: 10_000 }
-    expect(yield* due(input(83_999, contextLimited))).toBe(false)
-    expect(yield* due(input(84_000, contextLimited))).toBe(true)
+    expect(yield* due(input(76_999, contextLimited))).toBe(false)
+    expect(yield* due(input(77_000, contextLimited))).toBe(true)
 
-    // The reply limit does not lower the ceiling.
+    // A larger output limit keeps no more than 20k free.
     const outputLimited = { context: 100_000, output: 30_000 }
-    expect(yield* due(input(83_999, outputLimited))).toBe(false)
-    expect(yield* due(input(84_000, outputLimited))).toBe(true)
+    expect(yield* due(input(66_999, outputLimited))).toBe(false)
+    expect(yield* due(input(67_000, outputLimited))).toBe(true)
 
     const assistant = input(89_000, contextLimited).messages[0]
     const tool = SessionMessage.AssistantTool.make({
