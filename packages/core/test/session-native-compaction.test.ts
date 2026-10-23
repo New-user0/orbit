@@ -517,6 +517,8 @@ for (const [name, endpoint, flag, records] of [
       for (const row of rows) {
         expect(row.source).toBe("compaction")
         expect(row.tokens_input).toBeGreaterThan(0)
+        // The estimate covers the request, which is the base prompt and a few lines of text, and nothing more.
+        expect(row.tokens_input).toBeLessThan(2_500)
         expect(row.tokens_output).toBe(0)
       }
     }),

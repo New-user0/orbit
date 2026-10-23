@@ -170,6 +170,8 @@ describe("context state", () => {
     [{ context: 16_384, output: 16_384 }, 8_192],
     [{ context: 16_384, output: 0 }, 8_192],
     [{ context: 8_192, output: 0 }, 4_096],
+    // The half-window bound follows the input limit, not the larger context window.
+    [{ context: 100_000, input: 16_384, output: 0 }, 8_192],
   ] as const)
     test(`keeps the effective window of ${limit.context} tokens with an output limit of ${limit.output} at ${effective}`, () => {
       expect(SessionContextWindow.thresholds({ limit })?.effective).toBe(effective)

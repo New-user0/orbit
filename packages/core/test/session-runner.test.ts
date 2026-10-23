@@ -10643,6 +10643,47 @@ describe("context accounting", () => {
     expect(s.requests[0]?.generation?.maxTokens).toBe(8_000)
   })
 
+  for (const [usage, compacts] of [
+    [175_000, false],
+    [178_000, true],
+  ] as const)
+    scenario(`compacts at the configured buffer below the effective window: ${usage} ${compacts}`, function* (s) {
+      const compaction = yield* SessionCompaction.Service
+      yield* compaction.transform((editor) => editor.configure({ buffer: 2_000 }))
+      yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "buffer-first", usage))
+      yield* s.runPrompt("Earlier question")
+      yield* s.llm.push(...(compacts ? [summary("buffer")] : []), TestLLM.text("Continued", "buffer-final"))
+      yield* s.runPrompt("Next question")
+
+      expect((yield* compactions(s)).map((message) => message.status)).toEqual(compacts ? ["completed"] : [])
+    })
+
+  // The first check finds the request under the threshold of the primary model, which leaves it open: the fallback's
+  // smaller window finds the same conversation due.
+  scenario("checks again for compaction after a switch to a smaller fallback model", function* (s) {
+    const previous = modelLimits.get("replacement")
+    modelLimits.set("replacement", { context: 40_000, output: 32_000 })
+    const fallbackModel = { providerID: Provider.ID.make("fake"), id: ID.make("replacement") }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => modelLimits.set("replacement", previous ?? defaultModelLimit)),
+    )
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "fallback-first", 30_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(summary("fallback"), TestLLM.text("Recovered", "fallback-final"))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (let index = 0; index < 2; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    yield* Fiber.join(run)
+
+    expect(yield* compactions(s)).toMatchObject([{ status: "completed", reason: "auto" }])
+  })
+
   scenario("sends the request uncompacted when automatic compaction fails", function* (s) {
     yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "failed-first", 185_000))
     yield* s.runPrompt("Earlier question")
