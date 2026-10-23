@@ -405,6 +405,41 @@ describe("names and folders from IDs that someone else chose", () => {
       }),
     )
 
+  // `SessionMessage.ID` checks only the `msg_` prefix, and an imported session keeps the message IDs its file holds.
+  for (const messageID of ["msg_../../../escape", "msg_a\\..\\..\\..\\escape", `msg_${"m".repeat(65)}`])
+    it.live(`writes nothing for the message ${JSON.stringify(messageID)}, whose ID cannot name a file`, () =>
+      Effect.gen(function* () {
+        const big = "g".repeat(60_000)
+        const run = yield* runStep({
+          assistantMessageID: SessionMessage.ID.make(messageID),
+          calls: [{ id: "call_message" }],
+          execute: returns([text(big)]),
+        })
+        // Control: the result still reaches the store, whole and unmarked.
+        expect(run.settled("call_message")?.content).toEqual([text(big)])
+        expect(run.settled("call_message")?.metadata?.persisted).toBeUndefined()
+        expect(run.rootEntries.sort()).toEqual(["data"])
+        expect(run.files).toEqual([])
+      }),
+    )
+
+  it.live("writes nothing through a tool-output folder that is a link, and sends the result whole", () =>
+    Effect.gen(function* () {
+      const big = "k".repeat(60_000)
+      const run = yield* runStep({
+        calls: [{ id: "call_root_link" }],
+        execute: returns([text(big)]),
+        prepare: async ({ data, root }) => {
+          await fs.mkdir(path.join(root, "outside"), { recursive: true })
+          await fs.symlink(path.join(root, "outside"), path.join(data, "tool-output"), linkType)
+        },
+      })
+      expect(yield* Effect.promise(() => fs.readdir(path.join(run.root, "outside")))).toEqual([])
+      expect(run.settled("call_root_link")?.content).toEqual([text(big)])
+      expect(run.settled("call_root_link")?.metadata?.persisted).toBeUndefined()
+    }),
+  )
+
   it.live("writes nothing through a session folder that is a link, and sends the result whole", () =>
     Effect.gen(function* () {
       const big = "j".repeat(60_000)
