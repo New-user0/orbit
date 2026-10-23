@@ -704,6 +704,19 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   spellings), `test/formatter.test.ts`, and `test/tool-lsp.test.ts` (the `LSP` tool's new actions refused while the folder
   is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
+- The file-change reminder (`FileChangeReminder`, `packages/core/src/file-change-reminder.ts`) reads again, at each
+  logical step, a file the session wrote, and on the first step of a session in a process it rebuilds what the session
+  saw from the history it is given, which `orb session import` can bring from a file or URL. Both resolve a path once
+  with the read tool's resolver (`FileAccess.locate`: a share or device spelling is refused before any disk is read,
+  then a device or, outside Windows, anything but a file or folder), and check and read that same target. The re-read
+  (`FileChangeReminder.gate`) asks `ProjectTrust.reachable` on it at every step, and `Permission.denied` for `Read` on
+  the file and on where a link now leads, and for the `external_directory` request of a file outside the project; a
+  refusal skips the file silently and keeps it. The rebuild keeps only a file inside the project that `reachable`
+  accepts, and reads from disk only for an `Edit` in history. The path and the changed lines go only in the reminder's
+  data block. Proof: the "re-read gate" and "rebuild after a restart" rows of `test/durable-reminders.test.ts` (an outside
+  file after a revoke, a project file swapped for a link out, a dangling link, a deny on a link's target, an
+  `external_directory` deny, outside spellings in history including `~`, `..` and shares, and a pipe marker server and
+  device names that are never opened). The link rows need links, so they run on Linux or with Developer Mode.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder. It skips an empty or relative `PATH` entry such as `.`, so the working folder is reached only through

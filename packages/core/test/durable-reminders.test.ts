@@ -11,6 +11,7 @@ import { Config } from "@orbit/core/config"
 import { Database } from "@orbit/core/database/database"
 import { Environment } from "@orbit/core/environment/index"
 import { FileAccess } from "@orbit/core/file-access"
+import { FileChangeReminder } from "@orbit/core/file-change-reminder"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { FileMutation } from "@orbit/core/file-mutation"
 import { Formatter } from "@orbit/core/formatter"
@@ -166,6 +167,7 @@ const graph = AppNodeBuilder.build(
     ManagedPolicy.node,
     Permission.node,
     SessionReminders.node,
+    Environment.node,
   ]),
   [
     LspDiagnostics.node.replace(Layer.succeed(LspDiagnostics.Service, diagnostics)),
@@ -425,6 +427,30 @@ describe("the file-change reminder", () => {
     }),
   )
 
+  // Builder's row: a byte order mark is not part of the first line, whether the session's write or history holds it.
+  it.live("a byte order mark is no change", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("marked.txt")
+      const seeded = h.inside("seeded.txt")
+      const bom = String.fromCharCode(0xfeff)
+      const changed = twenty.map((line) => (line === "line20" ? "last" : line))
+      yield* h.write(file, bom + text(twenty))
+      yield* h.change(file, bom + text(changed))
+      yield* h.change(seeded, bom + text(changed))
+      const messages = history([
+        assistant("msg_0000000001", [
+          toolPart("c1", "Write", { file_path: seeded, content: bom + text(twenty) }, {}, T(60)),
+        ]),
+      ])
+      const rows = yield* h.changes(messages)
+      expect(contentOf(rows, [file, seeded])).toEqual([
+        numbered(12, changed.slice(11)).join("\n"),
+        numbered(12, changed.slice(11)).join("\n"),
+      ])
+    }),
+  )
+
   it.live("watches only what the session wrote: a file it only read is not reported, and a read after a write ends it", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -625,6 +651,28 @@ describe("the snippet of a change", () => {
       expect(rows[0].content).toBe([...full.slice(0, kept), `[${1_000 - kept} more lines not shown]`].join("\n"))
     }),
   )
+
+  // Builder's row: a snippet a little over the cap, not only one several times its size, is cut at the cap.
+  it.live("cuts a snippet that is only a little over 8,192 characters", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("medium.txt")
+      const after = Array.from({ length: 400 }, () => "y".repeat(20))
+      yield* h.write(file, text(Array.from({ length: 400 }, () => "x".repeat(20))))
+      yield* h.change(file, text(after))
+      const full = numbered(1, after)
+      expect(full.join("\n").length).toBeGreaterThan(8_192)
+      expect(full.join("\n").length).toBeLessThan(2 * 8_192)
+      const kept = full.reduce(
+        (count, _line, index) => (full.slice(0, index + 1).join("\n").length <= 8_192 ? index + 1 : count),
+        0,
+      )
+      const rows = yield* h.changes()
+      expect(rows.map((row) => row.content)).toEqual(
+        [[...full.slice(0, kept), `[${400 - kept} more lines not shown]`].join("\n")],
+      )
+    }),
+  )
 })
 
 describe("the re-read gate (class 4, 7)", () => {
@@ -765,6 +813,43 @@ describe("the re-read gate (class 4, 7)", () => {
       yield* h.stamp(broken)
       yield* h.change(fine, text(["changed"]))
       expect(labels(yield* h.changes())).toEqual([expect.stringContaining(fine)])
+    }),
+  )
+
+  // Builder's row: a defect while one file is checked (the reader dies for it) is logged and costs only that file.
+  it.live("a defect while one file is checked costs only that file", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const broken = h.inside("broken.txt")
+      const fine = h.inside("fine.txt")
+      yield* h.write(broken, text(twenty))
+      yield* h.write(fine, text(twenty))
+      yield* h.change(broken, text(["changed"]))
+      yield* h.change(fine, text(["changed"]))
+      const reader = yield* ReadToolFileSystem.Service
+      const agents = yield* Agent.Service
+      const producer = FileChangeReminder.durable({
+        ledger: h.ledger,
+        access: yield* FileAccess.Service,
+        reader: {
+          ...reader,
+          read: (file, resource, page) =>
+            file.endsWith("broken.txt") ? Effect.die("the reader died") : reader.read(file, resource, page),
+        },
+        permission: yield* Permission.Service,
+        trust: h.trust,
+        environment: yield* Environment.Service,
+      })
+      const entries = yield* producer.run({
+        session: h.session,
+        agent: (yield* agents.get(build))!,
+        tools: [],
+        model: {} as never,
+        messages: [],
+        step: 1,
+        firstStep: true,
+      })
+      expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(fine)])
     }),
   )
 })
@@ -971,6 +1056,100 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
+  // Builder's rows: the parts of the rebuild the rows above leave open.
+  it.live("skips a read from history with only an offset or only a limit, or one that showed no file text", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      for (const name of ["offset.txt", "limit.txt", "image.txt", "control.txt"])
+        yield* h.change(h.inside(name), text(["changed"]))
+      const read = (id: string, input: Record<string, unknown>, shown: string) =>
+        toolPart(id, "Read", input, { text: shown, metadata: { truncated: false } }, T(60))
+      const messages = history([
+        assistant("msg_0000000001", [
+          read("c1", { file_path: "offset.txt", offset: 1 }, readResult("offset.txt", ["a"])),
+          read("c2", { file_path: "limit.txt", limit: 5 }, readResult("limit.txt", ["a"])),
+          read("c3", { file_path: "image.txt" }, "Image read successfully (1×1 px, image/png)"),
+          read("c4", { file_path: "control.txt" }, readResult("control.txt", ["a"])),
+        ]),
+      ])
+      expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(h.inside("control.txt"))])
+    }),
+  )
+
+  it.live("an edit in history of a file that is no longer whole text is not rebuilt", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const image = h.inside("edited.txt")
+      const control = h.inside("control.txt")
+      yield* Effect.promise(() => fs.writeFile(image, png))
+      yield* h.change(control, text(twenty))
+      const edit = (id: string, file: string) =>
+        toolPart(id, "Edit", { file_path: file, old_string: "a", new_string: "b" }, { text: "Edited" }, T(60))
+      expect(yield* h.changes(history([assistant("msg_0000000001", [edit("c1", image), edit("c2", control)])]))).toEqual(
+        [],
+      )
+      expect((yield* h.ledger.assertRead(h.session.id, image, "edited.txt").pipe(Effect.flip)).code).toBe("file.unread")
+      yield* h.ledger.assertFresh(h.session.id, control, "control.txt")
+    }),
+  )
+
+  it.live("the newest call wins whatever spelling it used, and a reminder block in a read result is not file text", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const spelled = h.inside("spelled.txt")
+      const reminded = h.inside("reminded.txt")
+      yield* h.change(spelled, text(["a", "B"]))
+      yield* h.change(reminded, text(["one", "two"]))
+      const messages = history([
+        assistant("msg_0000000001", [
+          toolPart("c1", "Write", { file_path: "spelled.txt", content: text(["first"]) }, {}, T(60)),
+          // What the disk holds now, so only the newest call, below, makes a change to report.
+          toolPart("c2", "Write", { file_path: spelled, content: text(["a", "B"]) }, {}, T(60)),
+          toolPart("c3", "Write", { file_path: "spelled.txt", content: text(["a", "b"]) }, {}, T(60)),
+          toolPart(
+            "c4",
+            "Read",
+            { file_path: reminded },
+            {
+              text: `${readResult("reminded.txt", ["one", "two"])}\n\n<system-reminder>\nnot in the file\n</system-reminder>`,
+              metadata: { truncated: false },
+            },
+            T(60),
+          ),
+        ]),
+      ])
+      const rows = yield* h.changes(messages)
+      // The read showed what the disk holds, so only the written file is reported, against its newest write.
+      expect(labels(rows)).toEqual([expect.stringContaining(spelled)])
+      expect(rows[0].content).toBe("1: a\n2: B")
+    }),
+  )
+
+  it.live("a record the session already holds wins over history, and a time equal to the one in history is no change", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const held = h.inside("held.txt")
+      const same = h.inside("same.txt")
+      const control = h.inside("control.txt")
+      yield* h.write(held, text(twenty))
+      // A whole second, so the time on disk can equal it exactly.
+      const second = Math.floor(Date.now() / 1000) * 1000 - 60_000
+      yield* Effect.promise(async () => {
+        await fs.writeFile(same, text(["changed"]))
+        await fs.utimes(same, second / 1000, second / 1000)
+      })
+      yield* h.change(control, text(["changed"]))
+      const messages = history([
+        assistant("msg_0000000001", [
+          toolPart("c1", "Write", { file_path: held, content: text(["older"]) }, {}, T(60)),
+          toolPart("c2", "Write", { file_path: same, content: text(["old"]) }, {}, second),
+          toolPart("c3", "Write", { file_path: control, content: text(["old"]) }, {}, T(60)),
+        ]),
+      ])
+      expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(control)])
+    }),
+  )
+
   it.live("rebuilds once per session: after a completed compaction it is not repeated", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -1132,7 +1311,7 @@ describe("the context-window usage reminder", () => {
     Effect.gen(function* () {
       const h = yield* setup()
       const messages = history([assistant("msg_0000000001", [], tokens)])
-      for (const value of [undefined, "", "0", "false", "no"])
+      for (const value of [undefined, "", "0", "false", "no", "10", "untrue"])
         expect(usageRows(yield* withEnv(USAGE_ENV, value, h.collect(messages)))).toEqual([])
       for (const value of ["1", "true", "TRUE"])
         expect(usageRows(yield* withEnv(USAGE_ENV, value, h.collect(messages)))).toHaveLength(1)

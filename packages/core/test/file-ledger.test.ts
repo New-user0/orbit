@@ -342,4 +342,15 @@ describe("FileLedger bounds", () => {
       expect([yield* unread(one), yield* unread(small), yield* unread(two)]).toEqual([true, false, false])
     }).pipe(Effect.provide(ledgerLayer)),
   )
+
+  // Builder's row: a read keeps no text even when its caller hands some over, so it always ends the watch.
+  it.live("watches what a write left until a read of the same file", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      yield* ledger.recordWrite(sessionID, "/project/a.ts", written("a"))
+      yield* ledger.recordWrite(sessionID, "/project/b.ts", written("b"))
+      yield* ledger.recordRead(sessionID, "/project/a.ts", written("a"))
+      expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual(["/project/b.ts"])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
 })

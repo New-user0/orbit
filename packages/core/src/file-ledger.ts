@@ -30,7 +30,23 @@ export const digest = (bytes: Uint8Array) => {
 export interface Seen {
   readonly mtimeMs: number
   readonly digest?: string
+  /**
+   * The decoded text that the Session's own write left in the file, or that history shows it held. Only `recordWrite`
+   * and `seed` keep it, and a read drops it. A record with text is one the file-change reminder watches.
+   */
+  readonly text?: string
 }
+
+/** A record that holds text, which the file-change reminder compares the file on disk with. */
+export interface Watched {
+  readonly path: string
+  readonly seen: Seen & { readonly text: string }
+}
+
+/** At most this many files per Session. The least recently used record goes first, and its freshness goes with it. */
+export const MAX_FILES = 100
+/** At most this much stored text per Session, counted in UTF-8 bytes, with each record counting at least one. */
+export const MAX_BYTES = 25 * 1024 * 1024
 
 /**
  * Remembers which files each Session has read, and when they last changed, so the edit tools can refuse to change a
@@ -38,9 +54,14 @@ export interface Seen {
  * record the file's modification time, and its digest when the caller holds the whole file: a newer time with an
  * unchanged digest is a touch, not an edit.
  *
+ * A record of the Session's own write also keeps the text it left, which the file-change reminder compares the file
+ * with later. A read keeps no text, so a read ends that watch. Each Session's records are bounded as the reference
+ * bounds its read-file cache (`MAX_FILES`, `MAX_BYTES`): recording a file or asking about it is a use, and the least
+ * recently used record is dropped first, freshness included.
+ *
  * A second, separate memory holds what the last read of each file showed the model, so an identical repeat read can
  * be answered with a stub. A read never clears it; a write, a completed compaction, a committed revert and a deleted
- * or moved Session do. A completed compaction also forgets freshness.
+ * or moved Session do. A completed compaction also forgets freshness and every watch.
  */
 export interface Interface {
   /** Record that the Session has seen the file as it is now. Freshness only: it never touches the repeat-read marks. */
@@ -63,6 +84,14 @@ export interface Interface {
   readonly markRead: (sessionID: Session.ID, path: string, key: string, digest: string) => Effect.Effect<boolean>
   /** Forget what reads showed, keeping freshness. */
   readonly forgetReads: (sessionID: Session.ID) => Effect.Effect<void>
+  /** The records that hold text, least recently used first. Listing them is not a use. */
+  readonly watched: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<Watched>>
+  /** Drop the record of one file, freshness included, as for a file that is gone. */
+  readonly forget: (sessionID: Session.ID, path: string) => Effect.Effect<void>
+  /** Whether `seed` already ran for the Session in this process. A completed compaction does not reset it. */
+  readonly rebuilt: (sessionID: Session.ID) => Effect.Effect<boolean>
+  /** Record each file that has no record yet, and mark the Session rebuilt. A record that is already there wins. */
+  readonly seed: (sessionID: Session.ID, files: ReadonlyArray<Watched>) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileLedger") {}
@@ -72,13 +101,16 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const environment = yield* Environment.Service
+    // session -> path -> record, in order of use, the least recent first
     const sessions = new Map<Session.ID, Map<string, Seen>>()
     // session -> path -> the last read's key and the digest of the text the model was shown (one slot per path)
     const marks = new Map<Session.ID, Map<string, { readonly key: string; readonly digest: string }>>()
+    const rebuilt = new Set<Session.ID>()
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         sessions.clear()
         marks.clear()
+        rebuilt.clear()
       }),
     )
     yield* bus.subscribe([SessionEvent.Deleted, SessionEvent.Moved]).pipe(
@@ -86,6 +118,7 @@ const layer = Layer.effect(
         Effect.sync(() => {
           sessions.delete(event.data.sessionID)
           marks.delete(event.data.sessionID)
+          rebuilt.delete(event.data.sessionID)
         }),
       ),
       Effect.forkScoped({ startImmediately: true }),
@@ -121,31 +154,47 @@ const layer = Layer.effect(
       })
     const remember = (sessionID: Session.ID, path: string, seen: Seen) => {
       const files = sessions.get(sessionID) ?? new Map<string, Seen>()
-      files.set(path, seen)
+      files.delete(path)
+      // Only these fields: a writer hands over its whole snapshot.
+      files.set(path, {
+        mtimeMs: seen.mtimeMs,
+        ...(seen.digest === undefined ? {} : { digest: seen.digest }),
+        ...(seen.text === undefined ? {} : { text: seen.text }),
+      })
       sessions.set(sessionID, files)
+      bound(files)
+    }
+    // Asking about a file is a use of its record, which moves it to the end.
+    const use = (sessionID: Session.ID, path: string) => {
+      const files = sessions.get(sessionID)
+      const seen = files?.get(path)
+      if (files === undefined || seen === undefined) return undefined
+      files.delete(path)
+      files.set(path, seen)
+      return seen
     }
 
     return Service.of({
       recordRead: Effect.fn("FileLedger.recordRead")(function* (sessionID, path, seen) {
-        remember(sessionID, path, seen)
+        remember(sessionID, path, { mtimeMs: seen.mtimeMs, digest: seen.digest })
       }),
       recordWrite: Effect.fn("FileLedger.recordWrite")(function* (sessionID, path, seen) {
         remember(sessionID, path, seen)
         marks.get(sessionID)?.delete(path)
       }),
       assertRead: Effect.fn("FileLedger.assertRead")(function* (sessionID, path, display) {
-        if (sessions.get(sessionID)?.has(path)) return
+        if (use(sessionID, path)) return
         if ((yield* modified(path)) === undefined) return
         return yield* unread(display)
       }),
       assertFresh: Effect.fn("FileLedger.assertFresh")(function* (sessionID, path, display, current) {
         const time = current ? current.mtimeMs : yield* modified(path)
         if (time === undefined) return
-        const seen = sessions.get(sessionID)?.get(path)
+        const seen = use(sessionID, path)
         if (seen === undefined) return yield* unread(display)
         if (time <= seen.mtimeMs) return
         if (current && seen.digest !== undefined && seen.digest === current.digest) {
-          remember(sessionID, path, { mtimeMs: time, digest: seen.digest })
+          remember(sessionID, path, { ...seen, mtimeMs: time })
           return
         }
         return yield* new ToolFailure({
@@ -163,9 +212,37 @@ const layer = Layer.effect(
       forgetReads: Effect.fn("FileLedger.forgetReads")(function* (sessionID) {
         marks.delete(sessionID)
       }),
+      watched: Effect.fn("FileLedger.watched")(function* (sessionID) {
+        return Array.from(sessions.get(sessionID) ?? []).flatMap(([path, seen]) =>
+          seen.text === undefined ? [] : [{ path, seen: { ...seen, text: seen.text } }],
+        )
+      }),
+      forget: Effect.fn("FileLedger.forget")(function* (sessionID, path) {
+        sessions.get(sessionID)?.delete(path)
+      }),
+      rebuilt: Effect.fn("FileLedger.rebuilt")(function* (sessionID) {
+        return rebuilt.has(sessionID)
+      }),
+      seed: Effect.fn("FileLedger.seed")(function* (sessionID, files) {
+        rebuilt.add(sessionID)
+        files
+          .filter((file) => !sessions.get(sessionID)?.has(file.path))
+          .forEach((file) => remember(sessionID, file.path, file.seen))
+      }),
     })
   }),
 )
+
+// A Map keeps insertion order, so its first key is the least recently used. The newest record always stays.
+const bound = (files: Map<string, Seen>) => {
+  const size = (seen: Seen) => Math.max(1, seen.text === undefined ? 0 : Buffer.byteLength(seen.text))
+  let bytes = Array.from(files.values()).reduce((total, seen) => total + size(seen), 0)
+  for (const [path, seen] of files) {
+    if (files.size <= 1 || (files.size <= MAX_FILES && bytes <= MAX_BYTES)) return
+    files.delete(path)
+    bytes -= size(seen)
+  }
+}
 
 /** Records nothing and allows every change, for tests and embedders that write files without reading them first. */
 export const permissiveLayer = Layer.succeed(
@@ -177,6 +254,10 @@ export const permissiveLayer = Layer.succeed(
     assertFresh: () => Effect.void,
     markRead: () => Effect.succeed(false),
     forgetReads: () => Effect.void,
+    watched: () => Effect.succeed([]),
+    forget: () => Effect.void,
+    rebuilt: () => Effect.succeed(true),
+    seed: () => Effect.void,
   }),
 )
 

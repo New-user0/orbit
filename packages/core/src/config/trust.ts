@@ -41,6 +41,8 @@ import { LinkShare } from "@orbit/util/link-share"
 //   Rule files (`ConfigInstructionRules`, the `rules` folders of the same walk) are readers of the same list: a project's
 //   rule is asked of `reachable` and `supplies` on its real path at start, and of `importable` when a read brings it (for a rule of a folder above the project, of `reachable` and `supplies` again on where it leads now, never for a rule inside the project), and the `paths` key of its
 //   front matter is read only through `ConfigMarkdown`;
+//   the file-change reminder (`FileChangeReminder.gate`) asks `reachable` again on each file the session wrote before it
+//   reads it at a step, and its rebuild from history keeps a file only when it is inside the project and `reachable`;
 // - `supplies`: a file of a config directory, or of another product's root, which is the agents of `ConfigAgentPlugin`,
 //   the commands of `ConfigCommandPlugin`, the skills of `ConfigSkillPlugin` and `ConfigCompatibilityPlugin`, and the
 //   output styles of `OutputStylePlugin`;

@@ -3244,6 +3244,53 @@ bodies as message text, because a response can carry text from a project's files
 
 **What to do:** Nothing.
 
+### A file changed after the agent wrote it is reported to the model
+
+When a file that a session wrote with its file tools is changed afterwards outside the
+conversation (by you, an editor, a formatter or a shell command), the next step of that session gets a hidden reminder
+with the changed lines, numbered as `Read` numbers them, with eight unchanged lines around each change and at most
+8,192 characters in all. The reported change then counts as read, so the edit tools do not refuse the file as changed
+on disk. Before, the model learned of such a change only when an edit was refused.
+
+Only what the session itself wrote is watched: a file it only read is not reported, and reading a file after writing it
+ends the watch. A touch, a change of line endings or of the final line break alone, a notebook, an image, a file with a
+NUL byte, a folder in the file's place and a file longer than one read are not reported. A deleted file is forgotten. A
+file that a `Read` deny rule names, or that a link now leads to, is skipped, as is a file outside the project that an
+`external_directory` deny rule covers, and, once the project's trust is revoked, any file outside it. A subagent's
+session is told about the files it wrote. Clients show nothing for these rows, and `orb run --bare` adds none.
+
+After a restart, the first step of each session rebuilds what it saw from its history since the latest compaction: a
+whole `Read`, a `Write` (whether or not the call succeeded) and an `Edit` that succeeded. Changes made while Orbit was
+not running are then reported, and a file known this way can be edited without a new read. Only files inside the
+project are rebuilt. A file tracked for freshness is now dropped once a session tracks more than 100 files or 25 MB of
+written text, least recently used first, and must be read again before an edit.
+
+**Affects:** everyone who edits files the agent wrote while a session runs, and clients that list hidden
+`session.synthetic` rows, which now see rows of kind `file-change`.
+
+**What to do:** Nothing.
+
+### The active built-in output style is named on every step
+
+When `output_style` names a built-in style (`explanatory` or `learning`, in any letter case), the main conversation gets
+a short hidden reminder on each step that the style is active. The default style and a style that a file defines add
+nothing, and subagents and `orb run --bare` get nothing.
+
+**Affects:** people who use a built-in output style.
+
+**What to do:** Nothing.
+
+### An opt-in reminder of how much of the context window is used
+
+With `ORBIT_ENABLE_CONTEXT_USAGE_REMINDER` set to `1` or `true` in the server's environment, the main conversation gets
+a hidden line on each step: how many tokens the newest response used, out of the model's context window less the
+smaller of its output limit and 20,000 tokens, and how many are left. It is off by default, says nothing when the
+model's window is not known, and is not sent to subagents or by `orb run --bare`.
+
+**Affects:** people who set the variable.
+
+**What to do:** Nothing; set the variable to turn the reminder on.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
