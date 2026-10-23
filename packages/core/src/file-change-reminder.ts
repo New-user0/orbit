@@ -218,8 +218,9 @@ const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
   const resolved = yield* Effect.forEach(
     Array.from(bySpelling.values()),
     Effect.fnUntraced(function* (found) {
+      // Given no recorded place, `gate` refuses every target outside the project, so only project files remain.
       const target = yield* gate(services, input.session.id, input.agent.id, found.path)
-      if (target === undefined || target.externalDirectory !== undefined) return []
+      if (target === undefined) return []
       // The session may never have read this file: the call can have failed, and the store can be imported. So a file
       // that the read tool would ask about first (the built-in `.env` ask, a rule the person wrote, a link onto such a
       // file) is not seeded, and nothing of it is read (class 5).

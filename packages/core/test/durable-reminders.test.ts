@@ -898,6 +898,65 @@ describe("the re-read gate (class 4, 7)", () => {
     )
   }
 
+  // Gate's rows (class 3, 4): outside the project the name must still lead exactly where the write put it, not merely
+  // into it or above it. Inside the allowed outside folder, a link swapped in can make the name lead to a file below the
+  // recorded place (that place has become a folder) or to a folder above it. Neither is read; both swaps use folder links
+  // (a junction on Windows, which needs no privilege). The gate's answer before each swap is the control.
+  it.live("an outside file whose name now leads below or above the place its write recorded is skipped", () =>
+    Effect.gen(function* () {
+      const allowed = (yield* tmpdirScoped()).path
+      const h = yield* setup([
+        allowAll,
+        { action: "external_directory", resource: "*", effect: "ask" },
+        { action: "external_directory", resource: `${slash(allowed)}/*`, effect: "allow" },
+      ])
+      const services = { access: yield* FileAccess.Service, permission: yield* Permission.Service, trust: h.trust }
+      const placeOf = Effect.fnUntraced(function* (file: string) {
+        return (yield* h.ledger.watched(h.session.id)).find((watched) => watched.path === file)?.seen.place
+      })
+      const real = path.join(allowed, "real")
+      const via = path.join(allowed, "via")
+      const below = path.join(via, "notes.txt")
+      const above = path.join(allowed, "sub", "notes.txt")
+      const control = path.join(allowed, "control.txt")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(real)
+        await fs.symlink(real, via, "junction")
+        await fs.mkdir(path.dirname(above))
+      })
+      yield* h.write(below, text(twenty))
+      yield* h.write(above, text(twenty))
+      yield* h.write(control, text(twenty))
+      const belowPlace = yield* placeOf(below)
+      const abovePlace = yield* placeOf(above)
+      expect(yield* FileChangeReminder.gate(services, h.session.id, build, below, belowPlace)).toMatchObject({
+        absolute: below,
+      })
+      expect(yield* FileChangeReminder.gate(services, h.session.id, build, above, abovePlace)).toMatchObject({
+        absolute: above,
+      })
+      // Below: the recorded file becomes a folder, and the folder link now leads into it, so the name reaches a file
+      // that holds KEY-MARKER below the recorded place. Above: the file itself becomes a link to its own folder.
+      const deeper = path.join(real, "notes.txt", "deeper")
+      yield* Effect.promise(async () => {
+        await fs.rm(path.join(real, "notes.txt"))
+        await fs.mkdir(deeper, { recursive: true })
+        await fs.writeFile(path.join(deeper, "notes.txt"), text(["KEY-MARKER"]))
+        await fs.rm(via, { recursive: true })
+        await fs.symlink(deeper, via, "junction")
+        await fs.rm(above)
+        await fs.symlink(path.dirname(above), above, "junction")
+      })
+      yield* h.stamp(path.join(deeper, "notes.txt"))
+      yield* h.change(control, text(["changed"]))
+      expect(yield* FileChangeReminder.gate(services, h.session.id, build, below, belowPlace)).toBeUndefined()
+      expect(yield* FileChangeReminder.gate(services, h.session.id, build, above, abovePlace)).toBeUndefined()
+      const rows = yield* h.changes()
+      expect(labels(rows)).toEqual([expect.stringContaining(control)])
+      expect(JSON.stringify(rows)).not.toContain("KEY-MARKER")
+    }),
+  )
+
   // The place each writing tool records is what lets an outside file be read again, so a file outside the project that
   // the session last changed with Edit or Patch is still reported, and one changed with NotebookEdit still has its
   // freshness refreshed. Write's row is "an outside file the session wrote with permission is reported" above.
@@ -1564,6 +1623,39 @@ describe("the rebuild after a restart", () => {
       expect(yield* produce({ ...h.trust, reachable: () => Effect.succeed(false) }, refused)).toEqual([])
       expect(yield* h.ledger.watched(refused.id)).toEqual([])
       const entries = yield* produce(h.trust, h.session)
+      expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(file)])
+    }),
+  )
+
+  // Gate's row (class 5, 7): whether the read tool would read a file from history without a question is asked of
+  // `Permission.allowed`, and a check that fails seeds nothing. Here `allowed` alone fails, with the real error for a
+  // session it does not know, while the deny checks pass; the real `allowed` is the control.
+  it.live("seeds nothing when the check that the read tool would read without a question fails", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("history.txt")
+      yield* h.change(file, text(["now"]))
+      const messages = history([
+        assistant("msg_0000000001", [toolPart("w", "Write", { file_path: file, content: text(["old"]) }, {}, T(60))]),
+      ])
+      const access = yield* FileAccess.Service
+      const reader = yield* ReadToolFileSystem.Service
+      const permission = yield* Permission.Service
+      const environment = yield* Environment.Service
+      const agents = yield* Agent.Service
+      const agent = (yield* agents.get(build))!
+      const produce = (checks: Permission.Interface, session: Session.Info) =>
+        FileChangeReminder.durable({ ledger: h.ledger, access, reader, permission: checks, trust: h.trust, environment })
+          .run({ session, agent, tools: [], model: {} as never, messages, step: 1, firstStep: true })
+      const gone = Session.ID.make("ses_durable_reminders_allowed_gone")
+      const failing: Permission.Interface = {
+        ...permission,
+        allowed: (input) => permission.allowed({ ...input, sessionID: gone }),
+      }
+      const refused = yield* h.create()
+      expect(yield* produce(failing, refused)).toEqual([])
+      expect(yield* h.ledger.watched(refused.id)).toEqual([])
+      const entries = yield* produce(permission, h.session)
       expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(file)])
     }),
   )
