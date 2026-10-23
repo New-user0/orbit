@@ -768,7 +768,9 @@ project's config only from the project itself. What changed:
   in and its parents up to the project's root (the nearest folder with `.git` or `.hg`, or the start folder outside a
   repository), and never from a folder above it, even when you trust that folder and its grant covers the project. The
   walk starts from where the start folder really is, so a folder reached through a link is walked from its target.
-  Instruction files keep their own walk, which is unchanged.
+  Instruction files keep their own walk up the folders, with one change: in a trusted project, a rule in a `.orbit/rules`
+  folder above it is now read wherever its links lead, as the `AGENTS.md` beside it already was. It used to be kept
+  inside the folder it sits in. Nothing above a project that is not trusted loads, as before.
 - A project's custom themes in `.orbit/themes` wait for the folder to be trusted, as everything else it supplies does,
   and come only from the project's root down to the start folder. Your own themes load as before. Mini reads the same
   folders, and where its own walk would take a `.git` file that the server does not accept as a repository, it starts

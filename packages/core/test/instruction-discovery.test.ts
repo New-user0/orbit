@@ -4160,6 +4160,44 @@ describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
       }),
     )
 
+    // Classes 1 and 4: the instruction walk above the project is the reference's, which follows links. Once the project is
+    // trusted, a rules folder above it is read wherever its links lead, as the instruction file beside it is; until then
+    // nothing above the project loads. The plain file above is the control of each row.
+    const aboveModes = [
+      { name: "a rules folder above the project that is a link to a folder outside it", file: false },
+      { name: "a rule file above the project that is a link to a file outside it", file: true },
+    ] as const
+    for (const mode of aboveModes)
+      (mode.file && !canLinkFile ? it.live.skip : it.live)(`reads ${mode.name} once the project is trusted, and not before`, () =>
+        Effect.gen(function* () {
+          const where = yield* folders
+          const above = path.dirname(where.repo)
+          const secret = path.join(outside(where), "secret.md")
+          yield* write(secret, "SECRET MARKER")
+          yield* write(path.join(above, "AGENTS.md"), "ABOVE FILE")
+          if (mode.file) {
+            yield* write(path.join(rulesOf(above), "kept.md"), "ABOVE RULE")
+            yield* Effect.promise(() => fs.symlink(secret, path.join(rulesOf(above), "link.md")))
+          } else {
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.dirname(rulesOf(above)), { recursive: true })
+              await fs.symlink(outside(where), rulesOf(above), "junction")
+            })
+          }
+          const run = (trusted: boolean) =>
+            Effect.gen(function* () {
+              return (yield* baseline()).text
+            }).pipe(Effect.provide(layerFor(where, { trusted })))
+          const closed = yield* run(false)
+          expect(closed).not.toContain("SECRET MARKER")
+          expect(closed).not.toContain("ABOVE FILE")
+          const open = yield* run(true)
+          expect(open).toContain("SECRET MARKER")
+          expect(open).toContain("ABOVE FILE")
+          if (mode.file) expect(open).toContain("ABOVE RULE")
+        }),
+      )
+
     // Class 15 on a bound of time: one pass spends one allowance of import tokens over every file it loads, the walk's
     // instruction files and the rule files of every level alike, so a clone that spreads its tokens over many files gets
     // no more walks than one file would. Each token here names a missing file, which costs one look; the pass looks up

@@ -566,9 +566,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
   `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
   a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
-  through, of `ProjectTrust.importable`, or for a rule of a folder above the project (never one inside it), `reachable` and `supplies` again
-  on where it leads now. So a rules folder, a subfolder or a file that is a link out of the project is skipped alone,
-  trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
+  through, of `ProjectTrust.importable`, or for a rule of a folder above the project (never one inside it), `reachable`
+  again on where it leads now, which must still be the file that was found. A folder above the project keeps the
+  reference's instruction walk, which follows links: once the project is trusted, its rules are read wherever their
+  links lead, as the instruction file beside them is, and `supplies` bounds nothing there (proof: the "reads a rules
+  folder above the project that is a link" and "reads a rule file above the project that is a link" rows of
+  `test/instruction-discovery.test.ts`, and the "link out of a rules folder above the project" rows of
+  `test/session-instructions.test.ts`, each with its untrusted half and a plain rule as the control; mutation: bounding
+  a source above the project to its own folder in `supplies`, as before trust-first part 2, fails the four trusted
+  halves). So a rules folder, a subfolder or a file of the project's own folders that is a link out of the project is
+  skipped alone, trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
   A project or personal rule that cannot be read costs only itself, with one warning that names it; the administrator's rules
   fail closed (proof: the "a managed rule that answers nothing keeps the admitted instructions" and "a managed rule that fails keeps
   the admitted instructions" rows of `test/instruction-discovery.test.ts`, with a readable control; mutation: dropping the
