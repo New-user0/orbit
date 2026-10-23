@@ -660,7 +660,8 @@ export const layer = Layer.effect(
     }
 
     /**
-     * Each model call is billed as soon as it finishes, so failed and interrupted compactions are billed too. The
+     * A call that completes is billed when it finishes, and one that fails or is interrupted after the provider began
+     * to answer is billed by estimate; a request the provider refused before any response costs nothing. The
      * compaction's message shows the total across all of its calls. A session never runs two compactions at once.
      */
     const spent = new Map<SessionContext.Loaded["session"]["id"], SessionUsage.Recorded>()

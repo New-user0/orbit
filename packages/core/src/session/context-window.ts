@@ -24,13 +24,19 @@ export type Thresholds = {
   readonly blocking: number
 }
 
-/** The room the summary keeps for its output: the smaller of the output cap, the model's output limit and 20,000. */
-export const reserve = (limit: Limit, outputTokenCap?: number) =>
-  Math.min(
+/**
+ * The room the summary keeps for its output: the smaller of the output cap, the model's output limit and 20,000, and
+ * never more than half a known window, so a model whose output limit matches its window still has room for the request.
+ */
+export const reserve = (limit: Limit, outputTokenCap?: number) => {
+  const window = limit.input || limit.context
+  return Math.min(
     SUMMARY_RESERVE_MAX,
     limit.output > 0 ? limit.output : SUMMARY_RESERVE_MAX,
     outputTokenCap ?? SUMMARY_RESERVE_MAX,
+    window > 0 ? Math.floor(window / 2) : SUMMARY_RESERVE_MAX,
   )
+}
 
 /**
  * Undefined when the model's window is unknown, which is reported as 0. The summary keeps the smaller of the output

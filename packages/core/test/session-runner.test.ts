@@ -10277,8 +10277,7 @@ describe("SessionRunnerLLM", () => {
   })
 
   // A compaction between resumes drops the runner's history before it, so the caps must come from the durable rows.
-  // Each cut-off fills the window, which makes the next pass due. A pass that resumes inside the same step does not
-  // compact again after the step's first compaction, so only a cut-off that starts a new step is followed by one.
+  // Each cut-off fills the window, which makes the next pass due. A resume is a new request, so it is checked again.
   const overflowing = {
     reason: { normalized: "length", raw: "max_tokens" },
     usage: { nonCachedInputTokens: 3_950, outputTokens: 10 },
@@ -10288,15 +10287,12 @@ describe("SessionRunnerLLM", () => {
     LLMEvent.textDelta({ id, text: value }),
     LLMEvent.textEnd({ id }),
   ]
-  const withSummaries = (cuts: ReadonlyArray<ReturnType<typeof TestLLM.complete>>, sameStep: boolean) =>
-    cuts.flatMap((cut, index) =>
-      sameStep && index > 0 ? [cut] : [cut, TestLLM.text("## Objective\n- Keep going", `cmp-summary-${index}`)],
-    )
+  const withSummaries = (cuts: ReadonlyArray<ReturnType<typeof TestLLM.complete>>) =>
+    cuts.flatMap((cut, index) => [cut, TestLLM.text("## Objective\n- Keep going", `cmp-summary-${index}`)])
   for (const row of [
-    { name: "text only", sameStep: true, cut: (n: number) => TestLLM.complete(overflowing, ...text(`cmp-${n}`, String(n))) },
+    { name: "text only", cut: (n: number) => TestLLM.complete(overflowing, ...text(`cmp-${n}`, String(n))) },
     {
       name: "a cut-off tool call",
-      sameStep: true,
       cut: (n: number) =>
         TestLLM.complete(
           overflowing,
@@ -10307,7 +10303,6 @@ describe("SessionRunnerLLM", () => {
     },
     {
       name: "an input that never became a call",
-      sameStep: true,
       cut: (n: number) =>
         TestLLM.complete(
           overflowing,
@@ -10317,7 +10312,6 @@ describe("SessionRunnerLLM", () => {
     },
     {
       name: "a tool call that ran",
-      sameStep: false,
       cut: (n: number) =>
         TestLLM.complete(overflowing, LLMEvent.toolCall({ id: `cmp-ran-${n}`, name: "echo", input: { text: String(n) } })),
     },
@@ -10326,10 +10320,7 @@ describe("SessionRunnerLLM", () => {
       s.currentModel = halfWindowModel
       yield* s.admit("Never finishes")
       yield* s.llm.push(
-        ...withSummaries(
-          Array.from({ length: 8 }, (_, index) => row.cut(index + 1)),
-          row.sameStep,
-        ),
+        ...withSummaries(Array.from({ length: 8 }, (_, index) => row.cut(index + 1))),
         TestLLM.text("Done", "cmp-done"),
       )
 
@@ -10351,11 +10342,13 @@ describe("SessionRunnerLLM", () => {
     } as const
     yield* s.admit("Never finishes")
     yield* s.llm.push(
-      // The escalated retry follows its cut-off directly; the step compacts once before the request after that.
+      // The escalated retry follows its cut-off directly; a compaction runs before each request after that.
       TestLLM.complete(full, ...text("cmp-esc-0", "x")),
       TestLLM.complete(full, ...text("cmp-esc-1", "x")),
-      TestLLM.text("## Objective\n- Keep going", "cmp-esc-summary"),
-      ...Array.from({ length: 6 }, (_, index) => TestLLM.complete(full, ...text(`cmp-esc-${index + 2}`, "x"))),
+      ...Array.from({ length: 6 }, (_, index) => [
+        TestLLM.text("## Objective\n- Keep going", `cmp-esc-summary-${index}`),
+        TestLLM.complete(full, ...text(`cmp-esc-${index + 2}`, "x")),
+      ]).flat(),
       TestLLM.text("Done", "cmp-esc-done"),
     )
 
@@ -10817,24 +10810,46 @@ describe("context accounting", () => {
     expect(yield* compactions(s)).toHaveLength(3)
   })
 
-  scenario("compacts automatically at most once in a step", function* (s) {
-    // The summary alone is over the 20,000-token threshold of the 40,000-token window, so a check after the cut-off
-    // reply would find the step due again.
+  // The summary alone is over the 20,000-token threshold of the 40,000-token window, so any later check of the same
+  // conversation finds it due again.
+  scenario("compacts again when an output-limit resume is still above the threshold", function* (s) {
     s.currentModel = fortyModel
-    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "once-first", 30_000))
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "resume-first", 30_000))
     yield* s.runPrompt("Earlier question")
     s.requests.length = 0
-    yield* s.llm.always(TestLLM.text("Not a summary", "once-fallback"))
     yield* s.llm.push(
       summary("word ".repeat(24_000)),
-      lengthStop("once-cut", "Part"),
-      TestLLM.text("Done", "once-done"),
+      lengthStop("resume-cut", "Part"),
+      summary("small"),
+      TestLLM.text("Done", "resume-done"),
     )
     const exit = yield* s.runPrompt("Next question").pipe(Effect.exit)
 
+    expect(Exit.isSuccess(exit)).toBe(true)
+    expect(yield* compactions(s)).toMatchObject([
+      { status: "completed", reason: "auto" },
+      { status: "completed", reason: "auto" },
+    ])
+    expect(s.requests).toHaveLength(4)
+  })
+
+  scenario("does not compact again when the same request is retried", function* (s) {
+    s.currentModel = fortyModel
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "retry-first", 30_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(summary("word ".repeat(24_000)), Stream.fail(incompleteStream()))
+    yield* s.llm.push(TestLLM.text("Recovered", "retry-done"))
+    yield* s.admit("Next question")
+
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Queue.take(scheduled)
+    yield* TestClock.adjust(FIRST_RETRY)
+    yield* Fiber.join(run)
+
     expect(yield* compactions(s)).toMatchObject([{ status: "completed", reason: "auto" }])
     expect(s.requests).toHaveLength(3)
-    expect(Exit.isSuccess(exit)).toBe(true)
   })
 
   for (const [usage, refused] of [
@@ -10935,5 +10950,87 @@ describe("context accounting", () => {
     const measuredUpdates = updates.filter((update) => update.stale === false)
     expect(measuredUpdates.map((update) => update.paused)).toEqual([false, false, false, true, true])
     expect(measuredUpdates[0]).toMatchObject({ used: 185_000, percentLeft: 0, state: "error" })
+  })
+
+  // The estimate adds 3 tokens to the reported usage of the conversation here, so 176,997 reaches the 177,000 limit.
+  for (const [usage, refused] of [
+    [176_997, true],
+    [176_996, false],
+  ] as const)
+    scenario(`refuses a request exactly at the blocking limit: ${usage} ${refused}`, function* (s) {
+      yield* disableAuto
+      yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "edge-first", usage))
+      yield* s.runPrompt("Earlier question")
+      s.requests.length = 0
+      yield* s.llm.push(TestLLM.text("Sent", "edge-sent"))
+      yield* s.admit("Next question")
+      const exit = yield* s.resume.pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(refused)
+      expect(s.requests).toHaveLength(refused ? 0 : 1)
+    })
+
+  scenario("marks the report stale after an overflow compaction", function* (s) {
+    yield* setupOverflowRecovery(s)
+    const updates = yield* contextUpdates(s)
+    yield* s.llm.push(
+      [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+      ],
+      summary("overflow"),
+      TestLLM.textWithUsage("Recovered", "overflow-final", 1_000),
+    )
+    yield* s.runPrompt("Continue")
+    yield* settled(updates, 2)
+
+    expect(updates.map((update) => update.stale)).toEqual([true, false])
+  })
+
+  scenario("reports the usage of a response that stopped at the output limit", function* (s) {
+    const updates = yield* contextUpdates(s)
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" }, usage: measured(30_000) },
+        LLMEvent.textStart({ id: "cut-report" }),
+        LLMEvent.textDelta({ id: "cut-report", text: "Part" }),
+        LLMEvent.textEnd({ id: "cut-report" }),
+      ),
+      TestLLM.textWithUsage("Rest", "cut-report-rest", 31_000),
+    )
+    yield* s.runPrompt("Question")
+    yield* settled(updates, 2)
+
+    expect(updates.map((update) => [update.used, update.stale])).toEqual([
+      [30_000, false],
+      [31_000, false],
+    ])
+  })
+
+  scenario("records a failed automatic compaction before the response it did not prevent", function* (s) {
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "order-first", 185_000))
+    yield* s.runPrompt("Earlier question")
+    yield* s.llm.push(summaryFails(), TestLLM.text("Answered anyway", "order-final"))
+    yield* s.runPrompt("Next question")
+
+    const all = yield* s.messages
+    const ordered = all.toReversed()
+    expect(ordered.map((message) => message.type)).toEqual(["user", "assistant", "user", "compaction", "assistant"])
+    // IDs are time-ordered, so a listing sorted by ID keeps the failed row ahead of the response.
+    expect(ordered.map((message) => message.id)).toEqual(ordered.map((message) => message.id).toSorted())
+  })
+
+  // A model whose output limit fills its window must still leave the request room: the summary asks for half the
+  // window at most, so a strict server does not reject the compaction itself.
+  scenario("keeps the summary's output below a window that the output limit fills", function* (s) {
+    s.currentModel = testModel("filled-window", { context: 16_384, output: 16_384 })
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "filled-first", 10_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(summary("filled"), TestLLM.text("Continued", "filled-final"))
+    yield* s.runPrompt("Next question")
+
+    expect((yield* compactions(s)).map((message) => message.status)).toEqual(["completed"])
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_192)
   })
 })

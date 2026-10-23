@@ -101,6 +101,21 @@ describe("automatic compaction threshold", () => {
       threshold: 20_000,
     },
     {
+      name: "keeps half of a window whose output limit fills it",
+      limit: { context: 16_384, output: 16_384 },
+      threshold: 8_192,
+    },
+    {
+      name: "keeps half of a small window whose output limit is unknown",
+      limit: { context: 16_384, output: 0 },
+      threshold: 8_192,
+    },
+    {
+      name: "keeps half of an 8,192-token window whose output limit is unknown",
+      limit: { context: 8_192, output: 0 },
+      threshold: 4_096,
+    },
+    {
       name: "floors a buffer that would compact below half the window",
       limit: window200k,
       buffer: 150_000,
@@ -147,6 +162,17 @@ describe("context state", () => {
   ] as const)
     test(`${used} used with automatic compaction ${auto} is ${state}`, () => {
       expect(SessionContextWindow.state(used, found, auto)).toEqual({ percentLeft, state })
+    })
+
+  // The target a compaction aims at must stay positive and no smaller than the threshold floor, or a small window would
+  // leave the summary the whole window and the indicator a negative size.
+  for (const [limit, effective] of [
+    [{ context: 16_384, output: 16_384 }, 8_192],
+    [{ context: 16_384, output: 0 }, 8_192],
+    [{ context: 8_192, output: 0 }, 4_096],
+  ] as const)
+    test(`keeps the effective window of ${limit.context} tokens with an output limit of ${limit.output} at ${effective}`, () => {
+      expect(SessionContextWindow.thresholds({ limit })?.effective).toBe(effective)
     })
 
   test("refuses a request no earlier than the compaction threshold", () => {

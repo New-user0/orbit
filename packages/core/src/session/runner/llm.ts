@@ -406,8 +406,9 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
-      // One automatic compaction attempt per logical step: once one has run (or the turn is paused), retries, a
-      // fallback switch, a continuation and output-limit resumes resend the step's request without another.
+      // One automatic compaction attempt per model request: once one has run (or the turn is paused), retries, a
+      // fallback switch and a continuation resend the same request without another. An output-limit resume is a new
+      // request carrying the cut-off reply, so it clears the flag and is checked again.
       let autoChecked = false
       // Set by a completed compaction, reported once the context is reloaded from it.
       let compacted = false
@@ -609,6 +610,7 @@ const layer = Layer.effect(
               text: RESUME_AFTER_OUTPUT_LIMIT,
               metadata: { notice: "output-limit" },
             })
+            autoChecked = false
             if (outcome.needsContinuation) return "continue" as const
             assistantMessageID = SessionMessage.ID.create()
           }),

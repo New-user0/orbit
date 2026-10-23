@@ -4188,8 +4188,9 @@ In YAML an alias names a value that an anchor wrote earlier, and Orbit's readers
 
 - **Where it starts.** The summary now keeps the smaller of the model's output limit, `output_token_cap` and 20,000
   tokens free, and automatic compaction starts 13,000 tokens below the window that is left (`compaction.buffer`
-  replaces the 13,000). It never starts below half the window, so a small window or a large buffer cannot make every
-  request compact. On a 200,000-token window with a 32,000-token output limit it starts at 167,000 tokens; it used to
+  replaces the 13,000). The summary never keeps more than half the window, and compaction never starts below half the
+  window, so a small window, a model whose output limit fills its window, or a large buffer cannot make every request
+  compact. On a 200,000-token window with a 32,000-token output limit it starts at 167,000 tokens; it used to
   start at 180,000. A model with an unknown window never compacts automatically and is never refused locally, as before
   (`session-context-window.test.ts`, "automatic compaction threshold"; `session-runner.test.ts`, "context accounting").
 - **A failed automatic compaction keeps the turn going.** The failure is still recorded as a `compaction.failed`
@@ -4197,13 +4198,15 @@ In YAML an alias names a value that an anchor wrote earlier, and Orbit's readers
   turn pause automatic compaction until the next turn, and a paused turn also skips the rebuild after a provider
   rejects a request as too long, so the provider's error ends the step. Input steered into a running turn does not
   restart the count.
-- **At most one automatic compaction per step.** A retry, a continuation or a resume after the output limit no longer
-  compacts a second time inside the same step.
+- **At most one automatic compaction per request.** A retry, a fallback switch or a continuation resends the same
+  request and no longer compacts a second time. A resume after the output limit is a new request and is checked again.
 - **With automatic compaction off, a request that cannot fit is refused.** When the conversation reaches 3,000 tokens
   below the window that is left, the step fails with the new `context.limit` error, whose message names `/compact`,
-  and no request is sent. Clients show it as they show any other failed execution.
+  and no request is sent. On a window under about 46,000 tokens the limit is the point where automatic compaction
+  would have started (half the window at least), so the refusal comes no earlier than that. Clients show it as they
+  show any other failed execution.
 - **New event.** `session.context.updated` reports how full the context is after each measured response, and again
-  with `stale: true` after each compaction. It is not stored; a client that does not know it ignores it.
+  with `stale: true` after each compaction. It is not stored.
 - **Native compaction spend.** A native compaction call that reports no usage is recorded with zero tokens, which a
   turn limit reads as unknown spend, and one that fails or is interrupted after the provider began to answer is
   recorded as an estimate (`session-native-compaction.test.ts`). A request the provider refused costs nothing, as
