@@ -3,8 +3,10 @@ import { mkdir, realpath } from "node:fs/promises"
 import path from "node:path"
 import { RGBA, type CliRenderer, type TerminalColors } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
+import { RunFooter } from "../../src/mini/footer"
+import { resolveMiniSettings } from "../../src/mini/runtime.boot"
 import { createRuntimeLifecycle } from "../../src/mini/runtime.lifecycle"
-import { resolveRunTheme } from "../../src/mini/theme"
+import { resolveRunTheme, RUN_THEME_MONO } from "../../src/mini/theme"
 import type { MiniHost } from "../../src/mini/types"
 import { DEFAULT_THEMES } from "../../src/theme"
 import { tmpdir } from "../fixture/fixture"
@@ -168,4 +170,73 @@ test("the Mini's first draw and a theme refresh both keep to the folder the serv
   expect(unbounded).toHaveLength(2)
   expect(unbounded[1]).toBe(unbounded[0]!)
   expect(bounded[0]).not.toBe(unbounded[0]!)
+})
+
+// The third place the Mini resolves its theme: turning monochrome off in the settings menu. The footer passes the same
+// answer, so the theme it reads is never the one above the folder the server decided trust for.
+test("turning monochrome off in the settings keeps to the folder the server decided trust for", async () => {
+  const outer = path.join(tmp.path, "rejected-mono")
+  const app = path.join(outer, "app")
+  await mkdir(app, { recursive: true })
+  await Bun.write(path.join(outer, ".git"), "garbage\n")
+  await Bun.write(path.join(outer, ".orbit", "themes", "clone-outer-theme.json"), JSON.stringify(DEFAULT_THEMES.tokyonight))
+  process.chdir(app)
+
+  const toggled = async (root: string | undefined) => {
+    const test = await createTestRenderer({
+      width: 112,
+      height: 24,
+      screenMode: "split-footer",
+      footerHeight: 4,
+      externalOutputMode: "capture-stdout",
+    })
+    const footer = new RunFooter(test.renderer, {
+      directory: () => app,
+      findFiles: async () => [],
+      agents: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
+      references: [],
+      agent: "build",
+      modelLabel: "GPT-5",
+      model: undefined,
+      variant: undefined,
+      first: true,
+      theme: RUN_THEME_MONO,
+      tuiConfig: createTuiResolvedConfig({ theme: { name: "clone-outer-theme" } }),
+      root,
+      miniSettings: {
+        current: { ...resolveMiniSettings(), mono: true },
+        update: async (change) => ({ ...resolveMiniSettings(), [change.key]: change.value }),
+      },
+      onPermissionReply: () => {},
+      onFormReply: () => {},
+      onFormCancel: () => {},
+      onEditorOpen: async () => undefined,
+      subscribeThemeSignal: () => () => {},
+    })
+    try {
+      await test.renderOnce()
+      test.mockInput.pressKey("p", { ctrl: true })
+      await test.renderOnce()
+      await test.mockInput.typeText("settings")
+      await test.renderOnce()
+      test.mockInput.pressEnter()
+      await test.renderOnce()
+      await test.mockInput.typeText("monochrome")
+      await test.renderOnce()
+      test.mockInput.pressKey("ARROW_RIGHT")
+      const deadline = Date.now() + 5_000
+      while (footer.currentMiniSettings().mono && Date.now() < deadline) await Bun.sleep(10)
+      await footer.idle()
+      expect(footer.currentMiniSettings().mono).toBe(false)
+      return (footer.currentTheme().footer.text as RGBA).toInts()
+    } finally {
+      footer.destroy()
+      test.renderer.destroy()
+    }
+  }
+  const bounded = await toggled(await realpath(app))
+  const unbounded = await toggled(undefined)
+  // The control: without the server's answer the footer reads the theme of the folder that holds the `.git` file.
+  expect(unbounded).toEqual(await text("tokyonight"))
+  expect(bounded).toEqual(await text("orbit"))
 })
