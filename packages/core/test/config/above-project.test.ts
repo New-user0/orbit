@@ -12,6 +12,9 @@ import { Location } from "@orbit/core/location"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WellKnown } from "@orbit/core/wellknown"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { NodeFileSystem } from "@effect/platform-node"
+import type { Document } from "@orbit/schema/config"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
@@ -56,8 +59,10 @@ function loader(input: {
   readonly globalConfig: string
   readonly repo: string
   readonly directory: string
+  readonly fs?: Layer.Layer<FSUtil.Service>
 }) {
   return AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node]), [
+    ...(input.fs === undefined ? [] : [FSUtil.node.replace(input.fs)]),
     WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
     Location.node.replace(
       Layer.succeed(
@@ -253,4 +258,64 @@ describe("config sources that are skipped", () => {
       expect(logged.filter((item) => item.path === aboveMoved)).toEqual([])
     }).pipe(Effect.provide(Logger.layer([logger])))
   })
+
+  // Class 4: the folder is decided before its file is read, and the disk can change in between. The entry is placed again
+  // once it is read, so a start folder that became a link to a folder outside the project while its file was read applies
+  // as an untrusted folder's entry, with what such a folder may not supply taken out. The real file system makes the change
+  // at that moment, right after the file is read.
+  it.live("an entry whose folder the disk moved outside the project while it was read applies as untrusted", () =>
+    Effect.gen(function* () {
+      const layout = yield* folders
+      const elsewhere = path.join(path.dirname(layout.work), "elsewhere-later")
+      const own = path.join(layout.inner, "orbit.json")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(elsewhere, { recursive: true })
+        await Bun.write(own, JSON.stringify({ username: "INNER-USER", plugins: ["./held.ts"] }))
+      })
+      let move = false
+      const moving = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return FSUtil.Service.of({
+            ...real,
+            readFileStringSafe: (file) =>
+              real.readFileStringSafe(file).pipe(
+                Effect.tap(() =>
+                  move && file === own
+                    ? Effect.promise(async () => {
+                        move = false
+                        await fs.rm(layout.inner, { recursive: true, force: true })
+                        await fs.symlink(elsewhere, layout.inner, "junction")
+                      })
+                    : Effect.void,
+                ),
+              ),
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const entry = Effect.gen(function* () {
+        const config = yield* Config.Service
+        return (yield* config.entries()).find(
+          (item): item is Document => item.type === "document" && item.path === own,
+        )
+      })
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        yield* trust.grant(layout.repo, { persist: true, via: "test" })
+        yield* reread
+        // The control: while the folder stays the project's, its entry applies as it is.
+        expect((yield* entry)?.trusted).not.toBe(false)
+        expect((yield* entry)?.info.plugins).toEqual(["./held.ts"])
+
+        move = true
+        yield* reread
+        expect(move).toBe(false)
+        const moved = yield* entry
+        expect(moved?.trusted).toBe(false)
+        expect(moved?.info.plugins).toBeUndefined()
+        expect(moved?.withheld).toContain("plugins")
+      }).pipe(Effect.provide(loader({ ...layout, directory: layout.inner, fs: moving })))
+    }),
+  )
 })
