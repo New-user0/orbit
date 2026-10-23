@@ -8,7 +8,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, type Types } from "effect"
 import { Document, Info, type Entry, type Scope } from "@orbit/schema/config"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -549,8 +549,8 @@ describe("memory.directory", () => {
                 transform: (callback) =>
                   agents.transform((editor) =>
                     callback({
-                      list: () => editor.list(),
-                      get: (id) => editor.get(Agent.ID.make(id)),
+                      list: () => editor.list() as Types.DeepMutable<Agent.Info>[],
+                      get: (id) => editor.get(Agent.ID.make(id)) as Types.DeepMutable<Agent.Info> | undefined,
                       default: (id) => editor.default(id === undefined ? undefined : Agent.ID.make(id)),
                       update: (id, update) => editor.update(Agent.ID.make(id), update),
                       remove: (id) => editor.remove(Agent.ID.make(id)),
