@@ -1684,4 +1684,18 @@ describe("PatchTool records every file it changed, for code rewind", () => {
       }),
     ),
   )
+
+  it.live("names a file it failed to delete", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "gone.txt"), "gone\n"))
+        failRemoveErrorTarget = "gone.txt"
+        const failure = yield* registry.snapshot().pipe(
+          Effect.flatMap((tools) => tools.execute(call("*** Begin Patch\n*** Delete File: gone.txt\n*** End Patch"))),
+          Effect.flip,
+        )
+        expect(failure.metadata?.files).toEqual([{ file: "gone.txt" }])
+      }),
+    ),
+  )
 })
