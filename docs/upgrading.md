@@ -3256,15 +3256,16 @@ Only what the session itself wrote is watched: a file it only read is not report
 ends the watch. A touch, a change of line endings or of the final line break alone, a notebook, an image, a file with a
 NUL byte, a folder in the file's place and a file longer than one read are not reported. A deleted file is forgotten. A
 file that a `Read` deny rule names, or that a link now leads to, is skipped, as is a file outside the project that an
-`external_directory` deny rule covers, a file of the project that has become a link leading out of it, and, once the
-project's trust is revoked, any file outside it. A subagent's session is told about the files it wrote, and what Orbit
+`external_directory` deny rule covers, a file of the project that has become a link leading out of it, a file outside
+it that has become a link leading out of its folder, and, once the project's trust is revoked, any file outside it. A subagent's session is told about the files it wrote, and what Orbit
 holds about its files is released when its run ends, as it is when a session is deleted. Clients show nothing for
 these rows, and `orb run --bare` adds none.
 
 After a restart, the first step of each session rebuilds what it saw from its history since the latest compaction: a
 whole `Read`, a `Write` (whether or not the call succeeded) and an `Edit` that succeeded. Changes made while Orbit was
 not running are then reported, and a file known this way can be edited without a new read. Only files inside the
-project are rebuilt, at most the 100 named most recently. A continued subagent rebuilds the same way at its first step,
+project that `Read` would open without a question are rebuilt, at most the 100 named most recently: a file under an ask
+rule, such as the built-in one for `.env` files, is left out. A continued subagent rebuilds the same way at its first step,
 so a file it read only in part must be read again before an edit. A file tracked for freshness is now dropped once a
 session tracks more than 100 files or 25 MB of written text, least recently used first, and must be read again before
 an edit.
@@ -3277,7 +3278,7 @@ an edit.
 ### The active built-in output style is named on every step
 
 When `output_style` names a built-in style (`explanatory` or `learning`, in any letter case), the main conversation gets
-a short hidden reminder on each step that the style is active. The default style and a style that a file defines add
+a short hidden reminder on each step that its replies follow that style. The default style and a style that a file defines add
 nothing, and subagents and `orb run --bare` get nothing.
 
 **Affects:** people who use a built-in output style.
