@@ -269,7 +269,7 @@ describe("Snapshot.capture after a tracked folder became a link", () => {
         const changed = yield* snapshot.diff({
           from: before,
           to: after,
-          paths: ["sub/keep.txt", "safe.txt"].map(RelativePath.make),
+          paths: [RelativePath.make("sub/keep.txt"), RelativePath.make("safe.txt")],
         })
         expect(changed.map((file) => [file.file, file.status])).toEqual([
           ["safe.txt", "modified"],

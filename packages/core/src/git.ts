@@ -545,13 +545,11 @@ const layer = Layer.effect(
       )
       // A tracked file whose folder became a link since the last capture is no longer in the work tree, and git refuses
       // to check or add a path beyond a link, which would fail the whole capture: it leaves the index instead.
-      const linked = yield* Effect.filter(tracked, (file) => beyondLink(input.repository.worktree, file), {
-        concurrency: 8,
-      })
+      const linked = yield* linkedPaths(input.repository.worktree, tracked)
       const candidates = Array.from(new Set([...tracked, ...untracked]))
-        .filter((file) => !linked.includes(file))
+        .filter((file) => !linked.has(file))
         .map((file) => RelativePath.make(file))
-      if (!candidates.length && !linked.length) return { skipped: [] }
+      if (!candidates.length && !linked.size) return { skipped: [] }
       const excluded = input.ignores
         ? yield* ignored({ repository: input.ignores, paths: candidates })
         : new Set<RelativePath>()
@@ -602,7 +600,11 @@ const layer = Layer.effect(
       paths: readonly RelativePath[]
       tracked?: "keep"
     }) {
-      if (!input.paths.length) return new Set<RelativePath>()
+      // Git refuses to answer for a path beyond a link (a tracked folder that became one after a capture), and the refusal
+      // would fail every capture and comparison that asks: such a path is answered as not ignored.
+      const linked = yield* linkedPaths(input.repository.worktree, input.paths)
+      const paths = input.paths.filter((file) => !linked.has(file))
+      if (!paths.length) return new Set<RelativePath>()
       const result = yield* proc
         .run(
           ChildProcess.make(
@@ -625,7 +627,7 @@ const layer = Layer.effect(
           // `check-ignore` refuses `--literal-pathspecs`, and reads a leading `:` as pathspec magic: `:memo` would answer
           // for `memo`, and `:!x` or `:(icase)x` would stop the command and with it the capture or comparison that asked.
           // Behind `./` the name keeps its colon, and it is given back with the same `./` in front.
-          { stdin: input.paths.map((file) => `./${file}\0`).join("") },
+          { stdin: paths.map((file) => `./${file}\0`).join("") },
         )
         .pipe(
           Effect.mapError(
@@ -996,22 +998,32 @@ function nuls(text: string) {
   return text.split("\0").filter(Boolean)
 }
 
-/** Whether a folder on the way to a work-tree path, below the work tree, is a link (a junction on Windows included). */
-function beyondLink(worktree: string, file: string) {
-  const folders = file
-    .split("/")
-    .slice(0, -1)
-    .map((_, index, parts) => path.join(worktree, ...parts.slice(0, index + 1)))
+/**
+ * The work-tree paths with a link (a junction on Windows included) among their folders below the work tree, which git
+ * refuses to check or add ("beyond a symbolic link"). Each folder is looked at once.
+ */
+function linkedPaths<Name extends string>(worktree: string, files: readonly Name[]) {
+  const folders = (file: string) =>
+    file
+      .split("/")
+      .slice(0, -1)
+      .map((_, index, parts) => parts.slice(0, index + 1).join("/"))
+  const unique = Array.from(new Set(files.flatMap(folders)))
   return Effect.promise(() =>
     Promise.all(
-      folders.map((folder) =>
-        lstat(folder).then(
+      unique.map((folder) =>
+        lstat(path.join(worktree, folder)).then(
           (info) => info.isSymbolicLink(),
           () => false,
         ),
       ),
     ),
-  ).pipe(Effect.map((links) => links.includes(true)))
+  ).pipe(
+    Effect.map((links) => {
+      const linked = new Set(unique.filter((_, index) => links[index]))
+      return new Set(files.filter((file) => folders(file).some((folder) => linked.has(folder))))
+    }),
+  )
 }
 
 function resolvePath(cwd: string, value: string) {
