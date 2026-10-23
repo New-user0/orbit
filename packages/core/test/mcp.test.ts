@@ -3111,6 +3111,16 @@ describe("MCP tool traits", () => {
     expect(Object.keys(McpTool.traits(tool(input)))).not.toContain("displayName")
   })
 
+  // tool-runtime-8: as the reference declares for its MCP tool. The 50,000 ceiling makes it 50,000 unless the person raises
+  // `tool_output.max_result_chars`, and no annotation changes it.
+  test.each([
+    ["no annotations", {}],
+    ["a read-only hint", { annotations: { readOnlyHint: true } }],
+  ] as const)("declares 100,000 characters as the result limit with %s", async (_, input) => {
+    expect(McpTool.traits(tool(input)).maxResultChars).toBe(100_000)
+    expect((await resolved(input)).maxResultChars).toBe(100_000)
+  })
+
   test("writes out the control and format characters of a title a server chose", () => {
     const hostile = "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b\u202ee\r\nf\ng\rh"
     const displayName = McpTool.traits(tool({ title: hostile })).displayName

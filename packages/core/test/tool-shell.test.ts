@@ -2496,6 +2496,28 @@ describe("ShellTool", () => {
     ),
   )
 
+  // tool-runtime-8: a command that prints nothing returns no text of its own, so the step's empty marker names the tool,
+  // as the reference's empty shell result does. Control: a command that prints keeps its text.
+  it.live("gives no text for a command that prints nothing", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const silent = yield* executeTool(registry, call({ command: "exit 0" }, "call-silent"))
+            expect(silent.status).toBe("completed")
+            expect(silent.metadata).toMatchObject({ exit: 0 })
+            expect(silent.content?.every((item) => item.type === "text" && item.text.trim() === "")).toBe(true)
+            const spoken = yield* executeTool(registry, call({ command: helloCommand }, "call-spoken"))
+            expect(spoken.content?.[0]).toEqual({ type: "text", text: "hello" })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
   it.live(
     "truncates the model view and points at the saved output file when output overflows",
     () =>

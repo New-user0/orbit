@@ -689,6 +689,8 @@ describe("ConfigTrust.stamp", () => {
   test.each([
     ["media", { image: { auto_resize: false } }, { image: { auto_resize: true } }],
     ["tool_output", { max_lines: 100 }, { max_lines: 5000 }],
+    // tool-runtime-8: the ceiling on every saved-result threshold.
+    ["tool_output", { max_result_chars: 100 }, { max_result_chars: 200_000 }],
     ["compaction", { auto: false, buffer: 100 }, { auto: true, buffer: 20000 }],
   ] as const)("keeps an untrusted folder from setting %s", (field, projectValue, userValue) => {
     const user = document("user", { [field]: userValue })
