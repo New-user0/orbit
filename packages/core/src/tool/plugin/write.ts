@@ -110,7 +110,10 @@ export const Plugin = {
                       Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
                     )
                   : written
-                yield* ledger.recordWrite(context.sessionID, target.absolute, final)
+                yield* ledger.recordWrite(context.sessionID, target.absolute, {
+                  ...final,
+                  place: FileAccess.realPlace(target),
+                })
                 return result
               }).pipe(fileMutation.withLock([target.absolute]))
             }).pipe(

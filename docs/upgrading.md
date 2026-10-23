@@ -3257,7 +3257,8 @@ ends the watch. A touch, a change of line endings or of the final line break alo
 NUL byte, a folder in the file's place and a file longer than one read are not reported. A deleted file is forgotten. A
 file that a `Read` deny rule names, or that a link now leads to, is skipped, as is a file outside the project that an
 `external_directory` deny rule covers, a file of the project that has become a link leading out of it, a file outside
-it that has become a link leading out of its folder, and, once the project's trust is revoked, any file outside it. A subagent's session is told about the files it wrote, and what Orbit
+it that no longer really is where the session wrote it because the file, its folder or a folder above it has become a
+link or junction, and, once the project's trust is revoked, any file outside it. A subagent's session is told about the files it wrote, and what Orbit
 holds about its files is released when its run ends, as it is when a session is deleted. Clients show nothing for
 these rows, and `orb run --bare` adds none.
 

@@ -36,6 +36,12 @@ export interface Seen {
    * and `seed` keep it, and a read drops it. A record with text is one the file-change reminder watches.
    */
   readonly text?: string
+  /**
+   * Where the Session's write really put the file, every link followed, as the write tool resolved it. Only
+   * `recordWrite` keeps it. The file-change reminder reads a file outside the project again only while it still leads
+   * there, so a link swapped in since, for the file or any folder above it, cannot send that read elsewhere.
+   */
+  readonly place?: string
 }
 
 /** A record that holds text, which the file-change reminder compares the file on disk with. */
@@ -180,6 +186,7 @@ const layer = Layer.effect(
         mtimeMs: seen.mtimeMs,
         ...(seen.digest === undefined ? {} : { digest: seen.digest }),
         ...(seen.text === undefined ? {} : { text: seen.text }),
+        ...(seen.place === undefined ? {} : { place: seen.place }),
       })
       sessions.set(sessionID, files)
       bound(files)

@@ -171,6 +171,8 @@ export const leadsOf = (targets: readonly Target[]) => {
   )
   return entries.length === 0 ? {} : { leads: Object.fromEntries(entries) }
 }
+/** Where a target really is once its links, and the links of every folder above it, are followed. */
+export const realPlace = (target: Pick<Target, "place" | "leads">) => target.leads ?? target.place
 const slash = (value: string) => value.replaceAll("\\", "/")
 const invocation = (context: Invocation) => ({
   sessionID: context.sessionID,

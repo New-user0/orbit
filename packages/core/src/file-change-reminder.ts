@@ -87,27 +87,28 @@ export const durable = (services: Services): Durable => ({
  * The target a path stands for, when a read of it needs nobody's answer and no deny rule stops it, and undefined
  * otherwise. It is resolved once, as the read tool resolves it (a share or device spelling is refused before any disk is
  * read), and the checks are made on that same target: the project's containment at this moment (`reachable`, which
- * follows links), whether a name now leads out of the folder the session wrote it in, the Read deny rules on the file and
- * on where it leads, and the deny rules for the folder outside the project it is in. An ask rule does not stop it: the
- * reference consults deny rules only.
+ * follows links), whether a target outside the project still really is where the session's write put it (`place`, the
+ * ledger's record of that), the Read deny rules on the file and on where it leads, and the deny rules for the folder
+ * outside the project it is in. An ask rule does not stop it: the reference consults deny rules only.
  */
 export const gate = Effect.fnUntraced(function* (
   services: Pick<Services, "access" | "permission" | "trust">,
   sessionID: Session.ID,
   agent: Agent.ID,
   file: string,
+  place?: string,
 ) {
   const target = yield* services.access.locate(file, "file").pipe(Effect.orElseSucceed(() => undefined))
   if (target === undefined) return undefined
   if (!(yield* services.trust.reachable(target.absolute))) return undefined
+  // Outside the project, the person allowed the place the write went to, not whatever its name leads to now. A link
+  // swapped in since, for the file or for any folder above it, moves where the name really leads, and the read tool
+  // would ask about that new place, so the file is skipped. Without a recorded place (a file from history, which is
+  // seeded only inside the project) nothing outside it is read. Both sides are real paths, compared as the resolver
+  // compares them.
   if (target.externalDirectory !== undefined) {
-    // The resolver gives a target a place other than its name only when a name in the project's folders leads out of
-    // them, and a name outside the project keeps its place and has `leads` set when a link takes it elsewhere. Either way
-    // the file now leads to a place nobody allowed (the read tool would ask), so it is skipped. A file that stays in the
-    // outside folder the session wrote it in is still read. Both sides of the comparison are real paths.
-    if (target.place !== target.absolute) return undefined
-    const folder = yield* services.trust.leads(target.externalDirectory.directory)
-    if (target.leads !== undefined && !FSUtil.contains(folder, target.leads)) return undefined
+    const now = FileAccess.realPlace(target)
+    if (place === undefined || !(FSUtil.contains(place, now) && FSUtil.contains(now, place))) return undefined
   }
   const base = { sessionID, agent }
   const external = services.access.externalRequest([target], base)
@@ -132,7 +133,7 @@ const readRequest = (
 
 const changed = Effect.fnUntraced(function* (services: Services, input: Input, file: FileLedger.Watched) {
   const sessionID = input.session.id
-  const target = yield* gate(services, sessionID, input.agent.id, file.path)
+  const target = yield* gate(services, sessionID, input.agent.id, file.path, file.seen.place)
   if (target === undefined) return []
   // A read of no bytes follows links, as the time a read records does. A file that cannot be opened is not newer.
   const time = yield* services.environment.files.read(target.absolute, { offset: 0, length: 0 }).pipe(

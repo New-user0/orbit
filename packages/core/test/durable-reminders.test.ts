@@ -40,6 +40,7 @@ import { Tool } from "@orbit/core/tool"
 import { ToolNames } from "@orbit/core/tool/names"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
 import { NotebookEditTool } from "@orbit/core/tool/plugin/notebook-edit"
+import { PatchTool } from "@orbit/core/tool/plugin/patch"
 import { ReadTool } from "@orbit/core/tool/plugin/read"
 import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
@@ -104,6 +105,11 @@ const writeNode = makeLocationNode({
   layer: Layer.effectDiscard(registerToolPlugin(WriteTool.Plugin)),
   deps: [...writerDeps],
 })
+const patchNode = makeLocationNode({
+  name: "test/durable-reminders-patch",
+  layer: Layer.effectDiscard(registerToolPlugin(PatchTool.Plugin)),
+  deps: [...writerDeps],
+})
 const notebookNode = makeLocationNode({
   name: "test/durable-reminders-notebook",
   layer: Layer.effectDiscard(registerToolPlugin(NotebookEditTool.Plugin)),
@@ -151,6 +157,7 @@ const graph = AppNodeBuilder.build(
     editNode,
     writeNode,
     notebookNode,
+    patchNode,
     FileLedger.node,
     FileMutation.node,
     Tool.node,
@@ -832,33 +839,100 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  // Review row (class 3, 4): a file outside the project that the session wrote, swapped for a link into another outside
-  // folder, now leads to a place nobody allowed, which the read tool would ask about, so it is skipped although no rule
-  // denies it. A file in the allowed folder changed in place is the control and is still reported (owner Q2).
-  linked("an outside file swapped for a link into another outside folder is skipped", () =>
+  // Review rows (class 3, 4): a file the session wrote stays readable only while it really is where the write put it.
+  // A link swapped in since, for the file itself, for its folder or for a folder above it, moves where its name leads
+  // to a place nobody allowed, which the read tool would ask about, so it is skipped although no rule denies it. Each
+  // cell writes the file in an outside folder the person allowed, or in the project, swaps one part of its path for a
+  // link (a junction on Windows for a folder, which needs no privilege) into another outside folder holding KEY-MARKER,
+  // and runs with the project trusted and with its trust revoked. Controls changed in place: a file in the allowed
+  // outside folder, reported while the project is trusted (owner Q2), and a project file, reported either way.
+  const swaps = [
+    { part: "the file", file: ["credentials"], link: ["credentials"] },
+    { part: "its folder", file: ["sub", "credentials"], link: ["sub"] },
+    { part: "a folder above it", file: ["a", "b", "credentials"], link: ["a"] },
+  ] as const
+  const swapCells = swaps.flatMap((swap) =>
+    (["outside", "project"] as const).flatMap((home) =>
+      (["trusted", "revoked"] as const).map((trust) => ({ ...swap, home, trust })),
+    ),
+  )
+  for (const cell of swapCells) {
+    const row = cell.part === "the file" && !canLinkFile ? it.live.skip : it.live
+    row(
+      `a file in the ${cell.home} whose path has ${cell.part} swapped for a link elsewhere is skipped (${cell.trust})`,
+      () =>
+        Effect.gen(function* () {
+          const allowed = (yield* tmpdirScoped()).path
+          const other = (yield* tmpdirScoped()).path
+          const h = yield* setup([
+            allowAll,
+            { action: "external_directory", resource: "*", effect: "ask" },
+            { action: "external_directory", resource: `${slash(allowed)}/*`, effect: "allow" },
+          ])
+          const root = cell.home === "outside" ? allowed : h.location.directory
+          const swapped = path.join(root, ...cell.file)
+          const control = path.join(allowed, "control.txt")
+          const home = h.inside("home.txt")
+          yield* Effect.promise(() => fs.mkdir(path.dirname(swapped), { recursive: true }))
+          yield* h.write(swapped, text(twenty))
+          yield* h.write(control, text(twenty))
+          yield* h.write(home, text(twenty))
+          if (cell.trust === "revoked") yield* h.trust.revoke()
+          // The link stands where the swapped part was, and leads to the same path below the other folder.
+          const link = path.join(root, ...cell.link)
+          const credentials = path.join(other, ...cell.file)
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.dirname(credentials), { recursive: true })
+            await fs.writeFile(credentials, text(["KEY-MARKER"]))
+            await fs.rm(link, { recursive: true })
+            await fs.symlink(path.join(other, ...cell.link), link, cell.part === "the file" ? "file" : "junction")
+          })
+          yield* h.stamp(credentials)
+          yield* h.change(control, text(["changed"]))
+          yield* h.change(home, text(["changed"]))
+          const rows = yield* h.changes()
+          const reported = cell.trust === "trusted" ? [control, home] : [home]
+          expect(labels(rows)).toEqual(reported.map((file) => expect.stringContaining(file)))
+          expect(JSON.stringify(rows)).not.toContain("KEY-MARKER")
+        }),
+    )
+  }
+
+  // The place each writing tool records is what lets an outside file be read again, so a file outside the project that
+  // the session last changed with Edit or Patch is still reported, and one changed with NotebookEdit still has its
+  // freshness refreshed. Write's row is "an outside file the session wrote with permission is reported" above.
+  it.live("an outside file the session last changed with Edit or Patch is reported", () =>
     Effect.gen(function* () {
-      const allowed = (yield* tmpdirScoped()).path
-      const other = (yield* tmpdirScoped()).path
-      const h = yield* setup([
-        allowAll,
-        { action: "external_directory", resource: "*", effect: "ask" },
-        { action: "external_directory", resource: `${slash(allowed)}/*`, effect: "allow" },
-      ])
-      const swapped = path.join(allowed, "out.txt")
-      const control = path.join(allowed, "control.txt")
-      const credentials = path.join(other, "credentials")
-      yield* h.write(swapped, text(twenty))
-      yield* h.write(control, text(twenty))
-      yield* Effect.promise(async () => {
-        await fs.writeFile(credentials, text(["KEY-MARKER"]))
-        await fs.rm(swapped)
-        await fs.symlink(credentials, swapped)
-      })
-      yield* h.stamp(credentials)
-      yield* h.change(control, text(["changed"]))
-      const rows = yield* h.changes()
-      expect(labels(rows)).toEqual([expect.stringContaining(control)])
-      expect(JSON.stringify(rows)).not.toContain("KEY-MARKER")
+      const outside = (yield* tmpdirScoped()).path
+      const h = yield* setup()
+      const edited = path.join(outside, "edited.txt")
+      const patched = path.join(outside, "patched.txt")
+      yield* Effect.promise(() => Promise.all([edited, patched].map((file) => fs.writeFile(file, text(twenty)))))
+      for (const file of [edited, patched]) expect(status(yield* h.run("Read", { file_path: file }))).toBe("completed")
+      expect(status(yield* h.run("Edit", { file_path: edited, old_string: "line1\n", new_string: "one\n" }))).toBe(
+        "completed",
+      )
+      const patch = `*** Begin Patch\n*** Update File: ${patched}\n@@\n-line1\n+one\n*** End Patch`
+      expect(status(yield* h.run("Patch", { patchText: patch }))).toBe("completed")
+      yield* h.change(edited, text(["edited changed"]))
+      yield* h.change(patched, text(["patched changed"]))
+      expect(labels(yield* h.changes())).toEqual([expect.stringContaining(edited), expect.stringContaining(patched)])
+    }),
+  )
+
+  it.live("an outside notebook the session edited has its freshness refreshed", () =>
+    Effect.gen(function* () {
+      const outside = (yield* tmpdirScoped()).path
+      const h = yield* setup()
+      const file = path.join(outside, "nb.ipynb")
+      yield* Effect.promise(() => fs.writeFile(file, notebook("a")))
+      expect(status(yield* h.run("Read", { file_path: file }))).toBe("completed")
+      const edit = (source: string) =>
+        h.run("NotebookEdit", { notebook_path: file, mode: "replace", cellId: "calc", source })
+      expect(status(yield* edit("b"))).toBe("completed")
+      yield* h.change(file, notebook("zzz"))
+      expect(yield* h.changes()).toEqual([])
+      expect(status(yield* edit("c"))).toBe("completed")
     }),
   )
 
@@ -1000,6 +1074,24 @@ describe("the re-read gate (class 4, 7)", () => {
       expect(yield* FileChangeReminder.gate(services, h.session.id, build, file)).toMatchObject({ absolute: file })
       const gone = Session.ID.make("ses_durable_reminders_gone")
       expect(yield* FileChangeReminder.gate(services, gone, build, file)).toBeUndefined()
+    }),
+  )
+
+  // Gate's row (class 3, 4): outside the project only the place a write recorded is read again. With no recorded place
+  // (as for a file from history) nothing outside is read; the place the write tool resolved is the control.
+  it.live("an outside file is read again only at the place its write recorded", () =>
+    Effect.gen(function* () {
+      const outside = (yield* tmpdirScoped()).path
+      const h = yield* setup()
+      const file = path.join(outside, "away.txt")
+      yield* Effect.promise(() => fs.writeFile(file, text(["one"])))
+      const access = yield* FileAccess.Service
+      const services = { access, permission: yield* Permission.Service, trust: h.trust }
+      const place = FileAccess.realPlace(yield* access.resolve({ path: file, kind: "file" }))
+      expect(yield* FileChangeReminder.gate(services, h.session.id, build, file, place)).toMatchObject({
+        absolute: file,
+      })
+      expect(yield* FileChangeReminder.gate(services, h.session.id, build, file)).toBeUndefined()
     }),
   )
 })
