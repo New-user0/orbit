@@ -3,7 +3,7 @@
 // `session.recap.recorded`, projected as a `recap` message, never lowered into a model request, and written at most
 // once per user turn, however many clients ask.
 import { beforeEach, expect } from "bun:test"
-import { LLMEvent, LanguageModel, ToolDefinition, type LLMRequest } from "@orbit/ai"
+import { LLMEvent, LanguageModel, SystemPart, ToolDefinition, type LLMRequest } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { TestLLM } from "@orbit/ai/testing"
 import { Agent } from "@orbit/core/agent"
@@ -47,6 +47,7 @@ import { SessionEvent as SessionEventSchema } from "@orbit/schema/session-event"
 import { eq } from "drizzle-orm"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Context, Effect, Fiber, Layer, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
@@ -468,6 +469,45 @@ it.effect("a recap the person came back during is dropped: interrupting it recor
     yield* gate.release
     yield* test.push(answer("again"))
     expect(yield* recap.generate(sessionID)).toEqual({ text: "again" })
+  }),
+)
+
+it.effect("a recap has no deadline of its own: a slow answer is still recorded", () =>
+  Effect.gen(function* () {
+    const { bus, db, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    yield* test.push(answer("Slow but done."))
+    const gate = yield* test.gate()
+
+    const fiber = yield* recap.generate(sessionID).pipe(Effect.forkChild)
+    yield* gate.started
+    // Well past the 30 second default of other side queries: only the person coming back ends a recap.
+    yield* TestClock.adjust("10 minutes")
+    yield* gate.release
+
+    expect(yield* Fiber.join(fiber)).toEqual({ text: "Slow but done." })
+    expect(yield* recordedRecaps(db)).toHaveLength(1)
+  }),
+)
+
+it.effect("a recap drops the system parts that generate hooks add, as well as the Session's own", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "generate", (event) =>
+      Effect.sync(() => {
+        event.system.push(SystemPart.make("You are a hooked identity."))
+      }),
+    )
+    yield* say(bus, "Fix the build")
+    yield* test.push(answer("Fixing the build."))
+
+    expect(yield* recap.generate(sessionID)).toEqual({ text: "Fixing the build." })
+    const [request] = yield* test.requests()
+    expect(request?.system).toEqual([])
+    expect(allText(request)).not.toContain("hooked identity")
   }),
 )
 
