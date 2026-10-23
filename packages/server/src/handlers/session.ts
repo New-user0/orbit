@@ -654,11 +654,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           return { data: { text } }
         }),
       )
+      // Both assist routes ask the model about the folder's content (tool output, history and instruction files), so the
+      // folder is trusted first; the session's own Location is the one checked and the one asked in.
       .handle(
         "session.assist.label",
         Effect.fn(function* (ctx) {
-          // Both assist routes ask the model about the folder's content (tool output, history and instruction files),
-          // so the folder is trusted first; the session's own Location is the one checked and the one asked in.
           yield* requireTrusted()
           const label = yield* assist
             .label({ sessionID: ctx.params.sessionID, ...ctx.payload })

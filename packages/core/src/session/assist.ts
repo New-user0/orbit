@@ -71,9 +71,7 @@ export const layer = Layer.effect(
 
     // The trimmed text a side query answered, or why there is none: a blank answer is empty, and a model that could not
     // be asked is unavailable, which the client only sees as no text, so it is logged here (class 7).
-    const ask = (
-      input: SideQuery.TextInput,
-    ): Effect.Effect<{ readonly text: string } | { readonly reason: "empty" | "unavailable" }> =>
+    const ask = (input: SideQuery.TextInput) =>
       sideQuery.text(input).pipe(
         Effect.map((result) => ({ text: result.text.trim() })),
         Effect.catch(
@@ -163,7 +161,6 @@ export const layer = Layer.effect(
       const previous = writing.get(session.id)
       if (previous) yield* Deferred.succeed(previous, undefined)
       writing.set(session.id, cancel)
-      // A prompt admitted for the session makes the suggestion stale, as a newer request does.
       const admitted = bus.subscribe(SessionEvent.InboxEnqueued).pipe(
         Stream.filter((event) => event.data.sessionID === session.id),
         Stream.take(1),
@@ -286,6 +283,14 @@ const AFFIRMATIONS = new Set([
   "quit",
   "no",
 ])
+// Text about the suggestion rather than a suggestion, matched against the lower-cased text.
+const META_TEXT = [
+  /^nothing found\.?$/,
+  /^nothing to suggest/,
+  /^no suggestion/,
+  /\bsilence is\b|\bstay(s|ing)? silent\b/,
+  /^\W*silence\W*$/,
+]
 const ERROR_OPENINGS = [
   "api error:",
   "prompt is too long",
@@ -337,14 +342,7 @@ function filter(text: string): SessionAssist.SuggestionFilter | undefined {
   const words = text.split(/\s+/).filter(Boolean)
   if (text === "") return "empty"
   if (lower === "done") return "done"
-  if (
-    /^nothing found\.?$/.test(lower) ||
-    lower.startsWith("nothing to suggest") ||
-    lower.startsWith("no suggestion") ||
-    /\bsilence is\b|\bstay(s|ing)? silent\b/.test(lower) ||
-    /^\W*silence\W*$/.test(lower)
-  )
-    return "meta_text"
+  if (META_TEXT.some((pattern) => pattern.test(lower))) return "meta_text"
   if (/^\(.*\)$|^\[.*\]$/s.test(text)) return "meta_wrapped"
   if (ERROR_OPENINGS.some((opening) => lower.startsWith(opening))) return "error_message"
   if (/^\w+:\s/.test(text)) return "prefixed_label"
