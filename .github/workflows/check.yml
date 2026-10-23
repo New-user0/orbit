@@ -1,7 +1,9 @@
 name: check
 
 on:
+  # A pull request's branch is checked by its pull_request run alone; running push too doubled every run.
   push:
+    branches: [main, "m*-integration"]
   pull_request:
   workflow_dispatch:
 
