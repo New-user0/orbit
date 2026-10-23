@@ -543,9 +543,7 @@ const layer = Layer.effect(
         ],
         { concurrency: 2 },
       )
-      // A tracked file whose folder became a link since the last capture is no longer in the work tree, and git refuses
-      // to check or add a path beyond a link, which would fail the whole capture: it leaves the index instead.
-      const linked = yield* linkedPaths(input.repository.worktree, tracked)
+      const linked = yield* linkedPaths(input.repository.worktree, tracked) // these leave the index (see linkedPaths)
       const candidates = Array.from(new Set([...tracked, ...untracked]))
         .filter((file) => !linked.has(file))
         .map((file) => RelativePath.make(file))
@@ -600,9 +598,7 @@ const layer = Layer.effect(
       paths: readonly RelativePath[]
       tracked?: "keep"
     }) {
-      // Git refuses to answer for a path beyond a link (a tracked folder that became one after a capture), and the
-      // refusal would fail every capture and comparison that asks: such a path is answered as not ignored.
-      const linked = yield* linkedPaths(input.repository.worktree, input.paths)
+      const linked = yield* linkedPaths(input.repository.worktree, input.paths) // not ignored (see linkedPaths)
       const paths = input.paths.filter((file) => !linked.has(file))
       if (!paths.length) return new Set<RelativePath>()
       const result = yield* proc
@@ -806,10 +802,9 @@ const layer = Layer.effect(
                   ])
                   return
                 }
-                // The tree has no file here: only a file or a link is removed, never a folder with what it holds.
                 const absolute = path.join(input.repository.worktree, file)
                 const found = yield* Effect.promise(() => lstat(absolute).catch(() => undefined))
-                if (found?.isDirectory()) {
+                if (found?.isDirectory()) { // the tree has no file here: a folder is never removed with what it holds
                   yield* Effect.logWarning("restore left a folder where the snapshot has no file", { file })
                   return
                 }
@@ -1000,7 +995,10 @@ function nuls(text: string) {
 
 /**
  * The work-tree paths with a link (a junction on Windows included) among their folders below the work tree, which git
- * refuses to check or add ("beyond a symbolic link"). Each folder is looked at once.
+ * refuses to check or add ("beyond a symbolic link"). Each folder is looked at once. A tracked file whose folder became
+ * a link since the last capture is no longer in the work tree, and git's refusal would fail the whole capture or
+ * comparison that asked: a capture takes such a path out of the index instead of staging it, and the ignore check
+ * answers it as not ignored.
  */
 function linkedPaths<Name extends string>(worktree: string, files: readonly Name[]) {
   const folders = (file: string) =>
@@ -1009,16 +1007,11 @@ function linkedPaths<Name extends string>(worktree: string, files: readonly Name
       .slice(0, -1)
       .map((_, index, parts) => parts.slice(0, index + 1).join("/"))
   const unique = Array.from(new Set(files.flatMap(folders)))
-  return Effect.promise(() =>
-    Promise.all(
-      unique.map((folder) =>
-        lstat(path.join(worktree, folder)).then(
-          (info) => info.isSymbolicLink(),
-          () => false,
-        ),
-      ),
-    ),
-  ).pipe(
+  const isLink = (folder: string) =>
+    lstat(path.join(worktree, folder))
+      .then((info) => info.isSymbolicLink())
+      .catch(() => false)
+  return Effect.promise(() => Promise.all(unique.map(isLink))).pipe(
     Effect.map((links) => {
       const linked = new Set(unique.filter((_, index) => links[index]))
       return new Set(files.filter((file) => folders(file).some((folder) => linked.has(folder))))
