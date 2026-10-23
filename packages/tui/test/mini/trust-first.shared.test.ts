@@ -5,7 +5,10 @@ import { createApi, json } from "../fixture/tui-client"
 // The gate the build adds to the Mini, read by name so that this file compiles before it exists: until then every row
 // fails with the error below, which is the missing gate.
 const mini: Record<string, unknown> & {
-  readonly trustRefusal?: (input: { sdk: OrbitClient; directory: string }) => Promise<string | undefined>
+  readonly trustRefusal?: (input: {
+    sdk: OrbitClient
+    directory: string
+  }) => Promise<{ readonly refusal: string } | { readonly root: string }>
 } = await import("../../src/mini/trust.shared")
 
 // trust-first: nothing in the mini can ask the question, so `orb mini` is a headless door (class 12): in a folder that is
@@ -20,11 +23,16 @@ const status = (overrides: Partial<TrustStatus> = {}): TrustStatus => ({
   ...overrides,
 })
 
-async function refusal(respond: () => Response | Promise<Response>) {
+async function answer(respond: () => Response | Promise<Response>) {
   const fetch = Object.assign(async () => respond(), { preconnect: () => {} })
   if (mini.trustRefusal === undefined)
     throw new Error("the Mini has no trust gate: mini/trust.shared has no trustRefusal")
   return mini.trustRefusal({ sdk: createApi(fetch), directory: "/projects/app/packages" })
+}
+
+async function refusal(respond: () => Response | Promise<Response>) {
+  const result = await answer(respond)
+  return "refusal" in result ? result.refusal : undefined
 }
 
 test("refuses an untrusted folder that holds nothing back, and says how to trust it", async () => {
@@ -41,6 +49,12 @@ test("refuses a home directory and points at the terminal UI, which can trust it
 
 test("lets a trusted folder through: the control for the rows above and below", async () => {
   expect(await refusal(() => json(status({ trusted: true, source: "saved" })))).toBeUndefined()
+})
+
+// Class 3: the Mini bounds its own walks by the folder the server decided trust for, not by the folder it asked about or a
+// root it finds itself (`theme-project.test.ts` pins the theme walk).
+test("lets a trusted folder through with the folder the server decided trust for", async () => {
+  expect(await answer(() => json(status({ trusted: true, source: "saved" })))).toEqual({ root: "/projects/app" })
 })
 
 test.each([
@@ -65,8 +79,9 @@ test("refuses when the server does not answer in time", async () => {
   )
   if (mini.trustRefusal === undefined) throw new Error("the Mini has no trust gate")
   const started = Date.now()
-  const text = await mini.trustRefusal({ sdk: createApi(silent), directory: "/projects/app/packages" })
-  expect(text).toContain("/projects/app/packages")
+  expect(await mini.trustRefusal({ sdk: createApi(silent), directory: "/projects/app/packages" })).toEqual({
+    refusal: expect.stringContaining("/projects/app/packages"),
+  })
   expect(Date.now() - started).toBeLessThan(10_000)
 }, 15_000)
 

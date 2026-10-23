@@ -261,6 +261,7 @@ export async function resolveRunTheme(
   renderer: CliRenderer,
   config?: RunTuiConfig["theme"],
   mono = false,
+  root?: string,
 ): Promise<RunTheme> {
   if (mono) {
     const mode = renderer.themeMode ?? (await renderer.waitForThemeMode(300)) ?? config?.mode
@@ -285,7 +286,7 @@ export async function resolveRunTheme(
     return mode === "light" ? RUN_THEME_FALLBACK_LIGHT : RUN_THEME_FALLBACK
   }
 
-  const resolved = await themeSource(name, colors, mode)
+  const resolved = await themeSource(name, colors, mode, root)
     .then((source) => {
       const document = parseTheme(source, name)
       // Mini keeps the terminal background, so the opposite theme mode is not a safe fallback.
@@ -306,17 +307,19 @@ async function themeSource(
   name: string,
   colors: TerminalColors | undefined,
   mode: "dark" | "light",
+  root: string | undefined,
 ): Promise<ThemeDocumentSource> {
   if (name === "system" && colors) return generateSystem(colors, mode)
   const { Global } = await import("@orbit/util/global")
   // Mini starts only once the folder is trusted (`trustRefusal`), so the project's own themes are read with the user's,
-  // and nothing above the project's root (D7).
+  // and nothing above the project's root (D7). `root` is the folder the server decided trust for: the walk never starts
+  // above it, even where the mini's own walk would take a marker the server rejects (class 3).
   const custom = await discoverThemes(
     await themeDirectories({
       config: process.env.ORBIT_CONFIG_DIR ?? Global.Path.config,
       home: Global.Path.home,
       cwd: process.cwd(),
-      project: {},
+      project: { decided: root },
     }),
   )
   const source = custom[name] ?? allThemes()[name] ?? getOrbitTheme()
