@@ -852,6 +852,20 @@ describe("the re-read gate (class 4, 7)", () => {
       expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(fine)])
     }),
   )
+
+  // Gate's row (class 7): a rule check that fails is a refusal. Here the rules cannot be read because the session they
+  // belong to is gone; the same file for the live session is the control.
+  it.live("a deny check that fails refuses the file, with the live session's check as the control", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("checked.txt")
+      yield* Effect.promise(() => fs.writeFile(file, text(["one"])))
+      const services = { access: yield* FileAccess.Service, permission: yield* Permission.Service, trust: h.trust }
+      expect(yield* FileChangeReminder.gate(services, h.session.id, build, file)).toMatchObject({ absolute: file })
+      const gone = Session.ID.make("ses_durable_reminders_gone")
+      expect(yield* FileChangeReminder.gate(services, gone, build, file)).toBeUndefined()
+    }),
+  )
 })
 
 // After a restart the ledger is empty. The first collection for a session rebuilds it from the history after the latest
@@ -1209,6 +1223,73 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
+  const linkedRebuild = canLinkFile ? it.live : it.live.skip
+  // Gate's row (class 4): while the project is not trusted, a project file that is a link leading out is placed outside
+  // the project, so the rebuild reads nothing through it. Not seeded, it is not reported once the project is trusted
+  // again, while a project file the same history wrote is.
+  linkedRebuild("while the project's trust is revoked, a file from history that is a link leading out is not seeded", () =>
+    Effect.gen(function* () {
+      const outside = (yield* tmpdirScoped()).path
+      const h = yield* setup()
+      const key = path.join(outside, "id_rsa")
+      const linked = h.inside("linked.txt")
+      const control = h.inside("control.txt")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(key, text(["KEY-MARKER"]))
+        await fs.symlink(key, linked)
+      })
+      yield* h.change(control, text(["changed"]))
+      yield* h.trust.revoke()
+      const messages = history([
+        assistant("msg_0000000001", [
+          toolPart("e", "Edit", { file_path: linked, old_string: "a", new_string: "b" }, {}, T(60)),
+          toolPart("c", "Write", { file_path: control, content: text(["old"]) }, {}, T(60)),
+        ]),
+      ])
+      expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(control)])
+      yield* h.trust.grant({ persist: false, via: "test" })
+      yield* h.change(key, text(["KEY-CHANGED"]))
+      const rows = yield* h.changes(messages)
+      expect(rows).toEqual([])
+      expect(JSON.stringify(rows)).not.toContain("KEY-")
+    }),
+  )
+
+  // Gate's row (class 4): the rebuild asks `reachable` on the target it resolved before it seeds it. The resolution
+  // already places every link that leads out of an untrusted project outside it, so this row gives the producer a
+  // `reachable` that refuses, and reads what was seeded; the real one is the control.
+  it.live("seeds only a file that reachable accepts", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("history.txt")
+      yield* h.change(file, text(["now"]))
+      const messages = history([
+        assistant("msg_0000000001", [toolPart("w", "Write", { file_path: file, content: text(["old"]) }, {}, T(60))]),
+      ])
+      const access = yield* FileAccess.Service
+      const reader = yield* ReadToolFileSystem.Service
+      const permission = yield* Permission.Service
+      const environment = yield* Environment.Service
+      const agents = yield* Agent.Service
+      const agent = (yield* agents.get(build))!
+      const produce = (trust: ProjectTrust.Interface, session: Session.Info) =>
+        FileChangeReminder.durable({ ledger: h.ledger, access, reader, permission, trust, environment }).run({
+          session,
+          agent,
+          tools: [],
+          model: {} as never,
+          messages,
+          step: 1,
+          firstStep: true,
+        })
+      const refused = yield* h.create()
+      expect(yield* produce({ ...h.trust, reachable: () => Effect.succeed(false) }, refused)).toEqual([])
+      expect(yield* h.ledger.watched(refused.id)).toEqual([])
+      const entries = yield* produce(h.trust, h.session)
+      expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(file)])
+    }),
+  )
+
   it.live("refuses a device or pipe spelling in history before it opens anything", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -1224,7 +1305,13 @@ describe("the rebuild after a restart", () => {
                 }),
             )
           : undefined
-      const devices = process.platform === "win32" ? [pipe, "NUL", "CON", "\\\\.\\NUL"] : ["/dev/zero", "/dev/stdin"]
+      // A pipe inside the project is a place the read tool's resolution refuses too, and is never seeded.
+      const fifo = h.inside("pipe")
+      if (process.platform !== "win32") expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0)
+      const devices =
+        process.platform === "win32"
+          ? [pipe, "NUL", "CON", "\\\\.\\NUL", h.inside("NUL"), h.inside("aux.txt")]
+          : ["/dev/zero", "/dev/stdin", fifo]
       const control = h.inside("control.txt")
       yield* h.change(control, text(["changed"]))
       const messages = history([
@@ -1241,6 +1328,8 @@ describe("the rebuild after a restart", () => {
       )
       expect(connections).toEqual([])
       expect(labels(rows)).toEqual([expect.stringContaining(control)])
+      // Nothing was seeded for a device: the control's report ended its watch, and no other record holds text.
+      expect(yield* h.ledger.watched(h.session.id)).toEqual([])
     }),
   )
 })
