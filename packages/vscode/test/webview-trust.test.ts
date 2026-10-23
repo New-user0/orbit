@@ -76,7 +76,10 @@ test("the webview's banner calls a folder that is not trusted untrusted, and nev
   expect(banner().hidden).toBe(false)
   const [head, note] = banner().children
   expect(head!.children.map((node) => node.textContent)).toEqual(["⊙ Untrusted", "/work/repo"])
-  expect(note!.textContent).toBe("Orbit is leaving out what could run code or reach the network: .")
+  // Nothing of the folder is read, so the banner says so instead of an empty list of what it leaves out.
+  expect(note!.textContent).toBe("Nothing in this folder loads, and no work starts here, until you trust it.")
+  expect(banner().textContent).not.toContain("held back")
+  expect(banner().textContent).not.toContain("leaving out")
   expect(banner().textContent).not.toContain("Changed")
   expect(banner().textContent).not.toContain("changed since you trusted it")
   expect(banner().textContent).not.toContain("stays off")

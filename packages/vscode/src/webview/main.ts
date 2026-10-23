@@ -537,19 +537,10 @@ function paintTrust(trust: TrustView | undefined) {
     element("span", "strong", "⊙ Untrusted"),
     element("span", "muted grow trust-folder", trust.directory),
   )
-  const files = element("details", "trust-files")
-  files.append(
-    element("summary", undefined, `${trust.held.length} ${trust.held.length === 1 ? "file" : "files"} held back`),
-    ...trust.held.map((item) => {
-      const row = element("div", "trust-file")
-      row.append(element("span", "grow", item.name), element("span", "muted", item.kinds))
-      return row
-    }),
-  )
+  // Nothing of a folder that is not trusted is read, so there is no list of what it holds back (trust-first).
   banner.replaceChildren(
     head,
-    element("div", undefined, `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`),
-    files,
+    element("div", undefined, "Nothing in this folder loads, and no work starts here, until you trust it."),
     ...(trust.opened === undefined
       ? []
       : [element("div", "muted small", `VS Code opened ${trust.opened}. Trust is decided for the project's folder.`)]),

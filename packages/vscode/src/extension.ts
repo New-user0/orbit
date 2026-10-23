@@ -719,11 +719,11 @@ class Chat implements vscode.WebviewViewProvider {
     this.status.tooltip = waiting ? "Orbit is waiting for your review" : "Open Orbit"
   }
 
-  // The indicator shows while the folder is untrusted and holds something back, and the command is offered then only.
+  // The indicator shows while the folder is untrusted, and the command is offered then only.
   private paintTrust() {
     void vscode.commands.executeCommand("setContext", "orbit.untrusted", this.trust !== undefined)
     if (!this.trust) return this.untrusted.hide()
-    this.untrusted.tooltip = `Orbit is leaving out ${this.trust.summary} of ${this.trust.directory} until you trust it. Select to review.`
+    this.untrusted.tooltip = `Orbit loads nothing from ${this.trust.directory} until you trust it. Select to review.`
     this.untrusted.show()
   }
 
