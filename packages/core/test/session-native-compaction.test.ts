@@ -517,6 +517,7 @@ for (const [name, endpoint, flag, records] of [
       for (const row of rows) {
         expect(row.source).toBe("compaction")
         expect(row.tokens_input).toBeGreaterThan(0)
+        expect(row.tokens_output).toBe(0)
       }
     }),
   )

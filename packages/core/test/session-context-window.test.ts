@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { LanguageModel, LLMClient, LLMEvent } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Agent } from "@orbit/core/agent"
@@ -11,6 +11,7 @@ import { Project } from "@orbit/core/project"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionCompaction } from "@orbit/core/session/compaction"
+import { SessionContextWindow } from "@orbit/core/session/context-window"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
 import { SessionReminders } from "@orbit/core/session/reminders"
@@ -131,4 +132,30 @@ describe("automatic compaction threshold", () => {
       ).toEqual({ status: "skipped" })
     }),
   )
+})
+
+describe("context state", () => {
+  const found = SessionContextWindow.thresholds({ limit: { context: 200_000, output: 32_000 } })
+  if (!found) throw new Error("a 200,000-token window has thresholds")
+
+  // The warning band starts exactly 20,000 below the point the percentage counts down to.
+  for (const [used, auto, percentLeft, state] of [
+    [146_999, true, 12, "ok"],
+    [147_000, true, 12, "error"],
+    [159_999, false, 11, "ok"],
+    [160_000, false, 11, "error"],
+  ] as const)
+    test(`${used} used with automatic compaction ${auto} is ${state}`, () => {
+      expect(SessionContextWindow.state(used, found, auto)).toEqual({ percentLeft, state })
+    })
+
+  test("refuses a request no earlier than the compaction threshold", () => {
+    expect(SessionContextWindow.thresholds({ limit: { context: 40_000, output: 32_000 } })).toEqual({
+      window: 40_000,
+      effective: 20_000,
+      threshold: 20_000,
+      blocking: 20_000,
+    })
+    expect(found.blocking).toBe(177_000)
+  })
 })

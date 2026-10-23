@@ -85,7 +85,7 @@ import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
 import { ID, Model } from "@orbit/core/model"
 import { Location } from "@orbit/core/location"
 import { Provider } from "@orbit/core/provider"
-import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
+import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Logger, Queue, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -10666,19 +10666,39 @@ describe("context accounting", () => {
     )
   })
 
-  scenario("pauses automatic compaction after three failures in a turn", function* (s) {
-    yield* tripBreaker(s)
-    const exit = yield* s.runPrompt("Start").pipe(Effect.exit)
+  // The coordinator forks the drain when the layer is built, so the logger joins the layer rather than the test body.
+  const pauseWarnings: string[] = []
+  const pauseIt = testEffect(
+    layer.pipe(
+      Layer.provideMerge(
+        Logger.layer([
+          Logger.make(({ message }) => {
+            if (Array.isArray(message) && message[0] === "automatic compaction failed repeatedly; pausing it for this turn")
+              pauseWarnings.push(message[0])
+          }),
+        ]),
+      ),
+    ),
+  )
+  pauseIt.effect(
+    "pauses automatic compaction after three failures in a turn",
+    Effect.gen(function* () {
+      const s = yield* setup
+      yield* tripBreaker(s)
+      const exit = yield* s.runPrompt("Start").pipe(Effect.exit)
 
-    expect(Exit.isSuccess(exit)).toBe(true)
-    // One request per step, plus one summary request for each of steps two to four; step five sends no summary.
-    expect(s.requests).toHaveLength(8)
-    expect(yield* compactions(s)).toMatchObject([
-      { status: "failed", reason: "auto" },
-      { status: "failed", reason: "auto" },
-      { status: "failed", reason: "auto" },
-    ])
-  })
+      expect(Exit.isSuccess(exit)).toBe(true)
+      // The pause is logged once, when the third failure trips it.
+      expect(pauseWarnings).toHaveLength(1)
+      // One request per step, plus one summary request for each of steps two to four; step five sends no summary.
+      expect(s.requests).toHaveLength(8)
+      expect(yield* compactions(s)).toMatchObject([
+        { status: "failed", reason: "auto" },
+        { status: "failed", reason: "auto" },
+        { status: "failed", reason: "auto" },
+      ])
+    }),
+  )
 
   scenario("tries automatic compaction again on the next turn", function* (s) {
     yield* tripBreaker(s)
@@ -10711,6 +10731,77 @@ describe("context accounting", () => {
     expect(s.requests).toHaveLength(8)
     expect(userTexts(s.requests[7])).toContain("Steered into the turn")
     expect(yield* compactions(s)).toHaveLength(3)
+  })
+
+  scenario("tries automatic compaction again for a queued prompt in the same drain", function* (s) {
+    yield* tripBreaker(s)
+    yield* s.llm.push(summary("queued"), TestLLM.text("Second", "queued-final"))
+    yield* s.admit("Start")
+    yield* s.session.prompt({ sessionID, text: "Queued after", delivery: "queue", resume: false })
+    yield* s.resume
+
+    expect((yield* compactions(s)).map((message) => message.status)).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "completed",
+    ])
+  })
+
+  scenario("counts only consecutive failures: a completed compaction clears them", function* (s) {
+    yield* s.llm.push(
+      toolWithUsage("c1", 185_000),
+      summaryFails(),
+      toolWithUsage("c2", 185_000),
+      summaryFails(),
+      toolWithUsage("c3", 185_000),
+      summary("clears"),
+      toolWithUsage("c4", 185_000),
+      summaryFails(),
+      toolWithUsage("c5", 185_000),
+      summaryFails(),
+      toolWithUsage("c6", 185_000),
+      summaryFails(),
+      TestLLM.textWithUsage("Done", "clears-done", 185_000),
+    )
+    yield* s.runPrompt("Start")
+
+    expect((yield* compactions(s)).map((message) => message.status)).toEqual([
+      "failed",
+      "failed",
+      "completed",
+      "failed",
+      "failed",
+      "failed",
+    ])
+  })
+
+  scenario("clears the failures when a compaction after an overflow completes", function* (s) {
+    yield* s.llm.push(
+      toolWithUsage("c1", 185_000),
+      summaryFails(),
+      toolWithUsage("c2", 185_000),
+      summaryFails(),
+      [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
+      summary("overflow"),
+      toolWithUsage("c3", 185_000),
+      summaryFails(),
+      toolWithUsage("c4", 185_000),
+      summaryFails(),
+      toolWithUsage("c5", 185_000),
+      summaryFails(),
+      TestLLM.textWithUsage("Done", "overflow-done", 185_000),
+    )
+    yield* s.runPrompt("Start")
+
+    expect((yield* compactions(s)).map((message) => message.status)).toEqual([
+      "failed",
+      "failed",
+      "completed",
+      "failed",
+      "failed",
+      "failed",
+    ])
   })
 
   scenario("does not rebuild an overflowing request once automatic compaction is paused", function* (s) {
