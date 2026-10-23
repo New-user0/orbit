@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { TrustStatus } from "@orbit/client"
 import path from "node:path"
-import { asksTrust, prompt, readStatus, trusted, view } from "../src/trust"
+import { asksTrust, prompt, readStatus, tooltip, trusted, view } from "../src/trust"
 
 // What the extension says about trust, from the answer of the server. The strings in it come from the server and from the
 // names of folders that a repository chose, so they are written out before anything shows them.
@@ -41,6 +41,8 @@ test("lists nothing of an untrusted folder, whatever the answer carries", () => 
   expect(asked.detail).toContain("Orbit can read, change and run the files here")
   expect(asked.detail).not.toContain("orbit.json")
   expect(asked.accept).toBe("Trust this folder")
+  // The indicator says that nothing of the folder loads, not what an empty list leaves out.
+  expect(tooltip(view(untrusted, repo))).toBe(`Orbit loads nothing from ${repo} until you trust it. Select to review.`)
 })
 
 test("names the folder VS Code opened when it is not the project's folder", () => {
@@ -74,6 +76,7 @@ test("writes out the control and format characters that a repository chose, wher
   expect(shown.directory).toContain("\\x1b]0;pwned\\x07\\x1b[2K\\x9b\\u{202e}gpj.\\nrest")
   expect(asked.message + asked.detail.replaceAll("\n", "")).not.toMatch(controls)
   expect(trusted({ directory: shown.directory, persistent: true })).not.toMatch(controls)
+  expect(tooltip(shown)).not.toMatch(controls)
 })
 
 test("says what a grant lasts, and prints no command but the one that ends it", () => {

@@ -79,6 +79,11 @@ export function prompt(trust: TrustView) {
   }
 }
 
+/** The untrusted indicator's tooltip. Nothing of the folder is read, so there is no list of what it leaves out. */
+export function tooltip(trust: TrustView) {
+  return `Orbit loads nothing from ${trust.directory} until you trust it. Select to review.`
+}
+
 /** What to tell the person once the folder is trusted. */
 export function trusted(grant: TrustGrant) {
   return grant.persistent ? `Trusted ${grant.directory}.` : `Trusted ${grant.directory} until Orbit restarts.`
