@@ -77,49 +77,93 @@ jobs:
           ORBIT_EGRESS_IDLE_MS: "120000"
         # Each package's own test script, which sets up what its tests need (core's isolates home and config).
         # The log ends with the failing tests' names, which the full output buries.
+        # The run also writes line coverage, which the changed-line coverage gate reads from the artifact below.
         shell: bash
         run: |
           set -o pipefail
-          bun run test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
             grep -E '^\(fail\)|^error:|Unhandled error' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
             exit 1
           }
+      # Uploaded even when tests fail: a failure on a known row still leaves the coverage the gate needs.
+      - name: Upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcov-linux-${{ matrix.package }}
+          path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
 
   windows:
-    name: test on Windows (flow)
+    name: test on Windows (${{ matrix.package }})
     runs-on: windows-latest
+    # Windows runners are slower than Linux ones, and core and cli are the longest suites there.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [ai, cli, client, codemode, compat, core, flow, plugin, protocol, schema, sdk, server, theme, tui, util, vscode]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
       # The tests compare file contents byte for byte, so checkouts keep the line endings agents wrote.
       - name: Configure git
         run: git config --global core.autocrlf false
-      # The Windows image has no ripgrep, and the Grep and Glob rows of the cli step search with it. Chocolatey puts a
-      # shim in its bin folder, which is already on PATH. Printing the version fails the step when the shim is missing.
+      # The runner's TEMP is an 8.3 short name (C:\Users\RUNNER~1\...). Tests compare the folders they make under it
+      # with the real paths Orbit resolves, which use the long name, as TEMP does on a developer's machine.
+      - name: Use the long name of the temp folder
+        shell: bash
+        run: |
+          long="$(cygpath -w -l "$TEMP")"
+          echo "TEMP=$long" >> "$GITHUB_ENV"
+          echo "TMP=$long" >> "$GITHUB_ENV"
+          echo "$long"
+      # Git Bash exports SHELL when a developer opens it, and Orbit's session shell on Windows follows SHELL; without it
+      # the session shell is PowerShell and the tests' scripted Bash calls find no Bash tool. The runner's bash steps do
+      # not export it, so it is set to Git Bash here.
+      - name: Use Git Bash as the session shell
+        shell: bash
+        run: |
+          shell="$(cygpath -m "$(command -v bash)")"
+          echo "SHELL=$shell" >> "$GITHUB_ENV"
+          echo "$shell"
+      # The Windows image has no ripgrep, and the search tools and their tests use the one on PATH. Chocolatey's bin
+      # folder holds only a shim, which stops working once a test copies it into another folder, so the folder of the
+      # real rg.exe goes first on PATH. Printing the version fails the step when it is missing.
       - name: Install ripgrep
+        shell: bash
         run: |
           choco install ripgrep --yes --no-progress
-          rg --version
-      - name: Flow package
-        working-directory: packages/flow
-        run: bun test
-      # Windows semantics (path.win32, .exe heads, UNC paths, aliases) are exercised here as well as on Linux.
-      - name: Shell analysis
+          real="$(find /c/ProgramData/chocolatey/lib/ripgrep -name rg.exe | head -n1)"
+          test -n "$real"
+          cygpath -w "$(dirname "$real")" >> "$GITHUB_PATH"
+          "$real" --version
+      # The full suite, as on Linux: Windows semantics (path.win32, .exe heads, UNC paths, junctions, program lookup in
+      # the working folder) are only exercised here. Git Bash runs it, as the core tests expect.
+      - name: Test
+        working-directory: packages/${{ matrix.package }}
+        env:
+          ORBIT_EGRESS_IDLE_MS: "120000"
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run test --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::Failures"
+            grep -E '^\(fail\)|^error:|Unhandled error' "$RUNNER_TEMP/test.log" | tail -60
+            echo "::endgroup::"
+            exit 1
+          }
+      - name: Upload coverage
         if: ${{ !cancelled() }}
-        working-directory: packages/core
-        run: bun run test test/shell-analysis
-      # Instruction file patterns are matched as forward-slash paths, and a pattern written through a junction must match
-      # the folder it leads to; both are Windows behavior that the Linux job cannot show.
-      - name: Instruction files
-        if: ${{ !cancelled() }}
-        working-directory: packages/core
-        run: bun run test test/config/instruction-file.test.ts
-      - name: orb flow, the workflow tool and orb -p end to end
-        if: ${{ !cancelled() }}
-        working-directory: packages/cli
-        run: bun test --timeout 60000 test/flow.test.ts test/flow-verify.test.ts test/flow-team.test.ts test/workflow-tool.test.ts test/argv.test.ts test/print.test.ts test/config-overlay-flags.test.ts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcov-windows-${{ matrix.package }}
+          path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
 
   artifact:
     name: build and scan binary and extension
