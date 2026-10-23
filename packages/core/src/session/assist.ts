@@ -135,12 +135,7 @@ export const layer = Layer.effect(
       if (asks.permissions.some((request) => members.has(request.sessionID))) return "pending_permission" as const
       if (asks.forms.some((form) => members.has(form.sessionID))) return "elicitation_active" as const
       if (session.agent === PlanMode.agent) return "plan_mode" as const
-      if ((yield* inbox.list(session.id)).length > 0) return "busy" as const
-      // The end of an execution is recorded as an idle message, and published, a moment before the execution lets go of
-      // the session; a client that asks on that event is asking about a session that has finished.
-      if (!(yield* execution.isActive(session.id))) return undefined
-      const [latest] = yield* store.messages({ sessionID: session.id, order: "desc", limit: 1 }).pipe(Effect.orDie)
-      if (latest?.type !== "idle") return "busy" as const
+      if ((yield* execution.isActive(session.id)) || (yield* inbox.list(session.id)).length > 0) return "busy" as const
       return undefined
     })
 

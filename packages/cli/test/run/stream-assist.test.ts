@@ -296,7 +296,15 @@ test.each([
     args: ["-p", "--output-format", "stream-json", "--prompt-suggestions", "hi"],
     message: "--prompt-suggestions requires --input-format stream-json",
   },
+  {
+    args: ["-p", "--output-format", "stream-json", "--tool-labels", "hi"],
+    message: "--tool-labels requires --input-format stream-json",
+  },
   { args: ["run", "--format", "json", "--tool-labels", "hi"], message: "--tool-labels requires --format stream-json" },
+  {
+    args: ["run", "--format", "stream-json", "--tool-labels", "hi"],
+    message: "--tool-labels requires --input-format stream-json",
+  },
   {
     args: ["run", "--format", "stream-json", "--prompt-suggestions", "hi"],
     message: "--prompt-suggestions requires --input-format stream-json",
