@@ -249,6 +249,37 @@ describe("Snapshot.restore through a link made after the checkpoint", () => {
   )
 })
 
+// A rewind compares the checkpoint with a capture taken now. Git refuses to check or add a path beyond a link, so a
+// tracked folder that became a link would fail every capture of the folder, and the rewind would answer that snapshots
+// are unavailable. The tracked file behind the link leaves the capture instead, and the capture still records the
+// folder's other changes (the control).
+describe("Snapshot.capture after a tracked folder became a link", () => {
+  it.live("takes the capture without the files behind the link, and records the control", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const snapshot = yield* Snapshot.Service
+        const before = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(fixture.outside, "keep.txt"), "outside\n")
+          await fs.rename(path.join(fixture.project, "sub"), path.join(fixture.root, "moved-sub"))
+          await fs.symlink(fixture.outside, path.join(fixture.project, "sub"), linkType)
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        const after = yield* capture
+        const changed = yield* snapshot.diff({
+          from: before,
+          to: after,
+          paths: ["sub/keep.txt", "safe.txt"].map(RelativePath.make),
+        })
+        expect(changed.map((file) => [file.file, file.status])).toEqual([
+          ["safe.txt", "modified"],
+          ["sub/keep.txt", "deleted"],
+        ])
+      }),
+    ),
+  )
+})
+
 // A checkpoint ID comes from a session's stored steps, and an imported session's steps are whatever its file says (class
 // 5). Git reads a value that starts with `-` as an option, and `--output=<file>` makes `git diff` write that file, so a
 // value that is not a tree ID is refused before git starts, by every operation that takes one. The marker is the file

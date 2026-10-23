@@ -543,8 +543,15 @@ const layer = Layer.effect(
         ],
         { concurrency: 2 },
       )
-      const candidates = Array.from(new Set([...tracked, ...untracked])).map((file) => RelativePath.make(file))
-      if (!candidates.length) return { skipped: [] }
+      // A tracked file whose folder became a link since the last capture is no longer in the work tree, and git refuses
+      // to check or add a path beyond a link, which would fail the whole capture: it leaves the index instead.
+      const linked = yield* Effect.filter(tracked, (file) => beyondLink(input.repository.worktree, file), {
+        concurrency: 8,
+      })
+      const candidates = Array.from(new Set([...tracked, ...untracked]))
+        .filter((file) => !linked.includes(file))
+        .map((file) => RelativePath.make(file))
+      if (!candidates.length && !linked.length) return { skipped: [] }
       const excluded = input.ignores
         ? yield* ignored({ repository: input.ignores, paths: candidates })
         : new Set<RelativePath>()
@@ -564,7 +571,7 @@ const layer = Layer.effect(
           )).filter((item): item is RelativePath => item !== undefined)
         : []
       const stage = allowed.filter((item) => !skipped.includes(item))
-      const remove = [...excluded, ...skipped]
+      const remove = [...excluded, ...skipped, ...linked]
       if (remove.length)
         yield* repositoryOperation(
           "refresh",
@@ -987,6 +994,24 @@ function wholeLines(text: string, truncated: boolean) {
 /** Split NUL-terminated git output into its records. */
 function nuls(text: string) {
   return text.split("\0").filter(Boolean)
+}
+
+/** Whether a folder on the way to a work-tree path, below the work tree, is a link (a junction on Windows included). */
+function beyondLink(worktree: string, file: string) {
+  const folders = file
+    .split("/")
+    .slice(0, -1)
+    .map((_, index, parts) => path.join(worktree, ...parts.slice(0, index + 1)))
+  return Effect.promise(() =>
+    Promise.all(
+      folders.map((folder) =>
+        lstat(folder).then(
+          (info) => info.isSymbolicLink(),
+          () => false,
+        ),
+      ),
+    ),
+  ).pipe(Effect.map((links) => links.includes(true)))
 }
 
 function resolvePath(cwd: string, value: string) {
