@@ -20,6 +20,7 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
 import { ToolCurrentCall } from "./tool/current-call.js"
+import { MemoryStore } from "./memory/store.js"
 
 const PermissionEffect = Permission.Effect
 export { PermissionEffect as Effect }
@@ -208,6 +209,7 @@ const layer = Layer.effect(
     const managed = yield* ManagedPolicy.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
+    const memory = yield* MemoryStore.Service
     // The session folder and the project's worktree as written and as the disk has them. A session reached through a link
     // gets real-path leads, so a lead is also written in the project's own spelling before rules are matched against it.
     const spelled = [location.directory, path.resolve(location.project.directory)]
@@ -247,21 +249,50 @@ const layer = Layer.effect(
         ? [path.resolve(location.directory, resource)]
         : []
     }
+    // Whether a file tool's request is for the project's memory folder (context-memory-9): the place it names is in the
+    // folder by one of its spellings, and every real place it leads to is in the real folder, so a link inside the folder
+    // that points out of it is not (class 4). A call that a link of an untrusted project leads in is the person's to
+    // decide (`escaped`). A shell command is never one: it is decided by the shell's own rules.
+    const inMemory = (input: Pick<AssertInput, "action" | "escaped" | "leads">, resource: string) => {
+      const canonical = ToolNames.canonical(input.action)
+      if (canonical !== "external_directory" && canonical !== "Read" && canonical !== "Edit") return false
+      if (input.escaped?.includes(resource)) return false
+      const place = path.isAbsolute(resource) ? resource : path.resolve(location.directory, resource)
+      return (
+        [memory.folder, memory.real].some((folder) => FSUtil.contains(folder, place)) &&
+        (input.leads?.[resource] ?? [place]).every((lead) => FSUtil.contains(memory.real, lead))
+      )
+    }
     const decide = (
       input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads">,
       resource: string,
       rules: Permission.Ruleset,
       approvals: Permission.Ruleset = [],
     ) => {
-      // The allow for a scratchpad is written for the spelling that a call gives, and a link inside the folder can lead
-      // out of it, so the allow decides only a call whose real place is in the folder too. A link that points out is
-      // decided by the rules for the place it points to (class 4).
+      // The allow for a scratchpad or the memory folder is written for the spelling that a call gives, and a link inside
+      // the folder can lead out of it, so the allow decides only a call whose real place is in the folder too. A link that
+      // points out is decided by the rules for the place it points to (class 4).
       const scratch = (rule: Permission.Rule) => {
-        const folders = Agent.scratchpadFolders(rule)
+        const folders = Agent.scratchpadFolders(rule) ?? Agent.memoryFolders(rule)
         return (
           folders === undefined ||
           (input.leads?.[resource] ?? []).every((lead) => folders.some((folder) => FSUtil.contains(folder, lead)))
         )
+      }
+      // The memory folder is written and read without a question, as the reference's file tools do: no ask of the
+      // person's, no default question for a place outside the project and no mode's deny reaches it, while a deny of the
+      // person's, the session's or an agent's own still decides, by the last rule that allows or denies (classes 4, 8).
+      if (inMemory(input, resource)) {
+        const decisive = rules.filter((rule) => rule.effect !== "ask" && !Agent.isModeRule(rule) && scratch(rule))
+        const decided = evaluate(input.action, resource, decisive, [
+          ...(input.aliases?.[resource] ?? []),
+          ...resolved(input.action, resource),
+          ...respelled(input.action, resource),
+        ])
+        if (decided.effect === "deny") return decided
+        if (stricter(input.action, input.leads?.[resource], decisive).effect === "deny")
+          return { action: input.action, resource: "*", effect: "deny" } satisfies Permission.Rule
+        return { action: input.action, resource: "*", effect: "allow" } satisfies Permission.Rule
       }
       const all = [
         ...(input.escaped?.includes(resource) ? own(rules) : rules).filter(scratch),
@@ -322,7 +353,11 @@ const layer = Layer.effect(
         agent: agent?.id ?? name,
         rules: merge(
           // The allow for editing in a scratchpad names the scratchpad of this session's lineage and no other.
-          Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
+          // The allow for the memory folder names the folder of this Location.
+          Agent.placeMemory(
+            Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
+            memory,
+          ),
           managed.current().restrictions.managed_permissions_only ? own.filter((rule) => rule.effect !== "allow") : own,
         ),
       }
@@ -330,10 +365,12 @@ const layer = Layer.effect(
 
     // The last managed rule that matches a resource decides it. No match leaves the resource to the hooks and the rest.
     function managedEffect(
-      input: Pick<AssertInput, "action" | "aliases" | "leads">,
+      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads">,
       resource: string,
-      rules: Permission.Ruleset,
+      written: Permission.Ruleset,
     ): Permission.Effect | undefined {
+      // A managed ask does not reach the memory folder either; a managed deny does.
+      const rules = inMemory(input, resource) ? written.filter((rule) => rule.effect !== "ask") : written
       const subjects = [
         resource,
         ...resolved(input.action, resource),
@@ -679,5 +716,6 @@ export const node = makeLocationNode({
     ManagedPolicy.node,
     Global.node,
     FSUtil.node,
+    MemoryStore.node,
   ],
 })

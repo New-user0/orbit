@@ -59,6 +59,7 @@ import { asc, eq } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
@@ -171,6 +172,7 @@ const it = testEffect(
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(builtins),
       noScratchpad,
+      noMemory,
       noVcsSnapshot,
       InstructionDiscovery.node.replace(discovery),
       SkillInstructions.node.replace(skills),

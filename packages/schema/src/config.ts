@@ -14,6 +14,7 @@ import { ConfigFormatter } from "./config/formatter.js"
 import { ConfigHooks } from "./config/hooks.js"
 import { ConfigLSP } from "./config/lsp.js"
 import { ConfigMCP } from "./config/mcp.js"
+import { ConfigMemory } from "./config/memory.js"
 import { ConfigModel } from "./config/model.js"
 import { ConfigPlugin } from "./config/plugin.js"
 import { ConfigProvider } from "./config/provider.js"
@@ -153,6 +154,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   compaction: ConfigCompaction.Info.pipe(optional).annotate({
     description: "Conversation compaction behavior",
+  }),
+  memory: ConfigMemory.Info.pipe(optional).annotate({
+    description: "The agent's memory of a project: notes it keeps across sessions in a folder of its own",
   }),
   compatibility: ConfigCompatibility.Info.pipe(optional).annotate({
     description: "Whether to read other agent products' settings, skills, output styles and instruction files",

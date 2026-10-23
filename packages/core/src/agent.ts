@@ -116,6 +116,48 @@ export const narrowScratchpad = (rules: Info["permissions"], key: string | undef
     return [cut]
   })
 
+/** The allow that `memory` writes, which `placeMemory` turns into the allow for the project's memory folder. */
+const memoryAllows = new WeakSet<object>()
+
+/** The allows that `placeMemory` made, and the real memory folder each is for. */
+const placedMemory = new WeakMap<object, readonly string[]>()
+
+/**
+ * The allow of Orbit's own for the project's memory folder, which the file tools reach without a question. As written it
+ * names the folder that holds every project's memory and decides nothing: `Permission` puts the folder of its Location in
+ * its place (`placeMemory`), since `memory.directory` can move it. It is an `external_directory` allow like the ones of
+ * `folders`, so an agent that keeps those after a deny of everything, as Explore does, keeps this one too.
+ */
+export const memory = (global: Pick<Global.Interface, "data">): Info["permissions"] => {
+  const rule = {
+    action: "external_directory",
+    resource: path.join(global.data, "memory", "*"),
+    effect: "allow" as const,
+  }
+  memoryAllows.add(rule)
+  orbitOwn.add(rule)
+  return [rule]
+}
+
+/**
+ * `rules` with each allow that `memory` wrote replaced by allows for the memory folder as it is named and as it really
+ * is. The real folder is the only one a call's real place may be in for the allow to decide (`memoryFolders`), so a link
+ * inside the folder cannot carry the allow out of it. The order of the rules is kept.
+ */
+export const placeMemory = (rules: Info["permissions"], folder: { readonly folder: string; readonly real: string }) =>
+  rules.flatMap((rule) => {
+    if (!memoryAllows.has(rule)) return [rule]
+    return places(folder.folder, folder.real).map((place) => {
+      const placed = { ...rule, resource: path.join(place, "*") }
+      placedMemory.set(placed, [folder.real])
+      orbitOwn.add(placed)
+      return placed
+    })
+  })
+
+/** The real memory folder that `rule` allows, when `placeMemory` made it. */
+export const memoryFolders = (rule: object) => placedMemory.get(rule)
+
 /**
  * Marks a rule that a mode puts on an agent, such as Plan's deny of every edit, and returns it. The mode decides what the
  * agent's own tools may do; it is not a rule of the person's, so the deny-only probes a shell command makes for the files
@@ -187,7 +229,7 @@ const layer = Layer.effect(
       tmp: yield* lead(global.tmp),
       config: yield* lead(global.config),
     }
-    const permissions = [...folders(global, real), ...scratchpad(global, real)]
+    const permissions = [...folders(global, real), ...memory(global), ...scratchpad(global, real)]
     const state = State.create<Data, Editor>({
       name: "agent",
       initial: () => ({ agents: new Map() }),

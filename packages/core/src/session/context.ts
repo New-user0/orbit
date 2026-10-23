@@ -17,6 +17,7 @@ import { InstructionBuiltIns } from "../instructions/builtins.js"
 import { Location } from "../location.js"
 import { PromptConfigPlugin } from "../plugin/prompt-config.js"
 import { McpInstructions } from "../mcp/instructions.js"
+import { MemoryInstructions } from "../memory/instructions.js"
 import { McpTool } from "../tool/mcp.js"
 import { ReferenceInstructions } from "../reference/instructions.js"
 import { SkillInstructions } from "../skill/instructions.js"
@@ -117,6 +118,7 @@ const layer = Layer.effect(
     const vcsInstructions = yield* VcsInstructions.Service
     const registry = yield* Tool.Service
     const config = yield* Config.Service
+    const memory = yield* MemoryInstructions.Service
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
@@ -186,10 +188,13 @@ const layer = Layer.effect(
       const permissions = Permission.merge(agent.info.permissions, session.permissions ?? [])
       const tools = yield* registry.snapshot(permissions)
       const offered = (name: string) => tools.definitions.some((definition) => definition.name === name)
+      const forkSource = session.fork && (yield* store.get(session.fork.sessionID))
+      const main = PromptConfigPlugin.mainThread(session, forkSource || undefined)
+      const withInstructions = agent.info.context?.instructions !== false
       const loaded = yield* Effect.all(
         {
           builtins: builtins.load(),
-          discovery: discovery.load({ removed: agent.info.context?.instructions === false }),
+          discovery: discovery.load({ removed: !withInstructions }),
           skills: Effect.gen(function* () {
             // The skill listing is budgeted against the window of the model that runs this request.
             const pinned = session.model && (yield* model.get(session.model.providerID, session.model.id))
@@ -206,14 +211,21 @@ const layer = Layer.effect(
           references: referenceInstructions.load(),
           mcp: mcpInstructions.load(permissions),
           entries: entries.load(sessionID),
+          // The guide is part of the main thread's prompt, so a subagent and a system prompt of the person's that replaces
+          // Orbit's go without it; the index goes wherever the instruction files do.
+          memory: Effect.gen(function* () {
+            const replaced = PromptConfigPlugin.promptKeys(yield* config.entries()).replacement !== undefined
+            return yield* memory.load({
+              sessionID,
+              guide: main && !replaced,
+              index: withInstructions,
+            })
+          }),
         },
         { concurrency: "unbounded" },
       )
       // The reply language is for the main thread: a subagent answers its parent, not the person. A fork follows its source.
-      const forkSource = session.fork && (yield* store.get(session.fork.sessionID))
-      const preferences = PromptConfigPlugin.mainThread(session, forkSource || undefined)
-        ? yield* builtins.preferences()
-        : Instructions.empty
+      const preferences = main ? yield* builtins.preferences() : Instructions.empty
       return {
         session,
         agent: { ...agent, info: agent.info },
@@ -232,6 +244,7 @@ const layer = Layer.effect(
           loaded.agents,
           preferences,
           loaded.discovery,
+          loaded.memory,
           loaded.builtins,
           vcsInstructions.source(session, { enabled: agent.info.context?.git_status !== false }),
           scratchpad.source(session),
@@ -285,6 +298,7 @@ export const node = makeLocationNode({
     Location.node,
     McpInstructions.node,
     McpTool.node,
+    MemoryInstructions.node,
     ReferenceInstructions.node,
     SessionRunnerModel.node,
     SessionModelRequest.node,

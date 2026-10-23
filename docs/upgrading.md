@@ -117,7 +117,7 @@ from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`
 for the failures). A repository with no remote is named by its path until it is
 trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
 `project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
-path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
+path-named ID are moved to the new one when the folder is opened (`memory-instructions.test.ts`), and snapshots taken after a
 grant, before the folder was opened again, can be restored (`snapshot-trust-restart.test.ts`). Saved "always allow"
 answers stay with the old ID, so Orbit asks again.
 
@@ -3370,6 +3370,26 @@ an empty entry of a POSIX `PATH` still does.
 `error` field of a shell result's metadata.
 
 **What to do:** Nothing. Put commands that must not cancel each other in separate steps, or end them with `|| true`.
+
+### Memory is kept with the file tools, and the Memory tool is gone
+
+Before, the model saved notes with a `Memory` tool, and Orbit regenerated `MEMORY.md` from them after every save and
+showed the new index to the session at once. Now the model writes memory files with Write and Edit into the project's
+memory folder (`<data>/memory/<project ID>/`, or the folder `memory.directory` names) and keeps `MEMORY.md` itself. A
+memory file may carry `name`, `description` and `type` front matter. Writes and reads in that folder ask no question,
+even under an `edit: ask` or `read: ask` rule or in plan mode; a deny rule still wins, and a shell command there is
+asked about as before. The main thread's prompt gets a guide to memory, except under a `system_prompt` or
+`system_prompt_file` of your own. `MEMORY.md` loads after the instruction files, cut at 200 lines and 25,000
+characters with a note to the model, and a change to it reaches a session from its next compaction or in a new
+session. A Read of a memory file more than a day old starts with a note of its age. The index Orbit generated before is
+kept, without the line that named the tool. New: `memory.enabled`, `memory.directory` (read only from your own, local,
+command-line and managed configs) and `ORBIT_DISABLE_AUTO_MEMORY`; `orb run --bare` turns memory off.
+
+**Affects:** people with permission rules or hooks written for the `Memory` tool, which now name no tool, and anyone
+who reads the memory folder.
+
+**What to do:** Nothing for existing notes. Move a rule written for `Memory` to `Edit` and `Read` on the memory folder,
+and set `"memory": { "enabled": false }` or `ORBIT_DISABLE_AUTO_MEMORY=1` to switch memory off.
 
 ## Files and web tools
 

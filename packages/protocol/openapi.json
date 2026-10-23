@@ -15595,6 +15595,18 @@
             },
             "additionalProperties": false
           },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "directory": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
           "compatibility": {
             "type": "object",
             "properties": {

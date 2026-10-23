@@ -2485,6 +2485,7 @@ export type ConfigEntry =
           }
         }
         compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
+        memory?: { enabled?: boolean; directory?: string }
         compatibility?: { enabled?: boolean }
         skills?: Array<string>
         commands?: {

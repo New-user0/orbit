@@ -795,6 +795,27 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   ID would name a folder, and a control), `test/permission-scratchpad.test.ts` (the sessions of a lineage, the hostile IDs,
   the links and the Windows spellings, with the plain file in the folder as the control),
   `test/session-scratchpad-baseline.test.ts` and the `scratchpad` rows of `test/session-runner.test.ts`.
+- The memory folder (`MemoryStore`, `packages/core/src/memory/store.ts`): `<data>/memory/<project ID>`, or the folder
+  `memory.directory` names. That key is read only from the user, local, flag and managed scopes, never from a project's
+  or a remote one, and `ConfigTrust` withholds all of `memory` from an untrusted folder as `permissions` (class 8). The
+  value is refused before any disk access when it is relative, a share or device spelling (two leading separators), a
+  root, shorter than 3 characters, holds a NUL, names home or a folder above it through `~/`, or on Windows has no drive
+  letter (class 4); the default folder is kept then. The folder and its real path are decided once for the Location.
+  The file tools write and read there without a question (`inMemory` in `Permission`): only for `Edit`, `Read` and
+  `external_directory`, only when the place is in the folder by one of its spellings and every real place it leads to is
+  in the real folder (a link inside the folder that points out is decided as the place it points to), never for a call
+  marked `escaped`, and a deny of the person's, the session's, an agent's own or the managed policy still decides there,
+  while asks, the default question and a mode's deny do not (class 8). A shell command is not covered. The index reader
+  (`MemoryInstructions`, `packages/core/src/memory/instructions.ts`) loads `MEMORY.md` only when its real path is in the
+  real folder, takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
+  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) lists only files whose real
+  path is in the folder's, and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
+  asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
+  the five places beside the folder, four link targets with a new and an existing file, the data folder and the
+  configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a mode's deny, the
+  built-in agents, the shell, and the scope rows), `test/memory-store.test.ts` (validation, scopes, the switch order,
+  front matter with a marker file, the scan's links), `test/memory-instructions.test.ts` (the index link to a marker, the
+  caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 
@@ -1474,8 +1495,8 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   when one is a link (`packages/flow/test/git.test.ts`, "a run whose folder is reached through a link is left alone
   with everything it leads to", and the `orb flow clean` row in `packages/cli/test/flow.test.ts`).
 - A name that becomes a file name is one plain name (the output style rule in
-  `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
-  `packages/core/src/tool/plugin/memory.ts`).
+  `packages/core/src/plugin/output-style.ts`). Where the model names the file itself, as it does in the memory folder,
+  the real place of the file decides, not its name (`inMemory` in `Permission`).
 - Check at the moment of reading, not once when the file is discovered.
 
 **How to test:**
