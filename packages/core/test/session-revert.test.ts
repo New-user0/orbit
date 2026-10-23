@@ -139,4 +139,95 @@ describe("Session.revert files", () => {
     // Real Location/plugin startup and Git snapshots can exceed five seconds under CI load.
     { timeout: 15_000 },
   )
+
+  // clients-ux-5: the embedded host calls core's `revert.files`, not the HTTP route, so the code-only rewind is pinned
+  // here too: a dry run names what would change, and the rewind removes the file a recorded Write created while a file
+  // changed outside the file tools (the control) and the conversation stay as they are.
+  it.live(
+    "rewinds a prompt's file-tool edits, with a dry run first, and leaves other edits and the conversation",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const directory = path.join(tmp.path, "project")
+        const written = path.join(directory, "written.txt")
+        const other = path.join(directory, "other.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(directory)
+          await Bun.write(other, "other one\n")
+          await $`git init -q`.cwd(directory).quiet()
+          await $`git -c core.fsmonitor=false add .`.cwd(directory).quiet()
+        })
+
+        const session = yield* Session.Service
+        const database = yield* Database.Service
+        const bus = yield* Bus.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(directory) } })
+        const prompt = yield* session.prompt({ sessionID: created.id, text: "Write a file", resume: false })
+        yield* SessionInbox.promote(database.db, bus, created.id, "steer")
+
+        yield* Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          yield* plugins.awaitActivation
+          const snapshot = yield* Snapshot.Service
+          const before = yield* snapshot.capture()
+          if (!before) throw new Error("Initial snapshot missing")
+          const assistantMessageID = SessionMessage.ID.create()
+          yield* bus.publish(SessionEvent.Step.Started, {
+            sessionID: created.id,
+            assistantMessageID,
+            agent: Agent.defaultID,
+            model: { id: Model.ID.make("test-model"), providerID: Provider.ID.make("test-provider") },
+            snapshot: before,
+            started: 0,
+          })
+          const call = { sessionID: created.id, assistantMessageID, id: "call_write" }
+          yield* bus.publish(SessionEvent.Tool.Input.Started, { ...call, name: "Write" })
+          yield* bus.publish(SessionEvent.Tool.Called, { ...call, input: {}, executed: true })
+          yield* Effect.promise(async () => {
+            await Bun.write(written, "one\ntwo\n")
+            await Bun.write(other, "other two\n")
+          })
+          yield* bus.publish(SessionEvent.Tool.Success, {
+            ...call,
+            content: [{ type: "text", text: "done" }],
+            metadata: {
+              files: [{ file: "written.txt", status: "added", additions: 2, deletions: 0, patch: "" }],
+            },
+            executed: true,
+          })
+          const after = yield* snapshot.capture()
+          if (!after) throw new Error("Written snapshot missing")
+          yield* bus.publish(SessionEvent.Step.Ended, {
+            sessionID: created.id,
+            assistantMessageID,
+            finish: "stop",
+            cost: Money.USD.zero,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            snapshot: after,
+            files: yield* snapshot.files({ from: before, to: after }),
+          })
+          const messages = (yield* session.messages({ sessionID: created.id })).length
+
+          const dry = yield* session.revert.files({ sessionID: created.id, messageID: prompt.id, dryRun: true })
+          expect(dry).toEqual({
+            canRewind: true,
+            filesChanged: [path.join(yield* snapshot.root(), "written.txt")],
+            insertions: 0,
+            deletions: 2,
+          })
+          expect(yield* Effect.promise(() => Bun.file(written).exists())).toBe(true)
+
+          expect(yield* session.revert.files({ sessionID: created.id, messageID: prompt.id })).toEqual({
+            canRewind: true,
+          })
+          expect({
+            written: yield* Effect.promise(() => Bun.file(written).exists()),
+            other: yield* Effect.promise(() => Bun.file(other).text()),
+            messages: (yield* session.messages({ sessionID: created.id })).length,
+            revert: (yield* session.get(created.id)).revert,
+          }).toEqual({ written: false, other: "other two\n", messages, revert: undefined })
+        }).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
+      }),
+    { timeout: 15_000 },
+  )
 })

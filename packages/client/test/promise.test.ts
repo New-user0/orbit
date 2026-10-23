@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { isSessionNotFoundError, isUnauthorizedError, Orbit } from "../src/promise/index"
+import { isRewindFilesError, isSessionNotFoundError, isUnauthorizedError, Orbit } from "../src/promise/index"
 
 test("exposes every standard HTTP API group", () => {
   const client = Orbit.make({ baseUrl: "http://localhost:3000" })
@@ -1062,6 +1062,30 @@ test("session.log decodes SessionNotFoundError", async () => {
   } catch (error) {
     expect(isSessionNotFoundError(error)).toBe(true)
   }
+})
+
+// clients-ux-5: a code rewind that cannot happen is a typed refusal with its reason, not an unexpected status
+// (class 13).
+test("session.revert.files decodes RewindFilesError, and a busy session's SessionBusyError is not one", async () => {
+  const refusal = {
+    _tag: "RewindFilesError",
+    sessionID: "ses_test",
+    messageID: "msg_prompt",
+    reason: "no-checkpoint",
+    message: "This message has no checkpoint to rewind the files to.",
+  }
+  const answer = (body: unknown) =>
+    Orbit.make({ baseUrl: "http://localhost:3000", fetch: async () => Response.json(body, { status: 409 }) })
+      .session.revert.files({ sessionID: "ses_test", messageID: "msg_prompt" })
+      .then(
+        () => undefined,
+        (cause: unknown) => cause,
+      )
+  const refused = await answer(refusal)
+  expect(isRewindFilesError(refused)).toBe(true)
+  expect(refused).toMatchObject(refusal)
+  const busy = await answer({ _tag: "SessionBusyError", sessionID: "ses_test", message: "Session is busy" })
+  expect(isRewindFilesError(busy)).toBe(false)
 })
 
 const session = {

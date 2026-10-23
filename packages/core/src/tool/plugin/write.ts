@@ -111,7 +111,6 @@ export const Plugin = {
                     )
                   : written
                 yield* ledger.recordWrite(context.sessionID, target.absolute, final)
-                // The completed call names the file by the project's spelling, so a code rewind knows this tool changed it.
                 const files = [
                   fileDiff(result.resource, current?.text ?? "", final.text, current ? "modified" : "added"),
                 ]
@@ -121,7 +120,7 @@ export const Plugin = {
               Effect.map((written) => ({
                 output: written.output,
                 content: toModelContent(written.output),
-                metadata: { files: written.files },
+                metadata: { files: written.files }, // by the project's spelling, so a code rewind knows it wrote it
               })),
               Effect.mapError((error) =>
                 error instanceof ToolFailure

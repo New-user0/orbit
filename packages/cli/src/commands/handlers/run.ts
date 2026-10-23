@@ -1,4 +1,5 @@
 import { Orbit } from "@orbit/client"
+import type { OrbitClient } from "@orbit/client/promise"
 import { Service } from "@orbit/client/effect/service"
 import { Effect, Option } from "effect"
 import { Commands } from "../commands"
@@ -166,25 +167,13 @@ export function headlessInput(input: HeadlessInput) {
       strict: input.strict || stream,
     }).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
     if (stopped !== undefined) return reportRunError({ format, envelope }, stopped)
-    if (rewind !== undefined) {
-      // The server puts the files back and refuses a busy session, an untrusted folder or a message without a checkpoint.
-      const latest =
-        session === undefined
-          ? yield* Effect.promise(() =>
-              latestSessionOf(client, directory()).catch((cause) => new Error(errorMessage(cause))),
-            )
-          : undefined
-      if (latest instanceof Error) return reportRunError({ format, envelope }, latest.message)
-      const sessionID = session ?? latest?.id
-      if (sessionID === undefined) return reportRunError({ format, envelope }, "No session to rewind in this folder")
-      const rewound = yield* Effect.tryPromise({
-        try: () => client.session.revert.files({ sessionID, messageID: rewind }),
-        catch: (cause) => new Error(`Could not rewind the files to ${rewind}: ${errorMessage(cause)}`),
-      }).pipe(Effect.catch((error) => Effect.succeed(error)))
-      if (rewound instanceof Error) return reportRunError({ format, envelope }, rewound.message, sessionID)
-      process.stdout.write(`Rewound the files to message ${rewind}\n`)
-      return
-    }
+    if (rewind !== undefined)
+      return yield* rewindFiles({
+        client,
+        session,
+        messageID: rewind,
+        report: (message, sessionID) => reportRunError({ format, envelope }, message, sessionID),
+      })
     // Before the first prompt, and in the format that was asked for, like the trust refusal above.
     const bypass = yield* bypassDecision(
       client,
@@ -224,5 +213,33 @@ export function headlessInput(input: HeadlessInput) {
     )
   })
 }
+
+/**
+ * `--rewind-files`: asks the server to put back the files of the named session, or of the folder's latest one with
+ * `--continue`, as they were when the prompt's work began. The server refuses a busy session, an untrusted folder and a
+ * message without a checkpoint; a refusal is reported and exits 1.
+ */
+const rewindFiles = Effect.fnUntraced(function* (input: {
+  readonly client: OrbitClient
+  readonly session: string | undefined
+  readonly messageID: string
+  readonly report: (message: string, sessionID?: string) => void
+}) {
+  const latest =
+    input.session === undefined
+      ? yield* Effect.promise(() =>
+          latestSessionOf(input.client, directory()).catch((cause) => new Error(errorMessage(cause))),
+        )
+      : undefined
+  if (latest instanceof Error) return input.report(latest.message)
+  const sessionID = input.session ?? latest?.id
+  if (sessionID === undefined) return input.report("No session to rewind in this folder")
+  const rewound = yield* Effect.tryPromise({
+    try: () => input.client.session.revert.files({ sessionID, messageID: input.messageID }),
+    catch: (cause) => new Error(`Could not rewind the files to ${input.messageID}: ${errorMessage(cause)}`),
+  }).pipe(Effect.catch((error) => Effect.succeed(error)))
+  if (rewound instanceof Error) return input.report(rewound.message, sessionID)
+  process.stdout.write(`Rewound the files to message ${input.messageID}\n`)
+})
 
 export default Runtime.handler(Commands.commands.run, headlessInput)

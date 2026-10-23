@@ -600,8 +600,8 @@ const layer = Layer.effect(
       paths: readonly RelativePath[]
       tracked?: "keep"
     }) {
-      // Git refuses to answer for a path beyond a link (a tracked folder that became one after a capture), and the refusal
-      // would fail every capture and comparison that asks: such a path is answered as not ignored.
+      // Git refuses to answer for a path beyond a link (a tracked folder that became one after a capture), and the
+      // refusal would fail every capture and comparison that asks: such a path is answered as not ignored.
       const linked = yield* linkedPaths(input.repository.worktree, input.paths)
       const paths = input.paths.filter((file) => !linked.has(file))
       if (!paths.length) return new Set<RelativePath>()
