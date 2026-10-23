@@ -3377,19 +3377,23 @@ Before, the model saved notes with a `Memory` tool, and Orbit regenerated `MEMOR
 showed the new index to the session at once. Now the model writes memory files with Write and Edit into the project's
 memory folder (`<data>/memory/<project ID>/`, or the folder `memory.directory` names) and keeps `MEMORY.md` itself. A
 memory file may carry `name`, `description` and `type` front matter. Writes and reads in that folder ask no question,
-even under an `edit: ask` or `read: ask` rule or in plan mode; a deny rule still wins, and a shell command there is
-asked about as before. The main thread's prompt gets a guide to memory, except under a `system_prompt` or
-`system_prompt_file` of your own. `MEMORY.md` loads after the instruction files, cut at 200 lines and 25,000
-characters with a note to the model, and a change to it reaches a session from its next compaction or in a new
-session. A Read of a memory file more than a day old starts with a note of its age. The index Orbit generated before is
+even under an `edit: ask` or `read: ask` rule or in plan mode. A deny rule there wins over any ask and over plan mode;
+as elsewhere, a later allow rule of yours lifts it. A shell command that names the folder, or runs in it, is asked about
+as before, even by an agent that allows every command. The main thread's prompt gets a guide to memory, except when a
+`system_prompt`, a `system_prompt_file` with text or an agent's own prompt takes the place of Orbit's.
+`MEMORY.md` loads after the instruction files, cut at 200 lines and 25,000 characters with a note to the model, and a
+change to it reaches a session from its next compaction or in a new session. A Read of a memory file more than a day old starts with a note of its age. The index Orbit generated before is
 kept, without the line that named the tool. New: `memory.enabled`, `memory.directory` (read only from your own, local,
 command-line and managed configs) and `ORBIT_DISABLE_AUTO_MEMORY`; `orb run --bare` turns memory off.
 
 **Affects:** people with permission rules or hooks written for the `Memory` tool, which now name no tool, and anyone
 who reads the memory folder.
 
-**What to do:** Nothing for existing notes. Move a rule written for `Memory` to `Edit` and `Read` on the memory folder,
-and set `"memory": { "enabled": false }` or `ORBIT_DISABLE_AUTO_MEMORY=1` to switch memory off.
+**What to do:** Nothing for existing notes in the default folder. If you set `memory.directory`, Orbit neither reads
+the default folder nor moves anything into yours: move the notes, and their `MEMORY.md`, from
+`<data>/memory/<project ID>/` to your folder yourself. Notes saved before a folder was trusted keep moving to the
+default folder. Move a rule written for `Memory` to `Edit` and `Read` on the memory folder, and set
+`"memory": { "enabled": false }` or `ORBIT_DISABLE_AUTO_MEMORY=1` to switch memory off.
 
 ## Files and web tools
 

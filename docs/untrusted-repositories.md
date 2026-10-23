@@ -804,8 +804,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   The file tools write and read there without a question (`inMemory` in `Permission`): only for `Edit`, `Read` and
   `external_directory`, only when the place is in the folder by one of its spellings and every real place it leads to is
   in the real folder (a link inside the folder that points out is decided as the place it points to), never for a call
-  marked `escaped`, and a deny of the person's, the session's, an agent's own or the managed policy still decides there,
-  while asks, the default question and a mode's deny do not (class 8). A shell command is not covered. The index reader
+  marked `escaped`. A deny of the person's, the session's, an agent's own or the managed policy decides there over any ask
+  and over a mode's deny, which do not reach the folder, and as elsewhere a later allow of the person's lifts it (class
+  8). A shell command is not covered: the folder question that `ShellGuard.prepare` asks is marked `shell`, and neither
+  the carve-out nor Orbit's own allow for the folder decides it, so the default agent's `external_directory * ask` still
+  asks (class 8). The guide goes only to a main thread whose base prompt is Orbit's (class 12). The index reader
   (`MemoryInstructions`, `packages/core/src/memory/instructions.ts`) loads `MEMORY.md` only when its real path is in the
   real folder, takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
   25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) lists only files whose real
@@ -813,7 +816,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
   the five places beside the folder, four link targets with a new and an existing file, the data folder and the
   configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a mode's deny, the
-  built-in agents, the shell, and the scope rows), `test/memory-store.test.ts` (validation, scopes, the switch order,
+  built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation, scopes, the switch order,
   front matter with a marker file, the scan's links), `test/memory-instructions.test.ts` (the index link to a marker, the
   caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
 
