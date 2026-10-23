@@ -519,3 +519,93 @@ it.effect("the stored recap has its control and bidi characters written out, and
     expect(userTexts(historyQuery)).toContain("Now the tests")
   }),
 )
+
+it.effect("an instruction update in the window is left out, as the recap has no system prompt", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    yield* bus.publish(SessionEvent.InstructionsUpdated, { sessionID, delta: {}, text: "Updated instructions" })
+    yield* test.push(answer("Fixing the build."))
+
+    yield* recap.generate(sessionID)
+
+    const [request] = yield* test.requests()
+    expect(request?.messages.map((message) => message.role)).toEqual(["user", "user"])
+    expect(allText(request)).not.toContain("Updated instructions")
+  }),
+)
+
+it.effect("a step still running is left out of the window", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("build"),
+      model: { providerID: Provider.ID.make("test"), id: Model.ID.make("recap-primary") },
+      started: 0,
+    })
+    yield* bus.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, id: "call_1", name: "lookup" })
+    yield* bus.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID, id: "call_1", input: {}, executed: false })
+    yield* test.push(answer("Fixing the build."))
+
+    yield* recap.generate(sessionID)
+
+    const [request] = yield* test.requests()
+    expect(request?.messages.map((message) => message.role)).toEqual(["user", "user"])
+  }),
+)
+
+it.effect("a window that would open on a tool result starts at the next message instead", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    // One step with one tool call lowers to an assistant message and a tool message.
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("build"),
+      model: { providerID: Provider.ID.make("test"), id: Model.ID.make("recap-primary") },
+      started: 0,
+    })
+    yield* bus.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, id: "call_1", name: "lookup" })
+    yield* bus.publish(SessionEvent.Tool.Called, {
+      sessionID,
+      assistantMessageID,
+      id: "call_1",
+      input: {},
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Tool.Success, {
+      sessionID,
+      assistantMessageID,
+      id: "call_1",
+      content: [{ type: "text", text: "found" }],
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Step.Ended, {
+      sessionID,
+      assistantMessageID,
+      finish: "tool-calls",
+      cost: Money.USD.make(0),
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    // 32 messages in all, so the last 30 begin with the tool result, whose call was cut off.
+    for (const index of Array.from({ length: 29 }, (_, item) => item + 1)) yield* say(bus, `message ${index}`)
+    yield* test.push(answer("Looking things up."))
+
+    yield* recap.generate(sessionID)
+
+    const [request] = yield* test.requests()
+    expect(request?.messages.map((message) => message.role)).not.toContain("tool")
+    expect(request?.messages[0]?.role).toBe("user")
+    // The 29 prompts after the step, then the instruction.
+    expect(request?.messages).toHaveLength(30)
+  }),
+)
