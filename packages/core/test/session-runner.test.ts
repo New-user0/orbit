@@ -10777,22 +10777,30 @@ describe("context accounting", () => {
     expect(s.requests).toHaveLength(1)
   })
 
-  for (const auto of [true, false])
-    scenario(`reports context use after a measured response with automatic compaction ${auto}`, function* (s) {
+  // Percentages count down to the threshold with automatic compaction on and to the effective window with it off; the
+  // warning and error bands both start 20,000 below that point, as in the reference.
+  for (const [used, auto, percentLeft, state] of [
+    [140_000, true, 16, "ok"],
+    [150_000, true, 10, "error"],
+    [185_000, true, 0, "error"],
+    [150_000, false, 17, "ok"],
+    [165_000, false, 8, "error"],
+  ] as const)
+    scenario(`reports context use after a measured response: ${used} with automatic compaction ${auto}`, function* (s) {
       if (!auto) yield* disableAuto
       const updates = yield* contextUpdates(s)
-      yield* s.llm.push(TestLLM.textWithUsage("Answer", "report-answer", 150_000))
+      yield* s.llm.push(TestLLM.textWithUsage("Answer", "report-answer", used))
       yield* s.runPrompt("Question")
       yield* settled(updates, 1)
 
       expect(updates.at(-1)).toEqual({
         sessionID,
-        used: 150_000,
+        used,
         window: 180_000,
         threshold: 167_000,
         auto,
-        percentLeft: auto ? 10 : 17,
-        state: auto ? "error" : "ok",
+        percentLeft,
+        state,
         ...(auto ? {} : { blocking: 177_000 }),
         paused: false,
         stale: false,
