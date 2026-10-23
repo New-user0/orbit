@@ -87,7 +87,7 @@ export const durable = (config: Config.Interface): Durable => ({
       if (style === undefined) return []
       // A drain that restarts between collection and the request runs this again for the same step.
       if (ReminderText.postedInRun(input.messages, KIND)) return []
-      return [{ kind: KIND, text: `The ${style.name} output style is active. Keep following its guidelines.` }]
+      return [{ kind: KIND, text: `Your replies follow the ${style.name} output style; keep to its guidelines.` }]
     }),
 })
 
