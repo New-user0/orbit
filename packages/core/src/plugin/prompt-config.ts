@@ -60,29 +60,15 @@ export const Plugin = define({
             return Effect.logWarning("system_prompt_file not used", { file, reason })
           })
 
-    // The text of the file, or undefined to keep the default prompt.
-    const readFile = Effect.fn("PromptConfigPlugin.readFile")(function* (document: Document, value: string) {
-      const expanded = value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value
-      const base = document.path ? path.dirname(document.path) : ctx.location.directory
-      // Resolving also turns a rooted NT spelling (`\??\UNC\...`) into `<drive>:\??\...`, which cannot be opened as a share.
-      const resolved = path.resolve(base, expanded)
-      // Before any file system call: a share is a request to a host that a config chose.
-      const relative = !path.isAbsolute(expanded)
-      if (network(expanded) || network(resolved) || (relative && network(base))) {
-        yield* warnOnce(resolved, "network paths are not read")
+    // The text that replaces the base, or undefined to keep the default prompt.
+    const readFile = Effect.fn("PromptConfigPlugin.readFile")(function* (replacement: Replacement) {
+      const read = yield* replacementText(fs, ctx.location.directory, replacement)
+      if (read.failed !== undefined) {
+        yield* warnOnce(read.file, read.failed)
         return undefined
       }
-      if (yield* LinkShare.blocked(fs, resolved)) {
-        yield* warnOnce(resolved, "the path leads to a network share")
-        return undefined
-      }
-      const text = yield* fs.readFileStringSafe(resolved).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      if (text === undefined) {
-        yield* warnOnce(resolved, "the file could not be read")
-        return undefined
-      }
-      failing.delete(resolved)
-      return text
+      if (read.file !== undefined) failing.delete(read.file)
+      return read.text
     })
 
     const mainOf = (sessionID: Session.ID) =>
@@ -117,10 +103,7 @@ export const Plugin = define({
               yield* Effect.logInfo("system prompt replacement skipped for this agent", { agent: event.agent })
             }
           } else {
-            const value =
-              keys.replacement.type === "text"
-                ? keys.replacement.value
-                : yield* readFile(keys.replacement.document, keys.replacement.value)
+            const value = yield* readFile(keys.replacement)
             if (value) {
               const rendered = SessionSystemPrompt.render(value, Object.keys(event.tools))
               pieces.push(...authorText(value, rendered))
@@ -227,6 +210,50 @@ export function promptKeys(entries: readonly Entry[]) {
     append: documents.findLast((document) => document.info.append_system_prompt)?.info.append_system_prompt,
   }
 }
+
+type Replacement = NonNullable<ReturnType<typeof promptKeys>["replacement"]>
+
+/**
+ * The text of a replacement: the value itself, or the file's text read as UTF-8 from the folder of the document that
+ * names it (or `directory`, for a document without a path). A path on a network share, or one that reaches a share
+ * through a link, is refused before any file system call; `failed` then says why, as it does for a file that cannot be
+ * read. An empty text replaces nothing.
+ */
+export const replacementText = Effect.fn("PromptConfigPlugin.replacementText")(function* (
+  fs: FSUtil.Interface,
+  directory: string,
+  replacement: Replacement,
+) {
+  if (replacement.type === "text") return { text: replacement.value, file: undefined, failed: undefined }
+  const value = replacement.value
+  const expanded = value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value
+  const base = replacement.document.path ? path.dirname(replacement.document.path) : directory
+  // Resolving also turns a rooted NT spelling (`\??\UNC\...`) into `<drive>:\??\...`, which cannot be opened as a share.
+  const file = path.resolve(base, expanded)
+  // Before any file system call: a share is a request to a host that a config chose.
+  const relative = !path.isAbsolute(expanded)
+  if (network(expanded) || network(file) || (relative && network(base)))
+    return { text: undefined, file, failed: "network paths are not read" }
+  if (yield* LinkShare.blocked(fs, file)) return { text: undefined, file, failed: "the path leads to a network share" }
+  const text = yield* fs.readFileStringSafe(file).pipe(Effect.catch(() => Effect.succeed(undefined)))
+  if (text === undefined) return { text: undefined, file, failed: "the file could not be read" }
+  return { text, file, failed: undefined }
+})
+
+/**
+ * Whether the config's replacement takes the place of Orbit's base prompt on the main thread for an agent that has no
+ * prompt of its own, as the hook applies it: the agent is not a subagent's definition, and the replacement has text.
+ */
+export const replaces = Effect.fn("PromptConfigPlugin.replaces")(function* (
+  fs: FSUtil.Interface,
+  directory: string,
+  entries: readonly Entry[],
+  agent: { readonly mode?: string },
+) {
+  const replacement = promptKeys(entries).replacement
+  if (replacement === undefined || agent.mode === "subagent") return false
+  return Boolean((yield* replacementText(fs, directory, replacement)).text)
+})
 
 // A rooted `\??\` is the NT spelling of a device path. Two separators start a share (`\\host\share`, `//host/share`) or a device path (`\\?\UNC\`, `\\.\`).
 const network = LinkShare.isShare

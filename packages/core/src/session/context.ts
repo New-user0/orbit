@@ -11,6 +11,7 @@ import { WorkflowTool } from "../tool/plugin/workflow.js"
 import { CodeModeInstructions } from "../codemode/instructions.js"
 import { Database } from "../database/database.js"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { FSUtil } from "@orbit/util/fs-util"
 import { InstructionDiscovery } from "../instruction-discovery.js"
 import { Instructions } from "../instructions/index.js"
 import { InstructionBuiltIns } from "../instructions/builtins.js"
@@ -119,6 +120,7 @@ const layer = Layer.effect(
     const registry = yield* Tool.Service
     const config = yield* Config.Service
     const memory = yield* MemoryInstructions.Service
+    const fs = yield* FSUtil.Service
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
@@ -191,6 +193,7 @@ const layer = Layer.effect(
       const forkSource = session.fork && (yield* store.get(session.fork.sessionID))
       const main = PromptConfigPlugin.mainThread(session, forkSource || undefined)
       const withInstructions = agent.info.context?.instructions !== false
+      const info = agent.info
       const loaded = yield* Effect.all(
         {
           builtins: builtins.load(),
@@ -211,15 +214,15 @@ const layer = Layer.effect(
           references: referenceInstructions.load(),
           mcp: mcpInstructions.load(permissions),
           entries: entries.load(sessionID),
-          // The guide is part of the main thread's prompt, so a subagent and a system prompt of the person's that replaces
-          // Orbit's go without it; the index goes wherever the instruction files do.
+          // The guide is part of Orbit's base prompt on the main thread, so a subagent goes without it, and so does an agent
+          // whose own prompt, or a system prompt of the person's, takes the base's place. The index goes wherever the
+          // instruction files do.
           memory: Effect.gen(function* () {
-            const replaced = PromptConfigPlugin.promptKeys(yield* config.entries()).replacement !== undefined
-            return yield* memory.load({
-              sessionID,
-              guide: main && !replaced,
-              index: withInstructions,
-            })
+            const guide =
+              main &&
+              !info.system &&
+              !(yield* PromptConfigPlugin.replaces(fs, location.directory, yield* config.entries(), info))
+            return yield* memory.load({ sessionID, guide, index: withInstructions })
           }),
         },
         { concurrency: "unbounded" },
@@ -292,6 +295,7 @@ export const node = makeLocationNode({
     Config.node,
     Model.node,
     Database.node,
+    FSUtil.node,
     InstructionBuiltIns.node,
     InstructionDiscovery.node,
     InstructionEntry.node,

@@ -5,6 +5,7 @@
 // stays; an agent that leaves the instruction files out (`context.instructions: false`) gets no index.
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
@@ -51,6 +52,8 @@ const ids = {
   forkOfMain: SessionSchema.ID.make("ses_mem_ctx_fork_main"),
   forkOfSub: SessionSchema.ID.make("ses_mem_ctx_fork_sub"),
   bare: SessionSchema.ID.make("ses_mem_ctx_bare"),
+  own: SessionSchema.ID.make("ses_mem_ctx_own"),
+  helper: SessionSchema.ID.make("ses_mem_ctx_helper"),
 }
 
 const source = (key: string) =>
@@ -137,6 +140,16 @@ const customPrompt = harness([
     info: Schema.decodeUnknownSync(Info)({ system_prompt: "You are a custom assistant." }),
   }),
 ])
+// A file of this run alone, which a row makes missing, empty and then filled.
+const promptFile = path.join(os.tmpdir(), `orbit-memory-prompt-${crypto.randomUUID()}.md`)
+const filePrompt = harness([
+  new Document({
+    type: "document",
+    scope: "user",
+    path: AbsolutePath.make(FSUtil.resolve("/config/orbit.json")),
+    info: Schema.decodeUnknownSync(Info)({ system_prompt_file: promptFile }),
+  }),
+])
 
 // The sources of a session's baseline, each with whether it holds a value.
 const sources = (id: SessionSchema.ID) =>
@@ -166,6 +179,13 @@ const seed = Effect.gen(function* () {
       agent.mode = "primary"
       agent.context = { instructions: false }
     })
+    editor.update(Agent.ID.make("own"), (agent) => {
+      agent.mode = "primary"
+      agent.system = "You are an agent with a prompt of its own."
+    })
+    editor.update(Agent.ID.make("helper"), (agent) => {
+      agent.mode = "subagent"
+    })
   })
   const options = { directory, agent: "build" }
   yield* insertSession({ id: ids.main, ...options })
@@ -173,6 +193,8 @@ const seed = Effect.gen(function* () {
   yield* insertSession({ id: ids.forkOfMain, fork: ids.main, ...options })
   yield* insertSession({ id: ids.forkOfSub, parentID: ids.main, fork: ids.sub, ...options })
   yield* insertSession({ id: ids.bare, directory, agent: "bare" })
+  yield* insertSession({ id: ids.own, directory, agent: "own" })
+  yield* insertSession({ id: ids.helper, directory, agent: "helper" })
 })
 
 describe("memory in a session's baseline", () => {
@@ -220,6 +242,52 @@ describe("memory under a system prompt of the person's", () => {
       expect(main.keys).toContain(GUIDE)
       expect(main.present).not.toContain(GUIDE)
       expect(main.present).toContain(INDEX)
+    }),
+  )
+
+  // The person's system prompt is not applied to a subagent's definition, even when one runs as the main thread, so
+  // Orbit's base and its guide stay for it.
+  customPrompt.live("keeps the guide for a subagent's definition that runs as the main thread", () =>
+    Effect.gen(function* () {
+      yield* seed
+      expect((yield* sources(ids.helper)).present).toContain(GUIDE)
+      expect((yield* sources(ids.main)).present).not.toContain(GUIDE)
+    }),
+  )
+
+  // A system_prompt_file that is missing or empty replaces nothing, so Orbit's base and its guide stay; once the file has
+  // text, it takes the base's place and the guide goes.
+  filePrompt.live(
+    "keeps the guide while system_prompt_file is missing or empty, and drops it once the file has text",
+    () =>
+      Effect.gen(function* () {
+        yield* seed
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(promptFile, { force: true })))
+        const missing = yield* sources(ids.main)
+        yield* Effect.promise(() => fs.writeFile(promptFile, ""))
+        const empty = yield* sources(ids.main)
+        yield* Effect.promise(() => fs.writeFile(promptFile, "You are a custom assistant."))
+        const filled = yield* sources(ids.main)
+        expect(missing.present).toContain(GUIDE)
+        expect(empty.present).toContain(GUIDE)
+        expect(filled.present).not.toContain(GUIDE)
+        expect(filled.present).toContain(INDEX)
+      }),
+  )
+})
+
+// An agent's own prompt takes the place of Orbit's base, as a system prompt of the person's does, so its main thread
+// gets the index and no guide; an agent without one, in the same run, gets both.
+describe("memory for an agent with a prompt of its own", () => {
+  it.live("gives its main thread the index without the guide", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const own = yield* sources(ids.own)
+      const plain = yield* sources(ids.main)
+      expect(own.present).not.toContain(GUIDE)
+      expect(own.present).toContain(INDEX)
+      expect(plain.present).toContain(GUIDE)
+      expect(plain.present).toContain(INDEX)
     }),
   )
 })
