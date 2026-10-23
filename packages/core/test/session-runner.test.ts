@@ -10533,3 +10533,300 @@ describe("SessionRunnerLLM scratchpad", () => {
     expect(yield* Effect.promise(() => fs.readdir(path.dirname(folder)))).toEqual([path.basename(folder)])
   })
 })
+
+// context-memory-1: the reference's context accounting. The default test model has a 200,000-token window and a
+// 32,000-token output limit, so the summary keeps 20,000, the effective window is 180,000, automatic compaction starts
+// at 167,000 and, with automatic compaction off, a request at 177,000 or more is refused before it is sent.
+describe("context accounting", () => {
+  const fortyModel = testModel("forty", { context: 40_000, output: 32_000 })
+  const measured = (input: number) => ({ inputTokens: input, nonCachedInputTokens: input })
+  const toolWithUsage = (id: string, input: number, name = "echo") =>
+    TestLLM.complete(
+      { reason: { normalized: "tool-calls" }, usage: measured(input) },
+      LLMEvent.toolCall({ id, name, input: { text: id } }),
+    )
+  const summaryFails = () => [LLMEvent.providerError({ message: "summary unavailable" })]
+  const summary = (text: string) => TestLLM.text(`## Objective\n- ${text}`, `summary-${text.length}`)
+  const lengthStop = (id: string, text: string) =>
+    TestLLM.complete(
+      { reason: { normalized: "length", raw: "max_tokens" } },
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text }),
+      LLMEvent.textEnd({ id }),
+    )
+  // Oldest first; the message list reads newest first.
+  const compactions = (s: Scenario) =>
+    s.messages.pipe(Effect.map((messages) => messages.filter((message) => message.type === "compaction").toReversed()))
+  const disableAuto = Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    yield* compaction.transform((editor) => editor.configure({ auto: false }))
+  })
+  // `session.context.updated` is ephemeral, so the scenarios read it from the live bus, never from the event log.
+  const contextUpdates = (s: Scenario) =>
+    Effect.gen(function* () {
+      const updates = new Array<Record<string, unknown>>()
+      yield* s.bus.subscribe().pipe(
+        Stream.filter((event) => event.type === "session.context.updated"),
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            updates.push({ ...(event.data as Record<string, unknown>) })
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      return updates
+    })
+  // Ephemeral delivery runs on the subscriber's fiber, so give it a bounded number of turns to catch up.
+  const settled = (updates: ReadonlyArray<Record<string, unknown>>, count: number) =>
+    Effect.gen(function* () {
+      for (let turn = 0; turn < 200 && updates.length < count; turn++) yield* Effect.yieldNow
+    })
+
+  // Three steps whose automatic compaction fails, then a fourth that must not try again. Each response reports
+  // 185,000 input tokens, which is above the 167,000 threshold, so every step after the first is due.
+  const tripBreaker = (
+    s: Scenario,
+    fourth = "echo",
+    last: ReadonlyArray<LLMEvent> = TestLLM.textWithUsage("Done", "breaker-done", 185_000),
+  ) =>
+    s.llm.push(
+      toolWithUsage("c1", 185_000),
+      summaryFails(),
+      toolWithUsage("c2", 185_000),
+      summaryFails(),
+      toolWithUsage("c3", 185_000),
+      summaryFails(),
+      toolWithUsage("c4", 185_000, fourth),
+      last,
+    )
+
+  for (const [usage, compacts] of [
+    [170_000, true],
+    [165_000, false],
+  ] as const)
+    scenario(`compacts at the window less the summary room and the buffer: ${usage} ${compacts}`, function* (s) {
+      yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "threshold-first", usage))
+      yield* s.runPrompt("Earlier question")
+      yield* s.llm.push(...(compacts ? [summary("threshold")] : []), TestLLM.text("Continued", "threshold-final"))
+      yield* s.runPrompt("Next question")
+
+      expect((yield* compactions(s)).map((message) => message.status)).toEqual(compacts ? ["completed"] : [])
+    })
+
+  for (const [usage, compacts] of [
+    [22_000, true],
+    [19_000, false],
+  ] as const)
+    scenario(`compacts a 40,000-token window at half of it: ${usage} ${compacts}`, function* (s) {
+      s.currentModel = fortyModel
+      yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "floor-first", usage))
+      yield* s.runPrompt("Earlier question")
+      yield* s.llm.push(...(compacts ? [summary("floor")] : []), TestLLM.text("Continued", "floor-final"))
+      yield* s.runPrompt("Next question")
+
+      expect((yield* compactions(s)).map((message) => message.status)).toEqual(compacts ? ["completed"] : [])
+    })
+
+  scenario("keeps only the configured output cap free for the summary", function* (s) {
+    yield* s.configControl!.setEntries([
+      new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+    ])
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "cap-first", 185_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(summary("capped"), TestLLM.text("Continued", "cap-final"))
+    yield* s.runPrompt("Next question")
+
+    expect((yield* compactions(s)).map((message) => message.status)).toEqual(["completed"])
+    // The summary request may fill the effective window, which leaves it the 8,000 the cap keeps free.
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_000)
+  })
+
+  scenario("sends the request uncompacted when automatic compaction fails", function* (s) {
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "failed-first", 185_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(summaryFails(), TestLLM.text("Answered anyway", "failed-final"))
+    const exit = yield* s.runPrompt("Next question").pipe(Effect.exit)
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    expect(yield* compactions(s)).toMatchObject([{ status: "failed", reason: "auto" }])
+    expect(s.requests).toHaveLength(2)
+    expect(userTexts(s.requests[1])).toContain("Earlier question")
+    expect((yield* s.context).at(-1)).toMatchObject(
+      Expected.assistant({ finish: "stop" }, [Expected.text("Answered anyway")]),
+    )
+  })
+
+  scenario("pauses automatic compaction after three failures in a turn", function* (s) {
+    yield* tripBreaker(s)
+    const exit = yield* s.runPrompt("Start").pipe(Effect.exit)
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    // One request per step, plus one summary request for each of steps two to four; step five sends no summary.
+    expect(s.requests).toHaveLength(8)
+    expect(yield* compactions(s)).toMatchObject([
+      { status: "failed", reason: "auto" },
+      { status: "failed", reason: "auto" },
+      { status: "failed", reason: "auto" },
+    ])
+  })
+
+  scenario("tries automatic compaction again on the next turn", function* (s) {
+    yield* tripBreaker(s)
+    yield* s.runPrompt("Start").pipe(Effect.exit)
+    yield* s.llm.push(summary("next turn"), TestLLM.text("Answered", "next-turn-final"))
+    yield* s.runPrompt("Again")
+
+    expect((yield* compactions(s)).map((message) => message.status)).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "completed",
+    ])
+  })
+
+  scenario("keeps the pause when input is steered into the same turn", function* (s) {
+    yield* tripBreaker(s, "held")
+    const held = s.hold("c4")
+    yield* s.admit("Start")
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    const first = yield* Effect.raceFirst(
+      Deferred.await(held.started).pipe(Effect.as("held" as const)),
+      Fiber.await(run).pipe(Effect.as("ended" as const)),
+    )
+    expect(first).toBe("held")
+    yield* s.admit("Steered into the turn")
+    yield* Deferred.succeed(held.release, undefined)
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(8)
+    expect(userTexts(s.requests[7])).toContain("Steered into the turn")
+    expect(yield* compactions(s)).toHaveLength(3)
+  })
+
+  scenario("does not rebuild an overflowing request once automatic compaction is paused", function* (s) {
+    yield* tripBreaker(s, "echo", [
+      LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+    ])
+    yield* s.admit("Start")
+    const exit = yield* s.resume.pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("prompt too long")
+    expect(s.requests).toHaveLength(8)
+    expect(yield* compactions(s)).toHaveLength(3)
+  })
+
+  scenario("compacts automatically at most once in a step", function* (s) {
+    // The summary alone is over the 20,000-token threshold of the 40,000-token window, so a check after the cut-off
+    // reply would find the step due again.
+    s.currentModel = fortyModel
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "once-first", 30_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.always(TestLLM.text("Not a summary", "once-fallback"))
+    yield* s.llm.push(
+      summary("word ".repeat(24_000)),
+      lengthStop("once-cut", "Part"),
+      TestLLM.text("Done", "once-done"),
+    )
+    const exit = yield* s.runPrompt("Next question").pipe(Effect.exit)
+
+    expect(yield* compactions(s)).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(s.requests).toHaveLength(3)
+    expect(Exit.isSuccess(exit)).toBe(true)
+  })
+
+  for (const [usage, refused] of [
+    [178_000, true],
+    [170_000, false],
+  ] as const)
+    scenario(
+      `refuses a request at the blocking limit when automatic compaction is off: ${usage} ${refused}`,
+      function* (s) {
+        yield* disableAuto
+        yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "blocking-first", usage))
+        yield* s.runPrompt("Earlier question")
+        s.requests.length = 0
+        yield* s.llm.push(TestLLM.text("Sent", "blocking-sent"))
+        yield* s.admit("Next question")
+        const exit = yield* s.resume.pipe(Effect.exit)
+
+        expect(s.requests).toHaveLength(refused ? 0 : 1)
+        expect(Exit.isFailure(exit)).toBe(refused)
+        if (Exit.isFailure(exit)) {
+          const error = Cause.squash(exit.cause)
+          expect(error).toBeInstanceOf(StepFailedError)
+          if (error instanceof StepFailedError)
+            expect(error.error).toMatchObject({ type: "context.limit", message: expect.stringContaining("/compact") })
+        }
+        expect(yield* compactions(s)).toHaveLength(0)
+      },
+    )
+
+  scenario("sends a large request when automatic compaction is off and the window is unknown", function* (s) {
+    s.currentModel = unknownContextModel
+    yield* disableAuto
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "unknown-first", 300_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(TestLLM.text("Sent", "unknown-sent"))
+    yield* s.runPrompt("Next question")
+
+    expect(s.requests).toHaveLength(1)
+  })
+
+  for (const auto of [true, false])
+    scenario(`reports context use after a measured response with automatic compaction ${auto}`, function* (s) {
+      if (!auto) yield* disableAuto
+      const updates = yield* contextUpdates(s)
+      yield* s.llm.push(TestLLM.textWithUsage("Answer", "report-answer", 150_000))
+      yield* s.runPrompt("Question")
+      yield* settled(updates, 1)
+
+      expect(updates.at(-1)).toEqual({
+        sessionID,
+        used: 150_000,
+        window: 180_000,
+        threshold: 167_000,
+        auto,
+        percentLeft: auto ? 10 : 17,
+        state: auto ? "error" : "ok",
+        ...(auto ? {} : { blocking: 177_000 }),
+        paused: false,
+        stale: false,
+      })
+    })
+
+  for (const reason of ["auto", "manual"] as const)
+    scenario(`marks the report stale after a ${reason} compaction`, function* (s) {
+      const updates = yield* contextUpdates(s)
+      yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "stale-first", 185_000))
+      yield* s.runPrompt("Earlier question")
+      if (reason === "manual") {
+        yield* s.llm.push(summary("manual"))
+        yield* s.session.compact({ sessionID })
+        yield* s.resume
+      }
+      if (reason === "auto") {
+        yield* s.llm.push(summary("auto"), TestLLM.textWithUsage("After", "stale-after", 20_000))
+        yield* s.runPrompt("Next question")
+      }
+      yield* settled(updates, reason === "auto" ? 3 : 2)
+
+      expect(updates.map((update) => update.stale)).toEqual(reason === "auto" ? [false, true, false] : [false, true])
+      if (reason === "auto") expect(updates.at(-1)).toMatchObject({ used: 20_000, stale: false })
+    })
+
+  scenario("reports the pause on the next measured response", function* (s) {
+    const updates = yield* contextUpdates(s)
+    yield* tripBreaker(s)
+    yield* s.runPrompt("Start").pipe(Effect.exit)
+    yield* settled(updates, 5)
+
+    const measuredUpdates = updates.filter((update) => update.stale === false)
+    expect(measuredUpdates.map((update) => update.paused)).toEqual([false, false, false, true, true])
+    expect(measuredUpdates[0]).toMatchObject({ used: 185_000, percentLeft: 0, state: "error" })
+  })
+})
