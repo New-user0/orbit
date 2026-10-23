@@ -19,7 +19,6 @@ export function createRecapTrigger(input: {
   /** Asks the server for a recap. The signal aborts when the person comes back. */
   request: (signal: AbortSignal) => Promise<unknown>
 }) {
-  let blurred = false
   let timer: ReturnType<typeof setTimeout> | undefined
   // The delay ended during a turn, so the request waits for the turn's end.
   let deferred = false
@@ -38,12 +37,10 @@ export function createRecapTrigger(input: {
   }
 
   const onBlur = () => {
-    blurred = true
     const minutes = input.afterMinutes()
     if (minutes <= 0) return
     clearTimeout(timer)
     timer = setTimeout(() => {
-      timer = undefined
       if (input.busy()) {
         deferred = true
         return
@@ -53,10 +50,9 @@ export function createRecapTrigger(input: {
   }
 
   const onFocus = () => {
-    blurred = false
     clearTimeout(timer)
-    timer = undefined
     deferred = false
+    // A request the server is still answering is dropped, and the next blur may ask again at once.
     inflight?.abort()
     inflight = undefined
   }
@@ -65,11 +61,11 @@ export function createRecapTrigger(input: {
   input.renderer.on("focus", onFocus)
 
   return {
-    /** The session's turn ended: a deferred request goes out now, if the person is still away. */
+    /** The session's turn ended: a deferred request goes out now. Coming back has already cleared one. */
     idle() {
       if (!deferred) return
       deferred = false
-      if (blurred) ask()
+      ask()
     },
     dispose() {
       input.renderer.off("blur", onBlur)

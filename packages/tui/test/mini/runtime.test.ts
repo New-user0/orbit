@@ -318,6 +318,74 @@ describe("run interactive runtime", () => {
     await task
   })
 
+  // clients-ux-27: the lifecycle's away-summary request reaches the recap route for Mini's session, with its signal.
+  test("asks the recap route for its own session", async () => {
+    const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+    const api = footer()
+    const streamStarted = defer<void>()
+    let lifecycle!: LifecycleInput
+    stubCatalogLists(sdk)
+    const recap = spyOn(sdk.session, "recap").mockImplementation(() => ok({ recorded: true }))
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses_root",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp", canonical: "/tmp" } },
+          agent: "build",
+          model: { providerID: "test", modelID: "model" },
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: { providerID: "test", modelID: "model" },
+        variant: undefined,
+        files: [],
+        thinking: false,
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          lifecycle = input
+          return {
+            footer: api,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            setTitle: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => {
+            streamStarted.resolve()
+            return {
+              runPromptTurn: async () => {},
+              admitPromptTurn: async () => {},
+              waitForIdle: async () => {},
+              interruptActiveTurn: async () => {},
+              selectSubagent: () => {},
+              settleForm: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    )
+    await streamStarted.promise
+
+    const signal = new AbortController().signal
+    await lifecycle.recap?.(signal)
+    expect(recap).toHaveBeenCalledWith({ sessionID: "ses_root" }, { signal })
+
+    api.close()
+    await task
+  })
+
   test("resolves the deferred session only after first paint", async () => {
     const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
     const lifecycleStarted = defer<void>()

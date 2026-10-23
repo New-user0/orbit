@@ -86,14 +86,14 @@ async function start(input: {
         location: { directory },
       } as OrbitEvent)
     },
-    execution(type: "session.execution.started" | "session.execution.succeeded") {
+    execution(type: "session.execution.started" | "session.execution.succeeded", session = sessionID) {
       seq++
       events.emit({
         id: `evt_execution_${seq}`,
         created: Date.now(),
         type,
-        durable: { aggregateID: sessionID, seq, version: 1 },
-        data: { sessionID },
+        durable: { aggregateID: session, seq, version: 1 },
+        data: { sessionID: session },
         location: { directory },
       } as OrbitEvent)
     },
@@ -222,6 +222,18 @@ test("a delay that ends during a turn waits for the turn's end, and asks then on
   }
 })
 
+test("another session's turn ending does not send the request this session deferred", async () => {
+  await using app = await start({ messages: [user("Fix the build")] })
+  app.execution("session.execution.started")
+  app.blur()
+  await Bun.sleep(400)
+  app.execution("session.execution.succeeded", "ses_recap_other")
+  await Bun.sleep(400)
+  expect(app.requests).toHaveLength(0)
+  app.execution("session.execution.succeeded")
+  expect(await until(() => app.requests.length === 1)).toBe(true)
+})
+
 test("a refused or failed recap shows nothing and leaves the session usable", async () => {
   await using app = await start({
     messages: [user("Fix the build")],
@@ -267,4 +279,10 @@ test.each([40, 120])("the recap row is a dimmed reference mark and sanitized tex
     .find((item) => item.text.includes("Fix the build"))
   expect(span?.fg.toInts()).toBeDefined()
   expect(span?.fg.toInts()).not.toEqual(prompt?.fg.toInts())
+  // The mark is dimmed with the text.
+  const mark = app
+    .captureSpans()
+    .lines.flatMap((line) => line.spans)
+    .find((item) => item.text.includes("※"))
+  expect(mark?.fg.toInts()).toEqual(span?.fg.toInts())
 })

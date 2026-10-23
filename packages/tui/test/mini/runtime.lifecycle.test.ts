@@ -317,6 +317,36 @@ describe("away summary in Mini", () => {
     expect(harness.asked[0]?.aborted).toBe(true)
   })
 
+  test("closing Mini drops a request in flight", async () => {
+    const harness = await recapHarness()
+    harness.app.renderer.emit("blur")
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
+    await harness.lifecycle.close({ showExit: false })
+    expect(harness.asked[0]?.aborted).toBe(true)
+  })
+
+  test("a subagent's turn neither holds the request nor ends Mini's own turn", async () => {
+    {
+      using harness = await recapHarness()
+      harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_child" } })
+      await Bun.sleep(100)
+      expect(harness.asked).toHaveLength(0)
+    }
+    {
+      using harness = await recapHarness()
+      harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_child" } })
+      harness.app.renderer.emit("blur")
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect(harness.asked).toHaveLength(1)
+    }
+  })
+
   test("waits for the turn's end, asks nothing while focus is unknown, and 0 turns it off", async () => {
     {
       using harness = await recapHarness()
