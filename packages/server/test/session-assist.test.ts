@@ -329,6 +329,15 @@ it.live(
         expect(text).toContain(OUTPUT_MARK)
         expect(text).toContain("...")
         expect(text).not.toContain("o".repeat(400))
+        // The output is cut to exactly 300 characters of JSON, the last three of them the dots.
+        const sent = asked[0].body.messages[1].content
+        const promptText =
+          typeof sent === "string" ? sent : (sent as Array<{ text?: string }>).map((part) => part.text).join("")
+        const output = promptText
+          .split("\n")
+          .find((line) => line.startsWith("Output: "))
+          ?.slice("Output: ".length)
+        expect({ length: output?.length, dots: output?.endsWith("...") }).toEqual({ length: 300, dots: true })
         expect(text).toContain(`${"I".repeat(150)}INTENT-MARK${"J".repeat(39)}`)
         expect(text).not.toContain("J".repeat(40))
         // No history: the person's message is not sent.
@@ -588,6 +597,52 @@ const suppressions: ReadonlyArray<{
     },
   },
   {
+    name: "a subagent's permission request is waiting",
+    reason: "pending_permission",
+    setup: async ({ server, directory }) => {
+      const id = await createSession(server, directory)
+      await prompt(server, id, "one")
+      await prompt(server, id, "two")
+      const child = await createSession(server, directory, id)
+      const created = await request(server, "POST", `/api/session/${child}/permission`, {
+        body: { action: "edit", resources: ["x.txt"] },
+      })
+      expect(created.body?.data?.effect).toBe("ask")
+      expect((await request(server, "GET", `/api/session/${id}/permission`)).body?.data).toHaveLength(0)
+      return id
+    },
+  },
+  {
+    name: "a subagent's form is waiting",
+    reason: "elicitation_active",
+    setup: async ({ server, directory }) => {
+      const id = await createSession(server, directory)
+      await prompt(server, id, "one")
+      await prompt(server, id, "two")
+      const child = await createSession(server, directory, id)
+      const created = await request(server, "POST", `/api/session/${child}/form`, {
+        body: { title: "Pick", fields: [{ key: "a", type: "boolean" }] },
+      })
+      expect(created.status).toBe(200)
+      return id
+    },
+  },
+  {
+    name: "a prompt waits in the inbox, not yet delivered",
+    reason: "busy",
+    setup: async ({ server, directory }) => {
+      const id = await createSession(server, directory)
+      await prompt(server, id, "one")
+      await prompt(server, id, "two")
+      const admitted = await request(server, "POST", `/api/session/${id}/prompt`, {
+        body: { text: "three", resume: false },
+      })
+      expect(admitted.status).toBe(200)
+      expect((await request(server, "GET", `/api/session/${id}/inbox`)).body?.data).toHaveLength(1)
+      return id
+    },
+  },
+  {
     name: "a subagent's session",
     reason: "subagent",
     setup: async ({ server, directory }) => {
@@ -633,6 +688,8 @@ const filters: ReadonlyArray<readonly [string, string | undefined]> = [
   ["nothing to suggest right now", "meta_text"],
   ["I would stay silent here", "meta_text"],
   ["...silence...", "meta_text"],
+  ["Nothing found.", "meta_text"],
+  ["No suggestion this time", "meta_text"],
   ["[no suggestion]", "meta_wrapped"],
   ["(waiting for the user)", "meta_wrapped"],
   ["API Error: 500 upstream", "error_message"],
@@ -676,6 +733,89 @@ it.live(
       })
     }),
   120_000,
+)
+
+// The spend guard counts every kind of token of the last response that the prompt cache did not cover, and not the ones
+// it read. A provider decides which kinds it reports, so each row imports a copy of a finished session whose last
+// response reports one kind; the cache-read row is the control.
+const spends: ReadonlyArray<readonly [string, Message["tokens"], string | undefined]> = [
+  ["input", { input: 10_001, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_cold"],
+  ["output", { input: 0, output: 10_001, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_cold"],
+  ["reasoning", { input: 0, output: 0, reasoning: 10_001, cache: { read: 0, write: 0 } }, "cache_cold"],
+  ["cache write", { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 10_001 } }, "cache_cold"],
+  ["cache read", { input: 0, output: 0, reasoning: 0, cache: { read: 50_000, write: 0 } }, undefined],
+]
+
+it.live(
+  "a suggestion counts each kind of uncached token of the last response, and not the tokens the cache read",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const id = await createSession(server, folders.repo)
+        await prompt(server, id, "one")
+        await prompt(server, id, "two")
+        const exported = (await request(server, "GET", `/api/experimental/session/${id}/export`)).body?.data
+        const seen: Array<readonly [string, unknown]> = []
+        for (const [index, [kind, tokens]] of spends.entries()) {
+          // A copy under new IDs, with the same order, whose last response reports these tokens.
+          const copy = JSON.parse(
+            JSON.stringify(exported).replace(/"((?:ses|msg|prt)_[A-Za-z0-9]+)"/g, `"$1c${index}"`),
+          ) as { info: { id: string }; messages: Array<{ type: string; tokens?: unknown }> }
+          const last = copy.messages.findLast((message) => message.type === "assistant")
+          if (last) last.tokens = tokens
+          const imported = await request(server, "POST", "/api/experimental/session/import", {
+            body: { ...copy, location: { directory: folders.repo } },
+          })
+          expect(imported.status).toBe(200)
+          expect(uncached((await assistants(server, copy.info.id)).at(-1))).toBe(
+            tokens.input + tokens.output + tokens.reasoning + tokens.cache.write,
+          )
+          seen.push([kind, (await suggestion(server, copy.info.id)).body?.data])
+        }
+        expect(seen).toEqual(
+          spends.map(([kind, , reason]) => [
+            kind,
+            reason ? { suggestion: null, reason } : { suggestion: "run the tests" },
+          ]),
+        )
+        expect(llm.requests.filter((item) => item.kind === "suggestion")).toHaveLength(1)
+      })
+    }),
+  90_000,
+)
+
+it.live(
+  "a label of a failed call carries the error as the call's output",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const id = await createSession(server, folders.repo)
+        llm.script.steps.push(
+          { tool: { name: "Read", input: { file_path: path.join(folders.repo, "MISSING-MARK.txt") } } },
+          { text: "it is not there" },
+        )
+        await prompt(server, id, "read the missing file")
+        const [batch] = await assistants(server, id)
+        const call = batch?.content.find((part) => part.type === "tool")
+        expect(call?.state.status).toBe("error")
+        const before = llm.requests.length
+        llm.script.other = () => ({ text: "Read a missing file" })
+
+        const answered = await label(server, id, { messageID: batch?.id, toolCallIDs: [call?.id] })
+
+        expect(answered.body).toEqual({ data: { label: "Read a missing file" } })
+        const sent = llm.requests.slice(before)[0]?.body.messages[1]?.content
+        const promptText =
+          typeof sent === "string" ? sent : (sent as Array<{ text?: string }>).map((part) => part.text).join("")
+        const output = promptText.split("\n").find((line) => line.startsWith("Output: "))
+        expect(output).toContain("MISSING-MARK")
+      })
+    }),
+  60_000,
 )
 
 // ---- cancellation ---------------------------------------------------------------------------------------------------
@@ -733,6 +873,38 @@ it.live(
 
         expect(second.body?.data).toEqual({ suggestion: "fresh suggestion here" })
         expect((await first).body?.data).toEqual({ suggestion: null, reason: "aborted" })
+      })
+    }),
+  60_000,
+)
+
+it.live(
+  "a prompt admitted for another session leaves the suggestion being written alone",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const id = await createSession(server, folders.repo)
+        await prompt(server, id, "one")
+        await prompt(server, id, "two")
+        const other = await createSession(server, folders.repo)
+        llm.script.suggestion = () => ({ text: "run the tests", delayMs: 1_500 })
+        const pending = suggestion(server, id)
+        const deadline = Date.now() + 10_000
+        while (!llm.requests.some((item) => item.kind === "suggestion")) {
+          if (Date.now() > deadline) throw new Error("The suggestion never reached the model")
+          await Bun.sleep(25)
+        }
+        expect(
+          (
+            await request(server, "POST", `/api/session/${other}/prompt`, {
+              body: { text: "elsewhere", resume: false },
+            })
+          ).status,
+        ).toBe(200)
+
+        expect((await pending).body?.data).toEqual({ suggestion: "run the tests" })
       })
     }),
   60_000,

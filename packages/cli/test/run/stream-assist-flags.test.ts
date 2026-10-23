@@ -114,8 +114,7 @@ const server = Bun.serve({
     if (url.pathname === "/api/location") return Response.json({ directory, project: { id: "prj_flags" } })
     if (url.pathname === "/api/session" && request.method === "POST")
       return Response.json({ data: { id: "ses_flags", location: { directory }, agent: "build" } })
-    if (url.pathname === "/api/info")
-      return Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [] })
+    if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [] })
     return Response.json({ _tag: "NotFound", message: "not found" }, { status: 404 })
   },
 })
