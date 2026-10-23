@@ -239,6 +239,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   )
   const directory = location.directory
   const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(cwd, global))
+  const themeSource = createThemeSource(global)
   const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
   const managed = input.server.service
   const service = managed
@@ -409,7 +410,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                       <SessionTerminalsProvider>
                                                         <ThemeProvider
                                                           mode={mode}
-                                                          source={createThemeSource(global.config)}
+                                                          source={themeSource}
                                                         >
                                                           <ThemeErrorToast />
                                                           <KeybindingsToast />
@@ -426,6 +427,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                                           >
                                                                             <PanelProvider>
                                                                               <TrustProvider directory={cwd}>
+                                                                                <ProjectThemes source={themeSource} />
                                                                                 <PluginProvider
                                                                                   packages={input.packages}
                                                                                   directories={pluginDirectories}
@@ -487,6 +489,14 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
 })
+
+// The theme provider sits outside the trust provider so that the first paint never waits for the trust read: the
+// project's themes are added once the folder the terminal UI started in is trusted, and taken away if that ends.
+function ProjectThemes(props: { source: ReturnType<typeof createThemeSource> }) {
+  const trust = useTrust()
+  createEffect(() => props.source.trust({ trusted: trust.startup.trusted(), root: trust.startup.root() }))
+  return null
+}
 
 function App() {
   const log = useLog({ component: "app" })

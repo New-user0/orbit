@@ -682,15 +682,6 @@ describe("ConfigTrust.stamp", () => {
       const own = document("project", { instructions_exclude: ["/repo/AGENTS.md"] })
       expect(ConfigInstructionFile.excludes([user, own])).toEqual(["/home/me/AGENTS.md", "/repo/AGENTS.md"])
     })
-
-    test("stays when a trusted folder is held back for the kinds that changed since the grant", () => {
-      const entry = document("project", listed)
-      for (const kind of ["hooks", "mcp", "plugins", "providers", "shell", "formatter", "lsp", "env", "sandbox", "skills"] as const) {
-        const partial = ConfigTrust.partial(entry, place, [kind])
-        if (partial.type !== "document") throw new Error("Expected a document")
-        expect(partial.info.instructions_exclude).toEqual(["**/third_party/**/AGENTS.md"])
-      }
-    })
   })
 
   // FU-M2-021: these set how much each paid request carries, so an untrusted folder cannot set them, and the user's own

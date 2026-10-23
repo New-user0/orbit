@@ -10,7 +10,6 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { Npm } from "@orbit/util/npm"
 import { Bus } from "@orbit/core/bus"
-import { Config } from "@orbit/core/config"
 import { Command } from "@orbit/core/command"
 import { Database } from "@orbit/core/database/database"
 import { Watcher } from "@orbit/core/filesystem/watcher"
@@ -361,7 +360,9 @@ describe("PluginSupervisor under workspace trust", () => {
       Effect.retry({ times: 200, schedule: Schedule.spaced("25 millis") }),
     )
 
-  untrusted.live("turns a directory off when a plugin is planted after the grant, until the grant is renewed", () =>
+  // D8 (owner, 2026-10-21: "match refrence"): a trusted folder's plugins load as they are now, so one planted after the
+  // grant activates beside the one already there, with no new grant.
+  untrusted.live("activates a plugin planted after the grant beside the ones already there", () =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped()
       const first = path.join(directory.path, ".orbit/plugins/greeter.ts")
@@ -373,31 +374,13 @@ describe("PluginSupervisor under workspace trust", () => {
         const plugins = yield* Plugin.Service
         const commands = yield* Command.Service
         const project = yield* ProjectTrust.Service
-        const config = yield* Config.Service
 
         yield* plugins.awaitActivation
         yield* project.grant({ persist: false, via: "test" })
         yield* commandPresent(commands, "greet-project", true)
-        const read = () => config.fingerprints().pipe(Effect.map((items) => JSON.stringify(items.map((item) => item.digests))))
-        const before = yield* read()
 
-        // A plugin planted after the grant keeps the directory off, the plugin the person approved included, until a
-        // new grant lifts it for both.
         yield* Effect.promise(() => Bun.write(late, greeter("greet-late").replace("greeter", "late")))
         yield* watcher.emit({ path: late, type: "create" })
-        yield* commandPresent(commands, "greet-project", false)
-        expect(yield* commands.get("greet-late")).toBeUndefined()
-        // The change feed beat the config's reload (that is what the disk check in the source is for). A grant records
-        // what the config last read, so it waits for the reload to have read the new plugin. (The status already says so
-        // from the disk, so it cannot be the signal.)
-        yield* read().pipe(
-          Effect.filterOrFail(
-            (now) => now !== before,
-            () => "reload pending",
-          ),
-          Effect.retry({ times: 200, schedule: Schedule.spaced("25 millis") }),
-        )
-        yield* project.grant({ persist: false, via: "test" })
         yield* commandPresent(commands, "greet-late", true)
         yield* commandPresent(commands, "greet-project", true)
       }).pipe(

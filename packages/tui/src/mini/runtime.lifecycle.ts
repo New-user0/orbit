@@ -72,6 +72,8 @@ export type LifecycleInput = {
   model: RunInput["model"]
   variant: string | undefined
   tuiConfig: RunTuiConfig | Promise<RunTuiConfig>
+  /** The folder the server decided trust for, which bounds the theme walk (class 3). */
+  root?: string
   onMiniSettingChange?: (change: MiniSettingChange) => Promise<MiniSettings>
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onFormReply: (input: FormReply) => void | Promise<void>
@@ -180,7 +182,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   })
   if (mono) renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
   const title = createMiniTitle(renderer, input.host.platform, input.sessionTitle)
-  const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono)
+  const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono, input.root)
   renderer.setBackgroundColor(theme.background)
   const state: SplashState = {
     entry: false,
@@ -239,6 +241,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     wrote: true,
     startup,
     tuiConfig,
+    root: input.root,
     miniSettings: {
       current: miniSettings,
       update: input.onMiniSettingChange,

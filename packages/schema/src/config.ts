@@ -282,7 +282,7 @@ export class Document extends Schema.Class<Document>("Config.Document")({
   trusted,
   withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
     description:
-      "The kinds of configuration removed from info: all that the folder may not supply while it is not trusted, or only the kinds whose executable parts changed since the folder was trusted. Unset when nothing was removed.",
+      "The kinds of configuration removed from info because the folder that holds the file is not trusted. Set only on such a folder's entry; a trusted folder's entry applies as it is. Removed in a later release.",
   }),
   info: Info,
 }) {}
@@ -294,7 +294,7 @@ export class Directory extends Schema.Class<Directory>("Config.Directory")({
   trusted,
   withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
     description:
-      "The kinds of what the directory holds that are off although its folder is trusted, because their files changed since the folder was trusted. Unset when nothing is held back.",
+      "No longer set: a trusted folder's directory applies as it is, and an untrusted one's is marked by `trusted`. Kept so that older entries decode, and removed in a later release.",
   }),
 }) {}
 

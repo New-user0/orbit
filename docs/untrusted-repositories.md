@@ -39,11 +39,11 @@ Words used here:
   project.
 - **Held back:** what an untrusted folder's files would have contributed. `ProjectTrust.status` lists it per file with
   its kinds (`Trust.Kind`).
-- **Holder:** the folder whose decision covers a file. For config inside the project's folders it is the project's
-  canonical root, wherever the file sits (`standing()` in `packages/core/src/config.ts`). For config in a folder above
-  the project it is the folder around the file's `.orbit` directory, or the file's own folder (`ConfigTrust.holder`),
-  and a grant for the project does not reach it. Do not use `ConfigTrust.holder` for a file inside the project: for
-  `repo/sub/.orbit` it answers `repo/sub`, a folder whose grant changes nothing.
+- **Holder:** the folder whose decision covers a file. For config it is the project's canonical root, wherever in the
+  project's folders the file sits (`standing()` in `packages/core/src/config.ts`). Nothing above the project's root is
+  read (D7), so no config has a holder of its own above it. `ConfigTrust.holder` names the folder around a config
+  container (`repo/sub/.orbit` gives `repo/sub`), which `standing()` uses only to place a source in the project's folders:
+  a grant for that folder changes nothing.
 
 How to use the page:
 
@@ -118,7 +118,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   rooted `\??\` NT spelling such as `\??\UNC\`, also behind a dot segment such as `\x\..\??\UNC\`: the predicate tests
   the spelling as written and as normalized), before any file system call, and a path that reaches a share through a
   link (`LinkShare.blocked`; pinned by the link test in `test/plugin/prompt-config.test.ts`). The same predicate answers
-  for the trust fingerprint, `{file:}` reach and `ConfigTrust.inside`, and `test/link-share.test.ts` pins each NT
+  for `{file:}` reach and `ConfigTrust.inside`, and `test/link-share.test.ts` pins each NT
   spelling against `of`, `ofSync`, `blocked` and `scan` with no file system call. `PromptConfigPlugin.promptKeys` reads
   `system_prompt`, `append_system_prompt` and `system_prompt_file` only from documents of scope user (or no scope), flag
   and managed, so a project, local or remote document never supplies them, trusted or not, and nothing ranks against
@@ -396,74 +396,20 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   recorder, three `cwd` spellings, trusted control). The interactive clients show no trust dialog for this, since no
   config file of the clone is withheld (Known gaps).
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
-  `config-trust.test.ts`. The folders it may reach come from `standing()` in `packages/core/src/config.ts`, which for
-  config above the project asks `ConfigTrust.reach`: a holder that is the home directory or a filesystem root
-  (`WorkspaceTrust`'s own `persistent`) reaches only the config container, and a document directly in it nothing.
-  `ProjectTrust.supplies` asks the same function. Proof: the `ConfigTrust.reach` table in
-  `test/config/trust-fingerprint.test.ts`; the wiring from the store's answer through `standing()` and `supplies` on every
-  machine, with a store that calls one folder a root (`config-trust.test.ts`, "root-like": two rows, each with a control);
-  and with a real root in "does not let a file reference … reach the drive", which needs a root the test may write to and
-  returns without testing elsewhere (Linux as root). A drive made with `subst` cannot stand in for the real root on
-  Windows: the runtime resolves it to the folder behind it.
-- Executable config that changed after the folder was trusted (`Fingerprint`, `packages/core/src/config/fingerprint.ts`,
-  `WorkspaceTrust.compare`): the folder's grant records one SHA-256 of canonical JSON (sorted keys) per kind and source,
-  and a kind whose digest differs, or that cannot be read, is cut from that source only (`ConfigTrust.partial`: a document
-  loses the fields, a directory lists `withheld`). Implicit trust records nothing. Each row names the digest input and the
-  test that pins it; a mutation that fails each is in the pull request.
-  - `hooks`, `mcp`, `plugins`, `providers`, `shell`, `formatter`, `lsp`, `env`, `sandbox` of a document: that field
-    (`test/config/fingerprint.test.ts`, one row per kind; `config-trust.test.ts`, "stops <kind> after it is edited").
-  - `skills` of a document: the field and the front-matter `hooks` of the skill files under its local paths
-    (`fingerprint.test.ts`).
-  - `plugins` of a directory: every regular file in each plugin folder (`node_modules` inside a plugin folder is named,
-    not entered; a `node_modules` directly in `plugin/` or `plugins/` is never a plugin, for the digest, the server
-    loaders and the TUI alike), listed by the same link-aware walk as agents/ and skills/, so nothing a folder supplies
-    reaches the runtime's resolver before trust, and `reach` and `walk` call `fs.resolve` only after `LinkShare` has
-    found no share link on the way; a single-file plugin and the `package.json` beside it, by content
-    (`fingerprint.test.ts`, `fingerprint-tui-only.test.ts`: edits, a touch, an edit with the old time, a tui-only folder;
-    `fingerprint-plugin-share.test.ts`: tui.ts, server.ts, package.json and a server/ folder linked to a share, an
-    untrusted load, and a control; `fingerprint-node-modules.test.ts` and `plugin-source-bad-entry.test.ts`: nothing under
-    `plugins/node_modules` is read or offered; `plugin-trust-read.test.ts` in the TUI). `scan` compares
-    again when it runs, because its change feed fires before the reload (`config-trust.test.ts`: "offers no plugin planted
-    after the grant"). `ProjectTrust.status` reads the plugins of a config directory from the disk when it answers, so a
-    client that imports plugins on a file event (the terminal UI asks again before it does) sees one planted after the
-    grant before the reload (`project-trust.test.ts`: "lists a plugin that shows up in a trusted folder at once").
-  - `hooks` and `mcp` of a directory: the front matter `hooks` of its skills and agents, and `mcp_servers` of its agents
-    (`fingerprint.test.ts`). Nothing runs them yet; `ProjectTrust.allows(file, kind)` is what hooks-21 and
-    agents-extensibility-9 ask (`project-trust.test.ts`).
-  - A digest that cannot be read: `fingerprint.test.ts`, `workspace-trust-records.test.ts`. A value that comes to more than
-    4,000,000 values and characters, or nests 1,000 levels deep, is not written out (`Fingerprint.canonical`, class 7): that
-    kind of that source is `unreadable`, with one warning (`test/config/front-matter-aliases.test.ts`, the
-    `Fingerprint.canonical` rows of its child process and the "Fingerprint answers unreadable" row). A skill or agent file
-    whose front matter `ConfigMarkdown` refuses for its aliases carries nothing, and the load logs one "config file
-    skipped" line for it (the "untrusted project whose agent and skill files are aliased" rows of the same file).
-  - What the digests read is bounded (class 1, 4 and 6) by the folders that `ProjectTrust.supplies` holds the config to:
-    the project's own folders (the Location's directory, the project's directory and its canonical root) for a source
-    inside the project, and `ConfigTrust.reach` for a source above it. `Config.observe`, `ProjectTrust.allows`,
-    `ProjectTrust.status` (`differences`) and `Config.pluginsChanged` pass the same folders, so a grant, a load and a later
-    comparison compute the same digest, before a folder is trusted and after. A path whose real path lies inside them is
-    followed through any link, wherever the link sits, and hashed at the real path: a plugins folder, a plugin file or
-    folder, an agents/ or skills/ folder, or a folder nested in them, that links to another folder of the project. A path
-    whose real path lies outside (an absolute one, `~/`, `..`, a link or junction that leads out, `.orbit` itself as a link
-    out) is not listed, opened or hashed: its name and the links on the way to it, each as written and one hop, are, so
-    pointing a link somewhere else is a change and editing what it points at is not. A network path (`\\host\share`,
-    `//host/share`, `\\?\UNC\…`), or a link that names one (`LinkShare`, shared with `ProjectTrust`), is not touched at
-    all, not even to look at it: nothing below such a link is handed to the file system, a link read included
-    (`fingerprint-bounds.test.ts`, "never reaches below a link that names a share"). Only regular files are read, so a link to a device is named and not waited on. The walk of
-    agents/ and skills/ enters a link only when its real path is inside the bound, and stops at a loop. Proof:
-    `test/config/fingerprint-bounds.test.ts`, one row per spelling (agents/ and skills/ as a link out, a link out inside
-    agents/, a file link in agents/ and plugins/, plugins/ and a plugin as a link out, absolute, `..`, the folder around the
-    project, three network spellings, a device on Linux), each with the outside content changed between two digests and a
-    recorder of every path the file system was given, and trusted controls; `test/config/fingerprint-links.test.ts`
-    (plugins/ as a link to a project folder with a plugin added, a plugin file link, a plugin folder link, agents/ as a link
-    into the project, a re-pointed link out, `.orbit` as a link out, and the loaders: the plugin is held back after the
-    change and offered again after a new grant, and one behind a link out is never offered); and
-    `test/config/fingerprint-container.test.ts` (an untrusted load with `.orbit` as a link out).
-    `PluginSourceDirectory.entrypoints` loads no plugin whose server, tui or rpc entry leads out of its folder, the
-    terminal UI refuses a project plugin whose tui entry leaves its folder (`plugin-trust.test.ts`), and
-    `ConfigPluginSource.scan` and the terminal UI's plugin discovery (`discoverPluginTargets`, `plugin-trust-read.test.ts`)
-    leave out a project plugin whose real path lies outside the project, so no plugin is loaded that the digest cannot see.
-  - Records are per source, kept beside the grant and dropped with it (`workspace-trust-records.test.ts`); two locations
-    under one root do not invalidate each other (`config-trust.test.ts`).
+  `config-trust.test.ts`. The folders it may reach are the project's own (`standing()` in `packages/core/src/config.ts`):
+  since D7 every project and local source is in them, because the walk ends at the project's root
+  (`ConfigDiscovery.discover`, on real paths), and a source whose folder the disk moved outside them since the Location
+  opened is not read at all, with one log line. Proof: `test/config/above-project.test.ts` (the walk on real paths, a
+  link to the start folder, Windows case, and the moved folder).
+- Executable config that changes after the folder was trusted: none is held back. As the reference does, a trusted
+  folder's config loads as it is whenever it is read (owner decision D8, 2026-10-21); nothing is recorded at the grant,
+  and nothing asks about the folder again. Proof: `test/config/config-after-grant.test.ts` (a hook added after the grant
+  applies, a project that a grant for a folder above covers applies its own hooks, and a plugin added after the grant is
+  offered), `packages/server/test/trust-reference.test.ts`, `packages/cli/test/trust.test.ts` ("orb run goes ahead in a
+  trusted folder whose config changed after the grant"), `packages/tui/test/trust-reference.test.ts` and
+  `packages/vscode/test/trust-reference.test.ts`. `ConfigPluginSource.scan` and the terminal UI's plugin discovery
+  (`discoverPluginTargets`, `plugin-trust-read.test.ts`) still leave out a project plugin whose real path lies outside
+  the project, and the terminal UI refuses a project plugin whose tui entry leaves its folder (`plugin-trust.test.ts`).
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
   with control and format characters written out. A plugin or a simulated tool supplies its `displayName` raw, but the
   publisher writes every declared name through `plain` (`@orbit/util/plain`) onto the durable `session.tool.input.started`
@@ -620,9 +566,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   entered once under its real path so a link loop ends, and a project rule's folder and every file is asked of
   `ProjectTrust.reachable` and `ProjectTrust.supplies` on its real path at start (the stricter answer wins, so a rule in
   a folder above an untrusted project waits for trust, as the instruction file there does) and, when a read passes
-  through, of `ProjectTrust.importable`, or for a rule of a folder above the project (never one inside it), `reachable` and `supplies` again
-  on where it leads now. So a rules folder, a subfolder or a file that is a link out of the project is skipped alone,
-  trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
+  through, of `ProjectTrust.importable`, or for a rule of a folder above the project (never one inside it), `reachable`
+  again on where it leads now, which must still be the file that was found. A folder above the project keeps the
+  reference's instruction walk, which follows links: once the project is trusted, its rules are read wherever their
+  links lead, as the instruction file beside them is, and `supplies` bounds nothing there (proof: the "reads a rules
+  folder above the project that is a link" and "reads a rule file above the project that is a link" rows of
+  `test/instruction-discovery.test.ts`, and the "link out of a rules folder above the project" rows of
+  `test/session-instructions.test.ts`, each with its untrusted half and a plain rule as the control; mutation: bounding
+  a source above the project to its own folder in `supplies`, as before trust-first part 2, fails the four trusted
+  halves). So a rules folder, a subfolder or a file of the project's own folders that is a link out of the project is
+  skipped alone, trusted or not at injection, and a nested rules folder that is a link out is never listed or read.
   A project or personal rule that cannot be read costs only itself, with one warning that names it; the administrator's rules
   fail closed (proof: the "a managed rule that answers nothing keeps the admitted instructions" and "a managed rule that fails keeps
   the admitted instructions" rows of `test/instruction-discovery.test.ts`, with a readable control; mutation: dropping the
@@ -982,13 +935,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   discovery rows), `test/context/editor.test.tsx` (a real server: header, hello, ignored frames, reconnect that reads the
   lock again, no connection without the port, `TERM_PROGRAM=vscode` or `autoConnect`).
 
-- Custom themes (`discoverThemes`, called by the terminal UI's theme provider and by Mini when they mount): a JSON file
-  per theme, read from `<folder>/.orbit/themes` of every folder above the working folder, before any trust answer. It is
-  data, not code, so trust does not gate it; the class 6 rule does: a name that is, or leads through a link to, a share
-  is skipped before it is listed or read, and a theme that fails costs only itself. Proof:
-  `test/theme-share.test.ts`.
-- Plugins that the terminal UI imports in its own process: `trustedPluginDirectories` with `trust.startup`. Proof:
-  `test/plugin-trust.test.ts`, `test/plugin-discovery.test.ts`.
+- Custom themes (`discoverThemes` over `themeDirectories`, called by the terminal UI's theme provider and by Mini): a
+  JSON file per theme. The user's own folders (the global config folder and `.orbit` in the home directory) are read when
+  the client mounts. The project's `<folder>/.orbit/themes`, from the project's root down to the start folder and never
+  above it, is read by the terminal UI only once `trust.startup` says the start folder is trusted (a read that failed or
+  did not decode is untrusted), and by Mini once `trustRefusal` lets it start. A custom theme replaces a built-in one of
+  the same name, so a folder's theme read before trust could restyle the trust question itself. In both clients the
+  walk's root is the stricter of the client's own and the folder the server decided trust for (class 3): the terminal UI
+  takes that folder from `trust.startup`, and Mini from the answer `trustRefusal` lets it start with, for its first draw
+  and for a refresh of the theme. The class 6 rule holds too: a name that is, or leads through a link to, a share is
+  skipped before it is listed or read, and a theme that fails costs only itself. Proof: `packages/tui/test/trust-reference.test.ts` (the three theme rows), `test/mini/theme-project.test.ts`,
+  `test/mini/frontend.trust.test.ts` (the server's folder reaches Mini), `test/plugin-discovery.test.ts` (a `.git` file
+  the server rejects) and `test/theme-share.test.ts`.
+- Plugins that the terminal UI imports in its own process: `trustedPluginDirectories` with `trust.startup`, bounded by
+  the folder the server decided trust for where that is the narrower root. Proof: `test/plugin-trust.test.ts`,
+  `test/plugin-discovery.test.ts`.
 - The status line command (`status_line.command`, user config): it runs with the terminal UI's own working folder, the
   folder it was started in, and programs such as `bun` or `git` read a `bunfig.toml` preload or a `core.fsmonitor` from
   there. It is also handed the folder of the session in view as `cwd` and `project_dir`, which a status line commonly
@@ -1094,8 +1055,8 @@ every other extension):
   trust. The terminals start the program that `find` returned as their own process, and type nothing into a shell. Proof:
   `test/program.test.ts` (planted `orb.exe` decoys, with the variable deleted, under Bun and under a real Node process)
   and `test/manifest.test.ts`.
-- Config above the project: named, with no command, because a grant goes to the project's folder and not always to the
-  one that holds it. Proof: `test/trust-text.test.ts`, `test/trust.test.ts` ("names config above the project").
+- Config above the project: none is read (D7), so the question names none. Proof: `test/trust.test.ts` ("asks about a
+  repository below an untrusted folder on its own").
 
 **Built-in commands of the terminal UI** (`/ide`, `/terminal-setup`, `/agents` create and edit, and the route they use):
 
@@ -1357,8 +1318,9 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
 - Grants are keyed by the real path of the project's canonical root (`WorkspaceTrust.key`, lower-cased on win32). The
   home directory and filesystem roots are never stored and never implied. `ProjectTrust.status`, `grant` and `revoke`
   answer for the Location's project, so do not key trust by a path you did not resolve.
-- Config above the project follows the decision for its holder (`ConfigTrust.holder`, `ConfigTrust.covered`).
-  `Trust.Withheld.directory` is the folder whose trust lifts an entry, and the refusal advice must name it.
+- Config is read only from the project's own folders, from the start folder up to the project's root (D7), so a grant for
+  a folder above the project covers the project but supplies none of that folder's config. Where the terminal UI finds a
+  wider root than the server (a `.git` file the server rejects), the server's root bounds its walk.
 - `Project.resolve` counts the main checkout only when its repository also lists this folder, so a `.git` file cannot
   borrow another repository's identity or trust. For a folder that is not trusted, `GitLayout.locate` decides from
   files: the `.git` file has to name an entry directly under the `worktrees` of the `commondir` that the entry names, and
@@ -1680,12 +1642,10 @@ one table covers every spelling.
   `readLink` at a time, and a walk that reaches the limit answers `LinkShare.unresolved(file)`, a path that starts with
   two separators on Windows (`\\?\too-many-links\…`, a rooted `/\?\…` form elsewhere), never "no share": every caller
   then refuses or skips the path, as it does for a share, instead of
-  opening it. `ProjectTrust.follow`, which decides where a write through a dangling chain lands, ends the same way. The
-  listing of a config directory's `plugin` and `plugins` folders in `ProjectTrust.status` asks `LinkShare` first, since a
-  direct link there is a share too. Proof: `packages/core/test/link-chain.test.ts` (40, 41, 63 and 85 links, for
-  `LinkShare.of` and `ofSync`, `FileAccess.resolve`, `ShellGuard.facts` for an operand and for the workdir, and
-  `ShellTool.concurrent` with a Git Bash context) and `test/config/fingerprint-plugin-share.test.ts` (an untrusted Config
-  load and status, for 1, 40, 41 and 63 links from `.orbit/plugins` and `.orbit/plugin`). Mutation: restoring the old
+  opening it. `ProjectTrust.follow`, which decides where a write through a dangling chain lands, ends the same way.
+  Proof: `packages/core/test/link-chain.test.ts` (40, 41, 63 and 85 links, for `LinkShare.of` and `ofSync`,
+  `FileAccess.resolve`, `ShellGuard.facts` for an operand and for the workdir, and `ShellTool.concurrent` with a Git Bash
+  context). Mutation: restoring the old
   limit of 40 with `return undefined` fails every 41, 63 and 85 row.
 - The loaders that the guard table pins ask `LinkShare` before they touch a path a repository supplies (class 6, rounds
   5 and 6). It lives in `packages/util/src/link-share.ts`, so that the compatibility package and the terminal UI ask it
@@ -1764,16 +1724,15 @@ against a service that was started before the upgrade (#18, #22). The pattern re
 - Bound what a parsed value comes to, not only its text. YAML keeps an alias as one more reference to the node its
   anchor names, so a few hundred bytes can stand for billions of values, or for a value that holds itself, and every
   reader that copies or serializes the value pays for each reference: the round 11 audit measured about 2 GB for a
-  492-byte agent file when the folder of a project that was not trusted was fingerprinted. `ParsedSize.within`
+  492-byte agent file read from a project that was not trusted. `ParsedSize.within`
   (`packages/util/src/parsed-size.ts`) walks a value with every alias followed, counting each value and the characters
   of each string and key, and stops at the allowance or 1,000 levels deep. `ConfigMarkdown.read` refuses front matter that comes to more than its text and
   10,000 (`ConfigMarkdown.Oversized`), for all its readers at once, and `parse` does not retry such a block as text;
   `read` in `packages/flow/src/load.ts` refuses a YAML workflow or suite the same way, which Bun's parser lets through
-  when the alias repeats a long string or a node holds itself; and `Fingerprint.canonical` has an allowance of its own.
+  when the alias repeats a long string or a node holds itself.
   Proof: `packages/core/test/config/front-matter-aliases.test.ts` (a child process with a deadline and a memory bound over
-  the agent, skill and command readers, `parseOption`, `Fingerprint.directory` and `Fingerprint.canonical`, at levels 6
-  to 8 against an alias-free control; the `ParsedSize.within` and `ConfigMarkdown` rows; an untrusted project whose agent
-  and skill files are aliased), the rule rows named in "Where each surface is gated", and the alias rows of
+  the agent, skill and command readers and `parseOption`, at levels 6 to 8 against an alias-free control; the
+  `ParsedSize.within` and `ConfigMarkdown` rows), the rule rows named in "Where each surface is gated", and the alias rows of
   `packages/flow/test/load.test.ts`.
 
 **How to test:**
@@ -1959,12 +1918,12 @@ five review rounds for one defect.
 repository text.
 
 **The advice that names a folder** is a sink too, and a worse one, because a person pastes it: the folder names in
-`orb trust <folder> --for <location>` and `orb trust --revoke <folder>` come from folders inside the clone. Every name goes
+`orb trust --revoke <folder>` and the refusal of a file in another project come from folders inside the clone. Every name goes
 through `plain`, and a command is printed only when `shellArgument` (`packages/util/src/shell-argument.ts`) can quote the
 name so that no shell expands it (POSIX single quotes; on Windows only names that neither PowerShell nor cmd would expand);
 otherwise the advice says there is no command and shows the escaped name. Proof: `shell-argument.test.ts` (reads each name
-back through `sh`), `packages/cli/test/trust.test.ts` ("quoted so that no shell runs the name"), and a frame row in
-`dialog-trust.test.tsx`.
+back through `sh`), `packages/cli/test/trust-revoke.test.ts` ("a covering folder whose name no quoting makes safe gets
+no command to paste") and the `holderRefusal` rows of `packages/cli/test/trust.test.ts`.
 
 **How to comply:**
 
@@ -2351,7 +2310,7 @@ already guarded elsewhere.
 **How to comply:**
 
 - `requireTrust` and `trustRefusal` in `packages/cli/src/util/trust.ts` stop a command in any folder that is not
-  trusted, whatever it holds, and in a trusted one whose executable config changed since the grant. The handlers for
+  trusted, whatever it holds. The handlers for
   `run` (with or without `--bare`), `loop`, `flow run`, `flow resume`, `flow replay`, `flow clean`, the store readers
   `flow ls`, `show`, `cost`, `trace`, `watch` and `approve` (before `openStore`), `eval`, `doctor --probe` (before
   its throwaway session), `session import` (for the folder the session lands in) and `orb -p`
@@ -2607,18 +2566,6 @@ The program-wide register of every follow-up, these gaps included, with each one
   refused before any disk access. Carried by `permissions-3a` as FU-M3-003; see "A share named before anyone is asked" below.
   Accepted by the owner until `permissions-3a` (FU-M1-026): the reference treats a drive letter as an ordinary path. A
   word that a shell builds as it runs stays with `shell-safety-12`.
-- **Fingerprints stop short of three things.** The skill and agent directories of other products' roots
-  are not digested, so a hook added to a skill there is not asked about, and no consumer of those hooks exists yet:
-  hooks-21 must digest them before it runs one. The modules that a plugin's entry file imports are not digested
-  either, only the entry files and `package.json`. And a change that lands between the config's last load and the grant
-  is accepted with the grant: binding a grant to the contents a client displayed is hooks-22.
-- **A filesystem root as holder, end to end.** `ConfigTrust.reach` is tabled everywhere and its wiring is pinned on every
-  machine with a store that calls one folder a root ("root-like" in `config-trust.test.ts`), but the test that plants a
-  config file in a real root writes outside the sandbox of the test, so it returns without testing unless the root is
-  writable (Linux as root, `tools/linux-test`). Run it there before a milestone closes.
-- **VS Code gives the advice for the folder above a project without a command to run.** It names the folder and says
-  that each folder is trusted on its own (`packages/vscode/test/trust-text.test.ts`); the terminal UI, Mini, `orb run` and
-  `orb trust` print the `orb trust <folder> --for <location>` command.
 - **Decided: `model`, a provider and a budget are withheld.** The owner decided on 2026-10-08, choosing "Withhold
   all, now": "Every field that picks a model, provider or budget (top-level model, agent model and steps, side/title
   models, fallback_model, output_token_cap) is withheld in untrusted folders; Orbit uses your own settings until you
@@ -2779,7 +2726,7 @@ The program-wide register of every follow-up, these gaps included, with each one
   `packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`, `filter.<driver>.clean` and `hooks/post-checkout`, each with a
   trusted control; the tasks of an eval still run agents, whose sessions take no undo snapshot while the folder is not trusted); a repository with no config of its own, which shows no
   branch, changes or diff while it is not trusted, and no dialog or indicator says why (FU-M4-003, the owner's call, as
-  for hooks and stdio MCP servers below); fingerprints, which do not cover `.git`; and the question that decides whether
+  for hooks and stdio MCP servers below); and the question that decides whether
   a trusted folder's git may follow its `.git` elsewhere (`Git.repo.used` and `Git.root` of the flow, which run `rev-parse`):
   git reads the config of the repository it lands in, includes and all, before Orbit has decided anything about that
   repository, so it can open a file or a share that an include there names. A project is still named by the remote URL in the folder's config, which a

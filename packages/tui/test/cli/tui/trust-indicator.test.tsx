@@ -14,7 +14,6 @@ const untrusted: TrustStatus = {
   directory: "/projects/app",
   trusted: false,
   persistent: true,
-  changed: [],
   withheld: [{ path: "/projects/app/orbit.json", kinds: ["hooks"] }],
 }
 
@@ -57,8 +56,16 @@ test.each([
   }
 })
 
-// What sits in a folder above the project is turned on by that folder's own trust, so trusting this one would do nothing.
-const above: TrustWithheld = { path: "/projects/orbit.json", kinds: ["hooks"], directory: "/projects" }
+// What a server older than this client lists for config in a folder above the project. Nothing above the project is read
+// now (D7), and the indicator is about the folder alone.
+const above = { path: "/projects/orbit.json", kinds: ["hooks"], directory: "/projects" } as TrustWithheld
+// What a server older than this client sends for a trusted folder whose config changed since the grant (D8).
+const changed = {
+  ...untrusted,
+  trusted: true,
+  source: "saved",
+  changed: [{ path: "/projects/app/orbit.json", kinds: ["hooks"] }],
+} as TrustStatus
 
 // trust-first: a folder that is not trusted is marked whatever it holds, because nothing of it loads until it is.
 test.each([
@@ -77,12 +84,13 @@ test.each([
 test.each([
   ["a trusted folder", { ...untrusted, trusted: true, source: "saved" as const, withheld: [] }],
   ["a trusted folder with config above it held back", { ...untrusted, trusted: true, withheld: [above] }],
+  ["a trusted folder that an older server lists changes for", changed],
   ["a folder whose status is not known", undefined],
 ])("%s is not marked", async (_, status) => {
   const app = await render(status, 100)
 
   try {
-    expect(app.captureCharFrame()).not.toContain("Untrusted")
+    expect(app.captureCharFrame()).not.toContain("⊙")
   } finally {
     app.renderer.destroy()
   }

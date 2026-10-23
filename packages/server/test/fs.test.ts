@@ -19,8 +19,10 @@ it.live(
         await fs.mkdir(path.join(tmp.path, "root", "sibling", "nested"), { recursive: true })
         await fs.writeFile(path.join(tmp.path, "root", "sibling", "file.txt"), "outside")
         await fs.writeFile(starts, "")
+        // In the folder the Location opens: the empty `.git` above it names no repository, so the server takes `current`
+        // as the project, and nothing above the project is read (D7).
         await fs.writeFile(
-          path.join(tmp.path, "root", "orbit.json"),
+          path.join(current, "orbit.json"),
           JSON.stringify({
             mcp: {
               servers: {

@@ -110,14 +110,10 @@ export interface TrustView {
   readonly opened?: string
   /** Whether a grant can be kept on disk. A home directory or a filesystem root can only be trusted until Orbit restarts. */
   readonly persistent: boolean
-  /** The folder is trusted, and what is listed changed since it was: the question is whether to trust the changes. */
-  readonly changed?: boolean
   /** What is left out, as a list of kinds: "hooks, MCP servers". */
   readonly summary: string
   /** The files and directories of the project that hold something back, by path from its folder. */
   readonly held: ReadonlyArray<{ readonly name: string; readonly kinds: string }>
-  /** Folders above the project that hold config back until each is trusted on its own. */
-  readonly above: ReadonlyArray<string>
 }
 
 /** A question the server needs answered: the question tool's questions or a plan to approve. */

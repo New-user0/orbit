@@ -501,7 +501,7 @@ export function make(options: ClientOptions) {
               method: "POST",
               path: `/api/location/trust`,
               query: { location: input["location"] },
-              body: { trust: input["trust"], persist: input["persist"], holder: input["holder"] },
+              body: { trust: input["trust"], persist: input["persist"] },
               successStatus: 200,
               declaredStatuses: [400, 401],
               empty: false,

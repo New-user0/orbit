@@ -53,7 +53,6 @@ const run = async (input: { readonly revoke: boolean }) => {
       list: false,
       revoke: input.revoke,
       directory: Option.some(child),
-      for: Option.none(),
       server: Option.some(server.url.origin),
       standalone: false,
     }).pipe(

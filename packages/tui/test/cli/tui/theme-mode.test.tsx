@@ -177,3 +177,56 @@ test("dialog surfaces are absolute and can be inherited through the theme contex
     app.renderer.destroy()
   }
 })
+
+// A discovery is asked for again whenever what the source would find changes, such as when the start folder is trusted
+// and then revoked. One that began first and finishes last found what is no longer there, so its themes are dropped and
+// only the newest discovery's themes are kept (class 1: a revoked folder's theme does not come back).
+test("a theme discovery that a newer one overtook does not bring back the themes it found", async () => {
+  const replies: ((themes: Record<string, unknown>) => void)[] = []
+  let rediscover: (() => void) | undefined
+  let themes: ReturnType<typeof useThemes> | undefined
+  function Probe() {
+    themes = useThemes()
+    return <text>probe</text>
+  }
+  const app = await testRender(
+    () => (
+      <ConfigProvider config={createTuiResolvedConfig()}>
+        <ThemeProvider
+          mode="dark"
+          source={{
+            discover: () => new Promise((resolve) => replies.push(resolve)),
+            subscribeDiscover: (discover) => {
+              rediscover = discover
+              return () => {}
+            },
+          }}
+        >
+          <Probe />
+        </ThemeProvider>
+      </ConfigProvider>
+    ),
+    { width: 20, height: 2 },
+  )
+  app.renderer.start()
+
+  try {
+    await wait(() => replies.length === 1)
+    replies[0]!({})
+    await wait(() => themes?.ready === true)
+    // The folder is trusted (its discovery is slow), then revoked (its discovery is quick and finds nothing).
+    rediscover!()
+    rediscover!()
+    expect(replies).toHaveLength(3)
+    replies[2]!({})
+    replies[1]!({ "overtaken-project-theme": getOrbitTheme() })
+    await Bun.sleep(20)
+    expect(themes!.has("overtaken-project-theme")).toBeFalse()
+    // The control: the newest discovery's themes are kept.
+    rediscover!()
+    replies[3]!({ "overtaken-project-theme": getOrbitTheme() })
+    await wait(() => themes!.has("overtaken-project-theme"))
+  } finally {
+    app.renderer.destroy()
+  }
+})

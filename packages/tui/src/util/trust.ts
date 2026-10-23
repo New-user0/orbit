@@ -1,67 +1,20 @@
-import type { TrustStatus, TrustWithheld } from "@orbit/client"
-import { plain } from "@orbit/flow/plain"
-import { shellArgument } from "@orbit/util/shell-argument"
-
-/**
- * What trusting the project turns on, apart from what it does not. A file or directory in a folder above the project
- * names that folder as its `directory`, because each folder is trusted on its own: trusting the project lifts `own` and
- * leaves `above` held back.
- */
-export function groupWithheld(items: readonly TrustWithheld[]) {
-  return {
-    own: items.filter((item) => item.directory === undefined),
-    above: items.filter((item) => item.directory !== undefined),
-  }
-}
-
-/** The files of the folder itself whose executable config changed since the folder was trusted. */
-export function changedOwn(status: TrustStatus) {
-  const changed = new Set((status.changed ?? []).map((item) => item.path))
-  return groupWithheld(status.withheld).own.filter((item) => changed.has(item.path))
-}
+import type { TrustStatus } from "@orbit/client"
 
 /**
  * Whether the folder needs an answer from the person, which is what the question and the indicator are for: it is not
  * trusted, whatever it holds, because nothing a folder supplies loads and no work starts there until it is
- * (trust-first), or it is trusted and some of its own config changed since. Config in a folder above it follows that
- * folder's own decision, so a trusted folder whose only held-back config sits above it has nothing to ask.
+ * (trust-first). A trusted folder is never asked about again, whatever changed in it since the grant, as the reference
+ * does (D8), and so is one that a server older than this client still lists changes for.
  */
 export function asksTrust(status: TrustStatus | undefined) {
-  if (status === undefined) return false
-  return status.trusted ? changedOwn(status).length > 0 : true
+  return status !== undefined && !status.trusted
 }
 
 /**
- * What to do about the folders that hold what sits above the project, as they are typed: the command that trusts each
- * one through the location in view, which the grant would otherwise go to the wrong project for, and for a home
- * directory or a filesystem root, which can never be trusted for good, the way it is trusted for one run.
- */
-export function trustCommands(items: readonly TrustWithheld[], location: string) {
-  return [
-    ...new Map(
-      items.flatMap((item) => (item.directory === undefined ? [] : [[item.directory, item.persistent !== false] as const])),
-    ),
-  ]
-    .map(([folder, persistent]) => {
-      if (!persistent) return `${plain(folder)} (a home directory or filesystem root: \`--trust\` for one run)`
-      const holder = shellArgument(folder)
-      const through = shellArgument(location)
-      // A name that no quoting makes safe to paste is shown escaped, with no command to run.
-      if (holder === undefined || through === undefined)
-        return `${plain(folder)} (its name is not printed as a command because a shell could act on it)`
-      return `\`orb trust ${holder}${folder === location ? "" : ` --for ${through}`}\``
-    })
-    .join(", ")
-}
-
-/**
- * What the plugin loader needs from one read of the startup folder's status. A read that did not come back (unset) is an
- * untrusted folder with nothing above it, so no project plugin loads on an answer that was not there.
+ * What the plugin and theme loaders need from one read of the startup folder's status. A read that did not come back
+ * (unset) is an untrusted folder, so nothing of the project loads on an answer that was not there. `root` is the folder
+ * the server decided trust for, which bounds the terminal UI's own walk where it is the narrower one (class 3).
  */
 export function pluginTrust(status: TrustStatus | undefined) {
-  return {
-    trusted: status?.trusted === true,
-    above: groupWithheld(status?.withheld ?? []).above.flatMap((item) => item.directory ?? []),
-    changed: (status?.changed ?? []).flatMap((item) => (item.kinds.includes("plugins") ? item.path : [])),
-  }
+  return { trusted: status?.trusted === true, root: status?.directory }
 }

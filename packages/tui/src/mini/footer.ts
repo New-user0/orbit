@@ -87,6 +87,8 @@ type RunFooterOptions = {
   history?: RunPrompt[]
   theme: RunTheme
   tuiConfig: RunTuiConfig
+  /** The folder the server decided trust for, which bounds the theme walk when the theme is resolved again (class 3). */
+  root?: string
   miniSettings: {
     current: MiniSettings
     update?: (change: MiniSettingChange) => Promise<MiniSettings>
@@ -937,7 +939,7 @@ export class RunFooter implements FooterApi {
         this.setNotice("settings updated")
         return
       }
-      const theme = await resolveRunTheme(this.renderer, this.options.tuiConfig.theme, settings.mono)
+      const theme = await resolveRunTheme(this.renderer, this.options.tuiConfig.theme, settings.mono, this.options.root)
       this.flush()
       this.flushing = this.flushing.then(async () => {
         if (this.isClosed) {
@@ -1064,7 +1066,7 @@ export class RunFooter implements FooterApi {
   private handlePalette = (): Promise<void> | undefined => {
     if (this.isGone || this.paletteRefreshRunning) return
     const mono = this.miniSettings().mono
-    return resolveRunTheme(this.renderer, this.options.tuiConfig.theme, mono).then((theme) => {
+    return resolveRunTheme(this.renderer, this.options.tuiConfig.theme, mono, this.options.root).then((theme) => {
       this.flushing = this.flushing
         .then(() => {
           if (this.isGone || mono !== this.miniSettings().mono) {

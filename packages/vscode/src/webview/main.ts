@@ -534,40 +534,16 @@ function paintTrust(trust: TrustView | undefined) {
   if (!trust) return banner.replaceChildren()
   const head = element("div", "trust-head")
   head.append(
-    element("span", "strong", trust.changed === true ? "⊙ Changed" : "⊙ Untrusted"),
+    element("span", "strong", "⊙ Untrusted"),
     element("span", "muted grow trust-folder", trust.directory),
   )
-  const files = element("details", "trust-files")
-  files.append(
-    element("summary", undefined, `${trust.held.length} ${trust.held.length === 1 ? "file" : "files"} held back`),
-    ...trust.held.map((item) => {
-      const row = element("div", "trust-file")
-      row.append(element("span", "grow", item.name), element("span", "muted", item.kinds))
-      return row
-    }),
-  )
+  // Nothing of a folder that is not trusted is read, so there is no list of what it holds back (trust-first).
   banner.replaceChildren(
     head,
-    element(
-      "div",
-      undefined,
-      trust.changed === true
-        ? `This folder's config changed since you trusted it, and Orbit is leaving out what changed: ${trust.summary}.`
-        : `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`,
-    ),
-    files,
+    element("div", undefined, "Nothing in this folder loads, and no work starts here, until you trust it."),
     ...(trust.opened === undefined
       ? []
       : [element("div", "muted small", `VS Code opened ${trust.opened}. Trust is decided for the project's folder.`)]),
-    ...(trust.above.length === 0
-      ? []
-      : [
-          element(
-            "div",
-            "muted small",
-            `Config in ${trust.above.join(", ")} stays off: each folder is trusted on its own.`,
-          ),
-        ]),
     button("Review and trust…", () => vscode.postMessage({ type: "trust" }), "primary"),
   )
 }

@@ -1,7 +1,8 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Logger, Schedule } from "effect"
+import { Effect, Layer, Logger } from "effect"
+import { CompatNames } from "@orbit/compat/names"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
 import { Credential } from "@orbit/core/credential"
@@ -11,6 +12,9 @@ import { Location } from "@orbit/core/location"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WellKnown } from "@orbit/core/wellknown"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { NodeFileSystem } from "@effect/platform-node"
+import type { Document } from "@orbit/schema/config"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
@@ -20,29 +24,53 @@ import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.empty)
 
-// trust-first, D7: Orbit walks `orbit.json` and `.orbit` up the parents of a project, so config can sit in a folder above
-// it. Such a source is read only when a grant covers its own folder: trusting a repository says nothing about the folder
-// around it, which can carry plugins and hooks of its own. A grant for that folder covers the project below it as well.
+// trust-first part 2, D7 (owner, 2026-10-21: "match refrence"): as the reference reads project settings only from the
+// project it starts in, Orbit reads `orbit.json`, `orbit.local.json`, `.orbit` and other products' project roots only from
+// the folders between the working folder and the project's root, never from a folder above the project. A grant for a
+// folder above covers the project below it (the parent walk of part 1), and still none of that folder's config is read.
+// Instruction files are not config: their own walk is unchanged, and they are not part of these rows.
 const folders = Effect.gen(function* () {
   const tmp = (yield* tmpdirScoped()).path
   const real = yield* Effect.promise(() => fs.realpath(tmp))
   const work = path.join(real, "work")
   const repo = path.join(work, "repo")
+  // A folder inside the project, between the working folder and the project's root, whose config is the project's own.
+  const inner = path.join(repo, "packages", "app")
   yield* Effect.promise(async () => {
     await fs.mkdir(path.join(work, ".orbit", "plugins"), { recursive: true })
-    await fs.mkdir(repo, { recursive: true })
+    await fs.mkdir(inner, { recursive: true })
     await Bun.write(path.join(work, "orbit.json"), JSON.stringify({ username: "ABOVE-USER" }))
+    await Bun.write(path.join(work, "orbit.local.json"), JSON.stringify({ username: "ABOVE-LOCAL-USER" }))
     await Bun.write(path.join(work, ".orbit", "plugins", "above.ts"), `export default { id: "above", async setup() {} }\n`)
+    // Another product's project root above the project, with a hook in its settings file.
+    await Bun.write(
+      path.join(work, CompatNames.vendor.directory, "settings.json"),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "shell", hooks: [{ type: "command", command: "echo ABOVE" }] }] } }),
+    )
     await Bun.write(path.join(repo, "orbit.json"), JSON.stringify({ username: "REPO-USER" }))
+    await Bun.write(path.join(inner, "orbit.json"), JSON.stringify({ username: "INNER-USER" }))
   })
-  return { home: path.join(real, "home"), globalConfig: path.join(real, "home", "config"), work, repo }
+  return { home: path.join(real, "home"), globalConfig: path.join(real, "home", "config"), work, repo, inner }
 })
 
-function loader(input: { readonly home: string; readonly globalConfig: string; readonly repo: string }) {
+// The Location opens at `directory` inside the project whose root is `repo`.
+function loader(input: {
+  readonly home: string
+  readonly globalConfig: string
+  readonly repo: string
+  readonly directory: string
+  readonly fs?: Layer.Layer<FSUtil.Service>
+}) {
   return AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node]), [
+    ...(input.fs === undefined ? [] : [FSUtil.node.replace(input.fs)]),
     WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
     Location.node.replace(
-      Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(input.repo) }))),
+      Layer.succeed(
+        Location.Service,
+        Location.Service.of(
+          location({ directory: AbsolutePath.make(input.directory) }, { projectDirectory: AbsolutePath.make(input.repo) }),
+        ),
+      ),
     ),
     Global.node.replace(Global.layerWith({ config: input.globalConfig, home: input.home })),
     Credential.node.replace(emptyCredentialNode),
@@ -51,43 +79,122 @@ function loader(input: { readonly home: string; readonly globalConfig: string; r
   ])
 }
 
+const listed = Effect.gen(function* () {
+  const config = yield* Config.Service
+  return (yield* config.entries()).flatMap((entry): string[] => (entry.path === undefined ? [] : [entry.path]))
+})
+
+// Reads the config again now, so the entries are those of a load that saw the latest grant.
+const reread = Effect.gen(function* () {
+  const config = yield* Config.Service
+  const reload = config.reload
+  expect(reload).toBeDefined()
+  if (reload !== undefined) yield* reload()
+})
+
 describe("config above the project", () => {
-  it.live("is not read while only the project is trusted, and is read once a grant covers its own folder", () =>
+  it.live("is never read, not even once a grant for its own folder covers the project below it", () =>
     Effect.gen(function* () {
       const layout = yield* folders
-      const above = [path.join(layout.work, "orbit.json"), path.join(layout.work, ".orbit")]
+      const above = [
+        path.join(layout.work, "orbit.json"),
+        path.join(layout.work, "orbit.local.json"),
+        path.join(layout.work, ".orbit"),
+        path.join(layout.work, CompatNames.vendor.directory, "settings.json"),
+      ]
       yield* Effect.gen(function* () {
-        const config = yield* Config.Service
         const trust = yield* WorkspaceTrust.Service
-        const paths = config.entries().pipe(Effect.map((entries) => entries.flatMap((entry): string[] => (entry.path === undefined ? [] : [entry.path]))))
-        // Until a reload has seen the latest grant, the entries can still be the last load's.
-        const settle = (check: (listed: readonly string[]) => boolean) =>
-          paths.pipe(
-            Effect.flatMap((listed) => (check(listed) ? Effect.succeed(listed) : Effect.fail("not yet"))),
-            Effect.retry({ schedule: Schedule.spaced("50 millis"), times: 100 }),
-          )
 
-        // Nothing is trusted: neither the project nor the folder above it is read.
-        const none = yield* paths
-        expect(none.filter((item) => item.startsWith(layout.work))).toEqual([])
-
-        // The project alone: its own document is read, and the folder above it is still not.
-        yield* trust.grant(layout.repo, { persist: true, via: "test" })
-        const project = yield* settle((listed) => listed.includes(path.join(layout.repo, "orbit.json")))
-        expect(project.filter((item) => above.includes(item))).toEqual([])
-
-        // The control: a grant for the folder above reads its sources too, and covers the project below it.
+        // The grant for the folder above covers the project, so the project's own config is read.
         yield* trust.grant(layout.work, { persist: true, via: "test" })
-        const both = yield* settle((listed) => above.every((item) => listed.includes(item)))
-        expect(both).toContain(path.join(layout.repo, "orbit.json"))
-      }).pipe(Effect.provide(loader(layout)))
+        expect(yield* trust.status(layout.repo)).toMatchObject({ trusted: true, granted: layout.work })
+        yield* reread
+        const read = yield* listed
+        expect(read).toContain(path.join(layout.repo, "orbit.json"))
+        // None of the folder above is: not its documents, not its `.orbit` directory, not another product's root there.
+        expect(read.filter((item) => above.includes(item))).toEqual([])
+        expect(read.filter((item) => item.startsWith(layout.work) && !item.startsWith(layout.repo))).toEqual([])
+      }).pipe(Effect.provide(loader({ ...layout, directory: layout.repo })))
     }),
+  )
+
+  it.live("leaves the folders between the working folder and the project's root read, as the project's own", () =>
+    Effect.gen(function* () {
+      const layout = yield* folders
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        yield* trust.grant(layout.repo, { persist: true, via: "test" })
+        yield* reread
+        const read = yield* listed
+        // The control: the project's root and the folder the session works in are both read.
+        expect(read).toContain(path.join(layout.repo, "orbit.json"))
+        expect(read).toContain(path.join(layout.inner, "orbit.json"))
+        // And nothing above the root, which no grant here covers anyway.
+        expect(read.filter((item) => item.startsWith(layout.work) && !item.startsWith(layout.repo))).toEqual([])
+
+        // A grant for the folder above changes nothing about what is read: the walk ends at the project's root.
+        yield* trust.grant(layout.work, { persist: true, via: "test" })
+        yield* reread
+        const after = yield* listed
+        expect(after).toContain(path.join(layout.inner, "orbit.json"))
+        expect(after.filter((item) => item.startsWith(layout.work) && !item.startsWith(layout.repo))).toEqual([])
+      }).pipe(Effect.provide(loader({ ...layout, directory: layout.inner })))
+    }),
+  )
+
+  // Class 4: the walk is decided on real paths. A start folder reached through a link (a junction on Windows) walks
+  // where it really is, up to the project's real root, and never the folders around the link's own spelling.
+  it.live("walks a start folder reached through a link from where it really is, and not from the link's folder", () =>
+    Effect.gen(function* () {
+      const layout = yield* folders
+      const outer = path.dirname(layout.work)
+      const alias = path.join(outer, "alias")
+      yield* Effect.promise(async () => {
+        await fs.symlink(layout.inner, alias, "junction")
+        await Bun.write(path.join(outer, "orbit.json"), JSON.stringify({ username: "LINK-PARENT-USER" }))
+      })
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        // A grant for the link's folder covers the project too, so only the walk keeps that folder's config out.
+        yield* trust.grant(outer, { persist: true, via: "test" })
+        yield* reread
+        const read = yield* listed
+        expect(read).toContain(path.join(layout.inner, "orbit.json"))
+        expect(read).toContain(path.join(layout.repo, "orbit.json"))
+        expect(read).not.toContain(path.join(outer, "orbit.json"))
+      }).pipe(Effect.provide(loader({ ...layout, directory: alias })))
+    }),
+  )
+
+  // Class 4: Windows ignores case, so a Location spelled in another case still ends its walk at the project's root.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "ends the walk at the project's root however the Location spells its case",
+    () =>
+      Effect.gen(function* () {
+        const layout = yield* folders
+        const lower = (item: string) => item.toLowerCase()
+        yield* Effect.gen(function* () {
+          const trust = yield* WorkspaceTrust.Service
+          yield* trust.grant(layout.work, { persist: true, via: "test" })
+          yield* reread
+          const read = (yield* listed).map(lower)
+          expect(read).toContain(lower(path.join(layout.repo, "orbit.json")))
+          expect(read.filter((item) => item.startsWith(lower(layout.work)) && !item.startsWith(lower(layout.repo)))).toEqual(
+            [],
+          )
+        }).pipe(
+          Effect.provide(
+            loader({ ...layout, directory: layout.repo.toUpperCase(), repo: layout.repo.toUpperCase() }),
+          ),
+        )
+      }),
   )
 })
 
 describe("config sources that are skipped", () => {
-  // Each skipped source is reported once (class 7), not again at every reload while its folder stays untrusted.
-  it.live("are logged once, however often the config is read again", () => {
+  // A source of an untrusted project is reported once (class 7), not again at every reload while its folder stays
+  // untrusted. A folder above the project is not a source at all, so it is never reported.
+  it.live("are logged once, however often the config is read again, and a folder above the project is not one", () => {
     const logged: string[] = []
     const logger = Logger.map(Logger.formatStructured, (entry) => {
       if (!Array.isArray(entry.message) || entry.message[0] !== "config source skipped") return
@@ -97,17 +204,118 @@ describe("config sources that are skipped", () => {
     return Effect.gen(function* () {
       const layout = yield* folders
       yield* Effect.gen(function* () {
-        const config = yield* Config.Service
-        const reload = config.reload
-        expect(reload).toBeDefined()
-        if (reload === undefined) return
-        yield* reload()
-        yield* reload()
-      }).pipe(Effect.provide(loader(layout)))
+        yield* reread
+        yield* reread
+      }).pipe(Effect.provide(loader({ ...layout, directory: layout.repo })))
       const above = path.join(layout.work, "orbit.json")
       const own = path.join(layout.repo, "orbit.json")
-      expect(logged.filter((item) => item === above)).toEqual([above])
       expect(logged.filter((item) => item === own)).toEqual([own])
+      expect(logged.filter((item) => item === above)).toEqual([])
     }).pipe(Effect.provide(Logger.layer([logger])))
   })
+
+  // Class 7: the walk never leaves the project, but the disk can change under a Location that is open. A start folder
+  // replaced by a link to a folder outside the project is not the project's: its config is not read, even under a grant
+  // of its own, and the skip is logged once with that reason.
+  it.live("leave out a folder that the disk moved outside the project, with one log line saying so", () => {
+    const logged: { readonly path: string; readonly reason: string }[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "config source skipped") return
+      const details: unknown = entry.message[1]
+      if (typeof details === "object" && details !== null && "path" in details && "reason" in details)
+        logged.push({ path: String(details.path), reason: String(details.reason) })
+    })
+    return Effect.gen(function* () {
+      const layout = yield* folders
+      const elsewhere = path.join(path.dirname(layout.work), "elsewhere")
+      const moved = path.join(elsewhere, "orbit.json")
+      // A start folder outside the project is walked alone: the folder above it is not even a source to skip.
+      const aboveMoved = path.join(path.dirname(elsewhere), "orbit.json")
+      yield* Effect.promise(() => Bun.write(moved, JSON.stringify({ username: "MOVED-OUT-USER" })))
+      yield* Effect.promise(() => Bun.write(aboveMoved, JSON.stringify({ username: "ABOVE-MOVED-USER" })))
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        yield* trust.grant(layout.repo, { persist: true, via: "test" })
+        yield* trust.grant(elsewhere, { persist: true, via: "test" })
+        yield* reread
+        // The control: the start folder is read while it is the project's.
+        expect(yield* listed).toContain(path.join(layout.inner, "orbit.json"))
+
+        yield* Effect.promise(async () => {
+          await fs.rm(layout.inner, { recursive: true, force: true })
+          await fs.symlink(elsewhere, layout.inner, "junction")
+        })
+        yield* reread
+        yield* reread
+        const read = yield* listed
+        expect(read).not.toContain(moved)
+        expect(read).not.toContain(aboveMoved)
+        expect(read).not.toContain(path.join(layout.inner, "orbit.json"))
+      }).pipe(Effect.provide(loader({ ...layout, directory: layout.inner })))
+      expect(logged.filter((item) => item.path === moved)).toEqual([
+        { path: moved, reason: "it is outside the project's folders" },
+      ])
+      expect(logged.filter((item) => item.path === aboveMoved)).toEqual([])
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  // Class 4: the folder is decided before its file is read, and the disk can change in between. The entry is placed again
+  // once it is read, so a start folder that became a link to a folder outside the project while its file was read applies
+  // as an untrusted folder's entry, with what such a folder may not supply taken out. The real file system makes the change
+  // at that moment, right after the file is read.
+  it.live("an entry whose folder the disk moved outside the project while it was read applies as untrusted", () =>
+    Effect.gen(function* () {
+      const layout = yield* folders
+      const elsewhere = path.join(path.dirname(layout.work), "elsewhere-later")
+      const own = path.join(layout.inner, "orbit.json")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(elsewhere, { recursive: true })
+        await Bun.write(own, JSON.stringify({ username: "INNER-USER", plugins: ["./held.ts"] }))
+      })
+      let move = false
+      const moving = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return FSUtil.Service.of({
+            ...real,
+            readFileStringSafe: (file) =>
+              real.readFileStringSafe(file).pipe(
+                Effect.tap(() =>
+                  move && file === own
+                    ? Effect.promise(async () => {
+                        move = false
+                        await fs.rm(layout.inner, { recursive: true, force: true })
+                        await fs.symlink(elsewhere, layout.inner, "junction")
+                      })
+                    : Effect.void,
+                ),
+              ),
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const entry = Effect.gen(function* () {
+        const config = yield* Config.Service
+        return (yield* config.entries()).find(
+          (item): item is Document => item.type === "document" && item.path === own,
+        )
+      })
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        yield* trust.grant(layout.repo, { persist: true, via: "test" })
+        yield* reread
+        // The control: while the folder stays the project's, its entry applies as it is.
+        expect((yield* entry)?.trusted).not.toBe(false)
+        expect((yield* entry)?.info.plugins).toEqual(["./held.ts"])
+
+        move = true
+        yield* reread
+        expect(move).toBe(false)
+        const moved = yield* entry
+        expect(moved?.trusted).toBe(false)
+        expect(moved?.info.plugins).toBeUndefined()
+        expect(moved?.withheld).toContain("plugins")
+      }).pipe(Effect.provide(loader({ ...layout, directory: layout.inner, fs: moving })))
+    }),
+  )
 })

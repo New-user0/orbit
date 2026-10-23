@@ -67,7 +67,7 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
           const trust = yield* ProjectTrust.Service
           if (!ctx.payload.trust) return yield* trust.revoke()
           // The API does not know which client asked, so a grant says only that it came through here.
-          return yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api", holder: ctx.payload.holder })
+          return yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
         }),
       )
       .handle("trust.list", () => workspaces.list())

@@ -24,7 +24,7 @@ import { proposed } from "./patch.js"
 import { configured, find, missing } from "./program.js"
 import type { Check, FromView, Item, Mode, Model, ToView, TrustView, Workspace } from "./protocol.js"
 import { RunsView } from "./runs-view.js"
-import { prompt, trusted } from "./trust.js"
+import { prompt, tooltip, trusted } from "./trust.js"
 
 const scheme = "orbit-proposed"
 
@@ -719,11 +719,11 @@ class Chat implements vscode.WebviewViewProvider {
     this.status.tooltip = waiting ? "Orbit is waiting for your review" : "Open Orbit"
   }
 
-  // The indicator shows while the folder is untrusted and holds something back, and the command is offered then only.
+  // The indicator shows while the folder is untrusted, and the command is offered then only.
   private paintTrust() {
     void vscode.commands.executeCommand("setContext", "orbit.untrusted", this.trust !== undefined)
     if (!this.trust) return this.untrusted.hide()
-    this.untrusted.tooltip = `Orbit is leaving out ${this.trust.summary} of ${this.trust.directory} until you trust it. Select to review.`
+    this.untrusted.tooltip = tooltip(this.trust)
     this.untrusted.show()
   }
 

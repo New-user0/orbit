@@ -1,8 +1,7 @@
 /**
  * Reads front matter whose anchors each list the one before ten times, at levels 6 to 8 (a few hundred bytes that stand
  * for ten million to a billion values), and a control that writes the same lines without aliases, through each reader of
- * front matter, and measures `Fingerprint.canonical` on values that hold one list in many places, hold themselves or nest
- * deeper than a copy can recurse. It prints, for each row, whether the value was refused, how long the row took and how
+ * front matter. It prints, for each row, whether the value was refused, how long the row took and how
  * much the process grew, as JSON. It is a script of its own because the work is synchronous: the test starts it with a
  * deadline. Rows run level by level, and the script stops after the first row that accepts a value it should refuse,
  * refuses a control, or takes or grows too much, so that a reader without its bound never meets the larger levels.
@@ -10,7 +9,6 @@
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer, Logger } from "effect"
-import { Fingerprint } from "@orbit/core/config/fingerprint"
 import { ConfigMarkdown } from "@orbit/core/config/markdown"
 import { AgentFile } from "@orbit/core/config/plugin/agent-file"
 import { CommandFile } from "@orbit/core/config/plugin/command-file"
@@ -49,16 +47,6 @@ const folderOf = async (name: string, level: number, aliased: boolean) => {
   return { folder, text }
 }
 
-// A list of ten values, then `level` lists that each hold the one before ten times, built in memory.
-const shared = (level: number) =>
-  Array.from({ length: level }).reduce<unknown[]>((inner) => Array(10).fill(inner), Array(10).fill("x"))
-const holdsItself = () => {
-  const value: unknown[] = ["x"]
-  value.push(value)
-  return { hooks: value }
-}
-const nested = (depth: number) => Array.from({ length: depth }).reduce<unknown[]>((inner) => [inner], [])
-
 type Row = {
   readonly name: string
   readonly hostile: boolean
@@ -96,38 +84,17 @@ const readers = (level: number, aliased: boolean) =>
           hostile: aliased,
           refused: () => Effect.sync(() => ConfigMarkdown.parseOption(made.text) === undefined),
         },
-        {
-          // A file that is refused carries no hooks and no servers, so the folder has no digest of either.
-          name: name("Fingerprint.directory"),
-          hostile: aliased,
-          refused: (files) =>
-            Fingerprint.directory(files, made.folder, [path.dirname(made.folder)]).pipe(
-              Effect.map((digests) => digests.hooks === undefined && digests.mcp === undefined),
-            ),
-        },
       ]
     }),
   )
-
-const canonical = (name: string, hostile: boolean, value: () => unknown): Row => ({
-  name: `Fingerprint.canonical ${name}`,
-  hostile,
-  refused: () => Effect.sync(() => Fingerprint.canonical(value()) === undefined),
-})
 
 const program = Effect.gen(function* () {
   const files = yield* FSUtil.Service
   const rows = [
     ...(yield* readers(6, false)),
-    canonical("control", false, () => shared(3)),
     ...(yield* readers(6, true)),
-    canonical("level 6", true, () => shared(6)),
-    canonical("nested 100,000 deep", true, () => nested(100_000)),
-    canonical("holds itself", true, holdsItself),
     ...(yield* readers(7, true)),
-    canonical("level 7", true, () => shared(7)),
     ...(yield* readers(8, true)),
-    canonical("level 8", true, () => shared(8)),
   ]
   const report: { name: string; hostile: boolean; refused: boolean; ms: number; cpu: number; growthMB: number }[] = []
   for (const row of rows) {

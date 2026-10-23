@@ -51,19 +51,18 @@ async function render() {
   return app
 }
 
-test("the story opens the question for an untrusted folder that holds nothing back, and not for a trusted one", async () => {
+test("the story opens the question for an untrusted folder, and not for a trusted one", async () => {
   const app = await render()
   try {
-    // Cycle to the state where the folder is untrusted and holds nothing back.
-    for (const _ of [1, 2, 3]) app.mockInput.pressKey("t")
-    await app.waitForFrame((frame) => frame.includes("untrusted, holds nothing back"))
+    // The first state is a folder that is not trusted, which holds nothing back since nothing of it is read.
+    await app.waitForFrame((frame) => frame.includes(" · untrusted · "))
     app.mockInput.pressEnter()
     await app.waitForFrame((frame) => frame.includes("question opened") && frame.includes("Trust this folder?"))
     app.mockInput.pressEscape()
     await app.waitForFrame((frame) => !frame.includes("Trust this folder?"))
 
-    // The last state is a trusted folder: no indicator, so nothing to open.
-    for (const _ of [1, 2]) app.mockInput.pressKey("t")
+    // The other state is a trusted folder: no indicator, so nothing to open.
+    app.mockInput.pressKey("t")
     await app.waitForFrame((frame) => frame.includes(" · trusted · "))
     app.mockInput.pressEnter()
     await app.waitForFrame((frame) => frame.includes("the indicator is not shown, so there is nothing to activate"))

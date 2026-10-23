@@ -24,13 +24,9 @@ import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigDiscovery } from "./config/discovery.js"
 import { ConfigWatch } from "./config/watch.js"
 import { ConfigTrust } from "./config/trust.js"
-import { Fingerprint } from "./config/fingerprint.js"
 import { ManagedSettings } from "./managed-settings.js"
 import { WellKnown } from "./wellknown.js"
 import { WorkspaceTrust } from "./workspace-trust.js"
-
-// What differs from a grant, as one comparable string.
-const signature = (item: WorkspaceTrust.Difference) => `${item.path}:${item.kinds.join(",")}`
 
 export function latest<K extends keyof Info>(entries: readonly Entry[], key: K): Info[K] | undefined {
   return entries.findLast((entry): entry is Document => entry.type === "document" && entry.info[key] !== undefined)
@@ -70,12 +66,10 @@ export interface Interface {
    * scope, outer sources come before inner ones. While compatibility is on, the documents that other products' files
    * make, such as hook settings and an MCP file, open the scope they belong to, so Orbit's own documents outrank them.
    *
-   * While the folder that holds a project or local entry is untrusted, the entry is stamped `trusted: false`, and a
-   * document loses what an untrusted folder may not supply and lists its kinds in `withheld`; see `ConfigTrust`. The
-   * project's own folder follows the decision for the project. Config that discovery finds in the folders above it
-   * follows the decision for the folder that holds it, so granting a repository does not grant what surrounds it. The
-   * entries of every other scope are never subject to trust. A grant reloads the config, which publishes
-   * `config.updated`.
+   * Project and local entries come only from the folders between the Location's folder and the project's root, and only
+   * once the project is trusted: nothing above the root is read, even when a grant for a folder there covers the project.
+   * A trusted project's entries apply as they are now, whatever changed since the grant. The entries of every other
+   * scope are never subject to trust. A grant reloads the config, which publishes `config.updated`.
    */
   readonly entries: () => Effect.Effect<Entry[]>
   /**
@@ -105,28 +99,10 @@ export interface Interface {
   /** Updates supported global config fields while preserving unrelated JSONC content. */
   readonly update?: (patch: Patch) => Effect.Effect<void, FSUtil.Error>
   /**
-   * Reads the config again now, and returns once the new entries and fingerprints are in place. A grant for a folder
-   * that was not trusted asks it, because nothing of that folder was read before.
+   * Reads the config again now, and returns once the new entries are in place. A grant for a folder that was not
+   * trusted asks it, because nothing of that folder was read before.
    */
   readonly reload?: () => Effect.Effect<void>
-  /**
-   * The executable config of every project and local source the last load read, wherever the folder is not trusted
-   * implicitly: what a grant records, and what `WorkspaceTrust.compare` is asked about. Empty when the server trusts
-   * every folder.
-   */
-  readonly fingerprints: () => Effect.Effect<readonly Observed[]>
-  /**
-   * Whether the plugins that a config directory keeps differ now from what its folder's grant recorded. This reads the
-   * disk: the supervisor asks it when a file under the directory changes, which is before the config reloads and so
-   * before the directory's entry says so.
-   */
-  readonly pluginsChanged: (directory: string) => Effect.Effect<boolean>
-}
-
-/** A source's observation, and the folder whose grant it belongs to. */
-export interface Observed extends WorkspaceTrust.Observation {
-  /** The real path of the folder the grant is for: the project's canonical root, or the folder that holds the source. */
-  readonly root: string
 }
 
 export const Options = Schema.Struct({
@@ -167,8 +143,6 @@ export const testLayer = (initial: Entry[] = [], compat: Compat = defaultCompat)
         changes: () => Stream.fromPubSub(updates),
         notify: (paths) =>
           Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
-        fingerprints: () => Effect.succeed([]),
-        pluginsChanged: () => Effect.succeed(false),
         setEntries: (next) => Ref.set(entries, next),
         emitChange: (update) => PubSub.publish(updates, update).pipe(Effect.asVoid),
       })
@@ -195,15 +169,9 @@ export const layer = (options?: Options) =>
       const wellknown = yield* WellKnown.Service
       const trust = yield* WorkspaceTrust.Service
       const managedSettings = yield* ManagedSettings.Service
-      // How each folder was decided in the load that is running or ran last: the project's, and the ones that hold the
-      // config found above it. A trust change that moves none of them leaves the config as it is.
+      // How the project was decided in the load that is running or ran last. A trust change that does not move it leaves
+      // the config as it is.
       const decisions = new Map<string, boolean>()
-      const states = new Map<string, WorkspaceTrust.State>()
-      // What the executable config of each source was when the load that is running or ran last read it, and which
-      // sources of each folder differed from its grant then. A grant or a revoke that moves neither the decision nor
-      // what differs leaves the config as it is.
-      let observed: readonly Observed[] = []
-      const applied = new Map<string, string>()
       // The folders that the project's own decision covers: its own, and the main checkout when it is a linked worktree.
       // They are the folders `ProjectTrust` holds the project's config to, so that both bound a read the same way.
       const projectFolders = [
@@ -252,48 +220,45 @@ export const layer = (options?: Options) =>
         })
       })
 
-      // Asks the store once per folder in a load, so the files of one load never disagree about a folder.
-      const stateOf = Effect.fnUntraced(function* (root: string) {
-        const known = states.get(root)
+      // Asks the store once in a load, so the files of one load never disagree about the project.
+      const decide = Effect.fnUntraced(function* (root: string) {
+        const known = decisions.get(root)
         if (known !== undefined) return known
-        const status = yield* trust.status(root)
-        states.set(root, status)
-        decisions.set(root, status.trusted)
-        return status
+        const trusted = (yield* trust.status(root)).trusted
+        decisions.set(root, trusted)
+        return trusted
       })
-      const decide = (root: string) => stateOf(root).pipe(Effect.map((state) => state.trusted))
 
       // Asks the store every time, for what is wanted outside a load.
       const decideNow = (root: string) => trust.status(root).pipe(Effect.map((status) => status.trusted))
 
-      // Where the config in a folder stands under trust. The project's own folders follow the decision for its root.
-      // Config found above them, which discovery reaches by walking to the filesystem root, follows the decision for
-      // the folder that holds it: granting a repository does not grant the folders around it.
+      // Where the config in a folder stands under trust: the project's own folders follow the decision for its root. The
+      // folder is placed by the one that holds its config container, so a `.orbit` that is a link stays the project's.
+      // Discovery walks no higher than the project's root (D7), so a holder outside the project's folders is one the disk
+      // moved after the Location opened, such as a start folder replaced by a link. It is never the project's, and it is
+      // never read (`readable`).
       const standing = Effect.fnUntraced(function* (folder: string, ask: (root: string) => Effect.Effect<boolean>) {
         const directory = yield* fs.resolve(folder)
-        if (projectFolders.some((project) => FSUtil.contains(project, directory))) {
-          const root = location.project.canonical
-          return { roots: projectFolders, directory, root, trusted: yield* ask(root) }
-        }
         const holder = yield* fs.resolve(ConfigTrust.holder(folder))
-        // A holder that is the home directory or a filesystem root contains everything below it, so it cannot stand for
-        // what a file reference may reach: only the config container does, and a document that sits directly in the
-        // root reaches nothing.
-        const persistent = (yield* trust.status(holder)).persistent
-        const roots = ConfigTrust.reach({ holder, container: directory, persistent })
-        return { roots, directory, root: holder, trusted: yield* ask(holder) }
+        const inside = projectFolders.some((project) => FSUtil.contains(project, holder))
+        const root = location.project.canonical
+        return { roots: projectFolders, directory, inside, trusted: inside && (yield* ask(root)) }
       })
 
       // The sources already reported as skipped, so that a folder nobody trusts is logged once and not at every reload.
       const skipped = new Set<string>()
-      // Whether the folder that holds a project or local source is trusted, so that the source may be read at all: as the
-      // reference does, nothing a folder supplies is read until the person trusts it (class 1). A source above the
-      // project waits for a grant that covers its own folder (D7). One that is skipped is logged once (class 7).
+      // Whether a project or local source may be read at all: as the reference does, nothing a folder supplies is read
+      // until the person trusts it (class 1), and nothing outside the project's folders is read (D7). One that is skipped
+      // is logged once (class 7).
       const readable = Effect.fnUntraced(function* (source: string, folder: string) {
-        if ((yield* standing(folder, decide)).trusted) return true
+        const place = yield* standing(folder, decide)
+        if (place.trusted) return true
         if (!skipped.has(source)) {
           skipped.add(source)
-          yield* Effect.logInfo("config source skipped", { path: source, reason: "its folder is not trusted" })
+          yield* Effect.logInfo("config source skipped", {
+            path: source,
+            reason: place.inside ? "its folder is not trusted" : "it is outside the project's folders",
+          })
         }
         return false
       })
@@ -432,10 +397,8 @@ export const layer = (options?: Options) =>
       })
 
       // The entry as it applies: unchanged unless the folder that holds it is untrusted and it is a project's or a local
-      // one. Nothing here waits for a person: an untrusted folder just loads with what it may not supply taken out.
-      // A trusted folder's entry whose executable config differs from what the grant recorded loses those kinds only.
-      // What is read is kept for the grant that records it, so a first grant records exactly what was shown.
-      const stampEntry = Effect.fnUntraced(function* (entry: Entry, seen: Observed[], differences: Map<string, string[]>) {
+      // one. A trusted folder's entry applies as it is now, as the reference loads it (D8).
+      const stampEntry = Effect.fnUntraced(function* (entry: Entry) {
         if (entry.scope !== "project" && entry.scope !== "local") return entry
         const folder =
           entry.type === "directory"
@@ -444,33 +407,7 @@ export const layer = (options?: Options) =>
               ? location.project.directory
               : path.dirname(entry.path)
         const place = yield* standing(folder, decide)
-        const state = yield* stateOf(place.root)
-        // The server trusts every folder: nothing is recorded and nothing counts as changed.
-        if (state.source === "implicit") return entry
-        const observation = yield* observe(entry, place.roots)
-        if (observation !== undefined) seen.push({ ...observation, root: place.root })
-        if (!place.trusted) return ConfigTrust.stamp(entry, place)
-        if (observation === undefined) return entry
-        const changed = yield* trust.compare(place.root, [observation])
-        differences.set(place.root, [...(differences.get(place.root) ?? []), ...changed.map(signature)])
-        return changed.length === 0 ? entry : ConfigTrust.partial(entry, place, changed.flatMap((item) => item.kinds))
-      })
-
-      // The paths a document's `skills` names on disk, as the skill plugin resolves them.
-      const skillRoots = (info: Info) =>
-        (info.skills ?? []).flatMap((item) => {
-          if (URL.canParse(item) && /^https?:$/.test(new URL(item).protocol)) return []
-          const expanded = item.startsWith("~/") ? path.join(globalService.home, item.slice(2)) : item
-          return [path.isAbsolute(expanded) ? expanded : path.join(location.directory, expanded)]
-        })
-
-      const observe = Effect.fnUntraced(function* (entry: Entry, within: readonly string[]) {
-        if (entry.path === undefined) return undefined
-        const digests =
-          entry.type === "directory"
-            ? yield* Fingerprint.directory(fs, entry.path, within)
-            : yield* Fingerprint.document(fs, entry.path, entry.info, skillRoots(entry.info), within)
-        return { path: entry.path, identity: yield* fs.resolve(entry.path), digests } satisfies WorkspaceTrust.Observation
+        return place.trusted ? entry : ConfigTrust.stamp(entry, place)
       })
 
       // A root of another product carries the verdict for the folder that holds it, unless it is the user's own, which is
@@ -484,7 +421,6 @@ export const layer = (options?: Options) =>
 
       const load = Effect.fn("Config.load")(function* (discovered: ConfigDiscovery.Sources) {
         decisions.clear()
-        states.clear()
         const sources = yield* trustedSources(discovered)
         // The files of a folder that is not trusted are not read, but they stay that folder's: naming one as the explicit
         // file must not load it in the flag scope, where the folder's trust no longer applies (class 4).
@@ -583,9 +519,7 @@ export const layer = (options?: Options) =>
         // documents before their local counterparts, and ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file. The
         // documents of other products' files open their scope, so a native document of the same scope outranks them.
         // The managed document is the merge of the managed settings files, and comes last.
-        const seen: Observed[] = []
-        const differences = new Map<string, string[]>()
-        const stamped = yield* Effect.forEach(
+        return yield* Effect.forEach(
           [
             ...remote,
             ...compat.user,
@@ -598,12 +532,8 @@ export const layer = (options?: Options) =>
             ...content,
             ...organization,
           ],
-          (entry) => stampEntry(entry, seen, differences),
+          stampEntry,
         )
-        observed = seen
-        applied.clear()
-        for (const [root, found] of differences) applied.set(root, found.toSorted().join("|"))
-        return stamped
       })
 
       const initial = yield* ConfigDiscovery.discover(options)
@@ -690,21 +620,12 @@ export const layer = (options?: Options) =>
         ),
         Effect.forkScoped({ startImmediately: true }),
       )
-      // Trust changes arrive for every folder the server knows. Asking the store again about the folders this config was
-      // decided for, rather than comparing paths, settles whether one of them moved however it was spelled, and costs
-      // a read for each.
-      // A grant for a folder that is trusted already moves nothing but what differs from it, which is asked as well.
+      // Trust changes arrive for every folder the server knows. Asking the store again about the folder this config was
+      // decided for, rather than comparing paths, settles whether it moved however it was spelled.
       yield* bus.subscribe(Trust.Event.Updated).pipe(
         Stream.filterEffect(() =>
           Effect.forEach([...decisions], ([root, decided]) =>
-            Effect.gen(function* () {
-              if ((yield* trust.status(root)).trusted !== decided) return true
-              const found = yield* trust.compare(
-                root,
-                observed.filter((item) => item.root === root),
-              )
-              return found.map(signature).toSorted().join("|") !== (applied.get(root) ?? "")
-            }),
+            trust.status(root).pipe(Effect.map((state) => state.trusted !== decided)),
           ).pipe(Effect.map((moved) => moved.includes(true))),
         ),
         Stream.runForEach(() => requestReload),
@@ -779,21 +700,6 @@ export const layer = (options?: Options) =>
             Effect.catchCause((cause) => Effect.logError("failed to reload config", { cause })),
             Effect.provide(context),
           ),
-        fingerprints: () => Effect.sync(() => observed),
-        pluginsChanged: Effect.fn("Config.pluginsChanged")(function* (directory) {
-          const entry = configs.find(
-            (item) =>
-              item.type === "directory" && item.path === directory && (item.scope === "project" || item.scope === "local"),
-          )
-          if (entry === undefined) return false
-          const place = yield* standing(directory, decideNow)
-          const state = yield* trust.status(place.root)
-          if (!state.trusted || state.source === "implicit") return false
-          const plugins = yield* Fingerprint.pluginsOf(fs, directory, place.roots)
-          if (plugins === undefined) return false
-          const identity = yield* fs.resolve(directory)
-          return (yield* trust.compare(place.root, [{ path: directory, identity, digests: { plugins } }])).length > 0
-        }),
       })
     }),
   )

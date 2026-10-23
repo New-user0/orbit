@@ -6,50 +6,20 @@ import { Trust } from "@orbit/schema/trust"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
-import { Hash } from "@orbit/util/hash"
 import { Bus } from "./bus.js"
 import { KV } from "./kv.js"
 import { AbsolutePath } from "./schema.js"
 
-/** Where grants that outlive the process are kept: `trust/<key>`. */
+/**
+ * Where grants that outlive the process are kept: `trust/<key>`. An older Orbit also kept records of what each grant
+ * approved under `trust-fingerprint/`; nothing reads those rows any more, and they are left in place.
+ */
 const prefix = "trust/"
-
-/** Where what a grant approved is kept: `trust-fingerprint/<key>/<source>`. Not under `trust/`, so `list` never sees it. */
-const recordPrefix = "trust-fingerprint/"
 
 const decodeGrant = Schema.decodeUnknownOption(Trust.Grant)
 
-/** What a grant recorded about one source of executable config: the digest of each kind it held then. */
-const StoredRecord = Schema.Struct({
-  path: Schema.String,
-  digests: Schema.Record(Schema.String, Schema.String),
-})
-const decodeRecord = Schema.decodeUnknownOption(StoredRecord)
-
-/**
- * What a digest says when the file behind it could not be read. It is not a hash, so it equals no record, and a grant
- * does not store it: such a kind counts as changed until it can be read.
- */
-export const unreadable = "unreadable"
-
-/** The executable config of one source (a document or a config directory), as the last load of the config read it. */
-export interface Observation {
-  /** The source as the config lists it, which is what a status shows. */
-  readonly path: string
-  /** The source's real path, which names its record. */
-  readonly identity: string
-  /** The digest of each kind the source holds. A kind it holds nothing of has none. */
-  readonly digests: Readonly<Partial<Record<Trust.Kind, string>>>
-}
-
-/** Where a trusted folder's sources differ from the grant, and the kinds that do. */
-export interface Difference {
-  readonly path: string
-  readonly kinds: readonly Trust.Kind[]
-}
-
 /** What the store knows about a folder. The files that hold something back are the Location's to report. */
-export type State = Omit<Trust.Status, "withheld" | "changed">
+export type State = Omit<Trust.Status, "withheld">
 
 export interface Interface {
   /**
@@ -60,32 +30,20 @@ export interface Interface {
   /**
    * Trusts the folder and publishes `trust.updated`. The grant is stored on disk only when `persist` is set and the
    * folder is neither the home directory nor a filesystem root, which are trusted until the serving process restarts.
-   * `observations` are the sources whose executable config the grant approves: it records them beside the grant, leaves
-   * the records of other sources as they are, and drops those of sources that are gone. A grant without them records
-   * nothing, so every source reads as changed.
+   * Nothing about the folder's config is recorded: a trusted folder's config loads as it is whenever it is read (D8).
    */
-  readonly grant: (
-    root: string,
-    input: { readonly persist: boolean; readonly via: string; readonly observations?: readonly Observation[] },
-  ) => Effect.Effect<State>
+  readonly grant: (root: string, input: { readonly persist: boolean; readonly via: string }) => Effect.Effect<State>
   /**
-   * Ends every grant for the folder, and the records beside them, and publishes `trust.updated`. A server with implicit
-   * trust keeps trusting it, and so does a grant for a folder above it, which the answer names as `granted`.
+   * Ends every grant for the folder and publishes `trust.updated`. A server with implicit trust keeps trusting it, and
+   * so does a grant for a folder above it, which the answer names as `granted`.
    */
   readonly revoke: (root: string) => Effect.Effect<State>
   /** The grants stored on disk, ordered by key. Grants that last until the process restarts are not listed. */
   readonly list: () => Effect.Effect<readonly Trust.Grant[]>
   /**
-   * Which sources differ from what the folder's grant recorded, and the kinds that do: a source with no record has all
-   * the kinds it holds, and otherwise a kind whose digest is not the recorded one. A source that is gone, or a kind it
-   * no longer holds, differs in nothing. Nothing differs while the folder is untrusted, which holds everything back
-   * anyway, or trusted without a grant, which approves no config in particular.
-   */
-  readonly compare: (root: string, observations: readonly Observation[]) => Effect.Effect<readonly Difference[]>
-  /**
-   * Ends the stored grant, and the records, whose folder has this key or is shown as this directory, without needing
-   * the folder to exist. Returns the directories it ended, which is none for a folder that was never granted. It only
-   * narrows trust, so a lexical match is enough.
+   * Ends the stored grant whose folder has this key or is shown as this directory, without needing the folder to exist.
+   * Returns the directories it ended, which is none for a folder that was never granted. It only narrows trust, so a
+   * lexical match is enough.
    */
   readonly forget: (directory: string) => Effect.Effect<readonly string[]>
 }
@@ -130,8 +88,6 @@ export function layer(options?: Options) {
       const implicit = options?.implicit ?? truthy(process.env.ORBIT_TRUST_PROJECT)
       // Grants that last until this process stops, by key.
       const session = new Set<string>()
-      // The records of those grants, which are lost with them: by folder key, then by source.
-      const memory = new Map<string, Map<string, typeof StoredRecord.Type>>()
       const home = key(yield* fs.resolve(global.home))
 
       // A folder's shown path and its key, from the same real path, so the key never depends on how it was spelled.
@@ -141,23 +97,6 @@ export function layer(options?: Options) {
         // The home directory and filesystem roots hold everything below them, so no stored grant ever covers them.
         return { directory, id, persistent: id !== home && path.dirname(id) !== id }
       })
-
-      const recordKey = (id: string, identity: string) => `${recordPrefix}${id}/${Hash.fast(key(identity))}`
-
-      // The records of one folder. A folder's key holds slashes, so the records of a folder inside it share the prefix:
-      // only a key with nothing but the source after the prefix is this folder's own.
-      const stored = (id: string): Effect.Effect<readonly KV.Entry[]> => {
-        const own = `${recordPrefix}${id}/`
-        const page = (after?: string): Effect.Effect<readonly KV.Entry[]> =>
-          kv.scan({ prefix: own, after, limit: 1000 }).pipe(
-            Effect.flatMap((result) => {
-              const entries = result.entries.filter((entry) => !entry.key.slice(own.length).includes("/"))
-              if (result.next === undefined) return Effect.succeed(entries)
-              return page(result.next).pipe(Effect.map((rest) => [...entries, ...rest]))
-            }),
-          )
-        return page()
-      }
 
       // The grant a folder holds in its own right, by key: one stored on disk, or one for this process.
       const own = Effect.fnUntraced(function* (id: string, persistent: boolean) {
@@ -222,82 +161,26 @@ export function layer(options?: Options) {
 
       const grant = Effect.fn("WorkspaceTrust.grant")(function* (
         root: string,
-        input: { readonly persist: boolean; readonly via: string; readonly observations?: readonly Observation[] },
+        input: { readonly persist: boolean; readonly via: string },
       ) {
         const folder = yield* identify(root)
-        const observations = input.observations ?? []
         const stores = input.persist && folder.persistent
-        // What the grant approves. A kind that could not be read is not approved, so it stays changed.
-        const approved = observations.map((observation) => ({
-          observation,
-          record: {
-            path: observation.identity,
-            digests: Object.fromEntries(
-              Object.entries(observation.digests).filter(
-                (entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== unreadable,
-              ),
-            ),
-          },
-        }))
-        if (stores) {
+        if (stores)
           yield* kv.set(prefix + folder.id, {
             directory: folder.directory,
             time: yield* Clock.currentTimeMillis,
             via: input.via,
           })
-          session.delete(folder.id)
-          memory.delete(folder.id)
-          yield* Effect.forEach(
-            approved,
-            (item) =>
-              Object.keys(item.record.digests).length === 0
-                ? kv.remove(recordKey(folder.id, item.observation.identity))
-                : kv.set(recordKey(folder.id, item.observation.identity), item.record),
-            { discard: true },
-          )
-          // The records of sources that are gone are dropped; those of other sources that exist stay as they are.
-          const named = new Set(observations.map((observation) => recordKey(folder.id, observation.identity)))
-          yield* Effect.forEach(
-            (yield* stored(folder.id)).filter((entry) => !named.has(entry.key)),
-            (entry) =>
-              Option.match(decodeRecord(entry.value), {
-                onNone: () => kv.remove(entry.key),
-                onSome: (record) =>
-                  fs.exists(record.path).pipe(
-                    Effect.orElseSucceed(() => true),
-                    Effect.flatMap((there) => (there ? Effect.void : kv.remove(entry.key))),
-                  ),
-              }),
-            { discard: true },
-          )
-        } else {
-          session.add(folder.id)
-          const records = memory.get(folder.id) ?? new Map<string, typeof StoredRecord.Type>()
-          memory.set(folder.id, records)
-          for (const item of approved) {
-            const name = recordKey(folder.id, item.observation.identity)
-            if (Object.keys(item.record.digests).length === 0) records.delete(name)
-            else records.set(name, item.record)
-          }
-          for (const [name, record] of [...records]) {
-            if (!approved.some((item) => recordKey(folder.id, item.observation.identity) === name))
-              if (!(yield* fs.exists(record.path).pipe(Effect.orElseSucceed(() => true)))) records.delete(name)
-          }
-        }
+        if (stores) session.delete(folder.id)
+        if (!stores) session.add(folder.id)
         yield* bus.publish(Trust.Event.Updated, { directory: folder.directory, trusted: true }, { global: true })
         return yield* status(root)
-      })
-
-      const removeRecords = Effect.fnUntraced(function* (id: string) {
-        memory.delete(id)
-        yield* Effect.forEach(yield* stored(id), (entry) => kv.remove(entry.key), { discard: true })
       })
 
       const revoke = Effect.fn("WorkspaceTrust.revoke")(function* (root: string) {
         const folder = yield* identify(root)
         yield* kv.remove(prefix + folder.id)
         session.delete(folder.id)
-        yield* removeRecords(folder.id)
         const result = yield* status(root)
         yield* bus.publish(
           Trust.Event.Updated,
@@ -316,35 +199,6 @@ export function layer(options?: Options) {
           }),
         )
 
-      const compare = Effect.fn("WorkspaceTrust.compare")(function* (
-        root: string,
-        observations: readonly Observation[],
-      ) {
-        const folder = yield* identify(root)
-        const state = yield* status(root)
-        // A server that trusts every folder compares nothing, even for a folder that also has a saved grant: revoking
-        // that grant would otherwise turn withholding on for a server that is configured to trust everything.
-        if (!state.trusted || (implicit && folder.persistent)) return []
-        // The records are those of the folder whose grant applies, which is a folder above this one when it covers it.
-        const holder = state.granted === undefined ? folder.id : key(state.granted)
-        const records = session.has(holder) ? memory.get(holder) : undefined
-        const differences = yield* Effect.forEach(observations, (observation) =>
-          Effect.gen(function* () {
-            const name = recordKey(holder, observation.identity)
-            const record = Option.getOrUndefined(
-              decodeRecord(records === undefined ? yield* kv.get(name) : records.get(name)),
-            )
-            const kinds = Trust.Kinds.filter((kind) => {
-              const digest = observation.digests[kind]
-              if (digest === undefined) return false
-              return digest === unreadable || record?.digests[kind] !== digest
-            })
-            return kinds.length === 0 ? [] : [{ path: observation.path, kinds }]
-          }),
-        )
-        return differences.flat()
-      })
-
       const forget = Effect.fn("WorkspaceTrust.forget")(function* (directory: string) {
         const wanted = key(path.resolve(directory))
         const ended = (yield* page()).filter((item) => key(item.directory) === wanted || item.directory === directory)
@@ -355,7 +209,6 @@ export function layer(options?: Options) {
               const id = key(item.directory)
               yield* kv.remove(prefix + id)
               session.delete(id)
-              yield* removeRecords(id)
               yield* bus.publish(Trust.Event.Updated, { directory: item.directory, trusted: false }, { global: true })
             }),
           { discard: true },
@@ -368,7 +221,6 @@ export function layer(options?: Options) {
         grant,
         revoke,
         list: Effect.fn("WorkspaceTrust.list")(() => page()),
-        compare,
         forget,
       })
     }),
