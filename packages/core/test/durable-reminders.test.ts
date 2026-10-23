@@ -905,6 +905,60 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
+  // Gate's row (class 7): a file whose time cannot be read for a reason other than its absence is not newer, so it is
+  // neither read nor forgotten, and it is checked again at the next step; another file changed at the same step is the
+  // control.
+  it.live("a file whose time cannot be read is not read, and is kept for the next step", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const locked = h.inside("locked.txt")
+      const fine = h.inside("fine.txt")
+      yield* h.write(locked, text(twenty))
+      yield* h.write(fine, text(twenty))
+      yield* h.change(locked, text(["changed"]))
+      yield* h.change(fine, text(["changed"]))
+      const reader = yield* ReadToolFileSystem.Service
+      const environment = yield* Environment.Service
+      const agents = yield* Agent.Service
+      const reads: Array<string> = []
+      const producer = FileChangeReminder.durable({
+        ledger: h.ledger,
+        access: yield* FileAccess.Service,
+        reader: {
+          ...reader,
+          read: (file, resource, page) =>
+            Effect.sync(() => reads.push(file)).pipe(Effect.andThen(reader.read(file, resource, page))),
+        },
+        permission: yield* Permission.Service,
+        trust: h.trust,
+        environment: {
+          ...environment,
+          files: {
+            ...environment.files,
+            read: (file, range) =>
+              file.endsWith("locked.txt")
+                ? Effect.fail(new Environment.Failed({ path: file, cause: new Error("locked") }))
+                : environment.files.read(file, range),
+          },
+        },
+      })
+      const entries = yield* producer.run({
+        session: h.session,
+        agent: (yield* agents.get(build))!,
+        tools: [],
+        model: {} as never,
+        messages: [],
+        step: 1,
+        firstStep: true,
+      })
+      expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(fine)])
+      expect(reads).toEqual([fine])
+      expect((yield* h.ledger.watched(h.session.id)).map((file) => file.path)).toEqual([locked])
+      // Once its time can be read again, the change is reported.
+      expect(labels(yield* h.changes())).toEqual([expect.stringContaining(locked)])
+    }),
+  )
+
   // Gate's row (class 7): a rule check that fails is a refusal. Here the rules cannot be read because the session they
   // belong to is gone; the same file for the live session is the control.
   it.live("a deny check that fails refuses the file, with the live session's check as the control", () =>
