@@ -226,6 +226,32 @@ describe("Config", () => {
     ),
   )
 
+  // Started in the global config directory itself, there is no project to walk: what that directory holds is the
+  // user's own config, so a `.orbit` folder or another product's root in it is not read as a project's.
+  it.live("walks no project when started in the global config directory", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) => {
+        const global = AbsolutePath.make(path.join(tmp.path, "global"))
+        return Effect.promise(async () => {
+          await fs.mkdir(path.join(global, ".orbit"), { recursive: true })
+          await fs.mkdir(path.join(global, CompatNames.vendor.directory), { recursive: true })
+          await fs.writeFile(path.join(global, "orbit.json"), JSON.stringify({ shell: "global" }))
+          await fs.writeFile(path.join(global, ".orbit", "orbit.json"), JSON.stringify({ shell: "inner" }))
+        }).pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              const entries = yield* config.entries()
+              expect(entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : []))).toEqual([global])
+              expect(Config.latest(entries, "shell")).toBe("global")
+              expect(yield* compatRoots(global)).toEqual([])
+            }).pipe(Effect.provide(testLayer(global, global, global))),
+          ),
+        )
+      }),
+    ),
+  )
+
   it.live("loads explicit file and content overrides above project files in priority order", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {
