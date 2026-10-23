@@ -10893,6 +10893,112 @@ describe("context accounting", () => {
     expect(s.requests).toHaveLength(3)
   })
 
+  // The first check of a request is its only one, whatever the attempt did: the three scenarios below pin a failed
+  // attempt, an incomplete-stream continuation and a switch to a fallback model, each followed by the same request.
+  scenario("does not compact again when a failed compaction is followed by a retry", function* (s) {
+    s.currentModel = fortyModel
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "failed-retry-first", 30_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(summaryFails(), Stream.fail(incompleteStream()))
+    yield* s.llm.push(TestLLM.text("Recovered", "failed-retry-done"))
+    yield* s.admit("Next question")
+
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Queue.take(scheduled)
+    yield* TestClock.adjust(FIRST_RETRY)
+    yield* Fiber.join(run)
+
+    expect(yield* compactions(s)).toMatchObject([{ status: "failed", reason: "auto" }])
+    expect(s.requests).toHaveLength(3)
+  })
+
+  scenario("does not compact again when an incomplete stream continues the same request", function* (s) {
+    s.currentModel = fortyModel
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "continue-first", 30_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(
+      summary("word ".repeat(24_000)),
+      TestLLM.failAfter(
+        incompleteStream(),
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "continue-partial" }),
+        LLMEvent.textDelta({ id: "continue-partial", text: "Partial" }),
+      ),
+    )
+    yield* s.llm.push(TestLLM.text(" continuation", "continue-done"))
+    yield* s.admit("Next question")
+
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Queue.take(scheduled)
+    yield* TestClock.adjust(FIRST_RETRY)
+    yield* Fiber.join(run)
+
+    expect(yield* compactions(s)).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(s.requests).toHaveLength(3)
+  })
+
+  scenario("does not compact again when a fallback model takes over the same request", function* (s) {
+    s.currentModel = fortyModel
+    const previous = modelLimits.get("replacement")
+    modelLimits.set("replacement", { context: 40_000, output: 32_000 })
+    const fallbackModel = { providerID: Provider.ID.make("fake"), id: ID.make("replacement") }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => modelLimits.set("replacement", previous ?? defaultModelLimit)),
+    )
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "switch-first", 30_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      summary("word ".repeat(24_000)),
+      Stream.fail(overloaded()),
+      Stream.fail(overloaded()),
+      Stream.fail(overloaded()),
+    )
+    yield* s.llm.push(TestLLM.text("Recovered", "switch-done"))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (let index = 0; index < 2; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    yield* Fiber.join(run)
+
+    expect(yield* compactions(s)).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(s.requests).toHaveLength(5)
+  })
+
+  // The report is ephemeral, so a context that cannot be loaded for it never fails a compaction that is durable.
+  scenario("completes a manual compaction whose context report cannot be loaded", function* (s) {
+    yield* s.llm.push(TestLLM.text("Earlier answer", "report-fail-first"))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(summary("report"))
+    const compaction = yield* s.session.compact({ sessionID })
+    // The model resolves for the summary request first; every resolution after it is the report's.
+    s.modelResolveHook = Effect.suspend(() =>
+      s.requests.length === 0
+        ? Effect.void
+        : Effect.fail(
+            new SessionRunnerModel.ModelUnavailableError({
+              providerID: Provider.ID.make("test"),
+              modelID: Model.ID.make("missing"),
+            }),
+          ),
+    )
+    const exit = yield* s.resume.pipe(Effect.exit)
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
+      type: "compaction",
+      status: "completed",
+    })
+  })
+
   for (const [usage, refused] of [
     [178_000, true],
     [170_000, false],

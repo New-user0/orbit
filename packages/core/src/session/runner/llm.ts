@@ -233,7 +233,7 @@ const layer = Layer.effect(
                   })
                   return yield* Effect.failCause(compacted.cause)
                 }
-                if (compacted.value?.status === "completed") yield* reportAfterCompaction(sessionID, breaker)
+                if (compacted.value?.status === "completed") yield* restore(reportAfterCompaction(sessionID, breaker))
                 force = false
                 continue
               }
@@ -668,7 +668,8 @@ const layer = Layer.effect(
       })
     })
 
-    // A manual compaction ends the boundary without reloading, so the report loads what the checkpoint left.
+    // A manual compaction ends the boundary without reloading, so the report loads what the checkpoint left. The
+    // report is ephemeral: a failure to load it is logged and never fails a drain whose compaction is already durable.
     const reportAfterCompaction = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       breaker: { readonly failures: number },
@@ -676,7 +677,16 @@ const layer = Layer.effect(
       const selected = yield* context.select(sessionID)
       const loaded = yield* loadSelected(selected, (yield* SessionTurn.current(db, sessionID)).fallback)
       yield* report(loaded, SessionCompaction.estimateContext(loaded, reminders.minimal), true, breaker)
-    })
+    }, (effect, sessionID) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("could not report context use after compaction").pipe(
+                Effect.annotateLogs({ sessionID, cause: Cause.pretty(cause) }),
+              ),
+        ),
+      ))
 
     const settleStaleCompactions = Effect.fn("SessionRunner.settleStaleCompactions")(function* (
       sessionID: SessionSchema.ID,

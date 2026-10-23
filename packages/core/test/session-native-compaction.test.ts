@@ -499,6 +499,7 @@ for (const [name, endpoint, flag, records] of [
   ["a trigger stream that ended incomplete", false, "incomplete", true],
   ["an endpoint reply whose body cannot be read", true, "invalid", true],
   ["a refusal before any response", false, "failure", false],
+  ["an endpoint refusal before any response", true, "failure", false],
 ] as const)
   it.live(`records an estimated native compaction spend for ${name}: ${records}`, () =>
     Effect.gen(function* () {
