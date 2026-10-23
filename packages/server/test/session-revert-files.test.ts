@@ -542,3 +542,54 @@ it.live("diffs one prompt's own file-tool edits with scope=prompt, a steered pro
     }).toEqual({ first: ["a.txt"], steered: ["b.txt"], turn: ["a.txt", "b.txt", "shell.txt"] })
   }),
 )
+
+// Builder's rows beside the spec's: a checkpoint of the right shape that git cannot read answers the fixed `failed`
+// sentence (class 9: no git output reaches the answer), an import keeps the well-formed fields of a step and drops only
+// the malformed ones (class 7), and a prompt-scoped diff takes no `to`.
+it.live("answers a checkpoint git cannot read as failed, and keeps the well-formed fields of an imported step", () =>
+  Effect.gen(function* () {
+    const server = yield* setup()
+    const { repo } = yield* repository({ "tracked.txt": "one\n" })
+    const session = yield* server.session(repo)
+    const prompt = yield* session.prompt([
+      { tools: [edited("tracked.txt")], edit: write(path.join(repo, "tracked.txt"), "two\n") },
+    ])
+    const ranged = yield* server.request(
+      "GET",
+      `/api/session/${session.sessionID}/diff?from=${prompt}&scope=prompt&to=${prompt}`,
+    )
+    expect(ranged).toMatchObject({ status: 400, body: { _tag: "InvalidRequestError", field: "to" } })
+    const exported = yield* server.request("GET", `/api/experimental/session/${session.sessionID}/export`)
+    const data = exported.body?.data as {
+      info: Record<string, unknown>
+      messages: Array<Record<string, unknown> & { id: string; type: string; snapshot?: Record<string, unknown> }>
+    }
+    const ids = new Map(data.messages.map((message) => [message.id, SessionMessage.ID.create()]))
+    const imported = Session.ID.create()
+    const missing = "0".repeat(40)
+    const answer = yield* server.request("POST", "/api/experimental/session/import", {
+      info: { ...data.info, id: imported },
+      messages: data.messages.map((message) => ({
+        ...message,
+        id: ids.get(message.id),
+        ...(message.type === "assistant" && message.snapshot
+          ? { snapshot: { start: missing, end: "-x", files: ["tracked.txt", "../outside.txt", "a\\b", "./x"] } }
+          : {}),
+      })),
+      location: { directory: repo },
+    })
+    expect(answer.status).toBe(200)
+    const again = yield* server.request("GET", `/api/experimental/session/${imported}/export`)
+    const step = (again.body?.data as typeof data).messages.find((message) => message.type === "assistant")
+    expect(step?.snapshot).toEqual({ start: missing, files: ["tracked.txt"] })
+    const user = ids.get(data.messages.find((message) => message.type === "user")!.id)!
+    const rewind = (dryRun: boolean) =>
+      server.request("POST", `/api/session/${imported}/revert/files`, { messageID: user, dryRun })
+    const dry = yield* rewind(true)
+    expect(dry).toEqual({ status: 200, body: { data: { canRewind: false, error: expect.any(String) } } })
+    const real = yield* rewind(false)
+    expect(real).toMatchObject({ status: 409, body: { _tag: "RewindFilesError", reason: "failed" } })
+    expect((real.body as { message: string }).message).toBe((dry.body?.data as { error: string }).error)
+    expect(yield* read(path.join(repo, "tracked.txt"))).toBe("two\n")
+  }),
+)

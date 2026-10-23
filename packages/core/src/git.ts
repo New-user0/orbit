@@ -1,5 +1,6 @@
 export * as Git from "./git.js"
 
+import { lstat } from "fs/promises"
 import path from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
@@ -796,7 +797,14 @@ const layer = Layer.effect(
                   ])
                   return
                 }
-                yield* fs.remove(path.join(input.repository.worktree, file), { recursive: true, force: true }).pipe(
+                // The tree has no file here: only a file or a link is removed, never a folder with what it holds.
+                const absolute = path.join(input.repository.worktree, file)
+                const found = yield* Effect.promise(() => lstat(absolute).catch(() => undefined))
+                if (found?.isDirectory()) {
+                  yield* Effect.logWarning("restore left a folder where the snapshot has no file", { file })
+                  return
+                }
+                yield* fs.remove(absolute, { force: true }).pipe(
                   Effect.mapError(
                     (cause) =>
                       new OperationError({

@@ -456,8 +456,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info.Type {
-  const target = (change.type === "update" ? change.moveTarget : undefined)?.resource ?? change.target.resource
+// A move's entry names its source in `from` as well, so that a code rewind knows the call removed that file too.
+function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info.Type & { readonly from?: string } {
+  const moved = change.type === "update" ? change.moveTarget : undefined
   const diff = fileDiff(
     change.target.place,
     change.before,
@@ -466,8 +467,9 @@ function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info
   )
   return {
     ...diff,
-    file: target,
+    file: moved?.resource ?? change.target.resource,
     patch: trimDiff(diff.patch),
+    ...(moved ? { from: change.target.resource } : {}),
   }
 }
 

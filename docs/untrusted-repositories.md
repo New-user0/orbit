@@ -255,6 +255,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     index, so the row runs on every platform; a rewrite a second later is the control). Mutations: giving the copy the
     current time fails the row; a plain copy fails it on Linux, where the copy is new, and not on Windows, where it keeps
     the time of the index it copies.
+  - Code-only rewind (`POST /api/session/:sessionID/revert/files`, `orb run --rewind-files` and `orb -p --rewind-files`,
+    `SessionRevert.files` in `packages/core/src/session/revert.ts`): it reads the folder's git and writes its files, so
+    core refuses it, dry run included, with `WorkspaceTrust.UntrustedError` (403 `UntrustedFolderError` on the route)
+    before any git or file access once the folder's trust has ended, and refuses a busy session (409), so an embedded
+    host meets the same gates as the route (classes 1, 12 and 13). The CLI flag runs the same trust door as a run first.
+    Proof: `packages/server/test/session-revert-files.test.ts` ("refuses a rewind once the folder's trust has ended, and
+    restores once it is trusted again", "refuses a busy session with 409 and writes nothing") and
+    `packages/cli/test/rewind-files.test.ts`. Mutations: taking the trust check or the busy check out of core fails the
+    matching row. The writes go through `Snapshot.restore`, whose containment is in class 4.
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
@@ -1473,6 +1482,13 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   `Git.clean` does this for `.orbit`, `.orbit/worktrees` and the run's folder and removes nothing, branches included,
   when one is a link (`packages/flow/test/git.test.ts`, "a run whose folder is reached through a link is left alone
   with everything it leads to", and the `orb flow clean` row in `packages/cli/test/flow.test.ts`).
+- Writing files back from a checkpoint is the same case at a later moment: a folder on the way can have become a link
+  after the checkpoint. `Snapshot.restore`, which `/undo`, `/redo` and the code-only rewind share, asks
+  `ProjectTrust.leads` for each path's folder when it writes, under the real work tree, and skips the path with one log
+  line unless that folder leads where its name says (compared both ways with `FSUtil.contains`, so a folder whose name
+  changed case on Windows still counts). A path the checkpoint lacks is removed only when it is a file or a link, never
+  as a folder with what it holds (`packages/core/test/snapshot-restore-links.test.ts`: a junction, a folder replaced by
+  a link, a dangling link, a link to a share, a grown folder, `.` and `../`, each beside a control that goes back).
 - A name that becomes a file name is one plain name (the output style rule in
   `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
   `packages/core/src/tool/plugin/memory.ts`).
@@ -1544,6 +1560,14 @@ the store.
   (`packages/flow/src/git.ts`). A `*` in an ID would otherwise become a ref pattern that matches other runs' branches.
   `Git.clean` then keeps the entries of `git worktree list` whose real path is inside the run's folder, compared with
   `path.relative`, and leaves the run alone when that folder is reached through a link (class 4).
+- A checkpoint ID in a session's steps reaches git as an argument, and an imported session's steps say whatever its file
+  says: `--output=<file>` made `git diff` write that file. `Snapshot.files`, `Snapshot.diff` and `Snapshot.restore`
+  refuse an ID that is not a tree ID (`Snapshot.isTree`: 40 or 64 lowercase hex digits) before git starts, and an import
+  drops such an ID, and a changed path that is not a plain name inside the work tree, with one log line, keeping the
+  rest of the step (`packages/core/test/snapshot-restore-links.test.ts`, "… refuses an option-shaped ID and writes no
+  file"; `packages/server/test/session-revert-files.test.ts`, "keeps a forged checkpoint ID of an imported session away
+  from git"). A rewind writes and deletes only paths that git reports as changed since the checkpoint, filtered by the
+  names the session's file tools recorded, so no stored name becomes a path by itself.
 - For every identifier in a change, say where it comes from: the runner, the person, or a file that a clone can ship.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust

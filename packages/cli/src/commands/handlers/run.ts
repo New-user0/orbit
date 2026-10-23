@@ -5,7 +5,7 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { errorMessage } from "../../util/error"
-import { findResumeSession } from "../../session-target"
+import { findResumeSession, latestSessionOf } from "../../session-target"
 import { ConfigOverlay } from "../../config-overlay"
 import { bypassDecision, printBypassNotice } from "../../util/managed-bypass"
 import { mcpConfigRefusal } from "../../util/managed-mcp"
@@ -45,6 +45,7 @@ type HeadlessInput = {
   readonly auto: boolean
   readonly yolo: boolean
   readonly dangerouslySkipPermissions: boolean
+  readonly rewindFiles: Option.Option<string>
   /** Stop in any untrusted folder, even one that holds nothing back (`orb -p`). */
   readonly strict?: boolean
 }
@@ -79,6 +80,16 @@ export function headlessInput(input: HeadlessInput) {
             return "error" in attempts ? attempts : { schema: schema.schema, attempts: attempts.attempts }
           })
     if (output && "error" in output) return reportRunError({ format, envelope }, output.error)
+    // A rewind names a prompt of a session that exists and sends nothing, so it is refused before a server starts when
+    // it names no session or comes with a prompt of its own.
+    const rewind = Option.getOrUndefined(input.rewindFiles)
+    if (rewind !== undefined && !input.continue && Option.isNone(input.session) && Option.isNone(input.resume))
+      return reportRunError(
+        { format, envelope },
+        "--rewind-files needs the session named with --session, --continue or --resume",
+      )
+    if (rewind !== undefined && (input.message.length > 0 || input.file.length > 0))
+      return reportRunError({ format, envelope }, "--rewind-files takes no prompt: it only puts files back")
     const jsonSchema = output?.schema
     const attempts = output?.attempts
     // The private server inherits this process's environment, which is how --bare reaches it.
@@ -155,6 +166,25 @@ export function headlessInput(input: HeadlessInput) {
       strict: input.strict || stream,
     }).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
     if (stopped !== undefined) return reportRunError({ format, envelope }, stopped)
+    if (rewind !== undefined) {
+      // The server puts the files back and refuses a busy session, an untrusted folder or a message without a checkpoint.
+      const latest =
+        session === undefined
+          ? yield* Effect.promise(() =>
+              latestSessionOf(client, directory()).catch((cause) => new Error(errorMessage(cause))),
+            )
+          : undefined
+      if (latest instanceof Error) return reportRunError({ format, envelope }, latest.message)
+      const sessionID = session ?? latest?.id
+      if (sessionID === undefined) return reportRunError({ format, envelope }, "No session to rewind in this folder")
+      const rewound = yield* Effect.tryPromise({
+        try: () => client.session.revert.files({ sessionID, messageID: rewind }),
+        catch: (cause) => new Error(`Could not rewind the files to ${rewind}: ${errorMessage(cause)}`),
+      }).pipe(Effect.catch((error) => Effect.succeed(error)))
+      if (rewound instanceof Error) return reportRunError({ format, envelope }, rewound.message, sessionID)
+      process.stdout.write(`Rewound the files to message ${rewind}\n`)
+      return
+    }
     // Before the first prompt, and in the format that was asked for, like the trust refusal above.
     const bypass = yield* bypassDecision(
       client,

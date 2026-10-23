@@ -78,7 +78,28 @@ describe("Session.revert files", () => {
             snapshot: before,
             started: 0,
           })
+          // A revert puts back only what the session's file tools changed, so the rename is a recorded Patch move.
+          const call = { sessionID: created.id, assistantMessageID, id: "call_move" }
+          yield* bus.publish(SessionEvent.Tool.Input.Started, { ...call, name: "Patch" })
+          yield* bus.publish(SessionEvent.Tool.Called, { ...call, input: {}, executed: true })
           yield* Effect.promise(() => fs.rename(original, renamed))
+          yield* bus.publish(SessionEvent.Tool.Success, {
+            ...call,
+            content: [{ type: "text", text: "done" }],
+            metadata: {
+              files: [
+                {
+                  file: "new name.txt",
+                  from: "old name.txt",
+                  status: "modified",
+                  additions: 0,
+                  deletions: 0,
+                  patch: "",
+                },
+              ],
+            },
+            executed: true,
+          })
           const after = yield* snapshot.capture()
           if (!after) throw new Error("Renamed snapshot missing")
           yield* bus.publish(SessionEvent.Step.Ended, {

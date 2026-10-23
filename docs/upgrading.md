@@ -3001,6 +3001,56 @@ taken a snapshot of before.
 
 **What to do:** Nothing.
 
+### Undo puts back only what Orbit's file tools changed
+
+Undoing to a prompt (`/undo`, a revert with its files) used to put back every file that changed during the steps after
+it, including what a shell command, a subagent or you changed by hand. It now puts back only the files that the
+session's own Edit, Write, Patch and NotebookEdit calls changed, and only where git sees a difference; a shell
+command's edits stay as they are (`session-revert-files.test.ts`, "undoes only the file-tool edits when /undo stages a
+conversation revert with its files"). To record what it changed, Write now names its file in the completed call, as
+Edit already did, and a Patch move names its source beside its destination.
+
+A restore now skips, with a log line, a file whose folder became a link after the snapshot (a junction, a dangling link
+or a link to a share), and the other files still go back; before, git wrote through the link or the whole restore
+failed. A path the snapshot lacks is removed only when it is a file or a link: a folder that appeared since is left with
+what it holds (`snapshot-restore-links.test.ts`).
+
+**Affects:** people who undo after letting the agent run shell commands that change files, and folders whose layout
+changed to links after a step.
+
+**What to do:** Undo shell edits yourself, for example with git.
+
+### Rewind a prompt's files without touching the conversation
+
+`POST /api/session/:sessionID/revert/files` with `{ messageID, dryRun? }` puts back, as they were when that prompt's
+work began, the files that the session's own file tools changed, and leaves the conversation as it is. It takes effect
+at once and has no redo. A dry run answers `canRewind` with the files that would change (absolute paths) and the lines
+the rewind would add (`insertions`) and remove (`deletions`). It refuses a busy session (409 `SessionBusyError`), a
+folder that is no longer trusted (403 `UntrustedFolderError`), an unknown message (404), and a message with no checkpoint,
+a folder without snapshots or a restore that failed (409 `RewindFilesError` with `reason`; a dry run answers
+`canRewind: false` instead). `orb run --rewind-files <message id>` and `orb -p --rewind-files <message id>` call it
+once; they need `--session`, `--continue` or `--resume`, take no prompt, print one line and exit. A file that git leaves
+out of snapshots (one the repository ignores, or an untracked file over 2 MB) is not rewound.
+
+`GET /api/session/:sessionID/diff` takes `scope=prompt`, which diffs from `from` to the next prompt and counts only the
+file tools' edits, so a prompt steered in while the session was busy gets its own diff; `scope=turn`, the default, is
+unchanged.
+
+**Affects:** SDK callers and scripts that call `orb run` or `orb -p`.
+
+**What to do:** Nothing.
+
+### An imported session keeps no checkpoint ID that is not a snapshot tree
+
+Importing a session (`orb session import` or `POST /api/experimental/session/import`) now drops, with a log line, a
+step's start or end checkpoint that is not a git tree ID and a changed path that is not a plain name inside the
+project, and keeps the rest of the step. Such a value used to reach git: `--output=<file>` made viewing the session's
+diff write that file. Comparing, restoring and rewinding refuse such an ID before git starts.
+
+**Affects:** imported sessions whose files were edited by hand.
+
+**What to do:** Nothing.
+
 ## Prompts and instructions
 
 What the model is told about itself and the place it works in.

@@ -130,6 +130,24 @@ test("rewinds the file a prompt's Write created, through orb run and orb -p, and
   expect(rows().length).toBe(count)
 }, 300_000)
 
+// Builder's row beside the spec's: --continue names the folder's latest session, the one a fresh run just created.
+test("rewinds through --continue, in the folder's latest session", async () => {
+  const wrote = await orb(["run", "--standalone", "--model", model, "write created.txt"])
+  expect(wrote.code).toBe(0)
+  expect(await Bun.file(path.join(repo, "created.txt")).exists()).toBe(true)
+  const db = new Database(path.join(root, "orbit.db"), { readonly: true })
+  const prompt = db
+    .query<
+      { id: string },
+      []
+    >("select id from session_message where type = 'user' order by time_created desc, seq desc")
+    .get()
+  db.close()
+  const rewound = await orb(["run", "--standalone", "--continue", "--rewind-files", prompt!.id])
+  expect({ code: rewound.code, mentions: rewound.stdout.includes(prompt!.id) }).toEqual({ code: 0, mentions: true })
+  expect(await Bun.file(path.join(repo, "created.txt")).exists()).toBe(false)
+}, 300_000)
+
 async function orb(args: string[]) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),

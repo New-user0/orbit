@@ -260,6 +260,14 @@ export type SessionInboxSyntheticPayload = { text: string; description?: string;
 
 export type SessionInboxCompactionPayload = {}
 
+export type SessionRewindFiles = {
+  canRewind: boolean
+  error?: string
+  filesChanged?: Array<string>
+  insertions?: number
+  deletions?: number
+}
+
 export type InstructionStatusFile = {
   path: string
   kind: "managed" | "user" | "project" | "local"
@@ -2996,6 +3004,16 @@ export type SessionBusyError = {
 export const isSessionBusyError = (value: unknown): value is SessionBusyError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionBusyError"
 
+export type RewindFilesError = {
+  readonly _tag: "RewindFilesError"
+  readonly sessionID: string
+  readonly messageID: string
+  readonly reason: "disabled" | "no-checkpoint" | "failed"
+  readonly message: string
+}
+export const isRewindFilesError = (value: unknown): value is RewindFilesError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "RewindFilesError"
+
 export type InstructionEntryValueTooLargeError = {
   readonly _tag: "InstructionEntryValueTooLargeError"
   readonly actualBytes: number
@@ -5167,6 +5185,14 @@ export type SessionRevertStageInput = {
 
 export type SessionRevertStageOutput = { data: SessionRevert }["data"]
 
+export type SessionRevertFilesInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly messageID: { readonly messageID: string; readonly dryRun?: boolean | undefined }["messageID"]
+  readonly dryRun?: { readonly messageID: string; readonly dryRun?: boolean | undefined }["dryRun"]
+}
+
+export type SessionRevertFilesOutput = { data: SessionRewindFiles }["data"]
+
 export type SessionRevertClearInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionRevertClearOutput = void
@@ -5185,17 +5211,26 @@ export type SessionDiffInput = {
     readonly from?: string | undefined
     readonly to?: string | undefined
     readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
   }["from"]
   readonly to?: {
     readonly from?: string | undefined
     readonly to?: string | undefined
     readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
   }["to"]
   readonly context?: {
     readonly from?: string | undefined
     readonly to?: string | undefined
     readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
   }["context"]
+  readonly scope?: {
+    readonly from?: string | undefined
+    readonly to?: string | undefined
+    readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
+  }["scope"]
 }
 
 export type SessionDiffOutput = { data: Array<FileDiffInfo> }["data"]

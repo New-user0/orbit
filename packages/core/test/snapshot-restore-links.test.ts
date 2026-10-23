@@ -179,6 +179,31 @@ describe("Snapshot.restore through a link made after the checkpoint", () => {
     ),
   )
 
+  // A stored path (a staged revert keeps the names it restored) that names the work tree itself would make git check
+  // out every file of the tree, and one that climbs out of it would delete a file elsewhere; each is skipped alone.
+  it.live("skips a path that names the work tree itself or leaves it, and restores the control", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(fixture.outside, "victim.txt"), "outside\n")
+          await fs.writeFile(path.join(fixture.project, "sub", "keep.txt"), "keep two\n")
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        yield* restore([
+          [".", tree],
+          ["../outside/victim.txt", tree],
+          ["safe.txt", tree],
+        ])
+        expect({
+          victim: yield* text(path.join(fixture.outside, "victim.txt")),
+          keep: yield* text(path.join(fixture.project, "sub", "keep.txt")),
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+        }).toEqual({ victim: "outside\n", keep: "keep two\n", safe: "safe one\n" })
+      }),
+    ),
+  )
+
   // A link to a network share is decided by the share it names, without opening it. Windows needs the privilege to link
   // to one (CI's runner has it), and the share must answer, or a restore that followed the link would delete nothing.
   const share = process.platform === "win32" && canLinkFile ? it.live : it.live.skip
