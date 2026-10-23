@@ -298,16 +298,24 @@ describe("the memory folder of the project", () => {
         const out = yield* Effect.gen(function* () {
           yield* seed(l)
           const permission = yield* Permission.Service
-          const shell = yield* permission.ask({
-            id: Permission.ID.create(),
-            action: "Bash",
-            resources: [`rm ${path.join(l.memory, "a.md")}`],
-            sessionID: SessionSchema.ID.make(main),
-            agent: probe,
-          })
-          return { shell: shell.effect, control: yield* decide(path.join(l.memory, "a.md")) }
+          const shell = (command: string) =>
+            permission
+              .ask({
+                id: Permission.ID.create(),
+                action: "Bash",
+                resources: [command],
+                sessionID: SessionSchema.ID.make(main),
+                agent: probe,
+              })
+              .pipe(Effect.map((answer) => answer.effect))
+          return {
+            shell: yield* shell(`rm ${path.join(l.memory, "a.md")}`),
+            // A command that is only the path of a script the model wrote into the folder runs that script.
+            script: yield* shell(path.join(l.memory, "run.sh")),
+            control: yield* decide(path.join(l.memory, "a.md")),
+          }
         }).pipe(provide(l))
-        expect(out).toEqual({ shell: "ask", control: allowEdit })
+        expect(out).toEqual({ shell: "ask", script: "ask", control: allowEdit })
       }),
     timeout,
   )
@@ -372,10 +380,14 @@ describe("a link in the memory folder", () => {
             }
           }).pipe(provide(l))
           expect(out.control).toEqual(allowEdit)
-          expect(out.existing.effect).not.toBe("allow")
-          expect(out.fresh.effect).not.toBe("allow")
-          // A read of the global config folder is Orbit's own allow, so only the other targets must ask for a read.
-          if (!place.name.includes("global config")) expect(out.read.effect).not.toBe("allow")
+          // The question comes for the folder, before the file: the memory folder's allow does not decide a place that a
+          // link leads out to, even one that an allow of Orbit's own for the place it reaches would let through.
+          const asked = { effect: "ask", stage: "external_directory" }
+          expect({ existing: out.existing, fresh: out.fresh, read: out.read }).toEqual({
+            existing: asked,
+            fresh: asked,
+            read: asked,
+          })
         }),
       timeout,
     )
@@ -396,6 +408,29 @@ describe("a link in the memory folder", () => {
           }
         }).pipe(provide(l, { data: linked }))
         expect(out).toEqual({ spelled: allowEdit, real: allowEdit })
+      }),
+    timeout,
+  )
+
+  // Class 3: a deny the person wrote for the real folder decides a write that names it through the linked data folder,
+  // since the place the write really reaches is the one the deny names.
+  it.live(
+    "denies a write by the linked spelling when the person's deny names the real folder",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const linked = path.join(l.root, "data-link")
+        yield* Effect.promise(() => fs.symlink(l.data, linked, linkType))
+        yield* Effect.promise(() => fs.mkdir(l.memory, { recursive: true }))
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l, [{ action: "Edit", resource: path.join(l.memory, "private", "*"), effect: "deny" }])
+          return {
+            spelled: yield* decide(path.join(linked, "memory", Project.ID.global, "private", "a.md")),
+            control: yield* decide(path.join(linked, "memory", Project.ID.global, "a.md")),
+          }
+        }).pipe(provide(l, { data: linked }))
+        expect(out.control).toEqual(allowEdit)
+        expect(out.spelled.effect).toBe("deny")
       }),
     timeout,
   )
@@ -484,6 +519,55 @@ describe("memory.directory", () => {
         expect(out.spelled).toEqual(allowEdit)
         expect(out.real).toEqual(allowEdit)
         expect(out.through.effect).not.toBe("allow")
+      }),
+    timeout,
+  )
+
+  // Class 3: Explore denies everything and then keeps Orbit's own folders, the memory folder among them, so it reads a
+  // memory file by either spelling of a configured folder that is a link, still writes none, and asks about another
+  // project's memory folder. The plugin edits the agent itself, as the server's plugin host lets it: `agentHost` edits a
+  // copy, which carries none of the marks of Orbit's own rules.
+  it.live(
+    "lets the built-in explore agent read by either spelling of a configured folder that is a link",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const real = path.join(l.root, "real-memory")
+        const linked = path.join(l.root, "linked-memory")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(real, { recursive: true })
+          await fs.symlink(real, linked, linkType)
+          await fs.writeFile(path.join(real, "a.md"), "note")
+        })
+        const explore = Agent.ID.make("explore")
+        const out = yield* Effect.gen(function* () {
+          const agents = yield* Agent.Service
+          yield* AgentPlugin.Plugin.effect(
+            host({
+              agent: {
+                ...agentHost(agents),
+                transform: (callback) =>
+                  agents.transform((editor) =>
+                    callback({
+                      list: () => editor.list(),
+                      get: (id) => editor.get(Agent.ID.make(id)),
+                      default: (id) => editor.default(id === undefined ? undefined : Agent.ID.make(id)),
+                      update: (id, update) => editor.update(Agent.ID.make(id), update),
+                      remove: (id) => editor.remove(Agent.ID.make(id)),
+                    }),
+                  ),
+              },
+            }),
+          )
+          yield* seed(l, [], [explore, probe])
+          return {
+            spelled: (yield* decide(path.join(linked, "a.md"), "Read", explore)).effect,
+            real: (yield* decide(path.join(real, "a.md"), "Read", explore)).effect,
+            write: (yield* decide(path.join(real, "a.md"), "Edit", explore)).effect,
+            other: (yield* decide(path.join(l.data, "memory", "c".repeat(40), "a.md"), "Read", explore)).effect,
+          }
+        }).pipe(provide(l, {}, [configured("user", { directory: linked })]))
+        expect(out).toEqual({ spelled: "allow", real: "allow", write: "deny", other: "ask" })
       }),
     timeout,
   )

@@ -283,7 +283,7 @@ const layer = Layer.effect(
       // person's, no default question for a place outside the project and no mode's deny reaches it, while a deny of the
       // person's, the session's or an agent's own still decides, by the last rule that allows or denies (classes 4, 8).
       if (inMemory(input, resource)) {
-        const decisive = rules.filter((rule) => rule.effect !== "ask" && !Agent.isModeRule(rule) && scratch(rule))
+        const decisive = rules.filter((rule) => rule.effect !== "ask" && !Agent.isModeRule(rule))
         const decided = evaluate(input.action, resource, decisive, [
           ...(input.aliases?.[resource] ?? []),
           ...resolved(input.action, resource),
