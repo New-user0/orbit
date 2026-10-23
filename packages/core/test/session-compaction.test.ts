@@ -849,12 +849,12 @@ it.effect("sizes a summary request for an unknown window by the 200,000-token wi
   Effect.gen(function* () {
     requests = []
     const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap"))
-    // The last message stays verbatim; the eight before it are about 195,000 tokens, over a 191,808-token cap and under a 200,000-token one.
+    // The last message stays verbatim; the eight before it are about 212,000 tokens, and seven of them are 185,500, which fits a 191,808-token cap but not the 180,000 a fixed 20,000 reserve gives.
     const messages = Array.from({ length: 9 }, (_, index) =>
       SessionMessage.User.make({
         id: SessionMessage.ID.create(),
         type: "user",
-        text: `marker-${index} ${"a".repeat(97_500)}`,
+        text: `marker-${index} ${"a".repeat(106_000)}`,
         time: { created: DateTime.makeUnsafe(index) },
       }),
     )
@@ -875,6 +875,7 @@ it.effect("sizes a summary request for an unknown window by the 200,000-token wi
 
     const sent = JSON.stringify(requests[0]?.messages)
     expect(sent).not.toContain("marker-0 ")
+    expect(sent).toContain("marker-1 ")
     expect(sent).toContain("marker-6 ")
   }),
 )
