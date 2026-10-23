@@ -181,6 +181,36 @@ describe("text that only looks like a saved result", () => {
     expect(lower([text(content)], marker(60_000), {})).toEqual({ type: "text", value: content })
   })
 
+  // The step saves only text: a marker beside a file part came from somewhere else.
+  test("lowers a marked result that holds a file part as the stored content", () => {
+    const image = { type: "file" as const, uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png" }
+    expect(lower([text("i".repeat(60_000)), image], marker(60_000))).toEqual({
+      type: "content",
+      value: [text("i".repeat(60_000)), image],
+    })
+  })
+
+  // A provider-hosted result never passed through the step, so a marker on it is not the step's.
+  test("lowers a marked result of a provider-hosted tool as the stored content", () => {
+    const content = "h".repeat(60_000)
+    const message = SessionMessage.Assistant.make({
+      ...assistant({ status: "completed", input: {}, content: [text(content)], metadata: marker(60_000) as never }),
+      content: [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_low",
+          name: "web_search",
+          executed: true,
+          state: { status: "completed", input: {}, content: [text(content)], metadata: marker(60_000) as never },
+          time: { created, completed: created },
+        }),
+      ],
+    })
+    const messages = toLLMMessages([message], model, undefined, [], { toolOutput: root } as never)
+    expect(JSON.stringify(messages)).not.toContain("saved-output")
+    expect(JSON.stringify(messages)).toContain(content)
+  })
+
   test("never wraps a failed result, whatever its metadata says", () => {
     const messages = toLLMMessages(
       [

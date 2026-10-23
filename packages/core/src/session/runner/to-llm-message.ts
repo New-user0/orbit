@@ -9,10 +9,12 @@ import {
 } from "@orbit/ai"
 import type { Model } from "@orbit/schema/model"
 import { Option, Schema } from "effect"
+import path from "path"
 import { fileURLToPath } from "url"
 import { SessionMessage } from "../message.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { ToolNames } from "../../tool/names.js"
+import { ToolOutput } from "../../tool-output.js"
 import { ReminderText } from "../reminder-text.js"
 import { SessionEffort } from "../effort.js"
 import type { FileAttachment } from "@orbit/schema/prompt"
@@ -141,13 +143,16 @@ const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: Provider
     providerMetadata,
   })
 
-// Tool output is data, whatever produced it: a look-alike of an envelope tag in it is escaped as it is lowered, so the
-// stored row keeps the original bytes.
+// Tool output is data, whatever produced it: a look-alike of an envelope tag or of the saved-result wrapper's tag in it
+// is escaped as it is lowered, so the stored row keeps the original bytes.
+const neutralizeToolText = (text: string) => ReminderText.neutralize(text).replace(ToolOutput.TAG, "&lt;")
+
 const neutralizeContent = <T extends { readonly type: string }>(content: ReadonlyArray<T>) => {
   // The text parts are escaped together, because an adapter joins them into one string.
   const texts = content.flatMap((item, index) => (item.type === "text" ? [index] : []))
   const escaped = ReminderText.neutralizeParts(
-    texts.map((index) => (content[index] as unknown as { text: string }).text),
+    ReminderText.neutralizeParts(texts.map((index) => (content[index] as unknown as { text: string }).text)),
+    ToolOutput.TAG,
   )
   return content.map((item, index) =>
     item.type === "text"
@@ -168,7 +173,7 @@ const neutralizeFile = <F extends { uri: string; mime?: string; name?: string }>
   const match = TEXT_DATA_URL.exec(item.uri)
   if (!match) return item
   const text = Buffer.from(match[2], "base64").toString("utf8")
-  const escaped = ReminderText.neutralize(text)
+  const escaped = neutralizeToolText(text)
   if (escaped === text) return item
   return { ...item, uri: `data:${match[1]};base64,${Buffer.from(escaped, "utf8").toString("base64")}` }
 }
@@ -178,14 +183,19 @@ const neutralizeError = <E extends { readonly message: string; readonly response
   error: E,
 ): E => ({
   ...error,
-  message: ReminderText.neutralize(error.message),
+  message: neutralizeToolText(error.message),
   ...(error.response?.body === undefined
     ? {}
-    : { response: { ...error.response, body: ReminderText.neutralize(error.response.body) } }),
+    : { response: { ...error.response, body: neutralizeToolText(error.response.body) } }),
 })
 
-const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined) => {
+const toolResult = (
+  tool: SessionMessage.AssistantTool,
+  providerMetadata: ProviderMetadata | undefined,
+  toolOutput: string | undefined,
+) => {
   if (tool.state.status === "completed") {
+    const saved = toolOutput === undefined ? undefined : savedOutput(tool.state, toolOutput)
     // TODO: Materialize remote and managed URIs before provider-history lowering.
     const content = neutralizeContent(tool.state.content)
     const single = content.length === 1 ? content[0] : undefined
@@ -193,9 +203,11 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
       id: tool.id,
       name: toolName(tool),
       result:
-        single?.type === "text"
-          ? { type: "text" as const, value: single.text }
-          : { type: "content" as const, value: content },
+        saved !== undefined
+          ? { type: "text" as const, value: saved }
+          : single?.type === "text"
+            ? { type: "text" as const, value: single.text }
+            : { type: "content" as const, value: content },
       providerExecuted: tool.executed,
       providerMetadata,
     })
@@ -215,7 +227,37 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
   }
 }
 
-const assistant = (message: SessionMessage.Assistant, model: Model.Ref, providerMetadataKey: string) => {
+const decodePersisted = Schema.decodeUnknownOption(ToolOutput.Persisted)
+
+/**
+ * The wrapper for a result the step saved, from its stored marker and content alone: the path is the tool-output folder,
+ * the marker's session and its name, so lowering never reads the disk and a replay lowers byte for byte. A marker that
+ * does not decode (an imported or forked history can hold anything) is ignored and the result goes as stored (classes 5
+ * and 7). Only a marker makes a wrapper, never text that looks like one.
+ */
+const savedOutput = (state: SessionMessage.ToolStateCompleted, root: string) => {
+  if (state.metadata?.persisted === undefined) return undefined
+  const persisted = Option.getOrUndefined(decodePersisted(state.metadata.persisted))
+  const texts = state.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+  if (persisted === undefined || texts.length !== state.content.length) {
+    console.warn("a saved tool result's marker does not decode, so the result is sent as stored")
+    return undefined
+  }
+  const head = ToolOutput.preview(ToolOutput.savedText(texts).text)
+  return ToolOutput.wrapper({
+    file: path.join(root, persisted.session, persisted.name),
+    size: persisted.size,
+    preview: neutralizeToolText(head.text),
+    more: head.more,
+  })
+}
+
+const assistant = (
+  message: SessionMessage.Assistant,
+  model: Model.Ref,
+  providerMetadataKey: string,
+  toolOutput: string | undefined,
+) => {
   const sameProvider = String(message.model.providerID) === String(model.providerID)
   const sameModel = sameProvider && String(message.model.id) === String(model.id)
   const reuseProviderMetadata = sameModel && message.error === undefined
@@ -267,6 +309,8 @@ const assistant = (message: SessionMessage.Assistant, model: Model.Ref, provider
         : sameProvider && item.providerResultState !== undefined
           ? providerMetadata(providerMetadataKey, item.providerResultState)
           : undefined,
+      // The step saves only what ran here, so a hosted result goes as stored whatever its metadata says.
+      undefined,
     )
     return result ? [call, result] : [call]
   })
@@ -283,6 +327,7 @@ const assistant = (message: SessionMessage.Assistant, model: Model.Ref, provider
         reuseProviderMetadata
           ? providerMetadata(providerMetadataKey, item.providerResultState ?? item.providerState)
           : undefined,
+        toolOutput,
       ),
     )
     .filter((message) => message !== undefined)
@@ -382,6 +427,8 @@ interface Lowering {
   /** The user messages that arrived while work was in progress, decided from history up to each of them. */
   readonly queued: ReadonlySet<SessionMessage.ID>
   readonly minimal: boolean
+  /** `<data>/tool-output`, where saved results are; without it a saved result is lowered as stored. */
+  readonly toolOutput?: string
 }
 
 function toLLMMessage(
@@ -495,7 +542,7 @@ function toLLMMessage(
         }),
       ]
     case "assistant":
-      return assistant(message, model, providerMetadataKey)
+      return assistant(message, model, providerMetadataKey, lowering.toolOutput)
     case "compaction":
       if (message.status !== "completed") return []
       // History selection only keeps native windows the target model can replay.
@@ -592,10 +639,10 @@ export const toLLMMessages = (
   model: Model.Ref,
   providerMetadataKey: string = model.providerID,
   insertions: readonly LoweredInsertion[] = [],
-  options: { readonly minimal?: boolean } = {},
+  options: { readonly minimal?: boolean; readonly toolOutput?: string } = {},
 ) => {
   const history = withoutReplaced(messages)
-  const lowering = { queued: queuedInput(history), minimal: options.minimal === true }
+  const lowering = { queued: queuedInput(history), minimal: options.minimal === true, toolOutput: options.toolOutput }
   if (insertions.length === 0 && !history.some(ReminderText.isReminder))
     return history.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, lowering))
 

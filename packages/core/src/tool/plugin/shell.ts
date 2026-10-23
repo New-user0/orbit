@@ -143,12 +143,15 @@ const exitFailed = (output: Output, analysis: ShellAnalysis.Analysis | undefined
 const failedMetadata = (powershell: boolean) => (powershell ? {} : { error: true })
 
 const toolResult = (output: Output, failed = false, powershell = false) => {
+  // A foreground run says "Exited with code N" only when that code is a failure of its command (a grep with no match,
+  // a diff that found differences and a false test are answers, and say nothing). PowerShell keeps its notice: its
+  // codes are not judged.
+  const messages = resultMessages(output, failed || powershell)
   return {
     output,
-    // A foreground run says "Exited with code N" only when that code is a failure of its command (a grep with no match,
-    // a diff that found differences and a false test are answers, and say nothing). PowerShell keeps its notice: its
-    // codes are not judged.
-    content: resultMessages(output, failed || powershell).map((text) => ({ type: "text" as const, text })),
+    // A command that printed nothing and has no notice gives one blank part, so the step stores its empty marker
+    // instead of the structured output as text.
+    content: (messages.length === 0 ? [""] : messages).map((text) => ({ type: "text" as const, text })),
     metadata: {
       status: output.status,
       ...ShellResult.metadata(output),

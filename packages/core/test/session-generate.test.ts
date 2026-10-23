@@ -55,6 +55,7 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Tool } from "@orbit/core/tool"
+import { ToolOutput } from "@orbit/core/tool-output"
 import { asc, eq } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
@@ -161,6 +162,7 @@ const it = testEffect(
       SessionContext.node,
       SessionReminders.node,
       PluginHooks.node,
+      ToolOutput.node,
       llmClient,
     ]),
     [

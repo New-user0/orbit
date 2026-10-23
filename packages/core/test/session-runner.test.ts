@@ -1673,9 +1673,12 @@ describe("SessionRunnerLLM", () => {
       "cancelable",
       "defect",
       "echo",
+      "emit",
       "gated",
       "held",
       "mutate",
+      "nulled",
+      "silent",
       "storefail",
     ])
     expect(s.requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
@@ -4338,9 +4341,12 @@ describe("SessionRunnerLLM", () => {
       "cancelable",
       "defect",
       "echo",
+      "emit",
       "gated",
       "held",
       "mutate",
+      "nulled",
+      "silent",
       "storefail",
     ])
     expect(yield* s.context).toMatchObject([
