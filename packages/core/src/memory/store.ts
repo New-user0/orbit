@@ -208,15 +208,17 @@ export const scan = Effect.fn("MemoryStore.scan")(function* (folder: string) {
 const walk = (fs: FSUtil.Interface, folder: string, parts: string[]): Effect.Effect<string[][]> =>
   fs.readDirectoryEntries(path.join(folder, ...parts)).pipe(
     Effect.orElseSucceed(() => []),
-    Effect.flatMap((entries) =>
-      Effect.forEach(entries, (entry) => {
-        if (entry.type === "directory") return walk(fs, folder, [...parts, entry.name])
-        const markdown = entry.name.toLowerCase().endsWith(".md") && entry.name !== ENTRYPOINT
-        return Effect.succeed(markdown && entry.type !== "other" ? [[...parts, entry.name]] : [])
-      }),
-    ),
+    Effect.flatMap((entries) => Effect.forEach(entries, (entry) => entryFiles(fs, folder, parts, entry))),
     Effect.map((lists) => lists.flat()),
   )
+
+// A folder is walked; a Markdown file that is not an index is listed, and so is a link named like one.
+const entryFiles = (fs: FSUtil.Interface, folder: string, parts: string[], entry: FSUtil.DirEntry) =>
+  entry.type === "directory"
+    ? walk(fs, folder, [...parts, entry.name])
+    : Effect.succeed(memoryFile(entry.name) && entry.type !== "other" ? [[...parts, entry.name]] : [])
+
+const memoryFile = (name: string) => name.toLowerCase().endsWith(".md") && name !== ENTRYPOINT
 
 /** One line per memory file: its type, name, time of the last change and description, each left out when absent. */
 export function manifest(headers: readonly Header[]) {

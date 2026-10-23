@@ -43,6 +43,8 @@ export const Plugin = {
     const ledger = yield* FileLedger.Service
     const environment = yield* Environment.Service
     const fs = yield* FSUtil.Service
+    // A memory file more than a day old starts with a note of its age: it records a moment that has passed, and the code
+    // may have moved on since.
     const staleness = (file: string) =>
       access.inMemory(file).pipe(
         Effect.flatMap((held) =>
@@ -159,8 +161,6 @@ export const Plugin = {
                       createHash("sha256").update(content).digest("hex"),
                     ))
                   if (!unchanged) {
-                    // A memory file more than a day old starts with a note of its age: it records a moment that has
-                    // passed, and the code may have moved on since.
                     const note =
                       typeof content === "string" && result.output.type !== "list-page"
                         ? yield* staleness(result.absolute)
