@@ -26,7 +26,9 @@ import { MemoryStore } from "./store.js"
 const GUIDE = Instructions.Key.make("core/memory-guide")
 const INDEX = Instructions.Key.make("core/memory-index")
 
-const compacted = Schema.is(SessionEvent.Compaction.Ended)
+// The events after which a session's frozen index goes: a completed compaction moves its epoch, and a session that is
+// deleted or moves to another place no longer reads this Location's index.
+const released = Schema.is(Schema.Union([SessionEvent.Compaction.Ended, SessionEvent.Deleted, SessionEvent.Moved]))
 
 const Index = Schema.Struct({ path: Schema.String, content: Schema.String })
 type Index = typeof Index.Type
@@ -72,11 +74,11 @@ const layer = Layer.effect(
 
     yield* carryOver(fs, global, location)
 
-    // The index each session read, until its epoch moves. The listener runs inside the publish of the event, so the next
-    // read after a completed compaction finds the entry gone.
+    // The index each session read, until its epoch moves or the session is gone from this Location. The listener runs
+    // inside the publish of the event, so the next read after a completed compaction finds the entry gone.
     const frozen = new Map<string, Index | Instructions.Removed>()
     const unsubscribe = yield* bus.listen((event) =>
-      compacted(event) ? Effect.sync(() => frozen.delete(event.data.sessionID)) : Effect.void,
+      released(event) ? Effect.sync(() => frozen.delete(event.data.sessionID)) : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
     yield* discovery.addRescan(Effect.sync(() => frozen.clear()))
@@ -227,8 +229,8 @@ Each memory is one of four kinds.
 - When to save: when you learn something about them that would change how you work with them.
 - How to use: fit explanations, the level of detail and the choices you make to the person.
 - Examples:
-  - person: "I've written Go for years, but this is my first time with this frontend." → save a \`user\` memory: experienced in Go, new to this frontend; explain frontend ideas by comparing them with backend ones.
-  - person: "Keep the answers short, I'll ask if I need more." → save a \`user\` memory: prefers short answers.
+  - person: "I'm a statistician, so the models are fine, but containers are new to me." → save a \`user\` memory: at home with statistics, new to containers; spell out the container steps and skip the statistics.
+  - person: "I look after the documentation site and rarely open the server code." → save a \`user\` memory: works mostly on the docs; say more about it when a change reaches the server.
 
 ### \`feedback\`
 - What it holds: guidance the person gave on how you work, both corrections and approaches they confirmed.
@@ -236,8 +238,8 @@ Each memory is one of four kinds.
 - How to use: follow it, so they never have to say it twice.
 - Shape: the rule, then a line "Why:" with the reason they gave, then a line "How to apply:" with when it applies.
 - Examples:
-  - person: "Don't mock the database in these tests, we got burned by that last quarter." → save a \`feedback\` memory: tests use a real database. Why: mocked tests passed while a migration broke production. How to apply: every test that touches storage.
-  - person: "Yes, one pull request for the whole refactor was the right call." → save a \`feedback\` memory: a refactor goes in one pull request. Why: the person reviews it more easily in one piece. How to apply: refactors that span several files.
+  - person: "Please stop ending each reply with a recap, I read the diff myself." → save a \`feedback\` memory: no closing recap after a change. Why: the person reads the diff. How to apply: the last message of every finished change.
+  - person: "Good call putting the schema change in its own commit." → save a \`feedback\` memory: a schema change gets a commit of its own. Why: it can be reviewed and reverted alone. How to apply: any change that alters the stored data's shape.
 
 ### \`project\`
 - What it holds: facts about the work that the code and its history do not show: goals, deadlines, decisions, who is doing what and why.
@@ -245,16 +247,16 @@ Each memory is one of four kinds.
 - How to use: understand the reasons behind a request and make suggestions that fit them.
 - Shape: the fact or decision, then a line "Why:", then a line "How to apply:".
 - Examples:
-  - person: "We freeze merges after next Thursday for the release." → save a \`project\` memory: merges freeze from that date for the release. Why: the release branch is cut then. How to apply: flag work that will not land before it.
-  - person: "We're rewriting the auth middleware because legal flagged how it stores session tokens." → save a \`project\` memory: the auth rewrite is driven by a compliance finding, not by technical debt. How to apply: favour compliance over convenience in that area.
+  - person: "We show the importer to the pilot customers in two weeks." → save a \`project\` memory: the importer demo is on the date two weeks from today. Why: pilot customers see it then. How to apply: put importer bugs ahead of other work until that day.
+  - person: "Priya owns the billing service, so ask her before changing its API." → save a \`project\` memory: Priya owns billing and approves changes to its API. How to apply: name her when a change touches that API.
 
 ### \`reference\`
 - What it holds: where to find information that lives outside the project: a tracker, a dashboard, a channel, a document.
 - When to save: when the person tells you where something is kept.
 - How to use: look there when the question is about what it holds.
 - Examples:
-  - person: "Pipeline bugs are tracked in the INGEST project of our tracker." → save a \`reference\` memory: pipeline bugs live in the INGEST project.
-  - person: "The latency dashboard is what on-call watches." → save a \`reference\` memory: check that dashboard before changing request handling.
+  - person: "Customer bug reports land in the support-escalations channel first." → save a \`reference\` memory: the first copy of a customer's bug report is in that channel.
+  - person: "Our API naming rules are in the style guide linked from the wiki's home page." → save a \`reference\` memory: read that style guide before naming a new endpoint.
 
 ## What not to save
 
@@ -269,7 +271,7 @@ This holds even when the person asks you to save such a thing. Then ask what abo
 
 Saving takes two steps.
 
-1. Write the memory to its own file in the folder, named for its topic, with this front matter:
+1. Create one file per memory, give it a name that says its topic, and start it with this front matter:
 
 \`\`\`markdown
 ---
@@ -294,7 +296,7 @@ type: <user, feedback, project or reference>
 
 ## Before acting on a memory
 
-A memory that names a file, a function or a flag says that it existed when the memory was written. It may have been renamed or removed since. Before you recommend it or build on it, check that it is still there: look for the file, search for the function. A memory that sums up the state of the repository is a snapshot from the past; for the current state, the code and the version history win.
+Treat what a memory says about the code as true on the day it was saved, not today. When it mentions a file, a function or a setting, open the file or search for the name before you rely on it or suggest it to the person. When it describes how the repository looks, read the code and the version history instead, and go with them where they disagree.
 
 ## Memory, plans and tasks
 

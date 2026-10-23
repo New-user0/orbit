@@ -250,6 +250,47 @@ describe("the memory index source", () => {
     }),
   )
 
+  // The index a session froze is let go when the session is deleted or moves away, so a server that runs many sessions
+  // does not keep one for each. A later read under that ID, which only a test makes, finds the disk's index; the other
+  // session keeps the index it froze.
+  for (const row of [
+    {
+      name: "is deleted",
+      publish: (bus: Bus.Interface) => bus.publish(SessionEvent.Deleted, { sessionID: first }),
+    },
+    {
+      name: "moves to another place",
+      publish: (bus: Bus.Interface) =>
+        bus.publish(SessionEvent.Moved, {
+          sessionID: first,
+          location: Location.Ref.make({ directory: AbsolutePath.make(path.resolve("/elsewhere")) }),
+          projectID: Project.ID.global,
+        }),
+    },
+  ])
+    it.live(`lets go of the index a session froze once it ${row.name}`, () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const index = path.join(l.memory, "MEMORY.md")
+        yield* write(index, "- FIRST-VERSION\n")
+        const out = yield* Effect.gen(function* () {
+          yield* sessions(l)
+          const bus = yield* Bus.Service
+          const before = yield* readInitial(yield* load(first, { guide: false }))
+          const kept = yield* readInitial(yield* load(second, { guide: false }))
+          yield* write(index, "- SECOND-VERSION\n")
+          yield* row.publish(bus)
+          return {
+            released: yield* readUpdate(yield* load(first, { guide: false }), before),
+            kept: yield* readUpdate(yield* load(second, { guide: false }), kept),
+          }
+        }).pipe(provide(l))
+        expect(out.released.changed).toBe(true)
+        expect(out.released.text).toContain("SECOND-VERSION")
+        expect(out.kept.changed).toBe(false)
+      }),
+    )
+
   it.live("shows the new index to a session after a rescan of the instruction files", () =>
     Effect.gen(function* () {
       const l = yield* layout
@@ -413,6 +454,44 @@ describe("memory written before v2", () => {
         expect(out.text).toContain("Saved before trust")
       }),
     )
+})
+
+// The carry-over and the old tool's notes belong to the default folder: a folder that memory.directory names may be
+// shared by every project, so nothing moves into it, and the upgrade note tells the person to move the notes there
+// themselves. The default folder's index still gets its line, and the chosen folder is left as it was.
+describe("memory written before v2, with memory.directory set", () => {
+  it.live("moves a note saved before trust into the default folder and leaves the chosen folder alone", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const custom = path.join(l.root, "custom-memory")
+      const trustedID = Project.ID.make("d".repeat(40))
+      const project = AbsolutePath.make(path.resolve("/orbit-memory-test/custom"))
+      const target = path.join(l.data, "memory", trustedID)
+      yield* write(
+        path.join(l.data, "memory", Hash.fast(`directory:${project}`), "before-trust.md"),
+        "# Saved before trust\n",
+      )
+      yield* write(path.join(custom, "MEMORY.md"), "- CUSTOM-INDEX\n")
+      const out = yield* Effect.gen(function* () {
+        yield* sessions(l)
+        return yield* readInitial(yield* load(first, { guide: false }))
+      }).pipe(
+        provide(l, [configured("user", { directory: custom })], {
+          directory: project,
+          project: { id: trustedID, directory: project, canonical: project },
+          vcs: undefined,
+        }),
+      )
+      expect(yield* exists(path.join(target, "before-trust.md"))).toBe(true)
+      expect(yield* Effect.promise(() => fs.readFile(path.join(target, "MEMORY.md"), "utf8"))).toContain(
+        "(before-trust.md)",
+      )
+      expect(yield* exists(path.join(custom, "before-trust.md"))).toBe(false)
+      expect(yield* Effect.promise(() => fs.readFile(path.join(custom, "MEMORY.md"), "utf8"))).toBe("- CUSTOM-INDEX\n")
+      expect(out.text).toContain("CUSTOM-INDEX")
+      expect(out.text).not.toContain("before-trust.md")
+    }),
+  )
 })
 
 // The FU-M1-022 proof, moved from the removed Memory tool's tests: a repository with no remote and a linked worktree,
