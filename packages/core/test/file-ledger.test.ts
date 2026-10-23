@@ -295,3 +295,75 @@ describe("FileLedger", () => {
     }).pipe(Effect.provide(ledgerLayer)),
   )
 })
+
+// prompts-context-7: the ledger is also the store of the text a session's own write left in a file, which the
+// file-change reminder diffs against. As in the reference's read-file cache, one bounded store serves both freshness and
+// change detection, and only an entry that holds text is watched.
+describe("FileLedger, the text the session's writes left", () => {
+  const ledgerLayer = AppNodeBuilder.build(FileLedger.node, [Location.node.replace(tempLocationLayer)])
+  const digestOf = (text: string) => FileLedger.digest(new TextEncoder().encode(text))
+  const written = (text: string, mtimeMs = 1_000) => ({ mtimeMs, digest: digestOf(text), text })
+
+  it.live("watches a written file with its text; a read of it ends the watch and keeps freshness", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      const file = path.join("some", "written.ts")
+      const read = path.join("some", "read.ts")
+      yield* ledger.recordWrite(sessionID, file, written("body\n"))
+      yield* ledger.recordRead(sessionID, read, { mtimeMs: 1_000, digest: digestOf("x") })
+      expect(yield* ledger.watched(sessionID)).toEqual([expect.objectContaining({ path: file, mtimeMs: 1_000, text: "body\n" })])
+      expect(yield* ledger.watched(other)).toEqual([])
+
+      yield* ledger.recordRead(sessionID, file, { mtimeMs: 2_000, digest: digestOf("body\n") })
+      expect(yield* ledger.watched(sessionID)).toEqual([])
+      yield* ledger.assertFresh(sessionID, file, "written.ts", { mtimeMs: 2_000, digest: digestOf("other") })
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  it.live("forgets one path on request, and only that path", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const ledger = yield* FileLedger.Service
+      const gone = path.join(tmp.path, "gone.ts")
+      const kept = path.join(tmp.path, "kept.ts")
+      yield* Effect.promise(() => Promise.all([Bun.write(gone, "a"), Bun.write(kept, "b")]))
+      yield* ledger.recordWrite(sessionID, gone, written("a"))
+      yield* ledger.recordWrite(sessionID, kept, written("b"))
+      yield* ledger.forget(sessionID, gone)
+      expect((yield* ledger.watched(sessionID)).map((entry) => entry.path)).toEqual([kept])
+      expect((yield* ledger.assertRead(sessionID, gone, "gone.ts").pipe(Effect.flip)).code).toBe("file.unread")
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  it.live("holds at most 100 files per session and drops the least recently used first", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const ledger = yield* FileLedger.Service
+      const first = path.join(tmp.path, "file-0.ts")
+      yield* Effect.promise(() => Bun.write(first, "0"))
+      expect(FileLedger.MAX_FILES).toBe(100)
+      for (let index = 0; index <= FileLedger.MAX_FILES; index++)
+        yield* ledger.recordWrite(sessionID, path.join(tmp.path, `file-${index}.ts`), written(String(index)))
+      const paths = (yield* ledger.watched(sessionID)).map((entry) => entry.path)
+      expect(paths).toHaveLength(FileLedger.MAX_FILES)
+      expect(paths).not.toContain(first)
+      // Dropped from the one store, so freshness goes with it, as in the reference.
+      expect((yield* ledger.assertRead(sessionID, first, "file-0.ts").pipe(Effect.flip)).code).toBe("file.unread")
+      // A file another session wrote is counted for that session only.
+      yield* ledger.recordWrite(other, first, written("0"))
+      expect(yield* ledger.watched(other)).toHaveLength(1)
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  it.live("holds at most 25 MB of written text per session", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      const large = "x".repeat(13 * 1024 * 1024)
+      expect(FileLedger.MAX_TEXT_BYTES).toBe(25 * 1024 * 1024)
+      yield* ledger.recordWrite(sessionID, "one.txt", written(large))
+      yield* ledger.recordWrite(sessionID, "small.txt", written("small"))
+      yield* ledger.recordWrite(sessionID, "two.txt", written(large))
+      expect((yield* ledger.watched(sessionID)).map((entry) => entry.path).toSorted()).toEqual(["small.txt", "two.txt"])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+})
