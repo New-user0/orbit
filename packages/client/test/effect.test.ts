@@ -125,6 +125,34 @@ test("session instructions methods use the public HTTP contract", async () => {
   ])
 })
 
+// A grant names the location and how long it lasts, and nothing else: the trust is decided for the location's project.
+test("location.trust.update sends the trust and its persistence, and decodes the status", async () => {
+  const requests: Array<{ method: string; url: URL; body: unknown }> = []
+  const status = { directory: "/repo", trusted: true, persistent: true, source: "saved", withheld: [] }
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: new URL(request.url),
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(status)))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.location.trust.update({
+      location: { directory: AbsolutePath.make("/repo") },
+      trust: true,
+      persist: false,
+    })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual(status)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]!.method).toBe("POST")
+  expect(requests[0]!.url.pathname).toBe("/api/location/trust")
+  expect(requests[0]!.body).toEqual({ trust: true, persist: false })
+})
+
 test("event.subscribe exposes and decodes the native Effect event stream", async () => {
   const httpClient = HttpClient.make((request) =>
     Effect.succeed(

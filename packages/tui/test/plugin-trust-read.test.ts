@@ -11,12 +11,9 @@ import { tmpdir } from "./fixture/fixture"
 // The plugin loader decides from the answer of the read it just made, not from the status the context shares: that one
 // keeps the last answer when a read fails or times out, and drops an answer that a newer read overtook.
 
-const trusted: TrustStatus = { directory: "/p", trusted: true, persistent: true, changed: [], withheld: [] }
-const planted: TrustStatus = {
-  ...trusted,
-  changed: [{ path: "/p/.orbit", kinds: ["plugins"] }],
-  withheld: [{ path: "/p/.orbit", kinds: ["plugins"] }],
-}
+const trusted: TrustStatus = { directory: "/p", trusted: true, persistent: true, withheld: [] }
+// The same folder after `orb trust --revoke`.
+const revoked: TrustStatus = { ...trusted, trusted: false }
 
 function reading(answers: Array<() => Promise<TrustStatus>>) {
   let index = 0
@@ -37,11 +34,11 @@ function reading(answers: Array<() => Promise<TrustStatus>>) {
 }
 
 test("a read returns its own answer, and the shared status follows it", async () => {
-  const fixture = reading([async () => trusted, async () => planted])
+  const fixture = reading([async () => trusted, async () => revoked])
   try {
     // The first read is the one the effect on the directory makes.
-    expect(await fixture.status.refresh()).toEqual(planted)
-    expect(fixture.status.status()).toEqual(planted)
+    expect(await fixture.status.refresh()).toEqual(revoked)
+    expect(fixture.status.status()).toEqual(revoked)
   } finally {
     fixture.dispose()
   }
@@ -60,7 +57,7 @@ test("a read that fails answers nothing, and the status keeps the last answer: t
     expect(fixture.status.status()).toEqual(trusted)
     expect(fixture.warned.length).toBe(1)
     // With no answer, no project plugin loads.
-    expect(pluginTrust(undefined)).toEqual({ trusted: false, above: [], changed: [] })
+    expect(pluginTrust(undefined)).toEqual({ trusted: false, root: undefined })
   } finally {
     fixture.dispose()
   }
@@ -75,26 +72,26 @@ test("a read that a newer one overtook still returns what it read", async () => 
     const first = fixture.status.refresh()
     // A newer read starts and finishes before the first one answers.
     await fixture.status.refresh()
-    release(planted)
+    release(revoked)
     // The shared status does not take the older answer, but the caller that asked gets it.
-    expect(await first).toEqual(planted)
+    expect(await first).toEqual(revoked)
     expect(fixture.status.status()).toEqual(trusted)
-    expect(pluginTrust(await first).changed).toEqual(["/p/.orbit"])
+    expect(pluginTrust(await first).trusted).toBe(false)
   } finally {
     fixture.dispose()
   }
 })
 
-test("what the loader takes from a status is the trust, the folders above and the directories whose plugins changed", () => {
-  expect(pluginTrust(trusted)).toEqual({ trusted: true, above: [], changed: [] })
-  expect(pluginTrust(planted)).toEqual({ trusted: true, above: [], changed: ["/p/.orbit"] })
-  expect(
-    pluginTrust({
-      ...trusted,
-      trusted: false,
-      withheld: [{ path: "/o/orbit.json", kinds: ["hooks"], directory: "/o" }],
-    }),
-  ).toEqual({ trusted: false, above: ["/o"], changed: [] })
+// D8: a server older than this client can still list the plugins that changed since the grant; they load all the same.
+test("what the loader takes from a status is the trust and the folder it was decided for", () => {
+  expect(pluginTrust(trusted)).toEqual({ trusted: true, root: "/p" })
+  expect(pluginTrust(revoked)).toEqual({ trusted: false, root: "/p" })
+  const older = {
+    ...trusted,
+    withheld: [{ path: "/p/.orbit", kinds: ["plugins"] }],
+    changed: [{ path: "/p/.orbit", kinds: ["plugins"] }],
+  } as TrustStatus
+  expect(pluginTrust(older)).toEqual({ trusted: true, root: "/p" })
 })
 
 test("a project plugin that a link leads out of the project is not discovered, and one that stays is", async () => {

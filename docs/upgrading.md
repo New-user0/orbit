@@ -412,11 +412,6 @@ What changed:
   folder is trusted, and is not resumed after a restart until then. The same holds for a background subagent whose
   folder is no longer trusted when the server restarts: it is not resumed, its parent is not told that it failed, and
   the next start after the folder is trusted resumes it and tells the parent then.
-- Until F18 (the re-ask when a trusted folder's executable config changes after the grant) is removed, a project that
-  a parent folder's grant covers is compared with the records of that grant, which do not list the project's own files.
-  So its hooks, MCP servers and other executable config read as changed since the grant: they stay off, and the
-  terminal UI asks "Trust the changes?". Trusting the project itself (`orb trust` there, or that answer) ends it
-  (FU-M4-379).
 
 **Affects:** scripts, CI jobs and SDK hosts that ran in folders nobody trusted, and anyone who answered "Not now" in the
 terminal UI and kept working.
@@ -626,42 +621,6 @@ holds a relative entry that Orbit's own lookups used to honor.
 **What to do:** Move variables you want in Orbit's child processes into `env`. Replace a relative `PATH` entry with an
 absolute one.
 
-### Changed project config asks to be trusted again
-
-A trusted folder used to keep every part of its project config on for good, whatever a `git pull`, a branch switch or an
-edit did to it afterwards. Now Orbit records, when you trust a folder, a digest of the parts of each project and local
-config source that start programs: the `hooks`, `mcp`, `plugins`, `providers`, `shell`, `formatter`, `lsp`, `env`,
-`sandbox` and `skills` fields of the settings files (the other products' hook settings and `.mcp.json` included), the
-plugin files and `package.json` of a `.orbit` directory, the `hooks` in the front matter of its skills and agents, and
-the `mcp_servers` in the front matter of its agents. Permissions, commands and grants are not digested. When one of them
-differs from the record, only that kind of that file or directory is left out, as in an untrusted folder, and the rest of
-the folder keeps running: a new hook does not stop its MCP servers. Reformatting a file, reordering keys, comments and
-line endings are not changes, and neither is removing a file or a field. Trust the changes and the kind comes back.
-A digest that cannot be computed, such as a locked file, counts as changed until it can be.
-
-The `skills` setting now has a kind of its own (`skills`) where an untrusted folder used to report it as `settings`.
-
-Links are followed when they stay inside the project. A `.orbit/plugins` folder, a plugin file or folder, or an `agents` or
-`skills` folder that is a link to another folder of the same project counts for its real contents, so editing the target or
-adding a plugin there asks again. A link that leads out of the project is not read at all: the digest holds its name and
-where the link points, so pointing it somewhere else asks, editing what it points at does not, and a project plugin behind
-such a link is not loaded, in the server or in the terminal UI, whether the folder is trusted or not.
-
-You are asked once after each change to executable config, however it got there: a `git pull`, a branch switch or an
-edit. Orbit does not tell its own writes from anyone else's, so a command that edits project config, such as `orb mcp
-add` at project scope, asks as well. A folder you trusted before this version has no record, so each of its sources
-asks once, and so does a nested folder's config that no grant has recorded yet. The headless commands (`orb run` and the
-others) stop with the kinds and the files that changed, `orb trust` renews the grant ("Trusted … again"), `--trust`
-accepts the changes for one run, and the terminal UI, Mini and VS Code ask "Trust the changes?". `Trust.Status` has a new
-`changed` list, and the kinds in it are in `withheld` too. A server older than this version sends no `changed`, which
-the clients read as none.
-
-**Affects:** anyone who trusted a project folder, SDK callers and clients that read `Trust.Status`, and plugins or
-scripts that edit executable project config while Orbit runs.
-
-**What to do:** Look at what changed, then trust it with `orb trust` or the dialog. Nothing for config that only you edit
-in a folder you have not trusted.
-
 ### Config `env` cannot set Orbit's own control variables
 
 `env` in any settings document now skips `ORBIT_MANAGED_DIR`, `ORBIT_TRUST_PROJECT`, `ORBIT_CONFIG`, `ORBIT_CONFIG_DIR`, `ORBIT_CONFIG_CONTENT`, `ORBIT_CONFIG_CONTENT_FILE` and `ORBIT_PASSWORD`, in any spelling, with one "unsupported" diagnostic at the entry's own path. Before, a trusted project's or your own `env` could hand them to every program Orbit starts, so an `orb` started from a hook or an approved command could read another managed folder or trust its folder implicitly. A nested `orb` now inherits these names exactly as the parent process has them.
@@ -791,6 +750,46 @@ A prompt of your own for an agent has its `${ORBIT_TOOL_GUIDANCE}` placeholder f
 actually offered: on a PowerShell session the line reads PowerShell, and a model that loses Edit and Write gets no line
 for them. Your own words around the placeholder stay as written. Workflow subagents also get the brief alone as their
 first message.
+
+### A trusted folder's config loads as it is, and nothing above the project is read
+
+As the reference does, a folder you trust now loads its config as it is whenever Orbit reads it, and Orbit reads a
+project's config only from the project itself. What changed:
+
+- A trusted folder's config is no longer held back when it changes after the grant, and nothing asks about it again.
+  The hooks, MCP servers, plugins, providers and other executable config that a `git pull`, a branch switch or an edit
+  brings load as they stand; a plugin added to `.orbit/plugins` is loaded too. `orb run` and the other headless commands
+  no longer stop with "changed since the folder was trusted", `orb trust` on a folder with a saved grant of its own says
+  it is already trusted, and the terminal UI and VS Code no longer ask "Trust the changes?". This ends the re-ask that
+  an earlier version added, which recorded a digest of each source's executable config at the grant and held back a
+  kind that differed. A project that a grant for a folder above it covers now uses its own hooks as well; they used to
+  read as changed since that grant.
+- `orbit.json`, `orbit.local.json`, `.orbit` and other products' project folders are read from the folder Orbit starts
+  in and its parents up to the project's root (the nearest folder with `.git` or `.hg`, or the start folder outside a
+  repository), and never from a folder above it, even when you trust that folder and its grant covers the project. The
+  walk starts from where the start folder really is, so a folder reached through a link is walked from its target.
+  Instruction files keep their own walk up the folders, with one change: in a trusted project, a rule in a `.orbit/rules`
+  folder above it is now read wherever its links lead, as the `AGENTS.md` beside it already was. It used to be kept
+  inside the folder it sits in. Nothing above a project that is not trusted loads, as before.
+- A project's custom themes in `.orbit/themes` wait for the folder to be trusted, as everything else it supplies does,
+  and come only from the project's root down to the start folder. Your own themes load as before. Mini reads the same
+  folders, and where its own walk would take a `.git` file that the server does not accept as a repository, it starts
+  no higher than the folder the server decided trust for, as the terminal UI does.
+- VS Code's banner for a folder that is not trusted says that nothing there loads, and no work starts there, until you
+  trust it. It used to list what the folder held back, which was empty once nothing of the folder was read.
+- `orb trust <folder> --for <location>` is gone, and so are the `holder` field of `POST /api/location/trust`,
+  `Trust.Status.changed`, and the `directory` and `persistent` fields of `Trust.Withheld`. `Trust.Status.withheld` is
+  always empty and goes in a later release. A client older than this version reads a status without `changed` as
+  nothing changed; a server older than this version that still sends it is not asked about by a newer client.
+- The records that earlier versions kept of what each grant approved (`trust-fingerprint/` in Orbit's key-value store)
+  are left where they are and never read.
+
+**Affects:** people with config in a folder that holds several repositories, anyone who relied on being asked about
+changed config, and SDK hosts that read `changed` or send `holder`.
+
+**What to do:** move config from a folder above your projects into each project, or into your own config (the global
+config folder, or `.orbit` in your home folder). Look over what a pull brings into a folder you trust, or end the trust
+with `orb trust --revoke`.
 
 ## Clients
 

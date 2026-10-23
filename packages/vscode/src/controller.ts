@@ -8,7 +8,7 @@ import {
 import { plain } from "@orbit/flow/plain"
 import { PermissionView } from "@orbit/schema/permission-view"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
-import { aboveFolders, asksTrust, readStatus, trusted, view, type TrustGrant } from "./trust.js"
+import { asksTrust, readStatus, trusted, view, type TrustGrant } from "./trust.js"
 import { legacyToolName } from "./tool-name.js"
 
 export type Update =
@@ -278,8 +278,8 @@ export class Controller {
     return this.answered && !this.unchecked
   }
 
-  // Asks about trust before the first work in a folder that is not trusted, or whose config changed since it was, and
-  // that the person has not said "not now" to. The question is asked once however many prompts arrive meanwhile, and a
+  // Asks about trust before the first work in a folder that is not trusted, and that the person has not said "not now"
+  // to. The question is asked once however many prompts arrive meanwhile, and a
   // grant that fails is reported in the chat. A folder that is still not trusted afterwards gets no work (`send`).
   private async gate() {
     const grant = await this.decision(false).catch((error: unknown) => {
@@ -316,8 +316,7 @@ export class Controller {
   // Then the folder this chat works in is asked about again: both answers must say trusted, and the stricter one stands.
   private async grant(shown: TrustStatus): Promise<TrustGrant> {
     const granted = await this.client.location.trust.update(
-      // A grant that is stored stays stored when it is renewed after a change; one that lasts until Orbit restarts, too.
-      { location: { directory: shown.directory }, trust: true, persist: shown.trusted ? shown.source === "saved" : shown.persistent },
+      { location: { directory: shown.directory }, trust: true, persist: shown.persistent },
       { signal: AbortSignal.timeout(this.wait.grant) },
     )
     // Folder names are the repository's to choose, so they are written out wherever a person reads them.
@@ -330,7 +329,7 @@ export class Controller {
       throw new Error(
         `The server trusted ${plain(shown.directory)} but does not report ${plain(this.directory)} as trusted.`,
       )
-    return { directory: plain(confirmed.directory), persistent: confirmed.persistent, above: aboveFolders(confirmed) }
+    return { directory: plain(confirmed.directory), persistent: confirmed.persistent }
   }
 
   // Asks the server whether the folder VS Code opened is trusted, and returns the answer that stands afterwards. The

@@ -123,7 +123,7 @@ test("shows an untrusted folder in the banner, and lists nothing from it", async
 
   expect(update).toMatchObject({
     unchecked: false,
-    trust: { persistent: true, summary: "", held: [], above: [] },
+    trust: { persistent: true, summary: "", held: [] },
   })
   expect(same(update?.trust?.directory ?? "", repo)).toBe(true)
   expect(update?.trust?.opened).toBeUndefined()
@@ -147,7 +147,7 @@ test("shows, trusts and works in one folder when VS Code opened a folder inside 
   const grant = await controller.review()
 
   expect(questions).toHaveLength(1)
-  expect(grant).toMatchObject({ persistent: true, above: [] })
+  expect(grant).toMatchObject({ persistent: true })
   expect(same(grant?.directory ?? "", repo)).toBe(true)
   // The grant was made for the project's folder and not for the one that was opened, and both read as trusted.
   const stored = await main.client.location.trust.list()
@@ -249,8 +249,8 @@ test("follows a grant and a revoke that are made elsewhere", async () => {
   expect(await until(() => (trusts(updates).at(-1)?.trust !== undefined ? true : undefined))).toBe(true)
 })
 
-// trust-first: config above a project is not read until a grant covers its own folder, so nothing is listed for it, and
-// trusting the project does not trust the folder around it.
+// trust-first: nothing above a project is read (D7), so nothing is listed for it, and trusting the project does not trust
+// the folder around it.
 test("asks about a repository below an untrusted folder on its own, and its grant leaves that folder untrusted", async () => {
   const parent = await folder({ config: true })
   const child = await folder({ config: true, git: true, in: parent })
@@ -258,11 +258,10 @@ test("asks about a repository below an untrusted folder on its own, and its gran
   const { controller, updates, questions } = chat(main.client, child, "trust")
   const update = await shown(updates)
   expect(update?.trust?.held).toEqual([])
-  expect(update?.trust?.above).toEqual([])
 
   const grant = await controller.review()
 
-  expect(grant?.above).toEqual([])
+  expect(grant).toBeDefined()
   const text = prompt(update?.trust as TrustView).detail
   expect(text.replaceAll("`orb trust --revoke`", "")).not.toMatch(/orb trust/)
   expect(questions).toHaveLength(1)
@@ -553,20 +552,12 @@ test("sends nothing, with one line in the log, when the server only fails or sen
 })
 
 test("a withheld entry that does not fit costs only itself: the banner and the question stay", async () => {
-  // A trusted folder whose config changed, which is the answer whose entries the question lists.
-  const server = stub({
-    get: () =>
-      answer({
-        trusted: true,
-        source: "saved",
-        withheld: [null, ...held, { path: 7, kinds: [] }],
-        changed: held,
-      }),
-  })
+  // An untrusted folder, with entries that a server older than this extension could still send.
+  const server = stub({ get: () => answer({ withheld: [null, ...held, { path: 7, kinds: [] }] }) })
   try {
     const { updates } = chat(server.client, project, "later", quick)
 
-    expect((await shown(updates))?.trust?.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
+    expect((await shown(updates))?.trust).toMatchObject({ directory: project, held: [] })
     expect(logs(updates)).toEqual([])
   } finally {
     await server.stop()
@@ -625,7 +616,7 @@ test("asks about the folder VS Code opened and trusts the folder the server name
     const grant = await controller.review()
 
     // Every read was for the opened folder, and the one grant was for the project's folder that the question showed.
-    expect(grant).toEqual({ directory: project, persistent: true, above: [] })
+    expect(grant).toEqual({ directory: project, persistent: true })
     expect(new Set(server.asked.filter((item) => item.startsWith("GET")))).toEqual(new Set([`GET ${sub}`]))
     expect(server.asked.filter((item) => item.startsWith("POST"))).toEqual([`POST ${project}`])
     expect(server.grants).toEqual([{ trust: true, persist: true }])
@@ -653,7 +644,7 @@ test("a folder that can only be trusted until Orbit restarts is asked for, and g
 
     expect(prompt(questions[0] as TrustView).accept).toBe("Trust until Orbit restarts")
     expect(server.grants).toEqual([{ trust: true, persist: false }])
-    expect(grant).toEqual({ directory: project, persistent: false, above: [] })
+    expect(grant).toEqual({ directory: project, persistent: false })
   } finally {
     await server.stop()
   }

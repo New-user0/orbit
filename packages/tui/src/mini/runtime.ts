@@ -64,6 +64,8 @@ type RunRuntimeInput = {
   demo?: RunInput["demo"]
   tuiConfig?: RunTuiConfig | Promise<RunTuiConfig>
   config?: Pick<Config.Interface, "update">
+  /** The folder the server decided trust for, which bounds the mini's theme walk (class 3). */
+  root?: string
 }
 
 export type RunDeferredInput = {
@@ -84,6 +86,8 @@ export type RunDeferredInput = {
   demo?: RunInput["demo"]
   tuiConfig?: RunTuiConfig | Promise<RunTuiConfig>
   config?: Pick<Config.Interface, "update">
+  /** The folder the server decided trust for, which bounds the mini's theme walk (class 3). */
+  root?: string
 }
 
 type StreamTransportModule = Pick<
@@ -252,6 +256,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     model: state.model,
     variant: state.activeVariant,
     tuiConfig: tuiConfigTask,
+    root: input.root,
     onMiniSettingChange: config
       ? async (change) => {
           const info = await config.update((draft) => {
@@ -1111,6 +1116,7 @@ export async function runInteractiveDeferredMode(input: RunDeferredInput, deps?:
       demo: input.demo,
       tuiConfig: input.tuiConfig,
       config: input.config,
+      root: input.root,
       reconnect: input.reconnect,
       resolveSession: input.target,
       createSession: input.createSession,

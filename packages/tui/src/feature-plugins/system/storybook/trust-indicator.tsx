@@ -11,65 +11,11 @@ import type { Story } from "./index"
 
 const directory = "/Users/kit/code/orbit-app"
 
-// What the indicator can be shown for: a folder that holds something back, with or without config above it that only
-// its own folder's trust turns on, one that is untrusted but holds nothing back of its own, which is most repositories
-// and is marked all the same (trust-first), and one that is trusted, which shows nothing.
+// What the indicator can be shown for: a folder that is not trusted, which is marked whatever it holds (trust-first), and
+// one that is trusted, which shows nothing, even when a server older than this client lists changes since the grant (D8).
 const STATES: readonly { label: string; status: TrustStatus }[] = [
-  {
-    label: "untrusted, holds config back",
-    status: {
-      directory,
-      trusted: false,
-      persistent: true,
-      changed: [],
-      withheld: [
-        { path: `${directory}/.orbit`, kinds: ["plugins", "commands"] },
-        { path: `${directory}/orbit.json`, kinds: ["hooks", "mcp"] },
-      ],
-    },
-  },
-  {
-    label: "untrusted, own and above config",
-    status: {
-      directory,
-      trusted: false,
-      persistent: true,
-      changed: [],
-      withheld: [
-        { path: "/Users/kit/code/orbit.json", kinds: ["hooks"], directory: "/Users/kit/code" },
-        { path: `${directory}/orbit.json`, kinds: ["hooks", "mcp"] },
-      ],
-    },
-  },
-  {
-    label: "untrusted, only above config",
-    status: {
-      directory,
-      trusted: false,
-      persistent: true,
-      changed: [],
-      withheld: [{ path: "/Users/kit/code/orbit.json", kinds: ["hooks"], directory: "/Users/kit/code" }],
-    },
-  },
-  {
-    label: "untrusted, holds nothing back",
-    status: { directory, trusted: false, persistent: true, withheld: [], changed: [] },
-  },
-  {
-    label: "trusted, config changed since",
-    status: {
-      directory,
-      trusted: true,
-      persistent: true,
-      source: "saved",
-      withheld: [{ path: `${directory}/orbit.json`, kinds: ["hooks"] }],
-      changed: [{ path: `${directory}/orbit.json`, kinds: ["hooks"] }],
-    },
-  },
-  {
-    label: "trusted",
-    status: { directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] },
-  },
+  { label: "untrusted", status: { directory, trusted: false, persistent: true, withheld: [] } },
+  { label: "trusted", status: { directory, trusted: true, persistent: true, source: "saved", withheld: [] } },
 ]
 
 function TrustIndicatorStory(props: { context: Plugin.Context }) {

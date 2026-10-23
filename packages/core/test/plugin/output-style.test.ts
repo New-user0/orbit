@@ -315,15 +315,7 @@ describe("OutputStylePlugin", () => {
     { name: "a project's Orbit directory", where: "project", scope: "project", stamp: false, trusted: [false, true] },
     { name: "a local Orbit directory", where: "project", scope: "local", stamp: false, trusted: [false, true] },
     { name: "another product's root in the project", where: "vendor", scope: "project", stamp: false, trusted: [false, true] },
-    // Trusting the project does not trust the folder around it: that folder's own stamp decides.
-    { name: "an Orbit directory above the project", where: "above", scope: "project", stamp: false, trusted: [false, false] },
-    {
-      name: "an Orbit directory above the project whose folder is trusted",
-      where: "above",
-      scope: "project",
-      stamp: true,
-      trusted: [true, true],
-    },
+    // Nothing above the project is read (D7), so no Orbit directory there has a row.
   ] as const)
     it.live(`takes the opening line for a style from ${place.name} only while its folder is trusted`, () =>
       Effect.gen(function* () {
@@ -333,7 +325,6 @@ describe("OutputStylePlugin", () => {
           user: path.join(tmp, "user-config"),
           project: path.join(project, ".orbit"),
           vendor: path.join(project, CompatNames.vendor.directory),
-          above: path.join(path.dirname(project), ".orbit"),
         }[place.where]
         yield* Effect.promise(() => fs.mkdir(project, { recursive: true }))
         for (const [name, front] of keys) yield* writeStyle(folder, name, claim, front)

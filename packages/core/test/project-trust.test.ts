@@ -26,7 +26,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
-import { grantWithRecords } from "./fixture/grant"
+import { grantFolder } from "./fixture/grant"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -180,9 +180,9 @@ describe("ProjectTrust.status", () => {
       const folders = yield* layout
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
-        expect(yield* project.status()).toMatchObject({ directory: folders.repo, trusted: false, withheld: [], changed: [] })
+        expect(yield* project.status()).toMatchObject({ directory: folders.repo, trusted: false, withheld: [] })
         // The control: once trusted, the folder is read, and what it holds is what was trusted, so nothing is held back.
-        expect(yield* project.grant({ persist: false, via: "test" })).toMatchObject({ trusted: true, withheld: [], changed: [] })
+        expect(yield* project.grant({ persist: false, via: "test" })).toMatchObject({ trusted: true, withheld: [] })
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -235,7 +235,7 @@ describe("ProjectTrust.status", () => {
         expect((yield* project.grant({ persist: false, via: "test" })).withheld).toEqual([])
         expect((yield* project.status()).withheld).toEqual([])
         const revoked = yield* project.revoke()
-        expect(revoked).toMatchObject({ trusted: false, withheld: [], changed: [] })
+        expect(revoked).toMatchObject({ trusted: false, withheld: [] })
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -289,31 +289,6 @@ describe("ProjectTrust.allows", () => {
   )
 })
 
-describe("ProjectTrust.status, plugins planted after the grant", () => {
-  it.live("lists a plugin that shows up in a trusted folder at once, before the config has reloaded", () =>
-    Effect.gen(function* () {
-      const folders = yield* bare
-      const config = path.join(folders.repo, ".orbit")
-      yield* Effect.promise(() =>
-        write(path.join(config, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nText."),
-      )
-      yield* Effect.gen(function* () {
-        const project = yield* ProjectTrust.Service
-        const next = yield* nextUpdate
-        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
-        yield* Fiber.join(next)
-        expect((yield* project.status()).changed).toEqual([])
-
-        // A client that imports plugins on a file event asks before the debounced reload has run.
-        yield* Effect.promise(() => write(path.join(config, "plugins", "late.ts"), plugin))
-        const status = yield* project.status()
-        expect<unknown>(status.changed?.map((item) => [item.path, item.kinds])).toEqual([[config, ["plugins"]]])
-        expect(held(folders.root, status)).toEqual([[path.join("work", "repo", ".orbit"), ["plugins"]]])
-      }).pipe(Effect.provide(loader(folders)))
-    }),
-  )
-})
-
 describe("ProjectTrust.allows, nested config", () => {
   // A config directory in a folder of the project that is neither the location nor the project's root: the nearest
   // cover of its files is the directory's own entry, whose stamp is the verdict of the last load.
@@ -336,7 +311,7 @@ describe("ProjectTrust.allows, nested config", () => {
 
         // A grant is in force the moment it is made, not when the stamp catches up with it.
         const granted = yield* nextUpdate
-        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
+        yield* grantFolder(folders.repo, { persist: false, via: "test" })
         expect(yield* project.allows(skill)).toBe(true)
         yield* Fiber.join(granted)
         expect(yield* project.allows(skill)).toBe(true)
@@ -345,27 +320,6 @@ describe("ProjectTrust.allows, nested config", () => {
         yield* project.revoke()
         expect(yield* project.allows(skill)).toBe(false)
       }).pipe(Effect.provide(loader(folders, undefined, sub)))
-    }),
-  )
-
-  it.live("refuses the hooks of a skill file in a directory whose hooks changed, until the grant is renewed", () =>
-    Effect.gen(function* () {
-      const { folders, skill } = yield* nested
-      yield* Effect.gen(function* () {
-        const project = yield* ProjectTrust.Service
-        const next = yield* nextUpdate
-        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
-        yield* Fiber.join(next)
-        expect(yield* project.allows(skill, "hooks")).toBe(true)
-
-        yield* Effect.promise(() =>
-          write(skill, "---\nname: x\ndescription: d\nhooks:\n  Stop:\n    - command: echo hi\n---\nText."),
-        )
-        // Read now, from the disk: no reload has run.
-        expect(yield* project.allows(skill, "hooks")).toBe(false)
-        expect(yield* project.allows(skill)).toBe(true)
-        expect(yield* project.allows(path.join(folders.repo, "pkg", "readme.md"), "hooks")).toBe(true)
-      }).pipe(Effect.provide(loader(folders, undefined, path.join(folders.repo, "pkg", "sub"))))
     }),
   )
 })
@@ -713,40 +667,6 @@ describe("ProjectTrust.supplies", () => {
           }).pipe(Effect.provide(loader(folders, undefined, started)))
         }),
       )
-
-  it.live("holds a folder above the project to that folder, and to its own decision rather than the project's", () =>
-    Effect.gen(function* () {
-      const folders = yield* bare
-      const outside = path.join(folders.root, "outside")
-      const above = path.join(folders.work, ".orbit")
-      yield* Effect.promise(async () => {
-        await write(path.join(above, "agents", "shared.md"), "shared")
-        await write(path.join(folders.repo, "notes.md"), "notes")
-        await write(path.join(outside, "stolen.md"), "stolen")
-        // A link that goes down into the project stays inside the folder around it. One that goes out of it does not.
-        await fs.symlink(folders.repo, path.join(above, "skills"), "junction")
-        await fs.symlink(outside, path.join(above, "commands"), "junction")
-      })
-      const files = [
-        path.join(above, "agents", "shared.md"),
-        path.join(above, "skills", "notes.md"),
-        path.join(above, "commands", "stolen.md"),
-      ]
-      yield* Effect.gen(function* () {
-        const project = yield* ProjectTrust.Service
-        const untrusted = { path: above, scope: "project", trusted: false } as const
-        const answers = (source: Parameters<typeof project.supplies>[0]) =>
-          Effect.forEach(files, (file) => project.supplies(source, file))
-
-        expect(yield* answers(untrusted)).toEqual([true, true, false])
-        // Trusting the project does not trust the folder around it, whose stamp is what decides.
-        yield* project.grant({ persist: false, via: "test" })
-        expect(yield* answers(untrusted)).toEqual([true, true, false])
-        // Once the folder is trusted, its stamp says so.
-        expect(yield* answers({ path: above, scope: "project" })).toEqual([true, true, true])
-      }).pipe(Effect.provide(loader(folders)))
-    }),
-  )
 })
 
 // What `supplies` asks first, said on its own for what a source's text may speak for: the output style plugin changes the
@@ -781,18 +701,6 @@ describe("ProjectTrust.trustedSource", () => {
           { path: orbit, scope: "project", trusted: true },
           [false, true, false],
         ] as const,
-        // A folder above the project follows its own stamp, which trusting the project does not change.
-        [
-          "a directory above, stamped untrusted",
-          { path: above, scope: "project", trusted: false },
-          [false, false, false],
-        ] as const,
-        [
-          "a directory above, stamped trusted",
-          { path: above, scope: "project", trusted: true },
-          [true, true, true],
-        ] as const,
-        ["a directory above, with no stamp", { path: above, scope: "project" }, [true, true, true]] as const,
       ]
 
       yield* Effect.gen(function* () {

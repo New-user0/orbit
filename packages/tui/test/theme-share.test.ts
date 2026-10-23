@@ -3,13 +3,13 @@ import { mkdir, symlink, writeFile } from "node:fs/promises"
 import net from "node:net"
 import path from "node:path"
 import { discoverThemes } from "../src/theme/discovery"
-import { configDirectories } from "../src/util/config-directories"
+import { themeDirectories } from "../src/util/config-directories"
 import { tmpdir } from "./fixture/fixture"
 
-// Class 6 (M3 verification round 6): the terminal UI and Mini read custom themes when they mount, before any trust
-// answer, from `.orbit/themes` of every folder above the working folder. Each row makes one of those names a link to a
-// WebDAV share served by a local listener that records connections, and asks the real `discoverThemes` through
-// `configDirectories`, the call both clients make. A recorder counts a connection that a slow or failing host would hide.
+// Class 6 (M3 verification round 6): the terminal UI and Mini read custom themes from `.orbit/themes` of the folders from
+// the project's root down to the working folder (once the folder is trusted, trust-first part 2). Each row makes one of
+// those names a link to a WebDAV share served by a local listener that records connections, and asks the real
+// `discoverThemes` through `themeDirectories`, the call both clients make. A recorder counts a connection that a slow or failing host would hide.
 // Only Windows has links to shares, so the share rows run there (they need the right to make a link, and skip without
 // it). The folder's trust decision does not enter: the loader never touches a share in either mode, so the trusted
 // control is a plain folder read by the same call.
@@ -34,6 +34,12 @@ afterAll(() => {
 
 const share = () => `\\\\127.0.0.1@${port}\\DavWWWRoot\\themes`
 
+// The folders both clients read themes from for a trusted folder at `cwd`.
+const read = async (root: string, cwd: string) =>
+  discoverThemes(
+    await themeDirectories({ config: path.join(root, "config"), home: path.join(root, "home"), cwd, project: {} }),
+  )
+
 describe("theme discovery and a link to a share", () => {
   for (const place of [".orbit", ".orbit/themes", ".orbit/themes/x.json"])
     test(
@@ -45,7 +51,9 @@ describe("theme discovery and a link to a share", () => {
         const app = path.join(project, "app")
         const target = path.join(app, place)
         await mkdir(path.dirname(target), { recursive: true })
-        // A good theme in the folder above, so that skipping one entry is not skipping all of them.
+        // A good theme in the project's root, so that skipping one entry is not skipping all of them. The root is the folder
+        // that holds `.git`: nothing above it is read.
+        await mkdir(path.join(project, ".git"), { recursive: true })
         await mkdir(path.join(project, ".orbit", "themes"), { recursive: true })
         await writeFile(path.join(project, ".orbit", "themes", "good.json"), '{"ok":true}')
         const kind = place.endsWith(".json") ? "file" : "dir"
@@ -54,7 +62,7 @@ describe("theme discovery and a link to a share", () => {
           () => false,
         )
         if (!made) return
-        const found = await discoverThemes(configDirectories(path.join(root.path, "config"), app))
+        const found = await read(root.path, app)
         expect(connections).toEqual([])
         expect(found).toEqual({ good: { ok: true } })
       },
@@ -67,7 +75,7 @@ describe("theme discovery and a link to a share", () => {
     await mkdir(themes, { recursive: true })
     await writeFile(path.join(themes, "bad.json"), "{")
     await writeFile(path.join(themes, "good.json"), '{"ok":true}')
-    expect(await discoverThemes(configDirectories(path.join(root.path, "config"), root.path))).toEqual({
+    expect(await read(root.path, root.path)).toEqual({
       good: { ok: true },
     })
   })
@@ -77,7 +85,7 @@ describe("theme discovery and a link to a share", () => {
     const themes = path.join(root.path, "project", ".orbit", "themes")
     await mkdir(themes, { recursive: true })
     await writeFile(path.join(themes, "good.json"), '{"ok":true}')
-    expect(await discoverThemes(configDirectories(path.join(root.path, "config"), path.join(root.path, "project")))).toEqual({
+    expect(await read(root.path, path.join(root.path, "project"))).toEqual({
       good: { ok: true },
     })
     expect(connections).toEqual([])

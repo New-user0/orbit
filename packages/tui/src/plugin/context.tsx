@@ -323,17 +323,16 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
     const id = ++reconciliationID
     const started = Date.now()
     log.info("plugin reconciliation started", { id })
-    // The plugins of a project import into this process, so they are read only while its folder is trusted, and not
-    // from a folder around it that the server still holds back. Nothing else here depends on the trust: the user's
-    // directories and config load either way, and the server's own list already leaves out what the folder keeps.
-    // A plugin file that shows up in a watched folder is seen here before the server has reloaded, so the status is read
-    // again first: the server compares the plugins on the disk with the grant when it answers.
+    // The plugins of a project import into this process, so they are read only while its folder is trusted, and never
+    // from a folder above the project's root. Nothing else here depends on the trust: the user's directories and config
+    // load either way, and the server's own list already leaves out what the folder keeps. The status is read again
+    // first, so that a revoke made since is seen before anything is imported.
     // The decision is made from the answer of that read itself: the shared status may still hold an older one when the
     // read failed, timed out, or was overtaken by a newer read. With no answer, the project's plugins are left out.
     const read = await trust.startup.refresh()
     if (read === undefined) log.warn("project plugins left out: workspace trust could not be read", { id })
     const startup = pluginTrust(read)
-    const directories = trustedPluginDirectories(props.directories, startup.trusted, startup.above, startup.changed)
+    const directories = trustedPluginDirectories(props.directories, startup.trusted, startup.root)
     await trace("watch", { reconciliation: id, directories }, () =>
       Promise.all(directories.map(watcher.wait)).then(() => undefined),
     )
@@ -620,8 +619,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
               serverTuiPlugins(),
               config.data.plugins ?? [],
               trust.startup.trusted(),
-              trust.startup.above(),
-              trust.startup.changedPlugins(),
+              trust.startup.root(),
               restrictions(),
             ])
           : undefined,
@@ -780,8 +778,7 @@ async function resolvePlugin(
     : await trace("prepare", { reconciliation, target: spec, install }, () => packages.prepare(spec, install))
   const entrypoint = Host.resolve(target).tui
   if (!entrypoint) return { status: "unsupported" as const }
-  // A project plugin's entry stays inside its folder: the fingerprints digest the folder, and read nothing that a link
-  // leads out of it, so such an entry would change without the folder being asked again.
+  // A project plugin's entry stays inside its folder: what a link leads out of it to is not the project's to supply.
   if (confined && local && !FSUtil.contains(await realpath(fileURLToPath(local)), await realpath(fileURLToPath(entrypoint))))
     throw new Error(`Project plugin entry leaves its folder: ${spec}`)
   // Content remains stable across the several mtimes one save may expose to

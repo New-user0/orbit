@@ -90,10 +90,6 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             description:
               "Whether a grant is stored on disk (true when omitted) or lasts only until the serving process restarts. A grant for the home directory or a filesystem root always lasts only until the restart. Ignored when trust is false.",
           }),
-          holder: Schema.optional(Schema.String).annotate({
-            description:
-              "A folder to trust instead of the location's project: the project's own root, or the `directory` of a file in `withheld` that sits in a folder above the project. Any other folder trusts nothing and leaves the status as it is. The answer is always the location's status. Ignored when trust is false.",
-          }),
         }),
         success: Trust.Status,
       })
@@ -104,7 +100,7 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             identifier: "location.trust.update",
             summary: "Update workspace trust",
             description:
-              "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which turns what was held back on or off, and publishes trust.updated.",
+              "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which reads the project's configuration or stops reading it, and publishes trust.updated.",
           }),
         ),
     )
