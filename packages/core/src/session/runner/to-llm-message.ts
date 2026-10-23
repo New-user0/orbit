@@ -195,7 +195,15 @@ const toolResult = (
   toolOutput: string | undefined,
 ) => {
   if (tool.state.status === "completed") {
-    const saved = toolOutput === undefined ? undefined : savedOutput(tool.state, toolOutput)
+    const saved = toolOutput === undefined ? undefined : savedOutput(tool.id, tool.state, toolOutput)
+    if (saved !== undefined)
+      return ToolResultPart.make({
+        id: tool.id,
+        name: toolName(tool),
+        result: { type: "text" as const, value: saved },
+        providerExecuted: tool.executed,
+        providerMetadata,
+      })
     // TODO: Materialize remote and managed URIs before provider-history lowering.
     const content = neutralizeContent(tool.state.content)
     const single = content.length === 1 ? content[0] : undefined
@@ -203,11 +211,9 @@ const toolResult = (
       id: tool.id,
       name: toolName(tool),
       result:
-        saved !== undefined
-          ? { type: "text" as const, value: saved }
-          : single?.type === "text"
-            ? { type: "text" as const, value: single.text }
-            : { type: "content" as const, value: content },
+        single?.type === "text"
+          ? { type: "text" as const, value: single.text }
+          : { type: "content" as const, value: content },
       providerExecuted: tool.executed,
       providerMetadata,
     })
@@ -229,21 +235,27 @@ const toolResult = (
 
 const decodePersisted = Schema.decodeUnknownOption(ToolOutput.Persisted)
 
+// Lowering runs several times a step (the request and the compaction estimates) over the whole history, so a marker
+// that does not decode is reported once per tool call in this process rather than on every pass (class 7).
+const reported = new Set<string>()
+
 /**
  * The wrapper for a result the step saved, from its stored marker and content alone: the path is the tool-output folder,
  * the marker's session and its name, so lowering never reads the disk and a replay lowers byte for byte. A marker that
  * does not decode (an imported or forked history can hold anything) is ignored and the result goes as stored (classes 5
  * and 7). Only a marker makes a wrapper, never text that looks like one.
  */
-const savedOutput = (state: SessionMessage.ToolStateCompleted, root: string) => {
+const savedOutput = (id: string, state: SessionMessage.ToolStateCompleted, root: string) => {
   if (state.metadata?.persisted === undefined) return undefined
   const persisted = Option.getOrUndefined(decodePersisted(state.metadata.persisted))
   const texts = state.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
   if (persisted === undefined || texts.length !== state.content.length) {
-    console.warn("a saved tool result's marker does not decode, so the result is sent as stored")
+    if (!reported.has(id))
+      console.warn("a saved tool result's marker does not decode, so the result is sent as stored", { id })
+    reported.add(id)
     return undefined
   }
-  const head = ToolOutput.preview(ToolOutput.savedText(texts).text)
+  const head = ToolOutput.savedPreview(texts)
   return ToolOutput.wrapper({
     file: path.join(root, persisted.session, persisted.name),
     size: persisted.size,

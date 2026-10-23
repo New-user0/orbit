@@ -368,6 +368,9 @@ export const Plugin = {
                 })
               }),
             // interruptBehavior stays "block": a new user message does not cancel a running shell call.
+            // The shell bounds its own capture (`Shell.result`) and points at its own full-output file, so the step does
+            // not save that bounded text a second time behind a preview that hides its tail and that notice.
+            maxResultChars: Infinity,
           },
           description: description(undefined, limits()),
           input: Input,

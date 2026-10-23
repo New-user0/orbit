@@ -3385,7 +3385,8 @@ file name keeps only letters, digits, `_` and `-` (at most 64), and the hash kee
 characters or in letter case apart.
 
 The threshold is the tool's declared limit capped by `tool_output.max_result_chars`, which defaults to `max_bytes` and
-otherwise 50,000 characters. Read never saves; Grep declares 20,000, so a larger search is saved; MCP tools declare
+otherwise 50,000 characters. Read and the shell never save (the shell keeps its own capture limits and full-output
+file); Grep declares 20,000, so a larger search is saved; MCP tools declare
 100,000, so under the default ceiling their results are saved above 50,000 characters instead of being cut at 50 KiB;
 other tools use the ceiling. `max_lines` and `max_bytes` now bound only the shell's own capture of a command's output.
 An untrusted folder cannot set any `tool_output` key.

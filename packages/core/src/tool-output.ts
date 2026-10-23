@@ -95,6 +95,19 @@ export const preview = (text: string) => {
   return { text: newline > PREVIEW_CHARS / 2 ? head.slice(0, newline) : head, more: true }
 }
 
+/**
+ * `preview(savedText(texts).text)` without building the whole saved text. Its first 2,001 characters come from at most
+ * the first 2,001 characters of the first 2,001 parts, because every part adds at least one character of its own; a
+ * surrogate pair split at a part's 2,001st character is escaped only past that head, so the head does not change.
+ */
+export const savedPreview = (texts: ReadonlyArray<string>) =>
+  preview(
+    savedText(texts.slice(0, PREVIEW_CHARS + 1).map((text) => text.slice(0, PREVIEW_CHARS + 1))).text.slice(
+      0,
+      PREVIEW_CHARS + 1,
+    ),
+  )
+
 const formatSize = (size: number) => {
   if (size < 1024) return `${size} bytes`
   const kb = size / 1024

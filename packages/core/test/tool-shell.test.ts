@@ -2546,6 +2546,44 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
+  // tool-runtime-8 review: the shell's capture is already bounded and names its own full-output file, so the step must
+  // not save that bounded text again. Above 50,000 characters it settles unmarked, with its tail and notice intact.
+  it.live(
+    "keeps its own bounded output out of the step's saved results",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const input = { command: overflowCommand(300_000) }
+              const traits = yield* toolTraits(registry, "Bash", input)
+              const tools = yield* registry.snapshot()
+              const result = yield* tools.execute(call(input, "call-bounded"))
+              const toolOutput = yield* ToolOutput.Service
+              const settled = yield* toolOutput.settle({
+                sessionID,
+                messageID: SessionMessage.ID.create(),
+                callID: "call-bounded",
+                tool: "Bash",
+                limit: ToolOutput.threshold(traits.maxResultChars, undefined),
+                result,
+              })
+              expect(settled.metadata?.persisted).toBeUndefined()
+              const text = settled.content.map((part) => (part.type === "text" ? part.text : "")).join("")
+              expect(text.length).toBeGreaterThan(ToolOutput.MAX_RESULT_CHARS)
+              expect(text).toContain("output-end")
+              expect(text).toContain("full output saved to ")
+              expect(traits.maxResultChars).toBe(Infinity)
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
   it.live("uses configured line limits", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

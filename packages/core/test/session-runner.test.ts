@@ -10659,7 +10659,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     ])
   })
 
-  // Hooks see what the tool returned, never the wrapper, for a built-in and an MCP tool alike.
+  // The `execute.after` hook of a built-in tool sees what the tool returned, never the wrapper.
   savedScenario("lets the tool's after hook see its own content", function* (s) {
     const hooks = yield* PluginHooks.Service
     const seen: number[] = []
