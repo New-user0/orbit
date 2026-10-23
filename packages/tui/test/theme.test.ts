@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, realpath, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
 import { allThemes, hasTheme, getOrbitTheme, parseTheme, resolveTheme } from "../src/theme"
@@ -143,4 +143,35 @@ test("theme directories include global config before project directories", async
     global: { source: "global" },
     project: { source: "project" },
   })
+})
+
+// Class 3: of the two roots, the terminal UI's own and the folder the server decided trust for, the narrower bounds the
+// walk. A server root above the repository the start folder sits in does not widen the walk to that root's themes, and a
+// server root below it narrows the walk to start there.
+test("theme directories start at the narrower of the folder's own root and the one the server decided for", async () => {
+  await using tmp = await tmpdir()
+  const global = path.join(tmp.path, "global")
+  const home = path.join(tmp.path, "home")
+  // The walk takes the start folder by its real path, so the folders are named by theirs.
+  const outer = path.join(await realpath(tmp.path), "outer")
+  const inner = path.join(outer, "inner")
+  const app = path.join(inner, "app")
+  await mkdir(path.join(outer, ".git"), { recursive: true })
+  await mkdir(path.join(inner, ".git"), { recursive: true })
+  for (const [folder, name] of [
+    [outer, "outer"],
+    [inner, "inner"],
+    [app, "app"],
+  ] as const) {
+    await mkdir(path.join(folder, ".orbit", "themes"), { recursive: true })
+    await writeFile(path.join(folder, ".orbit", "themes", `${name}.json`), JSON.stringify({ source: name }))
+  }
+  const found = async (decided?: string) =>
+    Object.keys(await discoverThemes(await themeDirectories({ config: global, home, cwd: app, project: { decided } })))
+  // The control: with no answer from the server the walk starts at the repository the start folder sits in.
+  expect((await found()).sort()).toEqual(["app", "inner"])
+  // A server root above that repository does not take the walk up to it.
+  expect((await found(outer)).sort()).toEqual(["app", "inner"])
+  // A server root below it, such as the start folder itself, is where the walk starts.
+  expect(await found(app)).toEqual(["app"])
 })
