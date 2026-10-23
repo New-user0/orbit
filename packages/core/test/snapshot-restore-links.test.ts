@@ -134,6 +134,30 @@ describe("Snapshot.restore through a link made after the checkpoint", () => {
     ),
   )
 
+  // A link to a folder above it inside the project stays in the project, but it still carries the write to another
+  // file than the one named: `sub/keep.txt` would land as `keep.txt` in the project's own folder.
+  it.live("does not write through a folder that became a link to the project itself", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.rename(path.join(fixture.project, "sub"), path.join(fixture.root, "moved-sub"))
+          await fs.symlink(fixture.project, path.join(fixture.project, "sub"), linkType)
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        yield* restore([
+          ["sub/keep.txt", tree],
+          ["safe.txt", tree],
+        ])
+        expect({
+          written: yield* exists(path.join(fixture.project, "keep.txt")),
+          link: yield* isLink(path.join(fixture.project, "sub")),
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+        }).toEqual({ written: false, link: true, safe: "safe one\n" })
+      }),
+    ),
+  )
+
   it.live("does not make the folder a dangling link points at, and leaves the link", () =>
     withProject((fixture) =>
       Effect.gen(function* () {

@@ -248,12 +248,9 @@ const layer = Layer.effect(
         const absolute = path.join(worktree, file)
         const parent = path.dirname(absolute)
         const real = yield* trust.leads(parent)
-        if (
-          absolute === worktree ||
-          !FSUtil.contains(worktree, absolute) ||
-          !FSUtil.contains(parent, real) ||
-          !FSUtil.contains(real, parent)
-        ) {
+        // A folder's real place cannot lie below its own name, so "inside" here means "the same folder", with case
+        // compared as the system compares it.
+        if (absolute === worktree || !FSUtil.contains(worktree, absolute) || !FSUtil.contains(parent, real)) {
           yield* Effect.logWarning("restore skipped a path whose folder does not stay in the project", { file })
           continue
         }

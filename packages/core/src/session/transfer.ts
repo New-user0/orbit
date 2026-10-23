@@ -199,13 +199,9 @@ const checkpoints = Effect.fnUntraced(function* (message: SessionMessage.Info) {
   return { ...message, snapshot: { start, end, files } }
 })
 
+// An empty name and an absolute one have an empty part, so the part check refuses them too.
 function plainPath(file: string) {
-  return (
-    file.length > 0 &&
-    !/[\\:\0]/.test(file) &&
-    !file.startsWith("/") &&
-    file.split("/").every((part) => part !== "" && part !== "." && part !== "..")
-  )
+  return !/[\\:\0]/.test(file) && file.split("/").every((part) => part !== "" && part !== "." && part !== "..")
 }
 
 function isSettled(message: SessionMessage.Info) {

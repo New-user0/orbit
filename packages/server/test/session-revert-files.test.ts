@@ -313,7 +313,11 @@ it.live("answers a message that is not a prompt, a prompt without a checkpoint a
     const server = yield* setup()
     const { root, repo } = yield* repository({ "tracked.txt": "one\n" })
     const session = yield* server.session(repo)
-    yield* session.prompt([{ tools: [edited("tracked.txt")], edit: write(path.join(repo, "tracked.txt"), "two\n") }])
+    // Two steps, so the first step's message has a step with a checkpoint after it, as a prompt does.
+    yield* session.prompt([
+      { tools: [edited("tracked.txt")], edit: write(path.join(repo, "tracked.txt"), "two\n") },
+      { tools: [edited("tracked.txt")] },
+    ])
     expect(yield* session.rewind(SessionMessage.ID.create(), true)).toMatchObject({
       status: 404,
       body: { _tag: "MessageNotFoundError" },
@@ -573,7 +577,7 @@ it.live("answers a checkpoint git cannot read as failed, and keeps the well-form
         ...message,
         id: ids.get(message.id),
         ...(message.type === "assistant" && message.snapshot
-          ? { snapshot: { start: missing, end: "-x", files: ["tracked.txt", "../outside.txt", "a\\b", "./x"] } }
+          ? { snapshot: { start: missing, end: "-x", files: ["tracked.txt", "../outside.txt", "a\\b", "./x", "/abs.txt"] } }
           : {}),
       })),
       location: { directory: repo },

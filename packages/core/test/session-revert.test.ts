@@ -227,6 +227,28 @@ describe("Session.revert files", () => {
             revert: (yield* session.get(created.id)).revert,
           }).toEqual({ written: false, other: "other two\n", messages, revert: undefined })
         }).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
+
+        // A checkpoint lives in the snapshot repository of the folder that took it. Once the session has moved to
+        // another repository, the prompt has no checkpoint there: the rewind says so instead of handing that folder's
+        // git a tree it does not hold, and the file in the first folder stays as it is.
+        const elsewhere = path.join(tmp.path, "elsewhere")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(elsewhere)
+          await Bun.write(path.join(elsewhere, "other.txt"), "elsewhere\n")
+          await $`git init -q`.cwd(elsewhere).quiet()
+          await $`git -c core.fsmonitor=false add .`.cwd(elsewhere).quiet()
+          await Bun.write(written, "again\n")
+        })
+        yield* bus.publish(SessionEvent.Moved, {
+          sessionID: created.id,
+          location: { directory: AbsolutePath.make(elsewhere) },
+          projectID: created.projectID,
+        })
+        const moved = yield* session.revert
+          .files({ sessionID: created.id, messageID: prompt.id })
+          .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }))
+        expect(moved).toMatchObject({ _tag: "Session.RewindError", reason: "no-checkpoint" })
+        expect(yield* Effect.promise(() => Bun.file(written).text())).toBe("again\n")
       }),
     { timeout: 15_000 },
   )

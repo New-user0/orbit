@@ -1485,10 +1485,11 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 - Writing files back from a checkpoint is the same case at a later moment: a folder on the way can have become a link
   after the checkpoint. `Snapshot.restore`, which `/undo`, `/redo` and the code-only rewind share, asks
   `ProjectTrust.leads` for each path's folder when it writes, under the real work tree, and skips the path with one log
-  line unless that folder leads where its name says (compared both ways with `FSUtil.contains`, so a folder whose name
-  changed case on Windows still counts). A path the checkpoint lacks is removed only when it is a file or a link, never
-  as a folder with what it holds (`packages/core/test/snapshot-restore-links.test.ts`: a junction, a folder replaced by
-  a link, a dangling link, a link to a share, a grown folder, `.` and `../`, each beside a control that goes back).
+  line unless that folder leads where its name says (`FSUtil.contains` of the name and the real place, so a folder
+  whose name changed case on Windows still counts). A path the checkpoint lacks is removed only when it is a file or a
+  link, never as a folder with what it holds (`packages/core/test/snapshot-restore-links.test.ts`: a junction, a folder replaced by
+  a link, a link to the project itself, a dangling link, a link to a share, a grown folder, `.` and `../`, each beside a
+  control that goes back).
 - A name that becomes a file name is one plain name (the output style rule in
   `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
   `packages/core/src/tool/plugin/memory.ts`).
