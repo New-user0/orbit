@@ -32,6 +32,7 @@ import { SessionEvent } from "@orbit/core/session/event"
 import { InstructionState } from "@orbit/core/session/instruction-state"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionProjector } from "@orbit/core/session/projector"
+// @ts-expect-error clients-ux-27 adds this module; remove the directive with the build.
 import { SessionRecap } from "@orbit/core/session/recap"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionSchema } from "@orbit/core/session/schema"
@@ -220,13 +221,22 @@ const setup = (config?: { readonly pinned?: boolean }) =>
       Effect.provideService(Instance.Service, instances),
       Effect.map((services) => Context.get(services, SideQuery.Service)),
     )
-    const recap = yield* Layer.build(SessionRecap.layer).pipe(
+    // The cast stands in for the module's own types until clients-ux-27 adds it; remove it with the build.
+    const recap = yield* (Layer.build(SessionRecap.layer).pipe(
       Effect.provideService(Instance.Service, instances),
       Effect.provideService(SideQuery.Service, sideQuery),
       Effect.map((services) => Context.get(services, SessionRecap.Service)),
-    )
+    ) as unknown as Effect.Effect<Recap>)
     return { db, bus, store, sideQuery, recap }
   })
+
+// The service clients-ux-27 adds (spec S5): `{ text }` when it recorded a recap, `undefined` when it did not, and
+// `Session.NotFoundError` for a session that does not exist.
+interface Recap {
+  readonly generate: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<{ readonly text: string } | undefined, { readonly _tag: "Session.NotFoundError" }>
+}
 
 const usage = { inputTokens: 1000, nonCachedInputTokens: 1000, outputTokens: 100, visibleOutputTokens: 100 }
 const answer = (text: string) =>
@@ -268,6 +278,7 @@ const recordedRecaps = (db: Database.Interface["db"]) =>
         rows.filter(
           (row) =>
             row.type ===
+            // @ts-expect-error clients-ux-27 adds the event; remove the directive with the build.
             Event.versionedType(SessionEventSchema.RecapRecorded.type, SessionEventSchema.RecapRecorded.durable.version),
         ),
       ),

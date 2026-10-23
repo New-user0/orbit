@@ -92,6 +92,7 @@ test("session.recap.after_minutes is read from the person's cli.json and from no
         return yield* service.get()
       }),
     )
+    // @ts-expect-error clients-ux-27 adds session.recap; remove the directive with the build.
     expect(read.session?.recap?.after_minutes).toBe(7)
   } finally {
     process.chdir(cwd)

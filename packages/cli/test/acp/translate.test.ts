@@ -266,13 +266,16 @@ describe("acp away summary", () => {
   test("a stored recap replays nothing and a live recap produces no update", () => {
     const stored: Parameters<typeof ACPTranslate.replayMessage>[0] = {
       id: "msg_recap",
+      // @ts-expect-error clients-ux-27 adds the message type; remove the directive with the build.
       type: "recap",
       text: "Fixing the build.",
       time: { created: 1 },
     }
     expect([...ACPTranslate.replayMessage(stored, "/workspace")]).toEqual([])
 
+    // @ts-expect-error clients-ux-27 adds the event; remove the directive with the build.
     const live = durableEvent("session.recap.recorded", { sessionID: root, text: "Fixing the build." })
+    // @ts-expect-error clients-ux-27 adds the event; remove the directive with the build.
     expect(ACPTranslate.step(ACPTranslate.initial, live, ctx).outputs).toEqual([])
   })
 })

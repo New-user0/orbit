@@ -287,10 +287,12 @@ describe("away summary in Mini", () => {
       agent: "build",
       model: undefined,
       variant: undefined,
+      // @ts-expect-error clients-ux-27 adds session.recap; remove the directive with the build.
       tuiConfig: createTuiResolvedConfig({ session: { recap: { after_minutes: afterMinutes } } }),
       onPermissionReply: () => {},
       onFormReply: () => {},
       onFormCancel: () => {},
+      // @ts-expect-error clients-ux-27 adds the lifecycle's recap input; remove the directive with the build.
       recap: (signal: AbortSignal) => {
         asked.push(signal)
         return answer ? answer() : new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()))
