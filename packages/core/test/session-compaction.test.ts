@@ -844,3 +844,37 @@ it.effect("a minimal estimate leaves out the editor selection that the full esti
     )
   }),
 )
+
+it.effect("sizes a summary request for an unknown window by the 200,000-token window less the output reserve", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap"))
+    // The last message stays verbatim; the eight before it are about 195,000 tokens, over a 191,808-token cap and under a 200,000-token one.
+    const messages = Array.from({ length: 9 }, (_, index) =>
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: `marker-${index} ${"a".repeat(97_500)}`,
+        time: { created: DateTime.makeUnsafe(index) },
+      }),
+    )
+    const context = {
+      ...loaded(session, messages),
+      model: { ...resolved, limit: { context: 0, output: 8_192 } },
+    }
+    const compaction = yield* SessionCompaction.Service
+    const bus = yield* Bus.Service
+    const inputID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Compaction.Started, {
+      sessionID: session.id,
+      reason: "manual",
+      recent: "",
+      inputID,
+    })
+    expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
+
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).not.toContain("marker-0 ")
+    expect(sent).toContain("marker-6 ")
+  }),
+)

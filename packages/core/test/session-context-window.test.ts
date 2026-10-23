@@ -159,6 +159,8 @@ describe("context state", () => {
     [147_000, true, 12, "error"],
     [159_999, false, 11, "ok"],
     [160_000, false, 11, "error"],
+    // Past the point, the indicator stops at zero rather than going negative.
+    [250_000, true, 0, "error"],
   ] as const)
     test(`${used} used with automatic compaction ${auto} is ${state}`, () => {
       expect(SessionContextWindow.state(used, found, auto)).toEqual({ percentLeft, state })
