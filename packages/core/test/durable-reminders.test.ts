@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import net from "net"
 import path from "path"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schedule, Schema } from "effect"
 import { Document, Info, type Entry } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -561,6 +561,33 @@ describe("the file-change reminder", () => {
     }),
   )
 
+  // Review row: the reference releases a subagent's read-file cache when it returns. The end of a child's run drops what
+  // the ledger holds for it, its rebuild claim included; the parent, whose run ends too, keeps its records.
+  it.live("a subagent's records go when its run ends, and a parent's stay", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const bus = yield* Bus.Service
+      const child = yield* h.create(h.session.id)
+      const mine = h.inside("mine.txt")
+      const childs = h.inside("child.txt")
+      yield* h.write(mine, text(twenty))
+      yield* h.write(childs, text(twenty), child)
+      expect(yield* h.ledger.claim(child.id)).toBe(true)
+      expect(yield* h.ledger.claim(h.session.id)).toBe(true)
+      yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID: child.id })
+      yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID: h.session.id })
+      // The subscription runs on its own fiber, so wait until the child's records are gone.
+      yield* h.ledger.watched(child.id).pipe(
+        Effect.flatMap((watched) => (watched.length === 0 ? Effect.void : Effect.fail("still held"))),
+        Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
+      )
+      expect(yield* h.ledger.claim(child.id)).toBe(true)
+      expect((yield* h.ledger.assertRead(child.id, childs, "child.txt").pipe(Effect.flip)).code).toBe("file.unread")
+      expect((yield* h.ledger.watched(h.session.id)).map((file) => file.path)).toEqual([mine])
+      expect(yield* h.ledger.claim(h.session.id)).toBe(false)
+    }),
+  )
+
   it.live("a restarted drain does not post twice into the same run", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -773,6 +800,31 @@ describe("the re-read gate (class 4, 7)", () => {
         await fs.symlink(key, swapped)
       })
       yield* h.stamp(key)
+      yield* h.change(control, text(["changed"]))
+      const rows = yield* h.changes()
+      expect(labels(rows)).toEqual([expect.stringContaining(control)])
+      expect(JSON.stringify(rows)).not.toContain("KEY-MARKER")
+    }),
+  )
+
+  // Review row (class 4): in a trusted project, a file the session wrote there and that now leads out of the project is a
+  // place nobody allowed, which the read tool would ask about, so it is skipped although no rule denies it. A project
+  // file changed in place is the control.
+  linked("a project file swapped for a link that leads out is skipped while the project is trusted", () =>
+    Effect.gen(function* () {
+      const outside = (yield* tmpdirScoped()).path
+      const h = yield* setup([allowAll, { action: "external_directory", resource: "*", effect: "ask" }])
+      const swapped = h.inside("swapped.txt")
+      const control = h.inside("control.txt")
+      const credentials = path.join(outside, "credentials")
+      yield* h.write(swapped, text(twenty))
+      yield* h.write(control, text(twenty))
+      yield* Effect.promise(async () => {
+        await fs.writeFile(credentials, text(["KEY-MARKER"]))
+        await fs.rm(swapped)
+        await fs.symlink(credentials, swapped)
+      })
+      yield* h.stamp(credentials)
       yield* h.change(control, text(["changed"]))
       const rows = yield* h.changes()
       expect(labels(rows)).toEqual([expect.stringContaining(control)])
@@ -1287,6 +1339,94 @@ describe("the rebuild after a restart", () => {
       expect(yield* h.ledger.watched(refused.id)).toEqual([])
       const entries = yield* produce(h.trust, h.session)
       expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(file)])
+    }),
+  )
+
+  // Review row: a file rebuilt from a read in history is one the model only read, so the harness text claims no write.
+  it.live("the harness text claims no write, so it is true of a file the model only read", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const read = h.inside("read.txt")
+      yield* h.change(read, text(["one", "TWO"]))
+      const messages = history([
+        assistant("msg_0000000001", [
+          toolPart(
+            "c1",
+            "Read",
+            { file_path: read },
+            { text: readResult("read.txt", ["one", "two"]), metadata: { truncated: false } },
+            T(60),
+          ),
+        ]),
+      ])
+      const rows = yield* h.changes(messages)
+      expect(labels(rows)).toEqual([expect.stringContaining(read)])
+      expect(rows[0].harness).not.toMatch(/you wrote/i)
+      expect(rows[0].harness).toContain("changed outside the conversation")
+    }),
+  )
+
+  // Review rows: the rebuild runs under the producer's deadline, and history can name many files.
+  const producer = Effect.fnUntraced(function* (
+    h: Effect.Success<ReturnType<typeof setup>>,
+    read: ReadToolFileSystem.Interface["read"],
+  ) {
+    const reader = yield* ReadToolFileSystem.Service
+    const agents = yield* Agent.Service
+    const agent = (yield* agents.get(build))!
+    const made = FileChangeReminder.durable({
+      ledger: h.ledger,
+      access: yield* FileAccess.Service,
+      reader: { ...reader, read },
+      permission: yield* Permission.Service,
+      trust: h.trust,
+      environment: yield* Environment.Service,
+    })
+    return (messages: ReadonlyArray<SessionMessage.Info>) =>
+      made
+        .run({ session: h.session, agent, tools: [], model: {} as never, messages, step: 1, firstStep: true })
+        .pipe(Effect.timeoutOption(SessionReminders.DEFAULT_TIMEOUT))
+  })
+  const edits = (files: ReadonlyArray<string>) =>
+    history([
+      assistant(
+        "msg_0000000001",
+        files.map((file, index) =>
+          toolPart(`e${index}`, "Edit", { file_path: file, old_string: "a", new_string: "b" }, {}, T(60)),
+        ),
+      ),
+    ])
+
+  it.live("a rebuild that runs past the deadline is not started again at the next step", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const edited = h.inside("edited.txt")
+      yield* h.change(edited, text(twenty))
+      const reads: Array<string> = []
+      const run = yield* producer(h, (file) => Effect.sync(() => reads.push(file)).pipe(Effect.andThen(Effect.never)))
+      const messages = edits([edited])
+      expect(Option.isNone(yield* run(messages))).toBe(true)
+      expect(reads).toEqual([edited])
+      // The next step finds the session claimed, so it reads nothing and finishes in time.
+      expect(yield* run(messages)).toEqual(Option.some([]))
+      expect(reads).toEqual([edited])
+    }),
+  )
+
+  it.live("reads only the newest files the ledger keeps", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const files = Array.from({ length: FileLedger.MAX_FILES + 5 }, (_, index) => h.inside(`f${index}.txt`))
+      yield* Effect.promise(() => Promise.all(files.map((file) => fs.writeFile(file, text(["a"])))))
+      const real = yield* ReadToolFileSystem.Service
+      const reads: Array<string> = []
+      const run = yield* producer(h, (file, resource, page) =>
+        Effect.sync(() => reads.push(file)).pipe(Effect.andThen(real.read(file, resource, page))),
+      )
+      expect(yield* run(edits(files))).toEqual(Option.some([]))
+      expect(reads.toSorted()).toEqual(files.slice(5).toSorted())
+      yield* h.ledger.assertFresh(h.session.id, files.at(-1)!, "newest")
+      expect((yield* h.ledger.assertRead(h.session.id, files[0], "oldest").pipe(Effect.flip)).code).toBe("file.unread")
     }),
   )
 

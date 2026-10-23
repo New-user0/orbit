@@ -709,13 +709,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   saw from the history it is given, which `orb session import` can bring from a file or URL. Both resolve a path once
   with the read tool's resolver (`FileAccess.locate`: a share or device spelling is refused before any disk is read,
   then a device or, outside Windows, anything but a file or folder), and check and read that same target. The re-read
-  (`FileChangeReminder.gate`) asks `ProjectTrust.reachable` on it at every step, and `Permission.denied` for `Read` on
-  the file and on where a link now leads, and for the `external_directory` request of a file outside the project; a
-  refusal skips the file silently and keeps it. The rebuild keeps only a file inside the project that `reachable`
-  accepts, and reads from disk only for an `Edit` in history. The path and the changed lines go only in the reminder's
-  data block. Proof: the "re-read gate" and "rebuild after a restart" rows of `test/durable-reminders.test.ts` (an outside
-  file after a revoke, a project file swapped for a link out, a dangling link, a deny on a link's target, an
-  `external_directory` deny, outside spellings in history including `~`, `..` and shares, and a pipe marker server and
+  (`FileChangeReminder.gate`) asks `ProjectTrust.reachable` on it at every step, skips a name in the project that the
+  resolver now finds leading out of it (even in a trusted project, where the read tool would ask), and asks
+  `Permission.denied` for `Read` on the file and on where a link now leads, and for the `external_directory` request of
+  a file outside the project; a refusal skips the file silently and keeps it. The rebuild keeps only a file inside the
+  project that `reachable` accepts, reads from disk only for an `Edit` in history, and reads at most the newest 100
+  files. The path and the changed lines go only in the reminder's data block. Proof: the "re-read gate" and "rebuild
+  after a restart" rows of `test/durable-reminders.test.ts` (an outside file after a revoke, a project file swapped for
+  a link out with and without trust, a dangling link, a deny on a link's target, an `external_directory` deny, outside
+  spellings in history including `~`, `..` and shares, and a pipe marker server and
   device names that are never opened). The link rows need links, so they run on Linux or with Developer Mode.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the

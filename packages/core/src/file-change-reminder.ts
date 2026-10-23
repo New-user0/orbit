@@ -6,7 +6,7 @@ import type { Agent } from "@orbit/schema/agent"
 import type { Session } from "@orbit/schema/session"
 import type { Environment } from "./environment/index.js"
 import { FileAccess } from "./file-access.js"
-import type { FileLedger } from "./file-ledger.js"
+import { FileLedger } from "./file-ledger.js"
 import type { Permission } from "./permission.js"
 import type { ProjectTrust } from "./project-trust.js"
 import type { SessionMessage } from "./session/message.js"
@@ -40,7 +40,7 @@ const MAX_SNIPPET = 8_192
 const DIFF_TIMEOUT_MS = 1_000
 
 const TEXT =
-  "A file you wrote earlier in this session has since been changed outside the conversation, by the user or by a tool such as a linter. " +
+  "A file you worked with earlier in this session has since been changed outside the conversation, by the user or by a tool such as a linter. " +
   "The change is intended, so take it into account from now on and do not undo it unless the user asks you to. " +
   "The user already knows about it, so do not mention it to them. " +
   "The lines of the file that changed follow, numbered as the Read tool numbers them."
@@ -58,7 +58,8 @@ export const durable = (services: Services): Durable => ({
   name: KIND,
   run: (input) =>
     Effect.gen(function* () {
-      if (!(yield* services.ledger.rebuilt(input.session.id))) yield* rebuild(services, input)
+      // Claimed before the work, so a rebuild that runs past the producer's deadline costs one step, not every step.
+      if (yield* services.ledger.claim(input.session.id)) yield* rebuild(services, input)
       if (postedInRun(input.messages, KIND)) return []
       const watched = yield* services.ledger.watched(input.session.id)
       const entries = yield* Effect.forEach(
@@ -85,8 +86,9 @@ export const durable = (services: Services): Durable => ({
  * The target a path stands for, when a read of it needs nobody's answer and no deny rule stops it, and undefined
  * otherwise. It is resolved once, as the read tool resolves it (a share or device spelling is refused before any disk is
  * read), and the checks are made on that same target: the project's containment at this moment (`reachable`, which
- * follows links), the Read deny rules on the file and on where it leads, and the deny rules for the folder outside the
- * project it is in. An ask rule does not stop it: the reference consults deny rules only.
+ * follows links), whether a name in the project now leads out of it, the Read deny rules on the file and on where it
+ * leads, and the deny rules for the folder outside the project it is in. An ask rule does not stop it: the reference
+ * consults deny rules only.
  */
 export const gate = Effect.fnUntraced(function* (
   services: Pick<Services, "access" | "permission" | "trust">,
@@ -97,6 +99,10 @@ export const gate = Effect.fnUntraced(function* (
   const target = yield* services.access.locate(file, "file").pipe(Effect.orElseSucceed(() => undefined))
   if (target === undefined) return undefined
   if (!(yield* services.trust.reachable(target.absolute))) return undefined
+  // The resolver gives a target a place other than its name only when a name in the project's folders leads out of them.
+  // The session wrote a file of the project, and nobody allowed the place it leads to now (the read tool would ask), so
+  // it is skipped. A file outside the project that the session wrote keeps its own name as its place and is still read.
+  if (target.externalDirectory !== undefined && target.place !== target.absolute) return undefined
   const base = { sessionID, agent }
   const external = services.access.externalRequest([target], base)
   const requests: Permission.AssertInput[] = [
@@ -193,7 +199,9 @@ const shown = (text: string) =>
  * time), a write whatever its outcome (the text it was given, stamped with its time) and an edit that did not fail (the
  * file as it is now). A path in history may come from an imported session, so it is resolved as the read tool resolves
  * it, a share or device spelling is refused before any disk is read, and only a file inside the project that `reachable`
- * accepts is kept. A record that is already there wins over one from history.
+ * accepts is kept. Of those, only the newest `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop
+ * the rest. A record that is already there wins over one from history. The session is claimed before the rebuild starts,
+ * so one that runs past the producer's deadline is not tried again in this process.
  */
 const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
   // The newest call for each spelling; then the newest for each file, whatever spelling named it.
@@ -214,8 +222,11 @@ const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
       .toSorted((left, right) => left.order - right.order)
       .map((found) => [found.target.absolute, found] as const),
   )
+  // The ledger keeps only the newest files, so an older one is not read at all.
   const files = yield* Effect.forEach(
-    Array.from(byFile.values()),
+    Array.from(byFile.values())
+      .toSorted((left, right) => left.order - right.order)
+      .slice(-FileLedger.MAX_FILES),
     Effect.fnUntraced(function* (found) {
       if (found.text !== undefined)
         return [{ path: found.target.absolute, seen: { mtimeMs: found.at, text: found.text } }]

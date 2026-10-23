@@ -3256,14 +3256,18 @@ Only what the session itself wrote is watched: a file it only read is not report
 ends the watch. A touch, a change of line endings or of the final line break alone, a notebook, an image, a file with a
 NUL byte, a folder in the file's place and a file longer than one read are not reported. A deleted file is forgotten. A
 file that a `Read` deny rule names, or that a link now leads to, is skipped, as is a file outside the project that an
-`external_directory` deny rule covers, and, once the project's trust is revoked, any file outside it. A subagent's
-session is told about the files it wrote. Clients show nothing for these rows, and `orb run --bare` adds none.
+`external_directory` deny rule covers, a file of the project that has become a link leading out of it, and, once the
+project's trust is revoked, any file outside it. A subagent's session is told about the files it wrote, and what Orbit
+holds about its files is released when its run ends, as it is when a session is deleted. Clients show nothing for
+these rows, and `orb run --bare` adds none.
 
 After a restart, the first step of each session rebuilds what it saw from its history since the latest compaction: a
 whole `Read`, a `Write` (whether or not the call succeeded) and an `Edit` that succeeded. Changes made while Orbit was
 not running are then reported, and a file known this way can be edited without a new read. Only files inside the
-project are rebuilt. A file tracked for freshness is now dropped once a session tracks more than 100 files or 25 MB of
-written text, least recently used first, and must be read again before an edit.
+project are rebuilt, at most the 100 named most recently. A continued subagent rebuilds the same way at its first step,
+so a file it read only in part must be read again before an edit. A file tracked for freshness is now dropped once a
+session tracks more than 100 files or 25 MB of written text, least recently used first, and must be read again before
+an edit.
 
 **Affects:** everyone who edits files the agent wrote while a session runs, and clients that list hidden
 `session.synthetic` rows, which now see rows of kind `file-change`.

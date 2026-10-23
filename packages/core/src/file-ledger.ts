@@ -9,6 +9,7 @@ import { Context, Effect, Layer, Stream } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "./bus.js"
 import { Environment } from "./environment/index.js"
+import { SessionStore } from "./session/store.js"
 
 /**
  * The freshness digest of the exact bytes a caller already holds; the ledger never reads a file to compute one. Every
@@ -62,6 +63,10 @@ export const MAX_BYTES = 25 * 1024 * 1024
  * A second, separate memory holds what the last read of each file showed the model, so an identical repeat read can
  * be answered with a stub. A read never clears it; a write, a completed compaction, a committed revert and a deleted
  * or moved Session do. A completed compaction also forgets freshness and every watch.
+ *
+ * When a subagent's run ends (a child Session's busy period, however it ended), everything held for it goes, as the
+ * reference releases a subagent's read-file cache when the subagent returns. A child that is continued later rebuilds
+ * what it saw from its history at its first step.
  */
 export interface Interface {
   /** Record that the Session has seen the file as it is now. Freshness only: it never touches the repeat-read marks. */
@@ -88,9 +93,12 @@ export interface Interface {
   readonly watched: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<Watched>>
   /** Drop the record of one file, freshness included, as for a file that is gone. */
   readonly forget: (sessionID: Session.ID, path: string) => Effect.Effect<void>
-  /** Whether `seed` already ran for the Session in this process. A completed compaction does not reset it. */
-  readonly rebuilt: (sessionID: Session.ID) => Effect.Effect<boolean>
-  /** Record each file that has no record yet, and mark the Session rebuilt. A record that is already there wins. */
+  /**
+   * Claim the Session's rebuild from history: true the first time it is asked for the Session in this process, false
+   * after. A completed compaction does not reset it; the end of a subagent's run does, with the rest of its records.
+   */
+  readonly claim: (sessionID: Session.ID) => Effect.Effect<boolean>
+  /** Record each file that has no record yet. A record that is already there wins. */
   readonly seed: (sessionID: Session.ID, files: ReadonlyArray<Watched>) => Effect.Effect<void>
 }
 
@@ -101,6 +109,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const environment = yield* Environment.Service
+    const store = yield* SessionStore.Service
     // session -> path -> record, in order of use, the least recent first
     const sessions = new Map<Session.ID, Map<string, Seen>>()
     // session -> path -> the last read's key and the digest of the text the model was shown (one slot per path)
@@ -113,16 +122,27 @@ const layer = Layer.effect(
         rebuilt.clear()
       }),
     )
+    const drop = (sessionID: Session.ID) => {
+      sessions.delete(sessionID)
+      marks.delete(sessionID)
+      rebuilt.delete(sessionID)
+    }
     yield* bus.subscribe([SessionEvent.Deleted, SessionEvent.Moved]).pipe(
-      Stream.runForEach((event) =>
-        Effect.sync(() => {
-          sessions.delete(event.data.sessionID)
-          marks.delete(event.data.sessionID)
-          rebuilt.delete(event.data.sessionID)
-        }),
-      ),
+      Stream.runForEach((event) => Effect.sync(() => drop(event.data.sessionID))),
       Effect.forkScoped({ startImmediately: true }),
     )
+    yield* bus
+      .subscribe([SessionEvent.Execution.Succeeded, SessionEvent.Execution.Failed, SessionEvent.Execution.Interrupted])
+      .pipe(
+        Stream.runForEach((event) =>
+          store.get(event.data.sessionID).pipe(
+            Effect.map((session) => {
+              if (session?.parentID !== undefined) drop(event.data.sessionID)
+            }),
+          ),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
     // A completed compaction summarises away what the model saw, so it must read again before changing anything.
     yield* bus.subscribe([SessionEvent.Compaction.Ended]).pipe(
       Stream.runForEach((event) =>
@@ -220,11 +240,12 @@ const layer = Layer.effect(
       forget: Effect.fn("FileLedger.forget")(function* (sessionID, path) {
         sessions.get(sessionID)?.delete(path)
       }),
-      rebuilt: Effect.fn("FileLedger.rebuilt")(function* (sessionID) {
-        return rebuilt.has(sessionID)
+      claim: Effect.fn("FileLedger.claim")(function* (sessionID) {
+        if (rebuilt.has(sessionID)) return false
+        rebuilt.add(sessionID)
+        return true
       }),
       seed: Effect.fn("FileLedger.seed")(function* (sessionID, files) {
-        rebuilt.add(sessionID)
         files
           .filter((file) => !sessions.get(sessionID)?.has(file.path))
           .forEach((file) => remember(sessionID, file.path, file.seen))
@@ -256,9 +277,9 @@ export const permissiveLayer = Layer.succeed(
     forgetReads: () => Effect.void,
     watched: () => Effect.succeed([]),
     forget: () => Effect.void,
-    rebuilt: () => Effect.succeed(true),
+    claim: () => Effect.succeed(false),
     seed: () => Effect.void,
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Bus.node, Environment.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [Bus.node, Environment.node, SessionStore.node] })
