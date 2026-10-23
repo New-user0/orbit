@@ -216,8 +216,9 @@ type Replacement = NonNullable<ReturnType<typeof promptKeys>["replacement"]>
 /**
  * The text of a replacement: the value itself, or the file's text read as UTF-8 from the folder of the document that
  * names it (or `directory`, for a document without a path). A path on a network share, or one that reaches a share
- * through a link, is refused before any file system call; `failed` then says why, as it does for a file that cannot be
- * read. An empty text replaces nothing.
+ * through a link, is refused before any file system call (a share is a request to a host that a config chose); `failed`
+ * then says why, as it does for a file that cannot be read. Resolving the path also turns a rooted NT spelling
+ * (`\??\UNC\...`) into `<drive>:\??\...`, which cannot be opened as a share. An empty text replaces nothing.
  */
 export const replacementText = Effect.fn("PromptConfigPlugin.replacementText")(function* (
   fs: FSUtil.Interface,
@@ -228,9 +229,7 @@ export const replacementText = Effect.fn("PromptConfigPlugin.replacementText")(f
   const value = replacement.value
   const expanded = value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value
   const base = replacement.document.path ? path.dirname(replacement.document.path) : directory
-  // Resolving also turns a rooted NT spelling (`\??\UNC\...`) into `<drive>:\??\...`, which cannot be opened as a share.
   const file = path.resolve(base, expanded)
-  // Before any file system call: a share is a request to a host that a config chose.
   const relative = !path.isAbsolute(expanded)
   if (network(expanded) || network(file) || (relative && network(base)))
     return { text: undefined, file, failed: "network paths are not read" }

@@ -424,7 +424,6 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
   ]
   const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, native(operand))))
   const folders = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
-  // The folder question of a command, which the memory folder's carve-out for the file tools does not decide.
   const external = folders && { ...folders, shell: true }
   const requested = request(analysis, input.command, scanned, gathered.findings)
   const shell: Permission.AssertInput | undefined = requested && {
