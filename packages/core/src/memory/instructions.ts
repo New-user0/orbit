@@ -87,10 +87,10 @@ const layer = Layer.effect(
     let warned = false
     // A folder whose path has come to cross a link to a share since the Location started is not made, since making it
     // would connect to the host (class 6); that counts as a folder that cannot be made.
-    const ensureFolder = LinkShare.blocked(fs, store.folder).pipe(
-      Effect.flatMap((stop) =>
-        stop ? Effect.fail("its path leads to a share") : fs.makeDirectory(store.folder, { recursive: true }),
-      ),
+    const ensureFolder = Effect.gen(function* () {
+      if (yield* LinkShare.blocked(fs, store.folder)) return yield* Effect.fail("its path leads to a share")
+      yield* fs.makeDirectory(store.folder, { recursive: true })
+    }).pipe(
       Effect.catchCause((cause) =>
         warned
           ? Effect.void
