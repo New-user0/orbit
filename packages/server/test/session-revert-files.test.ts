@@ -329,6 +329,8 @@ it.live("answers a message that is not a prompt, a prompt without a checkpoint a
     const server = yield* setup()
     const { root, repo } = yield* repository({ "tracked.txt": "one\n" })
     const session = yield* server.session(repo)
+    // Each refusal is a fixed sentence that names no file and carries no git output (class 9).
+    const noCheckpoint = "This message has no checkpoint to rewind the files to."
     // Two steps, so the first step's message has a step with a checkpoint after it, as a prompt does.
     yield* session.prompt([
       { tools: [edited("tracked.txt")], edit: write(path.join(repo, "tracked.txt"), "two\n") },
@@ -341,7 +343,7 @@ it.live("answers a message that is not a prompt, a prompt without a checkpoint a
     // Only a prompt has a checkpoint: another message of the session is answered as one without a checkpoint.
     expect(yield* session.rewind(server.script.assistants[0]!, true)).toEqual({
       status: 200,
-      body: { data: { canRewind: false, error: expect.any(String) } },
+      body: { data: { canRewind: false, error: noCheckpoint } },
     })
     expect(yield* session.rewind(server.script.assistants[0]!)).toMatchObject({
       status: 409,
@@ -352,7 +354,7 @@ it.live("answers a message that is not a prompt, a prompt without a checkpoint a
     ])
     expect(yield* session.rewind(unrecorded, true)).toEqual({
       status: 200,
-      body: { data: { canRewind: false, error: expect.any(String) } },
+      body: { data: { canRewind: false, error: noCheckpoint } },
     })
     expect(yield* session.rewind(unrecorded)).toMatchObject({
       status: 409,
@@ -367,11 +369,17 @@ it.live("answers a message that is not a prompt, a prompt without a checkpoint a
     const prompt = yield* other.prompt([{ tools: [created("a.txt")], edit: write(path.join(plain, "a.txt"), "a\n") }])
     expect(yield* other.rewind(prompt, true)).toEqual({
       status: 200,
-      body: { data: { canRewind: false, error: expect.any(String) } },
+      body: {
+        data: { canRewind: false, error: "Snapshots are not available in this folder, so no files can be rewound." },
+      },
     })
     expect(yield* other.rewind(prompt)).toMatchObject({
       status: 409,
-      body: { _tag: "RewindFilesError", reason: "disabled" },
+      body: {
+        _tag: "RewindFilesError",
+        reason: "disabled",
+        message: "Snapshots are not available in this folder, so no files can be rewound.",
+      },
     })
     expect(yield* read(path.join(plain, "a.txt"))).toBe("a\n")
   }),
@@ -672,7 +680,10 @@ it.live("answers a checkpoint git cannot read as failed, and keeps the well-form
     const rewind = (dryRun: boolean) =>
       server.request("POST", `/api/session/${imported}/revert/files`, { messageID: user, dryRun })
     const dry = yield* rewind(true)
-    expect(dry).toEqual({ status: 200, body: { data: { canRewind: false, error: expect.any(String) } } })
+    expect(dry).toEqual({
+      status: 200,
+      body: { data: { canRewind: false, error: "The files could not be restored. The server log has the details." } },
+    })
     const real = yield* rewind(false)
     expect(real).toMatchObject({ status: 409, body: { _tag: "RewindFilesError", reason: "failed" } })
     expect((real.body as { message: string }).message).toBe((dry.body?.data as { error: string }).error)

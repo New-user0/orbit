@@ -11,7 +11,7 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { Model } from "@orbit/core/model"
 import { Plugin } from "@orbit/core/plugin"
 import { Provider } from "@orbit/core/provider"
-import { AbsolutePath } from "@orbit/core/schema"
+import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionExecution } from "@orbit/core/session/execution"
@@ -29,7 +29,14 @@ import { testEffect } from "./lib/effect"
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, Bus.node, SessionProjector.node, Session.node, LocationServiceMap.node, Global.node]),
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      Session.node,
+      LocationServiceMap.node,
+      Global.node,
+    ]),
     [
       Bus.node.replace(Bus.configured({ persist: true })),
       Global.node.replace(tempGlobalLayer),
@@ -539,6 +546,41 @@ describe("Session.revert names from another folder", () => {
       }),
     { timeout: 30_000 },
   )
+
+  // A staged revert takes its paths from the steps' stored lists, which an imported session fills as its file says
+  // (class 5). A stored name only selects among the paths git reports as changed: an ignored file is in neither capture,
+  // so a stored list and a Write that both name it delete nothing. The control is the Write's other file, which goes.
+  it.live(
+    "leaves an ignored file that a step's stored list and a Write name, and undoes the control",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const directory = path.join(tmp.path, "project")
+        yield* repository(directory, { ".gitignore": "*.log\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(directory) } })
+        const prompt = yield* promptNow(created.id, "Write files")
+        yield* recordStep(
+          created.id,
+          [{ name: "Write", files: ["debug.log", "written.txt"] }],
+          () =>
+            Promise.all([
+              Bun.write(path.join(directory, "debug.log"), "kept\n"),
+              Bun.write(path.join(directory, "written.txt"), "one\n"),
+            ]),
+          ["debug.log"],
+        )
+
+        yield* session.revert.stage({ sessionID: created.id, messageID: prompt.id })
+        expect(
+          yield* Effect.all({
+            ignored: text(path.join(directory, "debug.log")),
+            written: text(path.join(directory, "written.txt")),
+          }),
+        ).toEqual({ ignored: "kept\n", written: undefined })
+      }),
+    { timeout: 30_000 },
+  )
 })
 
 const text = (file: string) =>
@@ -563,7 +605,10 @@ const promptNow = (sessionID: Session.ID, text: string) =>
     return prompt
   })
 
-const moveTo = (session: { readonly id: Session.ID; readonly projectID: Session.Info["projectID"] }, directory: string) =>
+const moveTo = (
+  session: { readonly id: Session.ID; readonly projectID: Session.Info["projectID"] },
+  directory: string,
+) =>
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     yield* bus.publish(SessionEvent.Moved, {
@@ -574,7 +619,7 @@ const moveTo = (session: { readonly id: Session.ID; readonly projectID: Session.
   })
 
 // One step in the folder the session is in now: its start capture, the tool calls it records, what it changes on disk
-// and its end capture.
+// and its end capture. `stored` adds names to the step's stored list of changed files, as an imported session can.
 const recordStep = (
   sessionID: Session.ID,
   calls: ReadonlyArray<{
@@ -584,6 +629,7 @@ const recordStep = (
     readonly failed?: boolean
   }>,
   edit: () => Promise<unknown>,
+  stored: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -612,7 +658,13 @@ const recordStep = (
           const metadata = call.files
             ? {
                 metadata: {
-                  files: call.files.map((file) => ({ file, status: "modified", additions: 0, deletions: 0, patch: "" })),
+                  files: call.files.map((file) => ({
+                    file,
+                    status: "modified",
+                    additions: 0,
+                    deletions: 0,
+                    patch: "",
+                  })),
                 },
               }
             : {}
@@ -641,7 +693,10 @@ const recordStep = (
         cost: Money.USD.zero,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         snapshot: after,
-        files: yield* snapshot.files({ from: before, to: after }),
+        files: [
+          ...(yield* snapshot.files({ from: before, to: after })),
+          ...stored.map((file) => RelativePath.make(file)),
+        ],
       })
     }).pipe(Effect.provide(LocationServiceMap.Service.get(location)))
   })
