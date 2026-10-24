@@ -393,7 +393,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   working folder, where `bun` reads a `bunfig.toml` preload, `npx` an `.npmrc`, `uvx` a `uv.toml` and `git` the
   repository's config, so the program the person chose loads code the clone chose. Until `ProjectTrust.trusted()` holds,
   `LifecycleHooksPlugin` runs no hook (one warning per process) and `Mcp` starts no `local` server whatever its `cwd`
-  (status `failed`, saying it waits for trust); a `trust.updated` event starts the waiting servers, and hooks read the
+  (status `failed`, saying it waits for trust); a `trust.updated` event starts the waiting servers, among them one whose
+  folder was being decided when the grant landed (`test/mcp.test.ts`, "a grant that lands while a server's working
+  folder is being decided still starts it"), and hooks read the
   trust each time one fires. A `local` server whose config names a `cwd` waits as well until that folder, read from the
   Location's folder, is trusted (`ProjectTrust.folder`), and starts in that folder (class 3). A guard that cannot run never reads as no guard: a `PreToolUse` hook, the one event
   here that can stop a call, that applies to a call (user, managed or any document that reaches the runner) refuses
