@@ -84,8 +84,10 @@ export function frontMatter(text: string): { name?: string; description?: string
 export function validateDirectory(raw: string | undefined, home: string) {
   if (!raw || raw.includes("\0") || raw === "~") return undefined
   const tilde = raw.startsWith("~/") || (process.platform === "win32" && raw.startsWith("~\\"))
-  const rest = tilde ? path.normalize(raw.slice(2)) : ""
-  if (tilde && (rest === "." || rest === "..")) return undefined
+  // `normalize` keeps a trailing separator (`./` stays `./`), so it is dropped before the remainder is judged; a remainder
+  // of only `..` parts names home's parent or a folder further up.
+  const rest = tilde ? path.normalize(raw.slice(2)).replace(/[\\/]+$/, "") || "." : ""
+  if (tilde && (rest === "." || rest.split(/[\\/]/).every((part) => part === ".."))) return undefined
   const value = tilde ? path.join(home, rest) : raw
   if (/^[\\/]{2}/.test(value) || !path.isAbsolute(value)) return undefined
   if (process.platform === "win32" && !/^[A-Za-z]:[\\/]/.test(value)) return undefined

@@ -170,6 +170,12 @@ describe("MemoryStore.validateDirectory", () => {
     ["~/.., the parent of home", "~/.."],
     ["a remainder that normalises to home", "~/a/.."],
     ["a remainder that normalises above home", "~/a/../.."],
+    // `path.normalize` keeps a trailing separator, so each of these once named home or its parent.
+    ["~/./, home with a trailing separator", "~/./"],
+    ["~//, home through a doubled separator", "~//"],
+    ["~/.//, home with two trailing separators", "~/.//"],
+    ["~/a/../, a remainder that normalises to home with a trailing separator", "~/a/../"],
+    ["~/../, the parent of home with a trailing separator", "~/../"],
     ["a relative path", "memory"],
     ["a dot-relative path", "./memory"],
     ["a parent-relative path", "../memory"],
@@ -182,6 +188,8 @@ describe("MemoryStore.validateDirectory", () => {
     ["a UNC device path", "\\\\?\\UNC\\host\\share\\memory"],
     ...(process.platform === "win32"
       ? ([
+          ["~\\.\\, home with a trailing backslash", "~\\.\\"],
+          ["~\\..\\, the parent of home with a trailing backslash", "~\\..\\"],
           ["a bare drive", "C:"],
           ["a drive root", "C:\\"],
           ["a drive-relative path", "C:memory"],
@@ -194,6 +202,15 @@ describe("MemoryStore.validateDirectory", () => {
     test(`refuses ${name}`, () => {
       expect(MemoryStore.validateDirectory(raw, home)).toBeUndefined()
     })
+
+  // A home deep enough that two `..` parts stop short of the root, which the root check would refuse anyway. The folder
+  // below home in the same run is the control.
+  test("refuses a remainder of only `..` parts, which names a folder above a deep home", () => {
+    const deep = path.resolve("/srv/users/u/home")
+    expect(MemoryStore.validateDirectory("~/notes", deep)).toBe(path.join(deep, "notes"))
+    for (const raw of ["~/../..", "~/../../", "~/a/../../.."])
+      expect(MemoryStore.validateDirectory(raw, deep)).toBeUndefined()
+  })
 })
 
 // The override names a folder whose writes need no question, so a repository must not choose it: the project scope is
