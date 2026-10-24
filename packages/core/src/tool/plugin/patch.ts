@@ -136,7 +136,8 @@ export const Plugin = {
               )
               // A credential never reaches team memory (context-memory-11): what each hunk adds is scanned before anything
               // is read or asked, as Write's content and Edit's replacement are. A file moved into the folder is scanned
-              // whole once its text is known, below.
+              // whole once its text is known, below. An update's context lines are already in the file, so a patch that
+              // takes a key out beside another one passes, as an Edit that takes one out does.
               yield* Effect.forEach(
                 hunks,
                 (hunk) =>
@@ -151,7 +152,7 @@ export const Plugin = {
                             targets,
                             hunk.type === "add"
                               ? hunk.contents
-                              : hunk.chunks.flatMap((chunk) => chunk.newLines).join("\n"),
+                              : hunk.chunks.flatMap(added).join("\n"),
                           ),
                         ),
                       ),
@@ -530,3 +531,12 @@ function trimDiff(diff: string) {
     })
     .join("\n")
 }
+
+// The lines a chunk adds: its new side less one copy of each line on its old side. A context line is on both sides and
+// drops out; a line the chunk holds more often than the file did before is kept.
+const added = (chunk: Patch.UpdateFileChunk) =>
+  chunk.newLines.filter(
+    (line, index) =>
+      chunk.newLines.slice(0, index + 1).filter((other) => other === line).length >
+      chunk.oldLines.filter((other) => other === line).length,
+  )

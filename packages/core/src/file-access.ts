@@ -520,12 +520,12 @@ const layer = Layer.effect(
     ) {
       const found = SecretScan.scan(text)
       if (found.length === 0) return
-      const resolved = yield* team.resolved()
+      const real = yield* team.guarded()
       const inTeam = targets.some(
         (target) =>
           [target.absolute, target.place].some((place) => FSUtil.contains(team.folder, place)) ||
-          (resolved !== undefined &&
-            [target.place, target.leads].some((place) => place !== undefined && FSUtil.contains(resolved.real, place))),
+          (real !== undefined &&
+            [target.place, target.leads].some((place) => place !== undefined && FSUtil.contains(real, place))),
       )
       if (!inTeam) return
       return yield* new ToolFailure({

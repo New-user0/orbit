@@ -58,6 +58,22 @@ const layout = Effect.gen(function* () {
 })
 type Layout = Effect.Success<typeof layout>
 
+// The places inside the project a clone can make the team folder lead to: the project itself, `.orbit`, `.git`, another
+// folder, and a team folder that is plain while `.orbit` above it is a link.
+const teamLinks = ["project", ".orbit", ".git", "src", ".orbit is a link"] as const
+const linkTeam = (l: Layout, link: (typeof teamLinks)[number]) =>
+  Effect.promise(async () => {
+    if (link === ".orbit is a link") {
+      await fs.mkdir(path.join(l.project, "settings", "team-memory"), { recursive: true })
+      await fs.symlink(path.join(l.project, "settings"), path.dirname(l.team), linkType)
+      return
+    }
+    const target = link === "project" ? l.project : path.join(l.project, link)
+    await fs.mkdir(path.dirname(l.team), { recursive: true })
+    await fs.mkdir(target, { recursive: true })
+    await fs.symlink(target, l.team, linkType)
+  })
+
 const configured = (scope: Scope, memory: Record<string, unknown>) =>
   new Document({
     type: "document",
@@ -373,6 +389,56 @@ describe("the team memory folder", () => {
         expect(out.linked.spelled).not.toBe("allow")
         expect(out.linked.index).not.toBe("allow")
         expect(out.plain).toEqual({ spelled: "allow", index: "allow" })
+      }),
+    timeout,
+  )
+
+  // Classes 4 and 8: the carve-out drops every ask and every mode's deny for what is in the team folder, so a clone that
+  // ships `.orbit/team-memory` as a link to the project itself, to `.orbit`, to `.git` or to another folder of the
+  // project, or ships `.orbit` as a link, would carry it over the project's own files. Team memory is then off: those
+  // files are asked about under the person's ask rules and denied under a mode's deny. A plain team folder is the
+  // control in the same run.
+  it.live(
+    "asks about the project's files when the team folder is a link into the project",
+    () =>
+      Effect.gen(function* () {
+        const run = (l: Layout, rules: Permission.Ruleset) =>
+          Effect.gen(function* () {
+            yield* seed(l, rules)
+            return {
+              team: (yield* decide(path.join(l.team, "a.md"))).effect,
+              source: (yield* decide(path.join(l.project, "src", "a.ts"))).effect,
+              hook: (yield* decide(path.join(l.project, ".git", "hooks", "pre-commit"))).effect,
+              plugin: (yield* decide(path.join(l.project, ".orbit", "plugins", "x.ts"))).effect,
+            }
+          }).pipe(provide(l))
+        const modeDeny = [Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const })]
+        const out = yield* Effect.forEach(teamLinks, (link) =>
+          Effect.gen(function* () {
+            const ask = yield* layout
+            yield* linkTeam(ask, link)
+            const deny = yield* layout
+            yield* linkTeam(deny, link)
+            return { link, ask: yield* run(ask, askRules), deny: yield* run(deny, modeDeny) }
+          }),
+        )
+        const plain = { ask: yield* run(yield* layout, askRules), deny: yield* run(yield* layout, modeDeny) }
+        expect(plain.ask.team).toBe("allow")
+        expect(plain.ask.source).toBe("ask")
+        expect(plain.deny.team).toBe("allow")
+        expect(plain.deny.source).toBe("deny")
+        for (const row of out) {
+          expect({ link: row.link, effects: Object.values(row.ask).filter((effect) => effect === "allow") }).toEqual({
+            link: row.link,
+            effects: [],
+          })
+          expect({ link: row.link, source: row.ask.source }).toEqual({ link: row.link, source: "ask" })
+          expect({ link: row.link, source: row.deny.source, hook: row.deny.hook }).toEqual({
+            link: row.link,
+            source: "deny",
+            hook: "deny",
+          })
+        }
       }),
     timeout,
   )

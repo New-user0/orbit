@@ -353,6 +353,55 @@ describe("team memory in a folder it must not read", () => {
     }),
   )
 
+  // Class 4: a team folder that is a link to the project itself, to `.orbit`, to `.git` or to another folder of the
+  // project, or a plain one under an `.orbit` that is a link, is not the project's team folder either: its index (the
+  // project's own MEMORY.md, say) never loads, the guide stays today's, and the private index still loads. A plain team
+  // folder is the control.
+  it.live("turns team memory off when its folder is a link to the project, .orbit, .git or another folder", () =>
+    Effect.gen(function* () {
+      const links = [
+        { name: "project", target: (l: Layout) => l.project },
+        { name: ".orbit", target: (l: Layout) => path.dirname(l.team) },
+        { name: ".git", target: (l: Layout) => path.join(l.project, ".git") },
+        { name: "src", target: (l: Layout) => path.join(l.project, "src") },
+      ]
+      const linked = yield* Effect.forEach(links, (link) =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          yield* write(path.join(link.target(l), "MEMORY.md"), "- LINKED-MARKER\n")
+          yield* write(path.join(l.memory, "MEMORY.md"), "- PRIVATE-INDEX-LINE\n")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.dirname(l.team), { recursive: true })
+            await fs.symlink(link.target(l), l.team, linkType)
+          })
+          return { name: link.name, l, out: yield* initial(l, teamOn) }
+        }),
+      )
+      // `.orbit` itself a link to another folder of the project, holding a plain `team-memory`.
+      const dotted = yield* layout
+      const settings = path.join(dotted.project, "settings")
+      yield* write(path.join(settings, "team-memory", "MEMORY.md"), "- LINKED-MARKER\n")
+      yield* write(path.join(dotted.memory, "MEMORY.md"), "- PRIVATE-INDEX-LINE\n")
+      yield* Effect.promise(() => fs.symlink(settings, path.dirname(dotted.team), linkType))
+      const rows = [...linked, { name: ".orbit is a link", l: dotted, out: yield* initial(dotted, teamOn) }]
+      for (const row of rows) {
+        expect({
+          name: row.name,
+          marker: row.out.text.includes("LINKED-MARKER"),
+          team: Object.keys(row.out.values).includes(TEAM),
+          scope: headings(row.out.text).includes(SCOPE),
+          folder: row.out.text.includes(row.l.team),
+          private: row.out.text.includes("PRIVATE-INDEX-LINE"),
+        }).toEqual({ name: row.name, marker: false, team: false, scope: false, folder: false, private: true })
+      }
+      const plain = yield* layout
+      yield* write(path.join(plain.team, "MEMORY.md"), "- PLAIN-TEAM-LINE\n")
+      const control = yield* initial(plain, teamOn)
+      expect(control.text).toContain("PLAIN-TEAM-LINE")
+      expect(headings(control.text)).toContain(SCOPE)
+    }),
+  )
+
   // Class 4: a team MEMORY.md that is a link would send whatever it points at to the model provider with every request.
   if (canLinkFile)
     it.live("does not load a team MEMORY.md that is a link out of the folder", () =>

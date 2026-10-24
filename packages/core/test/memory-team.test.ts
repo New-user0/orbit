@@ -534,6 +534,33 @@ describe("a Patch into team memory", () => {
   )
 })
 
+describe("a Patch that takes a key out of team memory", () => {
+  // Only the lines a hunk adds are scanned. A hunk whose context holds a key already in the file, as it takes another
+  // line out, adds nothing, as an Edit that takes a key out adds nothing. A hunk that adds a key in the same file is
+  // the control, refused in the same run.
+  it.live("lets a patch take a line out beside a key and refuses one that adds a key", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const file = path.join(l.team, "keys.md")
+      yield* Effect.promise(() => fs.writeFile(file, `first\n${pat}\nold ${cloud}\nlast\n`))
+      const patch = (body: string) => `*** Begin Patch\n*** Update File: .orbit/team-memory/keys.md\n${body}\n*** End Patch`
+      const out = yield* withTools(l, record(), (registry) =>
+        Effect.gen(function* () {
+          const removed = yield* executeTool(
+            registry,
+            call("Patch", { patchText: patch(`@@\n ${pat}\n-old ${cloud}\n last`) }, "k1"),
+          )
+          const added = yield* executeTool(registry, call("Patch", { patchText: patch(`@@\n-first\n+${pat}`) }, "k2"))
+          return { removed, added }
+        }),
+      )
+      expect(out.removed.status).toBe("completed")
+      expectRefused(out.added, "GitHub PAT", pat)
+      expect(yield* read(file)).toBe(`first\n${pat}\nlast\n`)
+    }),
+  )
+})
+
 // The config watch of a project's `.orbit` folder sees every file below it. A memory write is not config, so it must not
 // reach the reloaders of agents, commands, instructions and plugin sources.
 describe("the config watch of .orbit", () => {
@@ -552,9 +579,11 @@ describe("the config watch of .orbit", () => {
         (target) => target.path === root && target.type === "directory",
       )
       expect(watch).toBeDefined()
+      // The folder at the top of `.orbit` only: a skill or agent folder of the same name further down still reloads.
       expect(watch && "ignore" in watch ? watch.ignore : []).toEqual(
-        expect.arrayContaining(["node_modules", ".git", "team-memory", "**/team-memory/**"]),
+        expect.arrayContaining(["node_modules", ".git", "team-memory", "team-memory/**"]),
       )
+      expect(watch && "ignore" in watch ? watch.ignore : []).not.toContain("**/team-memory/**")
     }),
   )
 })

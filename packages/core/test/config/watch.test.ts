@@ -6,7 +6,7 @@ import type { ConfigDiscovery } from "@orbit/core/config/discovery"
 import { ConfigWatch } from "@orbit/core/config/watch"
 import { AbsolutePath } from "@orbit/core/schema"
 
-const ignore = ["node_modules", ".git", "**/{node_modules,.git}/**", "team-memory", "**/team-memory/**"]
+const ignore = ["node_modules", ".git", "**/{node_modules,.git}/**", "team-memory", "team-memory/**"]
 const files = (directory: string, names: string[]) => names.map((name) => AbsolutePath.make(path.join(directory, name)))
 // A directory's orbit files and .orbit root, as discovery lists them for the project walk and for home.
 const level = (directory: string, present: boolean) =>
@@ -122,6 +122,24 @@ describe("ConfigWatch.plan", () => {
     const global = AbsolutePath.make(path.resolve("watch-plan-global"))
     const home = level(path.join(global, "home"), false)
     expect(ConfigWatch.plan({ ...sources, global, home })).toEqual(ConfigWatch.plan({ ...sources, global }))
+  })
+
+  // Team memory sits only at the top of an `.orbit` root. A folder of that name further down (a skill, an agent or a
+  // command) is config and must still reload, and the global config folder holds no team memory at all.
+  test("leaves out only the team memory folder at the top of an .orbit root", () => {
+    const global = AbsolutePath.make(path.resolve("watch-plan-global"))
+    const planned = Array.from(
+      ConfigWatch.plan({ ...sources, global, project: [{ path: root, present: true }] }).values(),
+    )
+    expect(planned).toContainEqual({ path: root, type: "directory", ignore })
+    expect(planned).toContainEqual({
+      path: global,
+      type: "directory",
+      ignore: ["node_modules", ".git", "**/{node_modules,.git}/**"],
+    })
+    expect(planned.flatMap((target) => ("ignore" in target ? target.ignore : []))).not.toContainEqual(
+      expect.stringMatching(/\*\*\/team-memory/),
+    )
   })
 
   test("watches the settings files that other products keep, in the root that holds them", () => {

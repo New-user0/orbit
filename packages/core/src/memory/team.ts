@@ -14,10 +14,12 @@ import { MemoryStore } from "./store.js"
 /**
  * Team memory: a second memory folder, `.orbit/team-memory/` at the project's root, that is committed with the
  * repository and so shared with everyone who works in it. It is on for a Location while memory is on, `memory.team` is
- * set, the project is trusted, and the folder stays inside the project once its links are followed. The folder is a
- * repository's, so a clone decides what it is: it is resolved once, a link to a share is refused before anything
- * resolves it (class 6), and a folder that leads out of the project turns team memory off (class 4). The one value
- * resolved here is the one the index, the guide, the folder's creation and the permission carve-out all use (class 3).
+ * set, the project is trusted, and the folder really is `.orbit/team-memory` of the real project, with neither part a
+ * link. The folder is a repository's, so a clone decides what it is: it is resolved once, a link to a share is refused
+ * before anything resolves it (class 6), and a folder that leads anywhere else, out of the project or onto the project
+ * itself, `.orbit`, `.git` or `src`, turns team memory off (class 4), because the carve-out drops every ask for what is
+ * in it. The one value resolved here is the one the index, the guide, the folder's creation and the permission
+ * carve-out all use (class 3).
  */
 
 export interface Folder {
@@ -40,10 +42,16 @@ export interface Interface {
   readonly folder: string
   /**
    * The folder and where it really is, resolved the first time it is asked for and kept for the Location, or undefined
-   * when it is refused: its path crosses a link to a share, or it leads out of the real project folder. Only links are
-   * read; nothing in the folder is.
+   * when it is refused: its path crosses a link to a share, or once its links are followed it is not `.orbit/team-memory`
+   * of the real project. Only links are read; nothing in the folder is.
    */
   readonly resolved: () => Effect.Effect<Folder | undefined>
+  /**
+   * Where the folder really is when that is a folder below the real project, accepted or not: a link to `shared/` of the
+   * project is refused for team memory but still names it, so the secret guard holds a write by that name too (class 3).
+   * Undefined for a folder that leads onto the project, out of it, or across a share.
+   */
+  readonly guarded: () => Effect.Effect<string | undefined>
   /** The folder while team memory is on now (memory on, `memory.team` set, the project trusted, the folder accepted). */
   readonly current: () => Effect.Effect<Folder | undefined>
   /** Where a file that exists really is, when team memory is on and that is in the real team folder (class 4). */
@@ -62,13 +70,12 @@ const layer = Layer.effect(
     const memory = yield* MemoryStore.Service
     const folder = path.join(location.project.directory, ".orbit", "team-memory")
 
-    const resolved = yield* Effect.cached(
+    // Where the folder and the project really are, each resolved once (class 3).
+    const reals = yield* Effect.cached(
       Effect.gen(function* () {
         if (yield* LinkShare.blocked(fs, folder)) return yield* Effect.fail("its path leads to a network share")
-        const real = yield* MemoryStore.realFolder(fs, folder)
         const project = FSUtil.normalizePath(yield* fs.realPath(location.project.directory))
-        if (!FSUtil.contains(project, real)) return yield* Effect.fail("it leads out of the project")
-        return { folder, real } satisfies Folder
+        return { real: yield* MemoryStore.realFolder(fs, folder), project }
       }).pipe(
         // A refused folder costs only team memory, with one line in the log (class 7).
         Effect.catchCause((cause) =>
@@ -76,6 +83,25 @@ const layer = Layer.effect(
         ),
       ),
     )
+
+    const resolved = yield* Effect.cached(
+      Effect.gen(function* () {
+        const found = yield* reals
+        if (found === undefined) return undefined
+        if (same(found.real, path.join(found.project, ".orbit", "team-memory"))) return { folder, real: found.real }
+        // The carve-out drops every ask for what is in the folder, so a folder that is a link anywhere else, even inside
+        // the project, would carry it there (class 4). It is refused with one line in the log (class 7).
+        yield* Effect.logWarning("team memory is off: its folder is a link", { folder, real: found.real })
+        return undefined
+      }),
+    )
+
+    const guarded = Effect.fnUntraced(function* () {
+      const found = yield* reals
+      if (found === undefined) return undefined
+      if (FSUtil.contains(found.real, found.project) || !FSUtil.contains(found.project, found.real)) return undefined
+      return found.real
+    })
 
     // Trust first: nothing of the folder is resolved for team memory before the project is trusted (class 1).
     const current = Effect.fn("MemoryTeam.current")(function* () {
@@ -88,6 +114,7 @@ const layer = Layer.effect(
     return Service.of({
       folder,
       resolved: () => resolved,
+      guarded,
       current,
       locate: (file) =>
         current().pipe(
@@ -104,3 +131,6 @@ export const node = makeLocationNode({
   layer,
   deps: [Config.node, Location.node, FSUtil.node, ProjectTrust.node, MemoryStore.node],
 })
+
+// Two real paths name the same place, as the platform compares them (case on Windows).
+const same = (a: string, b: string) => FSUtil.contains(a, b) && FSUtil.contains(b, a)
