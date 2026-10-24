@@ -250,7 +250,8 @@ const layer = Layer.effect(
     // the files it leads to; a folder would go with everything in it.
     const placed = Effect.fnUntraced(function* (worktree: AbsolutePath, file: RelativePath) {
       const absolute = path.join(worktree, file)
-      if (absolute === worktree || !FSUtil.contains(worktree, absolute)) return false
+      // The work tree itself is a folder, so the check of the path's own kind below refuses it.
+      if (!FSUtil.contains(worktree, absolute)) return false
       const parent = path.dirname(absolute)
       // A folder's real place cannot lie below its own name, so "inside" here means "the same folder", with case
       // compared as the system compares it.

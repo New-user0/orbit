@@ -263,7 +263,10 @@ describe("Snapshot.restore through a link made after the checkpoint", () => {
           await fs.writeFile(path.join(fixture.project, "sub"), "mine\n")
           await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
         })
-        const restorable = yield* snapshot.restorable([RelativePath.make("sub/keep.txt"), RelativePath.make("safe.txt")])
+        const restorable = yield* snapshot.restorable([
+          RelativePath.make("sub/keep.txt"),
+          RelativePath.make("safe.txt"),
+        ])
         yield* restore([
           ["sub/keep.txt", tree],
           ["safe.txt", tree],
@@ -321,6 +324,33 @@ describe("Snapshot.restore through a link made after the checkpoint", () => {
           keep: yield* text(path.join(fixture.project, "sub", "keep.txt")),
           safe: yield* text(path.join(fixture.project, "safe.txt")),
         }).toEqual({ victim: "outside\n", keep: "keep two\n", safe: "safe one\n" })
+      }),
+    ),
+  )
+
+  // The work tree is the real folder found when the snapshot repository was opened. If that folder itself is moved away
+  // and a link to another folder takes its name, every folder below it is still a plain folder, so only the real place of
+  // the file's folder shows that the write would land outside the project.
+  it.live("does not write through the project folder when its name became a link after the checkpoint", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(fixture.outside, "sub"), { recursive: true })
+          await fs.writeFile(path.join(fixture.outside, "sub", "keep.txt"), "outside keep\n")
+          await fs.writeFile(path.join(fixture.outside, "safe.txt"), "outside safe\n")
+          await fs.rename(fixture.project, path.join(fixture.root, "moved-project"))
+          await fs.symlink(fixture.outside, fixture.project, linkType)
+        })
+        yield* restore([
+          ["sub/keep.txt", tree],
+          ["safe.txt", tree],
+        ]).pipe(Effect.ignore)
+        expect({
+          keep: yield* text(path.join(fixture.outside, "sub", "keep.txt")),
+          safe: yield* text(path.join(fixture.outside, "safe.txt")),
+          moved: yield* text(path.join(fixture.root, "moved-project", "safe.txt")),
+        }).toEqual({ keep: "outside keep\n", safe: "outside safe\n", moved: "safe one\n" })
       }),
     ),
   )

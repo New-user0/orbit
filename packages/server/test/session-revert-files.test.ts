@@ -241,6 +241,8 @@ it.live(
             created("a.txt"),
             created("empty.txt"),
             { name: "Patch", files: [{ file: "moved.txt", status: "modified", from: "old.txt" }] },
+            // A call of another tool that names a file (a subagent's, say) is not a file tool's: its file stays.
+            { name: "Agent", files: [{ file: "shell.txt", status: "modified" }] },
           ],
           edit: async () => {
             await Bun.write(at("tracked.txt"), "two\n")
@@ -637,7 +639,13 @@ it.live("answers a checkpoint git cannot read as failed, and keeps the well-form
         ...message,
         id: ids.get(message.id),
         ...(message.type === "assistant" && message.snapshot
-          ? { snapshot: { start: missing, end: "-x", files: ["tracked.txt", "../outside.txt", "a\\b", "./x", "/abs.txt"] } }
+          ? {
+              snapshot: {
+                start: missing,
+                end: "-x",
+                files: ["tracked.txt", "../outside.txt", "a\\b", "./x", "/abs.txt"],
+              },
+            }
           : {}),
       })),
       location: { directory: repo },
