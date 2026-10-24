@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "../fixture/environment"
+import { startSlot } from "../fixture/start-gate"
 
 type JsonRpcRequest = {
   readonly jsonrpc: "2.0"
@@ -42,10 +43,11 @@ type Waiter = {
 export type AcpProcess = {
   readonly pid: number
   readonly exited: Promise<number>
-  readonly request: <T>(method: string, params?: unknown) => Promise<JsonRpcResponse<T>>
+  readonly request: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<JsonRpcResponse<T>>
   readonly send: <T>(
     method: string,
     params?: unknown,
+    timeoutMs?: number,
   ) => { readonly id: number; readonly response: Promise<JsonRpcResponse<T>> }
   readonly notify: (method: string, params: unknown) => Promise<void>
   readonly waitForNotification: <T>(
@@ -142,13 +144,21 @@ export async function createAcpFixture(
 }
 
 export function initialize(acp: AcpProcess) {
-  return acp
-    .request<InitializeResponse>("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: { _meta: { "terminal-auth": true } },
-      clientInfo: { name: "orbit-local-acp", version: "0.1.0" },
-    })
-    .then(expectOk)
+  // The first answer is the process's readiness signal. Its deadline starts when the start gate admits this process, so a
+  // runner that is busy starting other children delays the start without failing it.
+  return startSlot(() =>
+    acp
+      .request<InitializeResponse>(
+        "initialize",
+        {
+          protocolVersion: 1,
+          clientCapabilities: { _meta: { "terminal-auth": true } },
+          clientInfo: { name: "orbit-local-acp", version: "0.1.0" },
+        },
+        60_000,
+      )
+      .then(expectOk),
+  )
 }
 
 export function newSession(acp: AcpProcess, cwd: string) {
@@ -287,12 +297,12 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
     await child.stdin.flush()
   }
 
-  const send = <T>(method: string, params?: unknown) => {
+  const send = <T>(method: string, params?: unknown, timeoutMs = 20_000) => {
     const id = nextID++
     const request: JsonRpcRequest =
       params === undefined ? { jsonrpc: "2.0", id, method } : { jsonrpc: "2.0", id, method, params }
     const response = write(request).then(async () => {
-      const response = await take((message) => isResponse(message) && message.id === id, 20_000, `${method} response`)
+      const response = await take((message) => isResponse(message) && message.id === id, timeoutMs, `${method} response`)
       if (!isResponse<T>(response)) throw new Error(`Invalid ACP response: ${JSON.stringify(response)}`)
       return response
     })
@@ -302,7 +312,7 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
   return {
     pid: child.pid,
     exited: child.exited,
-    request: <T>(method: string, params?: unknown) => send<T>(method, params).response,
+    request: <T>(method: string, params?: unknown, timeoutMs?: number) => send<T>(method, params, timeoutMs).response,
     send,
     notify: (method: string, params: unknown) => write({ jsonrpc: "2.0", method, params }),
     async waitForNotification<T>(method: string, predicate: (params: T) => boolean, timeoutMs = 20_000) {
