@@ -206,6 +206,21 @@ test("a batch is asked about once its step ended and every call settled, a faile
   expect(at("tool_label")).toBeLessThan(at("result"))
 })
 
+test("a label answered after its period ended is still written before that period's result", async () => {
+  const h = harness({ labels: true })
+  await period(h, "one", "succeeded", async () => {
+    batch("msg_a", "call_1").forEach((event) => h.emit(event))
+    await waitFor(() => h.state.labels.length === 1)
+    // The answer arrives only after the period's end has been read, so the result has to wait for it.
+    void Bun.sleep(300).then(() => h.state.labels[0].answer({ label: "Read late" }))
+  })
+  await finish(h)
+
+  const at = (type: string) => h.lines.findIndex((line) => line.type === type)
+  expect(labels(h).map((line) => line.label)).toEqual(["Read late"])
+  expect(at("tool_label")).toBeLessThan(at("result"))
+})
+
 test("an interrupted period drops the label it asked for, and the next period's label is written", async () => {
   const h = harness({ labels: true })
   await period(h, "one", "interrupted", async () => {

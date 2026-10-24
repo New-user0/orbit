@@ -340,7 +340,6 @@ const ASSISTANT_OPENINGS = [
 function filter(text: string): SessionAssist.SuggestionFilter | undefined {
   const lower = text.toLowerCase()
   const words = text.split(/\s+/).filter(Boolean)
-  if (text === "") return "empty"
   if (lower === "done") return "done"
   if (META_TEXT.some((pattern) => pattern.test(lower))) return "meta_text"
   if (/^\(.*\)$|^\[.*\]$/s.test(text)) return "meta_wrapped"
