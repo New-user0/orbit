@@ -866,7 +866,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   like a flat `tool_*` file stays. Only a name of the session-folder shape is touched, compared without letter case, and
   a row whose ID cannot name a folder or whose clock does not decode keeps its family with one log line (classes 5 and
   7). A config document of any scope (user, home, project, local, the flag file, `ORBIT_CONFIG_CONTENT`, remote and the
-  managed settings files) that does not parse, or one rejected while the period is set, skips the pass, on a reload as on the first load; a value set twice of which one is kept is not a rejection (class 7). A row whose clock is ahead of now, or stored as text, does not put the pass off. Proof:
+  managed settings files) that does not parse, or one rejected while the period is set, skips the pass, on a reload as on the first load; a value set twice of which one is kept is not a rejection (class 7). A source whose content could not be obtained counts as one that does not parse and skips the pass too: a remote document whose fetch fails, a well-known list that cannot be read, and a file that is there but cannot be read (class 7, error and timeout). A row whose clock is ahead of now, or stored as text, does not put the pass off. Proof:
   `test/session-retention.test.ts` (the folder, link, case, other-database, decode and fold rows, each with a control,
   and the table of link spellings in both roots), `test/config/cleanup-period.test.ts` (with its table of scopes) and the
   `cleanup_period_days` row of `test/config/trust.test.ts`; in `packages/cli`, the bare row of

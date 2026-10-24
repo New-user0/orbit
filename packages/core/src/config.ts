@@ -104,8 +104,9 @@ export interface Interface {
    */
   readonly reload?: () => Effect.Effect<void>
   /**
-   * The documents of the current load that were not taken as written: one that did not parse (no `keys`) and one that
-   * lost top-level keys to normalization (`keys` lists them), from every scope, managed files included. Each still gives
+   * The documents of the current load that were not taken as written: one that did not parse or could not be loaded at
+   * all, such as a remote one that failed to fetch or a file without read permission (no `keys`), and one that lost
+   * top-level keys to normalization (`keys` lists them), from every scope, managed files included. Each still gives
    * what survived. A reader that must not act on a guess, such as retention, asks it.
    */
   readonly rejected: () => Effect.Effect<readonly Rejected[]>
@@ -250,6 +251,14 @@ export const layer = (options?: Options) =>
         })
       })
 
+      // A source whose content could not be obtained, such as a remote one that is offline or a file without read
+      // permission, is a document of this load that was not taken as written: what it holds is unknown (class 7).
+      const unloaded = (source: string, scope: Scope, error: unknown) =>
+        Effect.sync(() => rejecting.push({ source, scope })).pipe(
+          Effect.andThen(Effect.logWarning("config source could not be loaded", { source, scope, error })),
+          Effect.as(undefined),
+        )
+
       // Asks the store once in a load, so the files of one load never disagree about the project.
       const decide = Effect.fnUntraced(function* (root: string) {
         const known = decisions.get(root)
@@ -314,7 +323,12 @@ export const layer = (options?: Options) =>
       const loadFile = Effect.fnUntraced(function* (filepath: string, scope: Scope) {
         // A file of a project that a link leads to a share is not read: reading connects, before any trust check.
         if ((scope === "project" || scope === "local") && (yield* LinkShare.blocked(fs, filepath))) return
-        const text = yield* fs.readFileStringSafe(filepath)
+        // A file that is not there is absent, but one that is there and cannot be read holds something unknown: it is a
+        // rejected document, so a reader that must not act on a guess, such as retention, does not take the default.
+        const text = yield* fs.readFileString(filepath).pipe(
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined),
+          Effect.catchReason("PlatformError", "PermissionDenied", (error) => unloaded(filepath, scope, error)),
+        )
         if (text === undefined) return
         // What the file of an untrusted folder refers to is read before anything decides what to keep of it, so it is
         // held to the folder here: no environment variable is read, and no file outside the folder.
@@ -344,13 +358,7 @@ export const layer = (options?: Options) =>
         const variables = { [auth.env]: credential.value.key }
         const configs = yield* wellknown
           .resolve(entry, variables)
-          .pipe(
-            Effect.catch(() =>
-              Effect.logWarning("failed to load wellknown config", { source: entry.origin }).pipe(
-                Effect.as([] as const),
-              ),
-            ),
-          )
+          .pipe(Effect.catch((error) => unloaded(entry.origin, "remote", error).pipe(Effect.as([] as const))))
         return yield* Effect.forEach(configs, (config) =>
           ConfigVariable.substitute({
             type: "virtual",
@@ -368,11 +376,7 @@ export const layer = (options?: Options) =>
       const loadWellknown = Effect.fn("Config.loadWellknown")(function* () {
         const entries = yield* wellknown
           .entries()
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("failed to discover wellknown config", { error }).pipe(Effect.as([] as const)),
-            ),
-          )
+          .pipe(Effect.catch((error) => unloaded("wellknown", "remote", error).pipe(Effect.as([] as const))))
         return yield* Effect.forEach(entries, loadWellknownEntry).pipe(Effect.map((documents) => documents.flat()))
       })
 

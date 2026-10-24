@@ -41,6 +41,8 @@ type Input = {
   readonly file?: string
   readonly content?: string
   readonly remote?: WellKnown.Config
+  // A well-known source that cannot be loaded: its list of entries, or the remote document of its one entry, fails.
+  readonly offline?: "entries" | "resolve"
   readonly managed?: string
   readonly trusted?: boolean
 }
@@ -69,9 +71,17 @@ const configured = (input: Input) =>
       if (input.managed !== undefined) await fs.writeFile(path.join(managed, "managed-settings.json"), input.managed)
     })
     const directory = AbsolutePath.make(project)
-    const served = input.remote === undefined ? undefined : remote(input.remote)
+    const served =
+      input.remote === undefined && input.offline === undefined ? undefined : remote(input.remote ?? {}, input.offline)
     return {
       user: path.join(global, "orbit.json"),
+      files: {
+        user: path.join(global, "orbit.json"),
+        home: path.join(home, "orbit.json"),
+        project: path.join(project, "orbit.json"),
+        local: path.join(project, "orbit.local.json"),
+        file: flag,
+      },
       layer: AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
         Config.node.replace(
           Config.configured({ file: input.file === undefined ? undefined : flag, content: input.content }),
@@ -91,8 +101,9 @@ const configured = (input: Input) =>
     }
   })
 
-// A well-known source the person signed in to, which serves `config` as its remote document.
-function remote(config: WellKnown.Config) {
+// A well-known source the person signed in to, which serves `config` as its remote document, or fails where `offline`
+// says, as one does without a network.
+function remote(config: WellKnown.Config, offline?: Input["offline"]) {
   const integrationID = Integration.ID.make("https://example.com")
   const entry: WellKnown.Entry = {
     origin: "https://example.com",
@@ -129,12 +140,12 @@ function remote(config: WellKnown.Config) {
       layer: Layer.succeed(
         WellKnown.Service,
         WellKnown.Service.of({
-          entries: () => Effect.succeed([entry]),
+          entries: () => (offline === "entries" ? Effect.fail(new Error("offline")) : Effect.succeed([entry])),
           snapshot: () => [entry],
           refresh: () => Effect.succeed(false),
           add: () => Effect.die("unused Wellknown.add"),
           remove: () => Effect.die("unused Wellknown.remove"),
-          resolve: () => Effect.succeed([config]),
+          resolve: () => (offline === "resolve" ? Effect.fail(new Error("offline")) : Effect.succeed([config])),
         }),
       ),
       deps: [],
@@ -307,4 +318,40 @@ describe("SessionRetention.setting: every scope", () => {
         }),
       )
   }
+})
+
+// A source whose content could not be obtained may hold any period, so the pass is skipped as for one that does not
+// parse (class 7, error and timeout). The reference falls back on its cached copy of the remote settings; Orbit keeps
+// none, so an offline load must not run a 30-day pass against an organization's longer one. The control is the same
+// source loaded.
+describe("SessionRetention.setting: a source that cannot be loaded", () => {
+  it.live("skips the pass when the remote document cannot be fetched", () =>
+    Effect.gen(function* () {
+      expect(yield* read({ remote: { cleanup_period_days: 365 } })).toBe(365)
+      expect(yield* read({ remote: { cleanup_period_days: 365 }, offline: "resolve" })).toBeUndefined()
+      expect(yield* read({ user: JSON.stringify({ cleanup_period_days: 90 }), offline: "resolve" })).toBeUndefined()
+    }),
+  )
+
+  it.live("skips the pass when the well-known sources cannot be listed", () =>
+    Effect.gen(function* () {
+      expect(yield* read({ remote: {} })).toBe(30)
+      expect(yield* read({ offline: "entries" })).toBeUndefined()
+      expect(yield* read({ user: JSON.stringify({ cleanup_period_days: 90 }), offline: "entries" })).toBeUndefined()
+    }),
+  )
+
+  // Root reads a file whatever its mode, and Windows reports a denied read as another error, which fails the load.
+  describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a file that cannot be read", () => {
+    for (const at of ["user", "home", "project", "local", "file"] as const)
+      it.live(`${at}: skips the pass, and the readable file is the control`, () =>
+        Effect.gen(function* () {
+          const input = { [at]: JSON.stringify({ cleanup_period_days: 365 }) }
+          expect(yield* read(input)).toBe(365)
+          const built = yield* configured(input)
+          yield* Effect.promise(() => fs.chmod(built.files[at], 0o000))
+          expect(yield* setting.pipe(Effect.provide(built.layer))).toBeUndefined()
+        }),
+      )
+  })
 })

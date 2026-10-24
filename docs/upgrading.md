@@ -800,7 +800,7 @@ or was running when the server stopped is kept. The first pass runs 10 minutes a
 idle time from the first start of this version, so nothing is removed until 30 days after the upgrade. `orb stats`
 keeps counting removed sessions. `0` removes every session that can be removed at the next pass; sessions are still
 saved while they are used. A value that is not a whole number of 0 or more, a config file with errors while the key is
-set, or a config file that does not parse skips the cleanup; this includes the managed settings files and a file the server reads again after it changes. A file that sets one value twice and keeps one of them has no error. A bare run
+set, a config file that does not parse, a config file that cannot be read, or an organization's remote config that cannot be fetched (for example while offline) skips the cleanup; this includes the managed settings files and a file the server reads again after it changes. A file that sets one value twice and keeps one of them has no error. A bare run
 (`orb run --bare`, `orb -p --bare`) removes nothing. The flat `tool_*` files of earlier versions in the saved-results folder follow the same period instead of a
 fixed 7 days. A pass removes the saved-result and scratchpad folders only of sessions removed from the same database
 from this version on, so the folders of sessions removed earlier, and those of another channel's or `ORBIT_DB`'s
