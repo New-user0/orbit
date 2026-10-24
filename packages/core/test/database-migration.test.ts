@@ -20,6 +20,9 @@ import workspaceMigration from "@orbit/core/database/migration/20260808023530_wo
 import executionClaimsMigration from "@orbit/core/database/migration/20260811161259_execution_claim_attempts"
 import sessionInboxMigration from "@orbit/core/database/migration/20260812181746_session_inbox"
 import sessionViewedStateMigration from "@orbit/core/database/migration/20260819222447_session_viewed_state"
+import sessionRetentionMigration from "@orbit/core/database/migration/20261024013745_session_retention"
+import { SessionStatsArchiveTable } from "@orbit/core/session/sql"
+import { getTableConfig } from "drizzle-orm/sqlite-core"
 import { Global } from "@orbit/util/global"
 
 const run = <A, E>(
@@ -210,6 +213,45 @@ describe("DatabaseMigration", () => {
           idle_outcome: null,
         })
         expect(yield* db.get(sql`SELECT count(*) AS count FROM migration`)).toEqual({ count: 1 })
+      }),
+    )
+  })
+
+  // foundations-19: an existing database gets the stats archive when it upgrades, and the migration's journal row is
+  // when retention started on it, from which an older session's idle time is counted (owner, 2026-10-21). The table's
+  // indexes are the ones its Drizzle definition declares.
+  test("adds the session stats archive to an existing database and records when retention started", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY)`)
+        const before = Date.now()
+
+        yield* DatabaseMigration.applyOnly(db, [sessionRetentionMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionRetentionMigration])
+
+        const columns = yield* db.all<{ name: string }>(
+          sql`SELECT name FROM pragma_table_info('session_stats_archive')`,
+        )
+        expect(columns.map((column) => column.name).toSorted()).toEqual(
+          Object.values(getTableConfig(SessionStatsArchiveTable).columns)
+            .map((column) => column.name)
+            .toSorted(),
+        )
+        const indexes = yield* db.all<{ name: string }>(
+          sql`SELECT name FROM pragma_index_list('session_stats_archive') WHERE origin = 'c'`,
+        )
+        expect(indexes.map((index) => index.name).toSorted()).toEqual(
+          getTableConfig(SessionStatsArchiveTable)
+            .indexes.map((index) => index.config.name)
+            .toSorted(),
+        )
+        const journal = yield* db.all<{ time: number }>(
+          sql`SELECT time_completed AS time FROM migration WHERE id = ${sessionRetentionMigration.id}`,
+        )
+        expect(journal).toHaveLength(1)
+        expect(journal[0]!.time).toBeGreaterThanOrEqual(before)
+        expect(journal[0]!.time).toBeLessThanOrEqual(Date.now())
       }),
     )
   })
