@@ -208,3 +208,35 @@ test("Never mind on a picker opened from the message dialog closes it", async ()
   expect(closed).not.toContain("Checking files")
   expect(setup.actions()).toEqual([])
 })
+
+// The interrupted prompt goes back into the input, so the history entry it added is dropped and Up does not offer it
+// twice; the entries before it stay.
+test("interrupting a prompt whose reply has nothing in it drops the prompt's history entry", async () => {
+  await using state = await tmpdir()
+  const entry = (text: string) => JSON.stringify({ text, files: [], agents: [], pasted: [] }) + "\n"
+  const history = Bun.file(`${state.path}/prompt-history.jsonl`)
+  await Bun.write(history, entry("Earlier") + entry("Quick question"))
+  await using setup = await rewindApp({
+    state: state.path,
+    running: true,
+    messages: [...conversation, quick, reply([], false)],
+  })
+  await setup.waitForFrame((frame) => frame.includes("Quick question"))
+  setup.mockInput.pressEscape()
+  setup.mockInput.pressEscape()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
+  const texts = async () =>
+    (await history.text())
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line).text)
+  // The file is rewritten in the background, so it is read until it holds the result.
+  let saved: string[] = []
+  for (const _ of Array.from({ length: 200 })) {
+    saved = await texts()
+    if (saved.join() === "Earlier") break
+    await Bun.sleep(20)
+  }
+  expect(saved).toEqual(["Earlier"])
+})
