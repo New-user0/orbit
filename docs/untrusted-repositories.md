@@ -1973,7 +1973,9 @@ runs" is a permission.
   (classes 7 and 13). Proof: `packages/core/test/permission-revise.test.ts`
   (the real Permission service and Edit, Write, Patch and NotebookEdit tools; the approved diff equals the diff of what
   ran) and `packages/server/test/permission-revise.test.ts` (a real `orb serve`, an outside marker that the added keys
-  name, and the two typed 400 rows).
+  name, and the two typed 400 rows). Once such a call has run, its input no longer says what the file holds, so ACP
+  draws a completed Edit's or Write's diff from the diff the tool recorded (`metadata.files`), live and on session load,
+  and draws none when there is none (class 8; rows in `packages/cli/test/acp/translate.test.ts`).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

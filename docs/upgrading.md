@@ -2322,13 +2322,18 @@ want it: `content` on `POST /api/session/:sessionID/permission/:requestID/reply`
 `permission.reply`). The reply names no file: the server diffs your text against the file as the question read it,
 records that diff as `files` on `permission.replied` with the question's place, and the tool writes your text where it
 resolved before asking, after the usual check that the file has not changed since. The file's byte order mark is kept.
-An Edit then tells the model that you modified its proposal before approving it. Text equal to the file as it was read
-is taken as a reject. Before, a `content` field was dropped and the proposal was written.
+When your text differs from the proposal, an Edit tells the model that you modified its proposal before approving it;
+the proposal itself, sent back unchanged, gets the usual result. Text equal to the file as it was read is taken as a
+reject. Before, a `content` field was dropped and the proposal was written.
+
+In an ACP client, a completed Edit or Write now shows the diff the tool recorded of what it wrote, live and when a
+session is loaded, instead of one built from the model's `old_string` and `new_string`. A completed Write shows a diff
+too, and a call that recorded no diff shows none.
 
 `content` with an `always` or `reject` decision, or on any other question (Patch, NotebookEdit, shell, search, web,
 MCP), is refused with a 400 `InvalidRequestError` whose `field` is `content`, and the question stays pending.
 
-**Affects:** clients and SDK callers that answer approvals; listeners of `permission.replied`.
+**Affects:** clients and SDK callers that answer approvals; listeners of `permission.replied`; ACP clients.
 
 **What to do:** Nothing. Send `content` only for a request marked `revisable`, with a `once` decision.
 
