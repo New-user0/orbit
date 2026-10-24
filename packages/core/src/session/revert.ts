@@ -1,7 +1,7 @@
 export * as SessionRevert from "./revert.js"
 
 import path from "path"
-import { and, asc, eq, gt, lt } from "drizzle-orm"
+import { and, asc, eq, gt, inArray } from "drizzle-orm"
 import { Effect, Option, Schema } from "effect"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { Database } from "../database/database.js"
@@ -258,7 +258,8 @@ const decodeCall = Schema.decodeUnknownOption(
     name: Schema.String,
     state: Schema.Struct({
       status: Schema.Literals(["completed", "error"]),
-      metadata: Schema.Struct({ files: Schema.Array(Schema.Unknown) }),
+      input: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+      metadata: Schema.optional(Schema.Struct({ files: Schema.optional(Schema.Array(Schema.Unknown)) })),
     }),
   }),
 )
@@ -266,12 +267,17 @@ const decodeFile = Schema.decodeUnknownOption(
   Schema.Struct({ file: Schema.String, from: Schema.optional(Schema.String) }),
 )
 const decodeContent = Schema.decodeUnknownOption(Schema.Struct({ content: Schema.Array(Schema.Unknown) }))
+const decodeSwitch = Schema.decodeUnknownOption(
+  Schema.Struct({ location: Location.Ref, previous: Schema.optional(Schema.Struct({ location: Location.Ref })) }),
+)
 
 /**
  * Every path a recorded file-tool call of the session named, relative to the snapshot's work tree: in the whole session,
- * or in the steps between two message sequence numbers. A call names its files by the Location's spelling, so each name
- * is joined under the Location's folder; a name that leaves the work tree is ignored, and so is a malformed entry, which
- * costs only itself (class 7).
+ * or in the steps between two message sequence numbers. A call names its files by the spelling of the Location it ran
+ * in, so only the steps that ran in the current Location's folder count, and each of their names is joined under that
+ * folder. A step that ran elsewhere (before a session move, or on the other side of a worktree) named a file of another
+ * folder, which the same name here is not. A name that leaves the work tree is ignored, and so is a malformed entry,
+ * which costs only itself (class 7).
  */
 export const toolNames = Effect.fnUntraced(function* (
   db: Database.Interface["db"],
@@ -282,24 +288,51 @@ export const toolNames = Effect.fnUntraced(function* (
   const snapshot = yield* Snapshot.Service
   const prefix = path.relative(yield* snapshot.root(), location.directory).replaceAll("\\", "/")
   const rows = yield* db
-    .select({ data: SessionMessageTable.data })
+    .select({ type: SessionMessageTable.type, seq: SessionMessageTable.seq, data: SessionMessageTable.data })
     .from(SessionMessageTable)
     .where(
       and(
         eq(SessionMessageTable.session_id, sessionID),
-        eq(SessionMessageTable.type, "assistant"),
-        range ? gt(SessionMessageTable.seq, range.after) : undefined,
-        range?.before === undefined ? undefined : lt(SessionMessageTable.seq, range.before),
+        inArray(SessionMessageTable.type, ["assistant", "location-switched"]),
       ),
     )
+    .orderBy(asc(SessionMessageTable.seq))
     .all()
     .pipe(Effect.orDie)
+  const moves = rows
+    .filter((row) => row.type === "location-switched")
+    .map((row) => ({ seq: row.seq, move: Option.getOrUndefined(decodeSwitch(row.data)) }))
+  // The folder a step ran in: where the last move before it went or, before the first move, where that move left. A
+  // malformed move, or one recorded without where it left, leaves its steps without a folder, so they name nothing.
+  const ranIn = (seq: number) => {
+    const before = moves.findLast((row) => row.seq < seq)
+    if (before) return before.move?.location.directory
+    if (moves.length === 0) return location.directory
+    return moves[0]?.move?.previous?.location.directory
+  }
   const names = rows
+    .filter(
+      (row) =>
+        row.type === "assistant" &&
+        (!range || (row.seq > range.after && (range.before === undefined || row.seq < range.before))) &&
+        ranIn(row.seq) === location.directory,
+    )
     .flatMap((row) => Option.toArray(decodeContent(row.data)).flatMap((message) => message.content))
     .flatMap((part) => Option.toArray(decodeCall(part)))
     .filter((call) => fileTools.has(ToolNames.canonical(call.name)))
-    .flatMap((call) => call.state.metadata.files.flatMap((entry) => Option.toArray(decodeFile(entry))))
-    .flatMap((entry) => (entry.from === undefined ? [entry.file] : [entry.file, entry.from]))
+    .flatMap((call) => {
+      const files = call.state.metadata?.files
+      if (files)
+        return files
+          .flatMap((entry) => Option.toArray(decodeFile(entry)))
+          .flatMap((entry) => (entry.from === undefined ? [entry.file] : [entry.file, entry.from]))
+      // A Write recorded before Write named its file in its result: the path it was given stands in, relative to the
+      // Location as the tool resolved it. Like every name, it only selects among the paths git reports.
+      const input = call.state.input?.file_path ?? call.state.input?.path
+      if (ToolNames.canonical(call.name) !== "Write" || call.state.status !== "completed" || typeof input !== "string")
+        return []
+      return [path.isAbsolute(input) ? path.relative(location.directory, input) : input]
+    })
     .flatMap((name) => worktreeName(prefix, name) ?? [])
   return new Set(names)
 })

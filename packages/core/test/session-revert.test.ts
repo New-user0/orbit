@@ -341,3 +341,304 @@ describe("Session.revert files", () => {
     { timeout: 15_000 },
   )
 })
+
+// A recorded name is the spelling of the folder its step ran in. Once the session has moved, the same name in the
+// folder it is in now is another file, which a file tool there never touched: a rewind and an undo leave it, and
+// still put back what a file tool changed in the folder they restore.
+describe("Session.revert names from another folder", () => {
+  it.live(
+    "leaves a shell edit after a session move to another repository, and rewinds a Write made there",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const first = path.join(tmp.path, "first")
+        const second = path.join(tmp.path, "second")
+        yield* repository(first, { "x.txt": "base\n" })
+        yield* repository(second, { "x.txt": "base\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(first) } })
+        yield* promptNow(created.id, "Edit x")
+        yield* recordStep(created.id, [{ name: "Write", files: ["x.txt"] }], () =>
+          Bun.write(path.join(first, "x.txt"), "tool edit\n"),
+        )
+        yield* moveTo(created, second)
+        const prompt = yield* promptNow(created.id, "Go on")
+        yield* recordStep(created.id, [{ name: "Write", files: ["y.txt"] }], async () => {
+          await Bun.write(path.join(second, "x.txt"), "shell edit\n")
+          await Bun.write(path.join(second, "y.txt"), "written\n")
+        })
+        const files = () =>
+          Effect.all({
+            shell: text(path.join(second, "x.txt")),
+            written: text(path.join(second, "y.txt")),
+            first: text(path.join(first, "x.txt")),
+          })
+
+        yield* session.revert.stage({ sessionID: created.id, messageID: prompt.id })
+        expect(yield* files()).toEqual({ shell: "shell edit\n", written: undefined, first: "tool edit\n" })
+        yield* session.revert.clear(created.id)
+        expect(yield* files()).toEqual({ shell: "shell edit\n", written: "written\n", first: "tool edit\n" })
+
+        const dry = yield* session.revert.files({ sessionID: created.id, messageID: prompt.id, dryRun: true })
+        expect(dry.filesChanged?.map((file) => path.basename(file))).toEqual(["y.txt"])
+        expect(yield* session.revert.files({ sessionID: created.id, messageID: prompt.id })).toEqual({
+          canRewind: true,
+        })
+        expect(yield* files()).toEqual({ shell: "shell edit\n", written: undefined, first: "tool edit\n" })
+      }),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "leaves a shell edit in a worktree the session entered, and rewinds a Write made there",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const checkout = path.join(tmp.path, "checkout")
+        const tree = path.join(tmp.path, "tree")
+        yield* repository(checkout, { "x.txt": "base\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(checkout) } })
+        yield* promptNow(created.id, "Edit x, then work in a worktree")
+        yield* recordStep(
+          created.id,
+          [
+            { name: "Write", files: ["x.txt"] },
+            { name: "EnterWorktree", input: { name: "spike" } },
+          ],
+          async () => {
+            await Bun.write(path.join(checkout, "x.txt"), "tool edit\n")
+            await $`git worktree add -q -b spike ${tree}`.cwd(checkout).quiet()
+          },
+        )
+        // What EnterWorktree's move becomes once the runner applies it.
+        yield* moveTo(created, tree)
+        const prompt = yield* promptNow(created.id, "Go on")
+        yield* recordStep(created.id, [{ name: "Write", files: ["y.txt"] }], async () => {
+          await Bun.write(path.join(tree, "x.txt"), "shell edit\n")
+          await Bun.write(path.join(tree, "y.txt"), "written\n")
+        })
+
+        const dry = yield* session.revert.files({ sessionID: created.id, messageID: prompt.id, dryRun: true })
+        expect(dry.filesChanged?.map((file) => path.basename(file))).toEqual(["y.txt"])
+        yield* session.revert.files({ sessionID: created.id, messageID: prompt.id })
+        expect(
+          yield* Effect.all({
+            shell: text(path.join(tree, "x.txt")),
+            written: text(path.join(tree, "y.txt")),
+            checkout: text(path.join(checkout, "x.txt")),
+          }),
+        ).toEqual({ shell: "shell edit\n", written: undefined, checkout: "tool edit\n" })
+      }),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "leaves a shell edit after ExitWorktree to a file a Write changed in the worktree, and keeps the checkout's own names",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const checkout = path.join(tmp.path, "checkout")
+        const tree = path.join(tmp.path, "tree")
+        yield* repository(checkout, { "x.txt": "base\n", "z.txt": "base\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(checkout) } })
+        yield* promptNow(created.id, "Edit z, then work in a worktree")
+        yield* recordStep(
+          created.id,
+          [
+            { name: "Write", files: ["z.txt"] },
+            { name: "EnterWorktree", input: {} },
+          ],
+          async () => {
+            await Bun.write(path.join(checkout, "z.txt"), "tool edit\n")
+            await $`git worktree add -q -b spike ${tree}`.cwd(checkout).quiet()
+          },
+        )
+        yield* moveTo(created, tree)
+        yield* promptNow(created.id, "Edit x there, then come back")
+        yield* recordStep(
+          created.id,
+          [
+            { name: "Write", files: ["x.txt"] },
+            { name: "ExitWorktree", input: {} },
+          ],
+          () => Bun.write(path.join(tree, "x.txt"), "tool edit\n"),
+        )
+        // What ExitWorktree's move back becomes once the runner applies it.
+        yield* moveTo(created, checkout)
+        const prompt = yield* promptNow(created.id, "Go on")
+        yield* recordStep(created.id, [], async () => {
+          await Bun.write(path.join(checkout, "x.txt"), "shell edit\n")
+          await Bun.write(path.join(checkout, "z.txt"), "shell edit\n")
+        })
+
+        const dry = yield* session.revert.files({ sessionID: created.id, messageID: prompt.id, dryRun: true })
+        expect(dry.filesChanged?.map((file) => path.basename(file))).toEqual(["z.txt"])
+        yield* session.revert.files({ sessionID: created.id, messageID: prompt.id })
+        // z.txt was written by a file tool in this same folder before the session left it, so its name still counts.
+        expect(
+          yield* Effect.all({
+            shell: text(path.join(checkout, "x.txt")),
+            tool: text(path.join(checkout, "z.txt")),
+            tree: text(path.join(tree, "x.txt")),
+          }),
+        ).toEqual({ shell: "shell edit\n", tool: "tool edit\n", tree: "tool edit\n" })
+      }),
+    { timeout: 30_000 },
+  )
+
+  // Before Write named its file in its result, a recorded Write carried only the path it was given. That path, in each
+  // spelling an older session can hold, still lets a rewind remove the file; a Write that failed, and a file changed
+  // outside the file tools, are left.
+  it.live(
+    "rewinds a Write recorded before Write named its file, by the path it was given",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const directory = path.join(tmp.path, "project")
+        yield* repository(directory, { "other.txt": "other one\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(directory) } })
+        const prompt = yield* promptNow(created.id, "Write files")
+        yield* recordStep(
+          created.id,
+          [
+            { name: "Write", input: { file_path: "relative.txt", content: "one\n" } },
+            { name: "Write", input: { file_path: path.join(directory, "absolute.txt"), content: "one\n" } },
+            { name: "write", input: { path: "legacy.txt", content: "one\n" } },
+            { name: "Write", input: { file_path: "failed.txt", content: "one\n" }, failed: true },
+          ],
+          () =>
+            Promise.all(
+              ["relative.txt", "absolute.txt", "legacy.txt", "failed.txt"]
+                .map((file) => Bun.write(path.join(directory, file), "one\n"))
+                .concat(Bun.write(path.join(directory, "other.txt"), "other two\n")),
+            ),
+        )
+
+        yield* session.revert.files({ sessionID: created.id, messageID: prompt.id })
+        expect(
+          yield* Effect.all({
+            relative: text(path.join(directory, "relative.txt")),
+            absolute: text(path.join(directory, "absolute.txt")),
+            legacy: text(path.join(directory, "legacy.txt")),
+            failed: text(path.join(directory, "failed.txt")),
+            other: text(path.join(directory, "other.txt")),
+          }),
+        ).toEqual({
+          relative: undefined,
+          absolute: undefined,
+          legacy: undefined,
+          failed: "one\n",
+          other: "other two\n",
+        })
+      }),
+    { timeout: 30_000 },
+  )
+})
+
+const text = (file: string) =>
+  Effect.promise(async () => ((await Bun.file(file).exists()) ? Bun.file(file).text() : undefined))
+
+const repository = (directory: string, files: Record<string, string>) =>
+  Effect.promise(async () => {
+    await fs.mkdir(directory, { recursive: true })
+    await Promise.all(Object.entries(files).map(([file, content]) => Bun.write(path.join(directory, file), content)))
+    await $`git init -q`.cwd(directory).quiet()
+    await $`git -c core.fsmonitor=false add .`.cwd(directory).quiet()
+    await $`git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm base`.cwd(directory).quiet()
+  })
+
+const promptNow = (sessionID: Session.ID, text: string) =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const database = yield* Database.Service
+    const bus = yield* Bus.Service
+    const prompt = yield* session.prompt({ sessionID, text, resume: false })
+    yield* SessionInbox.promote(database.db, bus, sessionID, "steer")
+    return prompt
+  })
+
+const moveTo = (session: { readonly id: Session.ID; readonly projectID: Session.Info["projectID"] }, directory: string) =>
+  Effect.gen(function* () {
+    const bus = yield* Bus.Service
+    yield* bus.publish(SessionEvent.Moved, {
+      sessionID: session.id,
+      location: { directory: AbsolutePath.make(directory) },
+      projectID: session.projectID,
+    })
+  })
+
+// One step in the folder the session is in now: its start capture, the tool calls it records, what it changes on disk
+// and its end capture.
+const recordStep = (
+  sessionID: Session.ID,
+  calls: ReadonlyArray<{
+    readonly name: string
+    readonly input?: Record<string, unknown>
+    readonly files?: ReadonlyArray<string>
+    readonly failed?: boolean
+  }>,
+  edit: () => Promise<unknown>,
+) =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const bus = yield* Bus.Service
+    const location = (yield* session.get(sessionID)).location
+    yield* Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      yield* plugins.awaitActivation
+      const snapshot = yield* Snapshot.Service
+      const before = yield* snapshot.capture()
+      if (!before) throw new Error("Start snapshot missing")
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID,
+        agent: Agent.defaultID,
+        model: { id: Model.ID.make("test-model"), providerID: Provider.ID.make("test-provider") },
+        snapshot: before,
+        started: 0,
+      })
+      yield* Effect.forEach(calls, (call, index) =>
+        Effect.gen(function* () {
+          const identity = { sessionID, assistantMessageID, id: `call_${index}` }
+          yield* bus.publish(SessionEvent.Tool.Input.Started, { ...identity, name: call.name })
+          yield* bus.publish(SessionEvent.Tool.Called, { ...identity, input: call.input ?? {}, executed: true })
+          const metadata = call.files
+            ? {
+                metadata: {
+                  files: call.files.map((file) => ({ file, status: "modified", additions: 0, deletions: 0, patch: "" })),
+                },
+              }
+            : {}
+          if (call.failed)
+            return yield* bus.publish(SessionEvent.Tool.Failed, {
+              ...identity,
+              error: { type: "unknown", message: "failed" },
+              ...metadata,
+              executed: true,
+            })
+          yield* bus.publish(SessionEvent.Tool.Success, {
+            ...identity,
+            content: [{ type: "text", text: "done" }],
+            ...metadata,
+            executed: true,
+          })
+        }),
+      )
+      yield* Effect.promise(edit)
+      const after = yield* snapshot.capture()
+      if (!after) throw new Error("End snapshot missing")
+      yield* bus.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        assistantMessageID,
+        finish: "stop",
+        cost: Money.USD.zero,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        snapshot: after,
+        files: yield* snapshot.files({ from: before, to: after }),
+      })
+    }).pipe(Effect.provide(LocationServiceMap.Service.get(location)))
+  })
