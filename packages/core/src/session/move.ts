@@ -21,6 +21,7 @@ import { SessionExecution } from "./execution.js"
 import { SessionInbox } from "./inbox.js"
 import { SessionMessage } from "./message.js"
 import { SessionProjector } from "./projector.js"
+import { SessionRevert } from "./revert.js"
 import { SessionRunner } from "./runner/index.js"
 import { SessionStore } from "./store.js"
 
@@ -137,6 +138,9 @@ const layer = Layer.effect(
           input.sessionID,
           Effect.gen(function* () {
             const latest = yield* get(input.sessionID)
+            // A staged revert is committed first, as a prompt commits it: its stored tree and paths belong to the folder
+            // the session leaves, so a redo from the destination could only hand git another repository's tree.
+            if (latest.revert) yield* SessionRevert.commit(bus, latest)
             // Only recover the placement we probed; active runners retain their step-boundary handoff.
             if (
               unavailable &&

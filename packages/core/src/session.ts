@@ -37,6 +37,7 @@ import {
   NotFoundError,
   OutputSchemaError,
   PromptConflictError,
+  RewindError,
   SkillNotFoundError,
   SyntheticConflictError,
 } from "./session/error.js"
@@ -57,6 +58,7 @@ import {
 import { SessionModelTransport } from "./session/model-transport.js"
 import { llmClient } from "./effect/app-node-platform.js"
 import { Snapshot } from "./snapshot.js"
+import { WorkspaceTrust } from "./workspace-trust.js"
 import { Session } from "./session/session.js"
 import { SessionDiff, TurnRangeError } from "./session/diff.js"
 import { LocationServiceMap } from "./location-service-map.js"
@@ -116,6 +118,7 @@ export {
   NotFoundError,
   OutputSchemaError,
   PromptConflictError,
+  RewindError,
   SkillNotFoundError,
   SyntheticConflictError,
 }
@@ -155,6 +158,7 @@ export interface Interface {
     readonly from?: SessionMessage.ID
     readonly to?: SessionMessage.ID
     readonly context?: number
+    readonly scope?: "turn" | "prompt"
   }) => Effect.Effect<readonly FileDiff.Info[], NotFoundError | MessageNotFoundError | TurnRangeError | Snapshot.Error>
   /**
    * Durable admitted session work not yet visible in projected history,
@@ -235,6 +239,15 @@ export interface Interface {
     }) => Effect.Effect<SessionSchema.Revert, NotFoundError | MessageNotFoundError | BusyError | Snapshot.Error>
     readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error>
     readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
+    /** Code-only rewind to a prompt's checkpoint; see `SessionRevert.files`. */
+    readonly files: (input: {
+      sessionID: SessionSchema.ID
+      messageID: SessionMessage.ID
+      dryRun?: boolean
+    }) => Effect.Effect<
+      SessionSchema.RewindFiles,
+      NotFoundError | MessageNotFoundError | BusyError | RewindError | WorkspaceTrust.UntrustedError
+    >
   }
 }
 
@@ -428,6 +441,7 @@ const layer = Layer.effect(
           from: input.from,
           to: input.to,
           context: input.context,
+          scope: input.scope,
         })
       }),
       inbox: (sessionID) => sessions.forSession(sessionID).inbox(),
@@ -504,6 +518,7 @@ const layer = Layer.effect(
         stage: (input) => sessions.forSession(input.sessionID).revert.stage(input),
         clear: (sessionID) => sessions.forSession(sessionID).revert.clear(),
         commit: (sessionID) => sessions.forSession(sessionID).revert.commit(),
+        files: (input) => sessions.forSession(input.sessionID).revert.files(input),
       },
     })
 
