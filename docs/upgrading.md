@@ -3010,6 +3010,14 @@ command's edits stay as they are (`session-revert-files.test.ts`, "undoes only t
 conversation revert with its files"). To record what it changed, Write now names its file in the completed call, as
 Edit already did, and a Patch move names its source beside its destination.
 
+Undo and the code-only rewind count only the file-tool calls made in the folder the session is in now. After the
+session has moved (EnterWorktree, ExitWorktree or a session move), a file that a file tool changed in the other folder
+is a different file from the one with the same name here, so a shell edit to the one here stays; calls made here
+before the session left and came back still count (`session-revert.test.ts`, "Session.revert names from another
+folder"). A Write recorded before this upgrade did not name its file in its result, so it counts by the path it was
+given; a Patch move recorded before the upgrade names only its destination, so undoing it does not bring the source
+back.
+
 A restore now skips, with a log line, a file whose folder became a link after the snapshot (a junction, a dangling link
 or a link to a share), a file whose own name is now a link or a folder, and a file one of whose folders is now a file
 of yours; the other files still go back. Before, git wrote through the link, removed a junction's target files on

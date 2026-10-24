@@ -1601,7 +1601,10 @@ the store.
   rest of the step (`packages/core/test/snapshot-restore-links.test.ts`, "… refuses an option-shaped ID and writes no
   file"; `packages/server/test/session-revert-files.test.ts`, "keeps a forged checkpoint ID of an imported session away
   from git"). A rewind writes and deletes only paths that git reports as changed since the checkpoint, filtered by the
-  names the session's file tools recorded, so no stored name becomes a path by itself.
+  names the session's file tools recorded, so no stored name becomes a path by itself. A name counts only when its step
+  ran in the folder being restored, as the session's recorded moves place it, so a name recorded in another folder
+  never selects a file here (class 3, one resolved folder; `packages/core/test/session-revert.test.ts`,
+  "Session.revert names from another folder").
 - For every identifier in a change, say where it comes from: the runner, the person, or a file that a clone can ship.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust
