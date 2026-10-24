@@ -228,6 +228,25 @@ test("a batch is asked about once its step ended and every call settled, a faile
   expect(at("tool_label")).toBeLessThan(at("result"))
 })
 
+test("a batch whose calls all settled is not asked about until its step ends, so a later call of the step joins it", async () => {
+  const h = harness({ labels: true })
+  await period(h, "one", "succeeded", async () => {
+    ;[called("msg_a", "call_1"), success("msg_a", "call_1")].forEach((event) => h.emit(event))
+    await Bun.sleep(100)
+    // Every call seen so far has settled, but the step may still stream another call.
+    expect(h.state.labels).toHaveLength(0)
+    ;[called("msg_a", "call_2"), success("msg_a", "call_2"), ended("msg_a")].forEach((event) => h.emit(event))
+    await waitFor(() => h.state.labels.length === 1)
+    h.state.labels[0].answer({ label: "Read two files" })
+  })
+  await finish(h)
+
+  expect(h.state.labels.map((request) => request.input)).toEqual([
+    { sessionID, messageID: "msg_a", toolCallIDs: ["call_1", "call_2"] },
+  ])
+  expect(labels(h).map((line) => line.label)).toEqual(["Read two files"])
+})
+
 test("a label answered after its period ended is still written before that period's result", async () => {
   const h = harness({ labels: true })
   await period(h, "one", "succeeded", async () => {
