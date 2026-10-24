@@ -597,6 +597,102 @@ describe("a link in the memory folder", () => {
     )
 })
 
+// Class 4: the carve-out decides a call only when every real place it leads to is in the real memory folder. An asker
+// that gives no real place has its spelling taken as that place, so a spelling through a linked data folder that comes
+// without the place it leads to, or a call that leads to one place outside the folder beside one inside, is not decided
+// by it. Each row checks the same call with only a real place inside the folder as its control.
+describe("the real places a memory call leads to", () => {
+  const ask = (resource: string, leads?: readonly string[]) =>
+    Effect.gen(function* () {
+      const permission = yield* Permission.Service
+      const answer = yield* permission.ask({
+        id: Permission.ID.create(),
+        action: "Edit",
+        resources: [resource],
+        ...(leads === undefined ? {} : { leads: { [resource]: leads } }),
+        sessionID: SessionSchema.ID.make(main),
+        agent: probe,
+      })
+      return answer.effect
+    })
+
+  it.live(
+    "does not decide a linked spelling of the folder that comes without the real place it leads to",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const linked = path.join(l.root, "data-link")
+        yield* Effect.promise(() => fs.symlink(l.data, linked, linkType))
+        yield* Effect.promise(() => fs.mkdir(l.memory, { recursive: true }))
+        const resource = path.join(linked, "memory", Project.ID.global, "a.md")
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l)
+          return { bare: yield* ask(resource), led: yield* ask(resource, [path.join(l.memory, "a.md")]) }
+        }).pipe(provide(l, { data: linked }))
+        expect(out.led).toBe("allow")
+        expect(out.bare).not.toBe("allow")
+      }),
+    timeout,
+  )
+
+  it.live(
+    "does not decide a call that leads to a place outside the folder as well as to one inside it",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const resource = path.join(l.memory, "a.md")
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l)
+          return {
+            inside: yield* ask(resource, [resource]),
+            both: yield* ask(resource, [resource, path.join(l.elsewhere, "a.md")]),
+          }
+        }).pipe(provide(l))
+        expect(out.inside).toBe("allow")
+        expect(out.both).not.toBe("allow")
+      }),
+    timeout,
+  )
+})
+
+// Class 8: a managed ask does not reach the memory folder, as no other ask does, while a managed deny for a memory file
+// decides it. A project file still meets the managed ask, the control that the managed rules apply at all.
+describe("managed rules and the memory folder", () => {
+  it.live(
+    "writes and reads memory without a question under a managed ask, and a managed deny still decides",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l)
+          const policy = yield* ManagedPolicy.Service
+          yield* policy.set("file", {
+            statements: [],
+            rules: [
+              { action: "Edit", resource: "*", effect: "ask" },
+              { action: "Read", resource: "*", effect: "ask" },
+              { action: "external_directory", resource: "*", effect: "ask" },
+              { action: "Edit", resource: path.join(l.memory, "secret.md"), effect: "deny" },
+            ],
+          })
+          return {
+            write: yield* decide(path.join(l.memory, "a.md")),
+            read: yield* decide(path.join(l.memory, "a.md"), "Read"),
+            denied: (yield* decide(path.join(l.memory, "secret.md"))).effect,
+            project: yield* decide(path.join(l.project, "a.md")),
+          }
+        }).pipe(provide(l))
+        expect(out).toEqual({
+          write: allowEdit,
+          read: { effect: "allow", stage: "Read" },
+          denied: "deny",
+          project: { effect: "ask", stage: "Edit" },
+        })
+      }),
+    timeout,
+  )
+})
+
 // Classes 3, 4 and 8: `memory.directory` moves the folder, and the carve-out moves with it. Only the person's own
 // scopes and the administrator's choose it: a project's value is not read, even in a trusted project, because a
 // repository could otherwise point it at `~/.ssh` and write there without a question.

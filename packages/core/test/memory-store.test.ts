@@ -6,6 +6,7 @@
 // gets a staleness note.
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
+import net from "net"
 import os from "os"
 import path from "path"
 import { NodeFileSystem } from "@effect/platform-node"
@@ -465,6 +466,27 @@ describe("MemoryStore.scan", () => {
           `readFileString ${alias}`,
         )
       }),
+    )
+
+  // An entry that is not a file, a folder or a link is never touched past the listing, whatever its name: a read of a
+  // FIFO named like a memory file would wait for a writer and hold the session's start. A Unix socket stands in for it
+  // here, since its read fails at once; the recorded file system is the oracle, and the plain file is the control.
+  if (process.platform !== "win32")
+    it.live("leaves an entry that is not a file, a folder or a link alone, even when it is named like a memory file", () =>
+      Effect.gen(function* () {
+        const folder = (yield* tmpdirScoped()).path
+        const socket = path.join(folder, "s.md")
+        yield* Effect.promise(() => write(path.join(folder, "kept.md"), typed("control"), 1_000_000))
+        const server = net.createServer()
+        yield* Effect.acquireRelease(
+          Effect.promise(() => new Promise<void>((resolve) => server.listen(socket, resolve))),
+          () => Effect.promise(() => new Promise<void>((resolve) => server.close(() => resolve()))),
+        )
+        const recorded = recordedFileSystem()
+        const headers = yield* MemoryStore.scan(folder).pipe(Effect.provide(recorded.layer))
+        expect(headers.map((item) => item.file)).toEqual(["kept.md"])
+        expect(recorded.calls.filter((call) => call.endsWith(` ${socket}`))).toEqual([])
+      }).pipe(Effect.scoped),
     )
 
   // A folder that is itself reached through a link is the person's choice of place: its files are listed.
