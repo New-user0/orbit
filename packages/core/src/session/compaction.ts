@@ -283,7 +283,7 @@ export const layer = Layer.effect(
         if (Result.isSuccess(first) && first.success.text.trim()) return yield* finish(first.success)
 
         const second = yield* Effect.result(call(fallbackRequest(request, outputMax)))
-        if (Result.isSuccess(second)) return yield* second.success.text.trim() ? finish(second.success) : Effect.fail(NO_SUMMARY)
+        if (Result.isSuccess(second)) return yield* finish(second.success)
         const cause = second.failure
         if (!(cause instanceof AIError)) return yield* Effect.fail(cause)
         if (!isContextOverflowFailure(cause)) return yield* Effect.fail<Failure>({ error: toSessionError(cause) })

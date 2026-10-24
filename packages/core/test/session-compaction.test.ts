@@ -1386,3 +1386,161 @@ it.effect("analysis never stored: a second analysis ahead of the handoff", () =>
     expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
   }),
 )
+
+// Gate mutations: each test below fails when the line named in its comment is broken.
+const failedFinish = () =>
+  Stream.make(
+    LLMEvent.stepFinish({ index: 0, reason: { normalized: "error" }, usage }),
+    LLMEvent.finish({ reason: { normalized: "error" } }),
+  )
+
+it.effect("a summary that a compaction hook supplies with no text outside the analysis fails as no summary", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "compaction", (event) =>
+      Effect.sync(() => {
+        event.result = { summary: "<analysis>DRAFT-I only</analysis>" }
+      }),
+    )
+    const run = yield* scripted("ses_cm2_hook_blank", [userText("Do it")], [])
+    expect(run.outcome).toMatchObject({ status: "failed", error: { message: NO_SUMMARY } })
+    expect(run.sent).toEqual([])
+    expect(run.summary).toBeUndefined()
+  }),
+)
+
+it.effect("a first reply of only whitespace goes to the fallback", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_whitespace",
+      [userText("Do it")],
+      [answer("  \n\t"), answer("<handoff>\nfallback\n</handoff>")],
+      { context: withTools(32_000) },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(2)
+    expect(run.sent[1]?.system).toHaveLength(1)
+  }),
+)
+
+it.effect("a failure that is not a context overflow stops the fallback at once, without dropping history", () =>
+  Effect.gen(function* () {
+    const refused = () => Stream.make(LLMEvent.providerError({ message: "The provider refused this request" }))
+    const run = yield* scripted("ses_cm2_refused_twice", rounds(3), [refused, refused, answer("unused")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toMatchObject({ status: "failed", error: { message: expect.stringContaining("refused") } })
+    expect(run.sent).toHaveLength(2)
+  }),
+)
+
+it.effect("a prompt-too-long gap larger than the whole history still keeps the newest round group", () =>
+  Effect.gen(function* () {
+    const gap = tooLong("prompt is too long: 900000 tokens > 1000 maximum")
+    const run = yield* scripted("ses_cm2_ptl_huge", rounds(3), [gap, gap, answer("<handoff>\nfits\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    const sent = JSON.stringify(run.sent[2]?.messages)
+    expect(sent).not.toContain("A2-reply")
+    expect(sent).toContain("A3-reply")
+    expect(sent).toContain("U3-ask")
+  }),
+)
+
+it.effect("the fallback asks for at most 20,000 tokens, also when the model states no output limit", () =>
+  Effect.gen(function* () {
+    for (const output of [32_000, 0]) {
+      const run = yield* scripted(
+        `ses_cm2_cap_${output}`,
+        [userText("Do it")],
+        [silent, answer("<handoff>\nok\n</handoff>")],
+        { context: withTools(output) },
+      )
+      expect(run.sent[1]?.generation?.maxTokens).toBe(20_000)
+    }
+  }),
+)
+
+it.effect("the fallback sends no message that is left without content", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "compaction", (event) =>
+      Effect.sync(() => {
+        event.messages.unshift(Message.effort({ effort: "high" }))
+      }),
+    )
+    const run = yield* scripted(
+      "ses_cm2_fallback_empty",
+      [userText("Do it")],
+      [silent, answer("<handoff>\nok\n</handoff>")],
+      { context: withTools(32_000) },
+    )
+    expect(run.sent[1]?.messages.length).toBe((run.sent[0]?.messages.length ?? 0) - 1)
+    expect(run.sent[1]?.messages.every((message) => message.content.length > 0)).toBe(true)
+  }),
+)
+
+it.effect("a retryable failure of the first request is resent under the retry policy and its hook", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    let decided = 0
+    yield* hooks.register("session", "retry", (event) =>
+      Effect.sync(() => {
+        decided++
+        event.decision = { retry: true, delay: 0 }
+      }),
+    )
+    const run = yield* scripted(
+      "ses_cm2_retry_yes",
+      [userText("Do it")],
+      [failedFinish, answer("<handoff>\nretried\n</handoff>")],
+      { context: withTools(32_000) },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(decided).toBe(1)
+    // The same request is sent again: no fallback system prompt.
+    expect(run.sent).toHaveLength(2)
+    expect(run.sent[1]?.system).toHaveLength(run.sent[0]?.system.length ?? -1)
+  }),
+)
+
+it.effect("a hook that declines the retry sends the first request's failure on to the fallback", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "retry", (event) =>
+      Effect.sync(() => {
+        event.decision = { retry: false }
+      }),
+    )
+    const run = yield* scripted(
+      "ses_cm2_retry_no",
+      [userText("Do it")],
+      [failedFinish, answer("<handoff>\nfallback\n</handoff>")],
+      { context: withTools(32_000) },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(2)
+    expect(run.sent[1]?.system).toHaveLength(1)
+  }),
+)
+
+it.effect("a context overflow never reaches the retry policy", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    let decided = 0
+    yield* hooks.register("session", "retry", (event) =>
+      Effect.sync(() => {
+        decided++
+        event.decision = { retry: true, delay: 0 }
+      }),
+    )
+    const gap = tooLong("Input is longer than the context window")
+    const run = yield* scripted("ses_cm2_overflow_policy", rounds(3), [gap, gap, answer("<handoff>\nfits\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(decided).toBe(0)
+    expect(run.sent).toHaveLength(3)
+  }),
+)
