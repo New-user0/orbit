@@ -100,6 +100,8 @@ const input = {
   maxCost: Option.none(),
   maxTokens: Option.none(),
   fallbackModel: Option.none(),
+  toolLabels: false,
+  promptSuggestions: false,
   auto: false,
   yolo: false,
   dangerouslySkipPermissions: false,

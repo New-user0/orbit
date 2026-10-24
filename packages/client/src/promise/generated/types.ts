@@ -290,6 +290,33 @@ export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
 
+export type SessionAssistLabelSkip = "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
+
+export type SessionAssistSuggestionSkip =
+  | "subagent"
+  | "early_conversation"
+  | "last_response_error"
+  | "cache_cold"
+  | "pending_permission"
+  | "elicitation_active"
+  | "plan_mode"
+  | "busy"
+  | "aborted"
+  | "unavailable"
+  | "empty"
+  | "done"
+  | "meta_text"
+  | "meta_wrapped"
+  | "error_message"
+  | "prefixed_label"
+  | "too_few_words"
+  | "too_many_words"
+  | "too_long"
+  | "multiple_sentences"
+  | "has_formatting"
+  | "evaluative"
+  | "assistant_voice"
+
 export type LocationRef = { directory: string; workspaceID?: string }
 
 export type SessionInboxSyntheticPayload1 = { text: string; description?: string; metadata?: { [x: string]: any } }
@@ -759,6 +786,10 @@ export type InstructionStatus = {
 export type InstructionEntryInfo = { key: InstructionEntryKey; value: JsonValue }
 
 export type InstructionEntrySnapshot = Array<{ key: InstructionEntryKey; value: JsonValue; removed: boolean }>
+
+export type SessionAssistLabel = { label: string } | { label: null; reason: SessionAssistLabelSkip }
+
+export type SessionAssistSuggestion = { suggestion: string } | { suggestion: null; reason: SessionAssistSuggestionSkip }
 
 export type SessionAgentSelected = {
   id: string
@@ -2092,6 +2123,10 @@ export type SessionForked = {
   }
 }
 
+export type SessionAssistLabelResponse = { data: SessionAssistLabel }
+
+export type SessionAssistSuggestionResponse = { data: SessionAssistSuggestion }
+
 export type SessionToolSuccess = {
   id: string
   created: number
@@ -2349,6 +2384,7 @@ export type ConfigEntry =
         system_prompt_file?: string
         append_system_prompt?: string
         update?: "disable" | "notify" | "auto"
+        cleanup_period_days?: number
         share?: "manual" | "auto" | "disabled"
         enterprise?: { url?: string }
         username?: string
@@ -5306,6 +5342,24 @@ export type SessionGenerateInput = {
 }
 
 export type SessionGenerateOutput = SessionGenerateResponse["data"]
+
+export type SessionAssistLabelInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly messageID: {
+    readonly messageID: string
+    readonly toolCallIDs: readonly [string, ...Array<string>]
+  }["messageID"]
+  readonly toolCallIDs: {
+    readonly messageID: string
+    readonly toolCallIDs: readonly [string, ...Array<string>]
+  }["toolCallIDs"]
+}
+
+export type SessionAssistLabelOutput = SessionAssistLabelResponse["data"]
+
+export type SessionAssistSuggestionInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionAssistSuggestionOutput = SessionAssistSuggestionResponse["data"]
 
 export type SessionLogInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

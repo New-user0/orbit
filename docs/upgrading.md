@@ -791,6 +791,25 @@ changed config, and SDK hosts that read `changed` or send `holder`.
 config folder, or `.orbit` in your home folder). Look over what a pull brings into a folder you trust, or end the trust
 with `orb trust --revoke`.
 
+### Idle sessions are removed after 30 days (`cleanup_period_days`)
+
+The Orbit server now removes a session, with its subagents, its forks and their saved tool results and scratchpads,
+once none of them has changed for `cleanup_period_days` days (default 30). A session that is shared, has queued input
+or was running when the server stopped is kept. The first pass runs 10 minutes after the server starts, later ones every
+24 hours, and a pass waits while a session was active in the last minute. Sessions from before this version count their
+idle time from the first start of this version, so nothing is removed until 30 days after the upgrade. `orb stats`
+keeps counting removed sessions. `0` removes every session that can be removed at the next pass; sessions are still
+saved while they are used. A value that is not a whole number of 0 or more, a config file with errors while the key is
+set, a config file that does not parse, a config file that cannot be read, or an organization's remote config that cannot be fetched (for example while offline) skips the cleanup; this includes the managed settings files and a file the server reads again after it changes. A file that sets one value twice and keeps one of them has no error. A bare run
+(`orb run --bare`, `orb -p --bare`) removes nothing. The flat `tool_*` files of earlier versions in the saved-results folder follow the same period instead of a
+fixed 7 days. A pass removes the saved-result and scratchpad folders only of sessions removed from the same database
+from this version on, so the folders of sessions removed earlier, and those of another channel's or `ORBIT_DB`'s
+sessions, stay where they are; delete them by hand if you no longer need them.
+
+**Affects:** everyone who keeps sessions for longer than 30 days without changing them.
+
+**What to do:** set `cleanup_period_days` to a larger number in your own config to keep sessions longer.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -1858,6 +1877,27 @@ even its branches, and prints one line naming the link. Before, such a link coul
 which one of those folders is a link.
 
 **What to do:** nothing. If clean names a link, remove the link and run it again.
+
+### Opt-in tool labels and prompt suggestions for stream-json runs
+
+`orb -p` and `orb run` take two new flags, both off unless given and both only with `--input-format stream-json` and
+stream-json output. `--tool-labels` asks the side model for a short label after each finished batch of tool calls and
+writes it as a `tool_label` line (`messageID`, `toolIDs`, `label`) before the result of that batch's message; a batch
+that was interrupted gets none. `--prompt-suggestions` asks the session's own model, with the conversation, what you
+might type next after each result that was not interrupted, and writes a `prompt_suggestion` line (`suggestion`). A new
+`user`, `interrupt` or `end` line drops a suggestion still being written, and when standard input closes the run waits up
+to five seconds for one. Each label and each suggestion is a model call that spends tokens. Without the flags nothing is asked.
+
+The server has two new routes for this, `POST /api/session/:sessionID/assist/label` and
+`POST /api/session/:sessionID/assist/suggestion`. They store nothing and send nothing to the session; they answer with
+the text, or with `null` and the reason there is none (for a suggestion: a conversation with fewer than two replies, a
+failed last reply, a last reply that wrote more than 10,000 uncached tokens, a pending approval or form, Plan mode, a
+running session, a subagent's session, or a filter that dropped the text). Both refuse a session whose folder is not
+trusted with `UntrustedFolderError`.
+
+**Affects:** programs that drive `orb -p` or `orb run` with stream-json, and SDK callers.
+
+**What to do:** Nothing. Pass the flags to get the lines; escape the text before you print it, as for any model text.
 
 ## Permissions
 

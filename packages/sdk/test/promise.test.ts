@@ -58,9 +58,9 @@ test("closing cancels active Promise event streams", async () => {
   const orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } , trust: { implicit: true } })
   const events = orbit.events.subscribe()[Symbol.asyncIterator]()
   expect(await events.next()).toMatchObject({ value: { type: "server.connected" }, done: false })
-  const pending = events.next()
+  // The stream can reject before close resolves, so the handler goes on first or the runner reports it as unhandled.
+  const pending = events.next().catch((error: unknown) => error)
 
   await orbit.close()
-  const error = await pending.catch((error: unknown) => error)
-  expect(error).toMatchObject({ name: "ClientError", reason: "Transport" })
+  expect(await pending).toMatchObject({ name: "ClientError", reason: "Transport" })
 })

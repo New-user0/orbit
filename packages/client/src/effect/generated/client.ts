@@ -100,6 +100,10 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionAssistLabelInput,
+  SessionAssistLabelOutput,
+  SessionAssistSuggestionInput,
+  SessionAssistSuggestionOutput,
   SessionLogInput,
   SessionLogOutput,
   SessionInterruptInput,
@@ -761,6 +765,25 @@ const EndpointSessionGenerate = (raw: RawClient["server.session"]) => (input: Se
     ),
   )
 
+const EndpointSessionAssistLabel = (raw: RawClient["server.session"]) => (input: SessionAssistLabelInput) =>
+  preserveEffect<SessionAssistLabelOutput>()(
+    raw["session.assist.label"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { messageID: input["messageID"], toolCallIDs: input["toolCallIDs"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionAssistSuggestion = (raw: RawClient["server.session"]) => (input: SessionAssistSuggestionInput) =>
+  preserveEffect<SessionAssistSuggestionOutput>()(
+    raw["session.assist.suggestion"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointSessionLog = (raw: RawClient["server.session"]) => (input: SessionLogInput) =>
   preserveStream<SessionLogOutput>()(
     Stream.unwrap(
@@ -895,6 +918,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
     },
   },
   generate: EndpointSessionGenerate(raw),
+  assist: { label: EndpointSessionAssistLabel(raw), suggestion: EndpointSessionAssistSuggestion(raw) },
   log: EndpointSessionLog(raw),
   interrupt: EndpointSessionInterrupt(raw),
   background: EndpointSessionBackground(raw),
