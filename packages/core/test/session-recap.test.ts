@@ -804,3 +804,102 @@ it.effect("a tool call and its result in the window go as text, so the request n
     expect(JSON.stringify(prepared.body)).toContain("[Tool result]: found it")
   }),
 )
+
+// One step with one tool call and its result: an assistant message and a tool message once lowered.
+const toolStep = (bus: Bus.Interface, index: number) =>
+  Effect.gen(function* () {
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("build"),
+      model: { providerID: Provider.ID.make("test"), id: Model.ID.make("recap-primary") },
+      started: 0,
+    })
+    const id = `call_${index}`
+    yield* bus.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, id, name: "lookup" })
+    yield* bus.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID, id, input: {}, executed: false })
+    yield* bus.publish(SessionEvent.Tool.Success, {
+      sessionID,
+      assistantMessageID,
+      id,
+      content: [{ type: "text", text: `found ${index}` }],
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Step.Ended, {
+      sessionID,
+      assistantMessageID,
+      finish: "tool-calls",
+      cost: Money.USD.make(0),
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+  })
+
+// One step that only answers in text: an assistant message once lowered.
+const textStep = (bus: Bus.Interface, text: string) =>
+  Effect.gen(function* () {
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("build"),
+      model: { providerID: Provider.ID.make("test"), id: Model.ID.make("recap-primary") },
+      started: 0,
+    })
+    yield* bus.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID, ordinal: 0 })
+    yield* bus.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID, ordinal: 0, text })
+    yield* bus.publish(SessionEvent.Step.Ended, {
+      sessionID,
+      assistantMessageID,
+      finish: "stop",
+      cost: Money.USD.make(0),
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+  })
+
+// A long run of tool calls after one prompt leaves no user message in the last 30, so the window opens on the first
+// tool result there, written out as user text, rather than sending the recap instruction with nothing to recap.
+it.effect("a window of tool steps alone opens on its first tool result, so the recap still sees the work", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    // 31 messages in all: the prompt, then 15 steps of an assistant message and a tool message each.
+    for (const index of Array.from({ length: 15 }, (_, item) => item + 1)) yield* toolStep(bus, index)
+    yield* test.push(answer("Looking things up."))
+
+    expect(yield* recap.generate(sessionID)).toEqual({ text: "Looking things up." })
+
+    const [request] = yield* test.requests()
+    // The window's first message is step 1's tool call, so it opens on that step's result: 29 messages, then the
+    // instruction.
+    expect(request?.messages).toHaveLength(30)
+    expect(request?.messages[0]?.role).toBe("user")
+    expect(userTexts(request)[0]).toBe("[Tool result]: found 1")
+    expect(allText(request)).toContain("[Tool result]: found 15")
+    const prepared = yield* compileRequest(
+      LLMRequest.update(request!, {
+        model: AmazonBedrock.configure({ baseURL: "https://bedrock-runtime.test", apiKey: "test" }).model("recap"),
+      }),
+    )
+    expect((prepared.body as { messages: ReadonlyArray<{ role: string }> }).messages[0]?.role).toBe("user")
+  }),
+)
+
+// With neither a user message nor a tool result in the last 30, nothing in the window can open a conversation, so only
+// the instruction goes.
+it.effect("a window of assistant replies alone is left out, as no conversation may open on the assistant", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    for (const index of Array.from({ length: 30 }, (_, item) => item + 1)) yield* textStep(bus, `reply ${index}`)
+    yield* test.push(answer("Fixing the build."))
+
+    yield* recap.generate(sessionID)
+
+    const [request] = yield* test.requests()
+    expect(request?.messages.map((message) => message.role)).toEqual(["user"])
+    expect(allText(request)).not.toContain("reply ")
+  }),
+)
