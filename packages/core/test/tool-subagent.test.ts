@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { TestLLM } from "@orbit/ai/testing"
@@ -35,6 +35,17 @@ import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Permission } from "@orbit/core/permission"
 import { AgentInstructions } from "@orbit/core/agent/instructions"
 import { SubagentTool } from "@orbit/core/tool/plugin/subagent"
+import { ShellTool } from "@orbit/core/tool/plugin/shell"
+import { Shell } from "@orbit/core/shell"
+import { ShellSelect } from "@orbit/core/shell/select"
+import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
+import { Environment } from "@orbit/core/environment/index"
+import { FileAccess } from "@orbit/core/file-access"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
+import { ProjectTrust } from "@orbit/core/project-trust"
+import { SdkPlugins } from "@orbit/core/plugin/sdk"
+import { FSUtil } from "@orbit/util/fs-util"
+import { filesystem } from "@orbit/util/effect/app-node-platform"
 import { WorkflowTool } from "@orbit/core/tool/plugin/workflow"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { Tool } from "@orbit/core/tool"
@@ -1059,6 +1070,181 @@ describe("SubagentTool in Plan mode", () => {
       }),
     ),
     // A loaded Windows host needs more than the default limit.
+    30_000,
+  )
+})
+
+// shell-safety-6 (FU-M3-152): when the run that an Agent call started ends, by completing, by failing or in the
+// background, every shell the child session still has running is killed, and none of them reports back to the child.
+// The parent's shell is the control: it keeps running.
+describe("SubagentTool and the child's shells", () => {
+  const idleCommand = process.platform === "win32" ? "Start-Sleep -Seconds 60" : "sleep 60"
+
+  const childShells = (input: { title: string; background: boolean }) =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const child = yield* sessions.create({
+            parentID: parent.id,
+            title: input.title,
+            agent: Agent.ID.make("reviewer"),
+            model: childModel,
+          })
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const shell = yield* Shell.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const selected = ShellSelect.resolve({ priority: "compat" })
+          const start = (sessionID: Session.ID) =>
+            shell.create({ shell: selected, command: idleCommand, timeout: 0, metadata: { sessionID } })
+          const childShell = yield* start(child.id)
+          const parentShell = yield* start(parent.id)
+
+          yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-child-shells",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: input.title,
+                prompt: "work",
+                sessionID: child.id,
+                ...(input.background ? { background: true } : {}),
+              },
+            },
+          })
+
+          // Fails on the base: nothing kills the child's shell, so the wait runs out.
+          const ended = yield* shell.wait(childShell.id).pipe(Effect.timeout(Duration.seconds(15)))
+          expect(ended.status).toBe("killed")
+          expect((yield* shell.get(parentShell.id)).status).toBe("running")
+          yield* shell.kill(parentShell.id)
+        }),
+      ),
+    )
+
+  it.live("kills the child's shells when its run ends: a foreground run", () => childShells({ title: "done", background: false }), 30_000)
+  it.live("kills the child's shells when its run ends: a failed run", () => childShells({ title: "fail", background: false }), 30_000)
+  it.live("kills the child's shells when its run ends: a background run", () => childShells({ title: "detached", background: true }), 30_000)
+})
+
+const shellSubagentSupervisor = makeLocationNode({
+  name: "test/subagent-shell-plugins",
+  layer: Layer.effectDiscard(
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      const session: Partial<Context["session"]> = {
+        hook: (name, callback) => hooks.register("session", name, callback),
+      }
+      yield* registerToolPlugin(SubagentTool.Plugin, { session }, (name, callback) => hooks.register("tool", name, callback))
+      yield* registerToolPlugin(ShellTool.Plugin, { session }, (name, callback) => hooks.register("tool", name, callback))
+    }),
+  ),
+  deps: [
+    Agent.node,
+    Config.node,
+    Model.node,
+    Permission.node,
+    Session.node,
+    Job.node,
+    Tool.node,
+    PluginHooks.node,
+    Environment.node,
+    FileAccess.node,
+    FSUtil.node,
+    Location.node,
+    ManagedPolicy.node,
+    ProjectTrust.node,
+    Shell.node,
+    ShellSelect.node,
+    PowerShellParse.node,
+  ],
+})
+const shellSubagentIt = testEffect(
+  AppNodeBuilder.build(LayerNode.group([nodes, filesystem, FSUtil.node, SdkPlugins.node, ManagedPolicy.node]), [
+    ...replacements,
+    PluginSupervisor.node.replace(shellSubagentSupervisor),
+  ]),
+)
+
+describe("SubagentTool and the child's shell notifications", () => {
+  // Fails on the base: the child's background command is not killed, so the wait runs out. Once it is killed, its
+  // completion must not reach the child, whose run has ended and which nothing would read.
+  shellSubagentIt.live(
+    "drops the child's shell notifications when its run ends",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+            const sessions = yield* Session.Service
+            const parent = yield* sessions.create({ location, model: parentModel })
+            yield* withSubagent(parent.location)
+            const child = yield* sessions.create({
+              parentID: parent.id,
+              title: "child",
+              agent: Agent.ID.make("reviewer"),
+              model: childModel,
+            })
+            const locations = yield* LocationServiceMap.Service
+            const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+            const shell = yield* Shell.Service.pipe(Effect.provide(locations.get(parent.location)))
+            const bus = yield* Bus.Service
+            const notified: string[] = []
+            yield* bus.subscribe(SessionEvent.InboxEnqueued).pipe(
+              Stream.filter((event) => event.data.sessionID === child.id && event.data.item.type === "synthetic"),
+              Stream.runForEach((event) =>
+                Effect.sync(() => notified.push((event.data.item.payload as { text: string }).text)),
+              ),
+              Effect.forkScoped({ startImmediately: true }),
+            )
+
+            const started = yield* executeTool(registry, {
+              sessionID: child.id,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-child-background-shell",
+                name: "Bash",
+                input: {
+                  command: process.platform === "win32" ? "Start-Sleep -Seconds 60" : "sleep 60",
+                  run_in_background: true,
+                },
+              },
+            })
+            const shellID = started.status === "completed" ? started.metadata?.shellID : undefined
+            if (typeof shellID !== "string") throw new Error("Expected a background shell")
+
+            yield* executeTool(registry, {
+              sessionID: parent.id,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-child-run",
+                name: SubagentTool.name,
+                input: { agent: "reviewer", description: "child", prompt: "work", sessionID: child.id },
+              },
+            })
+
+            const ended = yield* shell.wait(Shell.ID.make(shellID)).pipe(Effect.timeout(Duration.seconds(15)))
+            expect(ended.status).toBe("killed")
+            yield* Effect.sleep(Duration.seconds(1))
+            expect(notified.filter((text) => text.includes(`<shell id="${shellID}"`))).toEqual([])
+          }),
+        ),
+      ),
     30_000,
   )
 })
