@@ -87,6 +87,8 @@ The registry gate is the last step before `execute` (hooks, decode, traits, `val
 
 Built-ins return complete tool responses. `Tool.Snapshot.execute` is the local execution boundary. The Session step settles each result after execution and after the `execute.after` hooks (`ToolOutput.settle`): an empty one becomes the empty marker, and a text-only one above its threshold (`maxResultChars` capped by `tool_output.max_result_chars`) is saved to the session's folder and marked, while its stored content stays whole. Lowering turns the marker into the saved-output wrapper. A tool never sets `metadata.persisted` itself; the step drops one it finds.
 
+Before each request the runner applies the message budget (`SessionMessageBudget`) to the newest step's results: when together they pass `tool_output.max_message_chars`, the largest are saved through `ToolOutput.persist` and recorded as `session.tool.overridden`, which sets `override` on the projected tool. Lowering renders an override as the same wrapper. A tool that declares `maxResultChars: Infinity` is left out of the budget too.
+
 Producer capture remains local to producers. Shell stores combined process output in its backing file and returns a bounded tail with the full-output path when truncated.
 
 ## Current Gaps

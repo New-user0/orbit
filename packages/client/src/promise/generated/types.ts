@@ -318,6 +318,8 @@ export type SessionMessageToolStateRunning1 = {
   metadata: { [x: string]: JsonValue }
 }
 
+export type SessionMessageAssistantToolOverride = { session: string; name: string; format: 1 }
+
 export type EventLogSynced = { type: "log.synced"; aggregateID: string; seq?: number }
 
 export type SessionInterruptResponse = { interrupted: boolean }
@@ -1616,6 +1618,16 @@ export type SessionMessageAssistantReasoning1 = {
 
 export type ToolContent1 = ToolTextContent | ToolFileContent1
 
+export type SessionToolOverridden = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.tool.overridden"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; assistantMessageID: string; id: string; override: SessionMessageAssistantToolOverride }
+}
+
 export type FormNumberField = {
   key: string
   title?: string
@@ -2474,7 +2486,7 @@ export type ConfigEntry =
         attribution?: { commit?: string; pr?: string }
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
         shell_tool?: { timeout?: number; max_timeout?: number }
-        tool_output?: { max_lines?: number; max_bytes?: number; max_result_chars?: number }
+        tool_output?: { max_lines?: number; max_bytes?: number; max_result_chars?: number; max_message_chars?: number }
         tool_execution?: { max_concurrency?: number }
         mcp?: {
           timeout?: { startup?: number; catalog?: number; execution?: number }
@@ -2617,6 +2629,7 @@ export type SessionMessageAssistantTool = {
   executed?: boolean
   providerState?: SessionMessageProviderState
   providerResultState?: SessionMessageProviderState
+  override?: JsonValue
   state:
     | SessionMessageToolStateStreaming
     | SessionMessageToolStateRunning
@@ -2638,6 +2651,7 @@ export type SessionMessageAssistantTool1 = {
   executed?: boolean
   providerState?: SessionMessageProviderState1
   providerResultState?: SessionMessageProviderState1
+  override?: JsonValue
   state:
     | SessionMessageToolStateStreaming
     | SessionMessageToolStateRunning1
@@ -2806,6 +2820,7 @@ export type SessionEventDurable =
   | SessionUsageRecorded
   | SessionSideQueryRecorded
   | SessionMessageContentUpdated
+  | SessionToolOverridden
 
 export type IntegrationInfo = {
   id: string
@@ -3672,6 +3687,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -4023,6 +4039,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -4374,6 +4391,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {

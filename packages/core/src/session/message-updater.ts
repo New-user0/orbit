@@ -378,6 +378,24 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
           }
         })
       },
+      // The stored result keeps the tool's own content; the override only changes what the model is sent.
+      "session.tool.overridden": (event) =>
+        Effect.gen(function* () {
+          const assistant = yield* adapter.getAssistant(event.data.assistantMessageID)
+          const index =
+            assistant?.content.findLastIndex((item) => item.type === "tool" && item.id === event.data.id) ?? -1
+          const match = assistant?.content[index]
+          if (assistant === undefined || match?.type !== "tool" || match.state.status !== "completed")
+            return yield* Effect.logWarning("a tool override names no completed result, so nothing changes", {
+              assistantMessageID: event.data.assistantMessageID,
+              id: event.data.id,
+            })
+          yield* adapter.updateAssistant(
+            produce(assistant, (draft) => {
+              draft.content[index] = castDraft({ ...match, override: { ...event.data.override } })
+            }),
+          )
+        }),
       "session.reasoning.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
