@@ -13,12 +13,15 @@ import { Global } from "@orbit/util/global"
 import { plain } from "@orbit/util/plain"
 import { FileRetention } from "./file-retention.js"
 import { SessionFolder } from "./session/folder.js"
+import { SessionMessage } from "./session/message.js"
 
 /** The shell's own capture limits (`Shell.result`). A saved result is decided by characters, not by these. */
 export const MAX_LINES = 2_000
 export const MAX_BYTES = 50 * 1024 // 50 KiB
 /** The ceiling on every finite result limit when the person sets neither `max_result_chars` nor `max_bytes`. */
 export const MAX_RESULT_CHARS = 50_000
+/** The most characters of tool results one step sends together when `max_message_chars` is not set. */
+export const MAX_MESSAGE_CHARS = 200_000
 export const RETENTION = Duration.days(7)
 export const DIRECTORY = "tool-output"
 /** The version of the wrapper a `persisted` marker asks for. */
@@ -27,7 +30,13 @@ const PREVIEW_CHARS = 2_000
 const ERROR_CHARS = 10_000
 
 const MESSAGE = /^msg_[A-Za-z0-9]{1,64}$/
-const NAME = /^msg_[A-Za-z0-9]{1,64}-[A-Za-z0-9_-]{0,64}-[0-9a-f]{8}\.(txt|json)$/
+
+/**
+ * What the message budget records on a result it saved: the same session, name and format a `persisted` marker holds,
+ * without the size, which lowering takes from the stored content.
+ */
+export const Override = SessionMessage.ToolOverride
+export type Override = typeof Override.Type
 
 /**
  * What the step records on a saved result: the session whose folder holds the file, the file's one-segment name, the
@@ -35,10 +44,10 @@ const NAME = /^msg_[A-Za-z0-9]{1,64}-[A-Za-z0-9_-]{0,64}-[0-9a-f]{8}\.(txt|json)
  * folder, so a marker that an imported or forked history carries names a file only once it decodes (class 5).
  */
 export const Persisted = Schema.Struct({
-  session: Schema.String.check(Schema.isPattern(SessionFolder.KEY)),
-  name: Schema.String.check(Schema.isPattern(NAME)),
+  session: Override.fields.session,
+  name: Override.fields.name,
   size: NonNegativeInt,
-  format: Schema.Literal(FORMAT),
+  format: Override.fields.format,
 })
 export type Persisted = typeof Persisted.Type
 
@@ -132,6 +141,16 @@ export interface Interface {
     readonly limit: number
     readonly result: Result
   }) => Effect.Effect<Result>
+  /**
+   * Saves these text parts to the session's folder for the message budget, as `settle` saves a result above its limit,
+   * and answers where, or `undefined` when the file cannot be saved (the result is then sent whole).
+   */
+  readonly persist: (input: {
+    readonly sessionID: string
+    readonly messageID: string
+    readonly callID: string
+    readonly texts: ReadonlyArray<string>
+  }) => Effect.Effect<Override | undefined>
   readonly cleanup: () => Effect.Effect<void>
 }
 
@@ -203,7 +222,12 @@ const layer = Layer.effect(
       return { ...result, metadata: { ...metadata, persisted } }
     })
 
-    return Service.of({ root, settle, cleanup: () => cleanup(files, root) })
+    const persist: Interface["persist"] = (input) =>
+      save({ ...input, saved: savedText(input.texts) }).pipe(
+        Effect.map((saved) => saved && { session: saved.session, name: saved.name, format: saved.format }),
+      )
+
+    return Service.of({ root, settle, persist, cleanup: () => cleanup(files, root) })
   }),
 )
 

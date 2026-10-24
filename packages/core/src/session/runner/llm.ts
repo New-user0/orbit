@@ -39,6 +39,7 @@ import { llmClient } from "../../effect/app-node-platform.js"
 import { StepFailedError } from "../error.js"
 import { SessionRunnerRetry } from "./retry.js"
 import { SessionStep } from "./step.js"
+import { SessionMessageBudget } from "./message-budget.js"
 import { ToolOutput } from "../../tool-output.js"
 import { Plugin } from "../../plugin.js"
 import { ToolNames } from "../../tool/names.js"
@@ -105,6 +106,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
+    const config = yield* Config.Service
     const lifecycle = yield* LocationLifecycle.Service
     const store = yield* SessionStore.Service
     const context = yield* SessionContext.Service
@@ -442,13 +444,25 @@ const layer = Layer.effect(
       while (true) {
         const current = yield* SessionTurn.current(db, sessionID)
         // Reuse boundary preparation once; retries refresh context without delivering more input.
-        const before =
+        let before =
           initial ??
           (yield* Effect.gen(function* () {
             selection = yield* prepareContext(sessionID)
             return yield* loadSelected(selection, current.fallback)
           }))
         initial = undefined
+        // Before automatic compaction, so its estimate measures the wrappers the request will carry. A result that carries
+        // an override is skipped, so a later pass of the step (a retry, a fallback switch, a compaction) keeps the choice.
+        if (
+          yield* SessionMessageBudget.apply({
+            bus,
+            toolOutput,
+            loaded: before,
+            limit:
+              Config.latest(yield* config.entries(), "tool_output")?.max_message_chars ?? ToolOutput.MAX_MESSAGE_CHARS,
+          })
+        )
+          before = yield* loadSelected(selection, current.fallback)
         if (compacted) {
           compacted = false
           yield* report(before, SessionCompaction.estimateContext(before, reminders.minimal), true, breaker)

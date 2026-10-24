@@ -761,3 +761,65 @@ describe("SessionProjector", () => {
     }),
   )
 })
+
+// tool-runtime-9: `session.tool.overridden` sets the override beside a completed result and keeps the result's own
+// content. An event that names a failed result or no result changes nothing (class 7).
+describe("SessionProjector tool overrides", () => {
+  it.effect("sets an override only on the completed result the event names", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const messageID = SessionMessage.ID.make("msg_overridden")
+      const tool = (id: string, state: Record<string, unknown>) => ({
+        type: "tool",
+        id,
+        name: "emit",
+        state: { input: {}, ...state },
+        time: { created: 0, completed: 0 },
+      })
+      const original = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+        id: messageID,
+        type: "assistant",
+        agent: build,
+        model,
+        content: [
+          tool("call_done", { status: "completed", content: [{ type: "text", text: "done" }] }),
+          tool("call_failed", { status: "error", error: { type: "tool.execution", message: "failed" } }),
+        ],
+        time: { created: 0, completed: 0 },
+      })
+      const { id: _, type, ...data } = encodeMessage(original)
+      yield* db
+        .insert(SessionMessageTable)
+        .values({ id: messageID, session_id: sessionID, type, seq: 0, time_created: 0, data })
+        .run()
+        .pipe(Effect.orDie)
+      const bus = yield* Bus.Service
+      const override = (id: string) => ({
+        session: sessionID,
+        name: `msg_overridden-${id}-1a2b3c4d.txt`,
+        format: 1 as const,
+      })
+      for (const id of ["call_done", "call_failed", "call_missing"])
+        yield* bus.publish(SessionEvent.Tool.Overridden, {
+          sessionID,
+          assistantMessageID: messageID,
+          id,
+          override: override(id),
+        })
+
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, messageID))
+        .get()
+        .pipe(Effect.orDie)
+      if (row === undefined) throw new Error("Expected the assistant row")
+      const projected = Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type })
+      if (projected.type !== "assistant") throw new Error("Expected the assistant message")
+      expect(projected.content).toEqual([
+        { ...original.content[0], override: override("call_done") },
+        original.content[1],
+      ])
+    }),
+  )
+})
