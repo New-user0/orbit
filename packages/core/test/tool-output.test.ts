@@ -14,7 +14,9 @@ import { it } from "./lib/effect"
 const linkType = process.platform === "win32" ? "junction" : "dir"
 const big = [{ type: "text" as const, text: "b".repeat(200) }]
 
-const withStore = <A, E, R>(body: (output: ToolOutput.Interface, fs: FSUtil.Interface, root: string) => Effect.Effect<A, E, R>) =>
+const withStore = <A, E, R>(
+  body: (output: ToolOutput.Interface, fs: FSUtil.Interface, root: string) => Effect.Effect<A, E, R>,
+) =>
   Effect.acquireUseRelease(
     Effect.promise(() => tmpdir()),
     (tmp) => {
@@ -75,6 +77,61 @@ describe("ToolOutput", () => {
         const result = yield* settle(output)
         expect(result).toEqual({ content: big })
         expect(yield* Effect.promise(() => fs.readdir(outside))).toEqual([])
+      }),
+    ),
+  )
+
+  // An offered file stands for the first part of its own call's result, once: settling that call takes the offer, and
+  // settling it again finds none. Fails when an offer outlives its settle, which would mark a replayed result with a file
+  // offered for an earlier one.
+  it.live("takes an offered file for its call's result once", () =>
+    withStore((output, _, root) =>
+      Effect.gen(function* () {
+        const file = path.join(root, "full.out")
+        yield* Effect.promise(() => fs.writeFile(file, "the whole output"))
+        const call = { sessionID: "ses_tool_output", messageID: "msg_0123abc", callID: "call_offer" }
+        const settleCall = output.settle({
+          ...call,
+          tool: "Bash",
+          limit: 100,
+          result: { content: [{ type: "text", text: "the" }] },
+        })
+        yield* output.adopt({ ...call, file })
+        expect((yield* settleCall).metadata?.persisted).toMatchObject({ parts: 1, size: "the whole output".length })
+        expect((yield* settleCall).metadata?.persisted).toBeUndefined()
+      }),
+    ),
+  )
+
+  // Offers that are never settled are bounded: past 256 the oldest is forgotten, so its call's result goes whole. Fails
+  // without the bound, which keeps every offer for the life of the process.
+  it.live("forgets the oldest offer past 256 unsettled ones", () =>
+    withStore((output, _, root) =>
+      Effect.gen(function* () {
+        const file = path.join(root, "full.out")
+        yield* Effect.promise(() => fs.writeFile(file, "the whole output"))
+        const call = (index: number) => ({
+          sessionID: "ses_tool_output",
+          messageID: "msg_0123abc",
+          callID: `call_${index}`,
+        })
+        yield* Effect.forEach(
+          Array.from({ length: 257 }, (_, index) => index),
+          (index) => output.adopt({ ...call(index), file }),
+          {
+            discard: true,
+          },
+        )
+        const settleCall = (index: number) =>
+          output.settle({
+            ...call(index),
+            tool: "Bash",
+            limit: 100,
+            result: { content: [{ type: "text", text: "the" }] },
+          })
+        expect((yield* settleCall(0)).metadata?.persisted).toBeUndefined()
+        expect((yield* settleCall(1)).metadata?.persisted).toMatchObject({ parts: 1 })
+        expect((yield* settleCall(256)).metadata?.persisted).toMatchObject({ parts: 1 })
       }),
     ),
   )

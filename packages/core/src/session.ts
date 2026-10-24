@@ -12,6 +12,7 @@ import { SessionMessage } from "./session/message.js"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { Bus } from "./bus.js"
 import { Instance } from "./instance/service.js"
+import { Shell } from "./shell.js"
 import { Database } from "./database/database.js"
 import { SessionProjector } from "./session/projector.js"
 import { SessionMessageTable } from "./session/sql.js"
@@ -228,6 +229,12 @@ export interface Interface {
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) => Effect.Effect<boolean>
+  /**
+   * Kills every shell command the Session still has running in its Location, for the end of the run that started them:
+   * none of them reports back, and every shell notice still waiting in the inbox is cancelled (the person's own `!`
+   * commands excepted).
+   */
+  readonly abandonShells: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly synthetic: (
     input: Parameters<Session.Handle["synthetic"]>[0] & { sessionID: SessionSchema.ID },
   ) => ReturnType<Session.Handle["synthetic"]>
@@ -514,6 +521,24 @@ const layer = Layer.effect(
       resume: (sessionID) => sessions.forSession(sessionID).resume(),
       synthetic: (input) => sessions.forSession(input.sessionID).synthetic(input),
       interrupt: (sessionID, options) => sessions.forSession(sessionID).interrupt(options),
+      abandonShells: Effect.fn("Session.abandonShells")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        const shell = yield* Shell.Service.pipe(instances.provide(session))
+        yield* shell.abandon(sessionID)
+        // Every shell notice still waiting goes, not only those of the commands just killed: one that finished as the run
+        // ended would otherwise wake the Session outside any run. The person's own `!` command is their input and stays.
+        const pending = (yield* result.inbox(sessionID)).filter(
+          (item) =>
+            item.type === "synthetic" &&
+            item.payload.metadata?.source === "shell" &&
+            item.payload.metadata.origin !== "user",
+        )
+        yield* Effect.forEach(
+          pending,
+          (item) => result.cancelInbox({ sessionID, inboxID: item.id }).pipe(Effect.ignore),
+          { discard: true },
+        )
+      }),
       revert: {
         stage: (input) => sessions.forSession(input.sessionID).revert.stage(input),
         clear: (sessionID) => sessions.forSession(sessionID).revert.clear(),
