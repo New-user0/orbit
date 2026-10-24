@@ -43,7 +43,8 @@ export const HEAD_BYTES = 30_000
 export const HEAD_CEILING = 150_000
 /** The output size at which a command that left the foreground is killed. */
 export const BACKGROUND_LIMIT = 5 * 1024 ** 3
-const WATCH_INTERVAL = Duration.seconds(5)
+/** How often the output size of a command that left the foreground is checked. */
+export const WATCH_INTERVAL = Duration.seconds(5)
 
 /** The number of bytes a result reads from the start of the output, from the `tool_output` setting. */
 export const headLimit = (configured: { readonly max_bytes?: number } | undefined) =>

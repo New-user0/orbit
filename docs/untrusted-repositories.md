@@ -821,8 +821,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   refuses anything but a regular file first, and the writer and the 64 MB cut open it the same way), so a link planted at
   its path is reported like a missing file and nothing is read through it (class 4); a file that cannot be read is named in
   the result, never read as no output (class 7). A foreground result whose output did not fit offers the file to the step
-  of that call, which links it (or copies it, made only where nothing is) into the session's tool-output folder through
-  the same door and checks as saved tool results above: the same ID shapes (class 5), the same `lstat` on
+  of that call, which links it into the session's tool-output folder, creating a name only where none is, through the
+  same door and checks as saved tool results above: the same ID shapes (class 5), the same `lstat` on
   `tool-output` and the session's folder (class 4), and a result sent whole with one log line when anything fails
   (class 7). Its marker carries `parts: 1`, and lowering ignores a `parts` that does not decode or names more parts than
   the result has (classes 5 and 7) and escapes the parts after the wrapper like any tool text (class 9).

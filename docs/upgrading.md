@@ -3429,10 +3429,10 @@ Nothing of a failure is saved to a file.
 Before, a shell command's result kept the last 50 KiB and at most 2,000 lines of its output, followed by a line that
 named the full-output file. Now it keeps the first 30,000 bytes (`tool_output.max_bytes`, at most 150,000), cut back
 to a whole character, and `max_lines` is no longer read. When the output is longer, the step links the command's output
-file into the session's tool-output folder (or copies it, cut to 64 MB) and the model gets the `<saved-output>` block
-with the file's size before any cut, its path and a preview of the head; the exit, timeout and signal notices follow
-the block. A command whose exit code reads as a failure is never saved: its text is cut to its first and last 5,000
-characters. The shell declares a 30,000-character result limit, so a head raised past that by `max_bytes` is saved by
+file, cut to 64 MB, into the session's tool-output folder and the model gets the `<saved-output>` block with the file's
+size before the cut, its path and a preview of the head, which starts at its first line that is not blank; the notices
+after the output follow the block. A command whose exit code reads as a failure is never saved: its text is cut to its
+first and last 5,000 characters. The shell declares a 30,000-character result limit, so a head raised past that by `max_bytes` is saved by
 the step like any other result. A background command's completion message and the result of a command you run with
 `!` carry the head too, and a completion message names the output file when the output did not fit. An output file
 that cannot be read is named in the result instead of giving an empty one, and a link planted at its path is not
@@ -3459,11 +3459,10 @@ guidance. A project's or local value applies only once the folder is trusted.
 
 ### A background command is stopped at 5 GB of output, and a subagent's commands end with it
 
-A shell command that has left the foreground, by `run_in_background`, at its timeout or when you moved it, is killed
-once its output file passes 5 GB, checked every five seconds; its completion message starts with a line saying so.
-When the run that an Agent call started ends, whether it finished, failed or was stopped, every shell command the
-subagent still has running is killed and reports nothing to it; a waiting notice of one of them is withdrawn. A later
-call that continues the subagent starts a new run.
+A shell command that has left the foreground is killed once its output file passes 5 GB, checked every five seconds;
+its completion message starts with a line saying so. When the run that an Agent call started ends, whether it finished
+or failed, in the foreground or the background, every shell command the subagent still has running is killed and
+reports nothing to it, and a waiting notice of one of them is withdrawn.
 
 **Affects:** people who start long background commands, and subagents that leave servers or watchers running.
 

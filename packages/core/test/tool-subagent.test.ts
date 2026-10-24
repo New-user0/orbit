@@ -1197,6 +1197,46 @@ describe("SubagentTool and the child's shells", () => {
   it.live("kills the child's shells when its run ends: a foreground run", () => childShells({ title: "done", background: false }), 30_000)
   it.live("kills the child's shells when its run ends: a failed run", () => childShells({ title: "fail", background: false }), 30_000)
   it.live("kills the child's shells when its run ends: a background run", () => childShells({ title: "detached", background: true }), 30_000)
+
+  // shell-safety-6: with background tasks off, a call that still asks for a background run gets the subagent's final
+  // response, as a foreground call does. Fails when the flag is read whatever the setting: the call returns `running`.
+  it.live(
+    "runs a background request in the foreground when background tasks are off",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(path.join(dir.path, "orbit.json"), JSON.stringify({ background_tasks: false })),
+            )
+            const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+            const sessions = yield* Session.Service
+            const parent = yield* sessions.create({ location, model: parentModel })
+            yield* withSubagent(parent.location)
+            const locations = yield* LocationServiceMap.Service
+            const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+            const settled = yield* executeTool(registry, {
+              sessionID: parent.id,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-background-off",
+                name: SubagentTool.name,
+                input: { agent: "reviewer", description: "review", prompt: "review", background: true },
+              },
+            })
+            expect(settled.metadata).toMatchObject({ status: "completed" })
+            expect(settled.content).toEqual([
+              { type: "text", text: completedOutput(outputSessionID(settled.metadata)) },
+            ])
+          }),
+        ),
+      ),
+    30_000,
+  )
 })
 
 const shellSubagentSupervisor = makeLocationNode({

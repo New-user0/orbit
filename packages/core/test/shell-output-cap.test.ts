@@ -208,6 +208,19 @@ it.live(
   { timeout: 30_000 },
 )
 
+// FU-M3-152: the service the product builds watches a moved command at 5 GB every five seconds, as the reference does,
+// and its size notice names that limit.
+it.live("watches a moved command at 5 GB every five seconds by default", () =>
+  Effect.sync(() => {
+    expect(Shell.BACKGROUND_LIMIT).toBe(5 * 1024 ** 3)
+    expect(Duration.toMillis(Shell.WATCH_INTERVAL)).toBe(5_000)
+    expect(ShellResult.sizeNotice(Shell.BACKGROUND_LIMIT)).toBe(
+      "Background command killed: output file exceeded 5 GB.",
+    )
+    expect(ShellResult.sizeNotice(256 * 1024)).toBe("Background command killed: output file exceeded 256 KB.")
+  }),
+)
+
 // FU-M3-152. Fails on the base, which has neither the seam nor `background`: nothing watches a command that left the
 // foreground. The flood that stays in the foreground is the control: only a moved command is watched.
 it.live(
