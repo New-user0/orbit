@@ -1864,7 +1864,7 @@ which one of those folders is a link.
 When the terminal has been unfocused for five minutes, the terminal UI and Mini now ask the server for a short recap of
 the session in view: one to three sentences that name the task and the next step. It is drawn as a muted row led by
 `※`. A turn that is still running, including one that was already under way when the client opened the session, holds
-the request until it ends, and coming back first cancels it. There is at most one
+the request until it ends, whether it succeeds, fails or is stopped, and coming back first cancels it. There is at most one
 recap per prompt or `!` command, however many clients ask or however often the terminal loses focus. The recap is
 written by the provider's small model, or by `agents.side.model` when you set one, never by the session's own model;
 with neither, no recap is made. It sees the last 30 messages, less any assistant replies at their start, so that the
@@ -1874,7 +1874,9 @@ afterwards. Only the main conversation is recapped: a subagent's session in view
 agent wrote does not count as one of yours. A recap you come back during is dropped,
 and its estimated cost is still counted, as for a side query that times out. A terminal that does not report focus never asks. The server adds the route
 `POST /api/session/:sessionID/recap` and the durable event `session.recap.recorded`, and session message lists can
-hold a `recap` message. `orb export --sanitize` redacts a recap's text as it does a prompt's.
+hold a `recap` message, whose text is stored with its control and bidi characters written out, both when the server
+writes it and when `orb session import` brings it in from a file. `orb export --sanitize` redacts a recap's text as it does a
+prompt's.
 
 **Affects:** people who use the terminal UI or Mini with a provider that has a small model or with `agents.side.model`
 set, who see the row and pay for one small call per prompt they step away from, and SDK and API clients that switch on

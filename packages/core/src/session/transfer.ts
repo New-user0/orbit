@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm"
 import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect"
 import { map } from "effect/Array"
 import path from "path"
-import { plain } from "@orbit/util/plain"
+import { body, plain } from "@orbit/util/plain"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { App } from "../app.js"
 import { Bus } from "../bus.js"
@@ -76,7 +76,7 @@ const layer = Layer.effect(
         yield* upsertProject(db, project).pipe(Effect.orDie)
         const importedAt = yield* Clock.currentTimeMillis
         const messages = input.data.messages.filter(isSettled).map((message, index) => {
-          const encoded = encodeMessage(escapeToolNames(message))
+          const encoded = encodeMessage(escapeImported(message))
           const { id: _, type, ...data } = encoded
           return {
             id: message.id,
@@ -163,9 +163,12 @@ export const node = makeGlobalNode({
   deps: [App.node, Bus.node, Database.node, Project.node, Session.node],
 })
 
-// An imported file is as untrusted as a clone, and the schema keeps a tool part's display name, so the import writes it
-// through the same escaper as the live publisher: the stored name never holds a control or format character.
-function escapeToolNames(message: SessionMessage.Info): SessionMessage.Info {
+// An imported file is as untrusted as a clone, so the import writes the text that the live publishers escape through
+// the same escapers: a tool part's display name through `plain`, and a recap's text through `body`, as SessionRecap
+// stores it. The stored text never holds a control or bidi character, and `body` leaves text it already escaped as it
+// is, since it does not touch a backslash.
+function escapeImported(message: SessionMessage.Info): SessionMessage.Info {
+  if (message.type === "recap") return { ...message, text: body(message.text) }
   if (message.type !== "assistant") return message
   return {
     ...message,

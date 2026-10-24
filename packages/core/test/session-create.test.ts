@@ -1508,6 +1508,40 @@ describe("SessionTransfer", () => {
     }),
   )
 
+  // Class 9: an imported file is as untrusted as a clone, so a recap it carries is stored escaped, as SessionRecap
+  // stores one, and an SDK or API reader never gets the raw characters. Text already escaped is the control.
+  it.effect("an imported away summary's text is stored with its control and bidi characters written out", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const template = yield* session.create({ location })
+      const sessionID = Session.ID.create()
+      const hostileID = SessionMessage.ID.create()
+      const escapedID = SessionMessage.ID.create()
+      const escaped = "a\\x1b]0;pwned\\x07b\\u{202e}c\\x9b2J\\x0dd\nNext: tests."
+      yield* transfer.import({
+        data: {
+          info: { ...template, id: sessionID },
+          messages: [
+            {
+              id: hostileID,
+              type: "recap",
+              text: "a\u001b]0;pwned\u0007b‮c\u009b2J\rd\nNext: tests.",
+              time: { created: DateTime.makeUnsafe(1) },
+            },
+            { id: escapedID, type: "recap", text: escaped, time: { created: DateTime.makeUnsafe(2) } },
+          ],
+        },
+        location,
+      })
+
+      expect(yield* session.messages({ sessionID, order: "asc" })).toMatchObject([
+        { id: hostileID, type: "recap", text: escaped },
+        { id: escapedID, type: "recap", text: escaped },
+      ])
+    }),
+  )
+
   it.effect("rejects an existing session ID without changing its transcript", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

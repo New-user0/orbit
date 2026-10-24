@@ -418,6 +418,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `session-runner-tool-events.test.ts` ("tool input started carries the declared display name") and `server/test/session-import-display-name.test.ts`. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and
   `MCP hints and permissions` in `core/test/mcp.test.ts`.
+- A recap's text (the away summary), which a model writes from the session's history: `SessionRecap` stores it through
+  `body` (`@orbit/util/plain`), and `SessionTransfer.import` writes an imported `recap` message's text through `body`
+  too, so every reader gets it with its control and bidi characters written out. Proof: `core/test/session-recap.test.ts`
+  ("the stored recap has its control and bidi characters written out...") and `core/test/session-create.test.ts` ("an
+  imported away summary's text is stored with its control and bidi characters written out").
 - A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
   model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
   a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
