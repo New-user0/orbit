@@ -254,6 +254,26 @@ describe("an approval answered with the person's revised content", () => {
     ),
   )
 
+  // The reference counts an editor save as the person's change only when it differs from what the model proposed.
+  it.live("an Edit answered with the proposal itself writes it and tells the model nothing more", () =>
+    withProject((directory) =>
+      Effect.gen(function* () {
+        const file = path.join(directory, "a.txt")
+        yield* Effect.promise(() => fs.writeFile(file, "alpha\nbeta\n"))
+        const settled = yield* settle(
+          directory,
+          "Edit",
+          { file_path: "a.txt", old_string: "beta", new_string: "BETA" },
+          () => ({ reply: "once", content: "alpha\nBETA\n" }),
+        )
+        expect(Exit.isSuccess(settled.exit)).toBe(true)
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("alpha\nBETA\n")
+        expect(text(settled.exit)).toContain("Edited a.txt (1 replacement)")
+        expect(text(settled.exit)).not.toMatch(/modif/i)
+      }),
+    ),
+  )
+
   it.live("a Write writes the revised content, over an existing file and as a new one", () =>
     withProject((directory) =>
       Effect.gen(function* () {

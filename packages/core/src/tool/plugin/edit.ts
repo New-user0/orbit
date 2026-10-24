@@ -329,7 +329,8 @@ export const Plugin = {
                     files: [fileDiff(result.resource, source, final.text)],
                     replacements,
                   } satisfies Output,
-                  revised: revision !== undefined,
+                  // Saving the proposal unchanged is not a change the person made, so the model hears nothing of it.
+                  revised: revision !== undefined && revision.content !== replaced,
                 }
               }).pipe(
                 // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
