@@ -1985,6 +1985,25 @@ runs" is a permission.
   not the spelling the model chose, and a request for a resource or a skill lists what it names.
   `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP and `packages/tui/test/util/path-format.test.ts`
   the terminal interface's and Mini's.
+- An approval answered with the person's own version of the file runs that version where the request resolved. Edit
+  and Write mark their request `revisable` and keep the text they read on the pending item, off the public request
+  (`Permission.AssertInput.original`). A `once` reply may carry `content`: the server diffs it against that text,
+  publishes the diff on `permission.replied` (`files`, with the request's `place`), and the tool writes it at the
+  `target` it resolved before asking, after `FileMutation.assertUnchanged`. The reply names no file, so a key a client
+  adds to it (`place`, `file`, `path`, `filePath`, `file_path`, `files`) is dropped at decode. Text equal to what was
+  read is a reject. `content` with `always` or `reject`, or on any other request, is refused with a typed 400
+  (`InvalidRequestError`, field `content`; `Permission.RevisionError` in core) and the question stays pending
+  (classes 7 and 13). Proof: `packages/core/test/permission-revise.test.ts`
+  (the real Permission service and Edit, Write, Patch and NotebookEdit tools; the approved diff equals the diff of what
+  ran) and `packages/server/test/permission-revise.test.ts` (a real `orb serve`, an outside marker that the added keys
+  name, and the two typed 400 rows). Once such a call has run, its input no longer says what the file holds, so ACP
+  draws a completed Edit's or Write's diff from the diff the tool recorded (`metadata.files`), live and on session load,
+  and draws none when there is none (class 8; rows in `packages/cli/test/acp/translate.test.ts`). The terminal UI and
+  Mini draw a completed Write the same way (`writtenFile` in `packages/tui/src/util/tool-display.ts`): a new file's text
+  is the added lines of the recorded diff, a file that was there shows that diff, and a call that recorded no diff
+  shows no text (the terminal UI names its file, Mini says it completed); the model's `content` is never drawn (rows in
+  `packages/tui/test/cli/tui/write-ran.test.tsx` and `packages/tui/test/mini/scrollback.surface.test.ts`). Their
+  completed Edit already drew the recorded diff.
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

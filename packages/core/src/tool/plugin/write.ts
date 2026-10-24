@@ -84,27 +84,28 @@ export const Plugin = {
                 )
                 // A new file has nothing to be stale against; for an existing one the same read serves as the current state.
                 yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path, current)
-                const next = Bom.split(input.content)
-                const preview = fileDiff(
-                  FileAccess.shownName(target),
-                  current?.text ?? "",
-                  next.text,
-                  current ? "modified" : "added",
-                )
-                yield* permission.assert({
+                const shown = FileAccess.shownName(target)
+                const status = current ? "modified" : "added"
+                const preview = fileDiff(shown, current?.text ?? "", Bom.split(input.content).text, status)
+                const revision = yield* permission.assert({
                   action: "Edit",
                   resources: [target.resource],
                   save: ["*"],
                   ...FileAccess.leadsOf([target]),
                   // `paths` and each file's `place` are where the write lands as resolved here, absolute, for a client to show.
                   metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
+                  // The person may approve their own version of the file instead; it is written at this same target.
+                  original: { file: shown, place: target.place, text: current?.text ?? "", status },
                   sessionID: context.sessionID,
                   agent: context.agent,
                   source,
                 })
                 yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, current)
                 return yield* Effect.gen(function* () {
-                  const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
+                  const result = yield* fileMutation.writeTextPreservingBom({
+                    target,
+                    content: revision ? revision.content : input.content,
+                  })
                   const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
                   const final = (yield* formatter.file(target.absolute))
                     ? yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom).pipe(

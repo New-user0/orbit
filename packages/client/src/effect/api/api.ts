@@ -2121,6 +2121,7 @@ export type PermissionReplyInput = {
   readonly requestID: Permission.ID
   readonly decision: Permission.Reply
   readonly message?: string | undefined
+  readonly content?: string | undefined
 }
 export type PermissionReplyOutput = void
 export type PermissionReplyOperation<E = never> = (

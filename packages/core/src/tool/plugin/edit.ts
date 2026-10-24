@@ -298,7 +298,8 @@ export const Plugin = {
                   (content, match) => `${content.slice(0, match.start)}${match.text}${content.slice(match.end)}`,
                   source,
                 )
-              yield* permission.assert({
+              const shown = FileAccess.shownName(target)
+              const revision = yield* permission.assert({
                 action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
@@ -306,25 +307,31 @@ export const Plugin = {
                 // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
                 metadata: {
                   paths: [target.place],
-                  files: [{ ...fileDiff(FileAccess.shownName(target), source, replaced), place: target.place }],
+                  files: [{ ...fileDiff(shown, source, replaced), place: target.place }],
                 },
+                // The person may approve their own version of the file instead; it is written at this same target.
+                original: { file: shown, place: target.place, text: source, status: "modified" },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source: permissionSource,
               })
-              const replacementBom = replaced.startsWith("\uFEFF")
+              const planned = revision ? revision.content : replaced
               yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, original)
-              const bom = original.bom || replacementBom
+              const bom = original.bom || planned.startsWith("\uFEFF")
               return yield* Effect.gen(function* () {
-                const result = yield* fileMutation.write({ target, content: Bom.join(replaced, bom) })
+                const result = yield* fileMutation.write({ target, content: Bom.join(planned, bom) })
                 if (yield* formatter.file(target.absolute))
                   yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
                 const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
                 yield* ledger.recordWrite(context.sessionID, target.absolute, final)
                 return {
-                  files: [fileDiff(result.resource, source, final.text)],
-                  replacements,
-                } satisfies Output
+                  output: {
+                    files: [fileDiff(result.resource, source, final.text)],
+                    replacements,
+                  } satisfies Output,
+                  // Saving the proposal unchanged is not a change the person made, so the model hears nothing of it.
+                  revised: revision !== undefined && revision.content !== replaced,
+                }
               }).pipe(
                 // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
                 Effect.mapError(
@@ -338,10 +345,13 @@ export const Plugin = {
               )
             }).pipe(
               fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]),
-              Effect.map((output) => ({
-                output,
-                content: `Edited ${output.files[0]?.file} (${output.replacements} replacement${output.replacements === 1 ? "" : "s"})`,
-                metadata: { files: output.files },
+              Effect.map((edited) => ({
+                output: edited.output,
+                // A revised edit is not the replacement the model asked for, so the model is told the person changed it.
+                content: edited.revised
+                  ? `Edited ${edited.output.files[0]?.file} with a version the person modified from your proposal before approving it`
+                  : `Edited ${edited.output.files[0]?.file} (${edited.output.replacements} replacement${edited.output.replacements === 1 ? "" : "s"})`,
+                metadata: { files: edited.output.files },
               })),
               Effect.mapError((error) =>
                 error instanceof ToolFailure

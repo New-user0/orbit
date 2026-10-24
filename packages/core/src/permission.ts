@@ -21,6 +21,8 @@ import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
 import { ToolCurrentCall } from "./tool/current-call.js"
 import { MemoryStore } from "./memory/store.js"
+import { Bom } from "@orbit/util/bom"
+import { fileDiff } from "./tool/plugin/file-diff.js"
 
 const PermissionEffect = Permission.Effect
 export { PermissionEffect as Effect }
@@ -71,6 +73,16 @@ export const AssertInput = Schema.Struct({
   // prompt-free for the file tools only, so a command that reaches into it is asked about as it would be anywhere else.
   // It stays off the public Request.
   shell: Schema.Boolean.pipe(Schema.optional),
+  // The file an Edit or Write question is about, as the tool read it before asking (`text` without its byte order mark),
+  // with the name and place its preview shows. Its presence makes the question revisable: a person may answer it once
+  // with their own version, which the server diffs against `text` and hands back to the tool (class 8). It stays off the
+  // public Request.
+  original: Schema.Struct({
+    file: Schema.String,
+    place: Schema.String,
+    text: Schema.String,
+    status: Schema.Literals(["added", "modified"]),
+  }).pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -79,8 +91,15 @@ export const ReplyInput = Schema.Struct({
   requestID: ID,
   reply: Reply,
   message: Schema.String.pipe(Schema.optional),
+  // The person's own version of the file for a revisable question, given only with a "once" reply.
+  content: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.ReplyInput" })
 export type ReplyInput = typeof ReplyInput.Type
+
+/** What a person approved instead of the proposal: the whole new text of the file, without a byte order mark. */
+export interface Revision {
+  readonly content: string
+}
 
 export const AskResult = Schema.Struct({
   id: ID,
@@ -110,6 +129,16 @@ export class BlockedError extends Schema.TaggedError<BlockedError>()("Permission
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Permission.NotFoundError", {
   requestID: ID,
 }) {}
+
+// A reply whose revised content the question cannot take. The question stays pending for another reply.
+export class RevisionError extends Schema.TaggedError<RevisionError>()("Permission.RevisionError", {
+  requestID: ID,
+  reason: Schema.String,
+}) {
+  override get message() {
+    return this.reason
+  }
+}
 
 export type Error = BlockedError | CorrectedError
 
@@ -170,7 +199,11 @@ export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
 export interface Interface {
   readonly close: Effect.Effect<void>
   readonly ask: (input: AssertInput) => Effect.Effect<AskResult, SessionErrors.NotFoundError>
-  readonly assert: (input: AssertInput) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
+  /**
+   * Decides the input and, when it asks, waits for the answer. A revisable question (`original`) answered once with the
+   * person's own version gives back that version; every other approval gives back nothing.
+   */
+  readonly assert: (input: AssertInput) => Effect.Effect<Revision | void, Error | SessionErrors.NotFoundError>
   /**
    * Whether `assert` would fail with a block for this input, decided by the configured deny rules (agent, session and
    * project), the managed rules and the managed denied domains, and nothing else. It asks nobody, creates no request,
@@ -179,7 +212,7 @@ export interface Interface {
    * a deny is not seen here; the later `assert` still honours it.
    */
   readonly denied: (input: AssertInput) => Effect.Effect<boolean, SessionErrors.NotFoundError>
-  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
+  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | RevisionError>
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
@@ -197,7 +230,8 @@ interface Pending {
   readonly escaped?: AssertInput["escaped"]
   readonly leads?: AssertInput["leads"]
   readonly shell?: AssertInput["shell"]
-  readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
+  readonly original?: AssertInput["original"]
+  readonly deferred: Deferred.Deferred<Revision | void, DeclinedError | CorrectedError>
   // The tool call that was executing when the request was made, for deciding and explaining it. Never on the public Request.
   readonly call?: ToolCurrentCall.Call
 }
@@ -558,13 +592,17 @@ const layer = Layer.effect(
         metadata: input.metadata,
         source: input.source,
         message,
+        revisable: input.original ? true : undefined,
       }
     }
 
-    const create = (request: Request, input: Pick<AssertInput, "agent" | "aliases" | "escaped" | "leads" | "shell">) =>
+    const create = (
+      request: Request,
+      input: Pick<AssertInput, "agent" | "aliases" | "escaped" | "leads" | "shell" | "original">,
+    ) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
-          const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
+          const deferred = yield* Deferred.make<Revision | void, DeclinedError | CorrectedError>()
           const item: Pending = {
             request,
             agent: input.agent,
@@ -572,6 +610,7 @@ const layer = Layer.effect(
             escaped: input.escaped,
             leads: input.leads,
             shell: input.shell,
+            original: input.original,
             deferred,
             call: yield* ToolCurrentCall.Current,
           }
@@ -647,13 +686,18 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
+          const revised = input.content === undefined ? undefined : yield* revise(existing, input.reply, input.content)
+          // A version equal to the file as it was read keeps nothing of the proposal, so it is a reject, as when the
+          // person undoes the proposal in the editor.
+          const decision = revised === null ? "reject" : input.reply
           yield* bus.publish(Permission.Event.Replied, {
             sessionID: existing.request.sessionID,
             requestID: existing.request.id,
-            reply: input.reply,
+            reply: decision,
+            ...(revised ? { files: revised.files } : {}),
           })
 
-          if (input.reply === "reject") {
+          if (decision === "reject") {
             yield* Deferred.fail(
               existing.deferred,
               input.message ? new CorrectedError({ feedback: input.message }) : new DeclinedError(),
@@ -677,7 +721,7 @@ const layer = Layer.effect(
           }
 
           // Under managed_permissions_only an "always" reply acts as "once": nothing is saved and no other ask is lifted.
-          const always = input.reply === "always" && !managed.current().restrictions.managed_permissions_only
+          const always = decision === "always" && !managed.current().restrictions.managed_permissions_only
           if (always && existing.request.save?.length) {
             yield* saved.add({
               projectID: location.project.id,
@@ -685,7 +729,7 @@ const layer = Layer.effect(
               resources: existing.request.save,
             })
           }
-          yield* Deferred.succeed(existing.deferred, undefined)
+          yield* Deferred.succeed(existing.deferred, revised ? { content: revised.content } : undefined)
           pending.delete(input.requestID)
           if (!always || !existing.request.save?.length) return
 
@@ -710,6 +754,29 @@ const layer = Layer.effect(
         }),
       ),
     )
+
+    // Checks a reply's revised content against its question. Only a "once" reply to a question the tool made revisable
+    // takes one; anything else is refused before anything is published, so the question stays. `null` means the content
+    // equals the file as the question read it.
+    const revise = Effect.fnUntraced(function* (existing: Pending, decision: Reply, revision: string) {
+      const original = existing.original
+      if (decision !== "once")
+        return yield* new RevisionError({
+          requestID: existing.request.id,
+          reason: "Revised content can only be given with a once reply",
+        })
+      if (!original)
+        return yield* new RevisionError({
+          requestID: existing.request.id,
+          reason: "This question does not take revised content: only an Edit or Write approval does",
+        })
+      const content = Bom.split(revision).text
+      if (content === original.text) return null
+      return {
+        content,
+        files: [{ ...fileDiff(original.file, original.text, content, original.status), place: original.place }],
+      }
+    })
 
     const list = Effect.fn("Permission.list")(function* () {
       return Array.from(pending.values(), (item) => item.request)
