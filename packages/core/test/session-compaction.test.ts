@@ -377,7 +377,7 @@ it.effect("auto compaction measures a saved tool result by its wrapper", () =>
       model: SessionRunnerModel.resolved(model, {
         capabilities: { tools: true, input: ["text"], output: ["text"] },
         cost: [],
-        limit: { context: 100_000, output: 10_000 },
+        limit: { context: 110_000, output: 10_000 },
       }),
     })
     const saved = savedResult(session.id, 80_000)
@@ -385,7 +385,7 @@ it.effect("auto compaction measures a saved tool result by its wrapper", () =>
       compaction
         .compact({ reason: "auto", context: context(message) })
         .pipe(Effect.map((outcome) => outcome.status !== "skipped"))
-    // The whole text would pass the 84,000-token ceiling; the wrapper stays under it.
+    // The whole text would pass the 87,000-token threshold; the wrapper stays under it.
     expect(yield* due(saved)).toBe(false)
     const content = saved.content.map((part) =>
       part.type === "tool" && part.state.status === "completed"

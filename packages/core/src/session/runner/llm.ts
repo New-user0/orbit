@@ -478,6 +478,8 @@ const layer = Layer.effect(
                 yield* Effect.logWarning("automatic compaction failed repeatedly; pausing it for this turn").pipe(
                   Effect.annotateLogs({ sessionID, failures: breaker.failures }),
                 )
+              // The failed attempt's own spend may have put the turn over a limit it set: the top of the loop checks again.
+              continue
             }
           }
         }

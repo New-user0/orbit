@@ -6359,6 +6359,30 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(2)
     })
 
+    // A failed automatic compaction lets the request go on, but its own spend may have passed the turn's limit (class 7).
+    for (const row of [
+      { name: "tokens", turn: { maxTokens: 5_000 }, expected: "limit.tokens", priced: false },
+      { name: "cost", turn: { maxCost: Money.USD.make(2_000) }, expected: "limit.cost", priced: true },
+    ])
+      scenario(`sends no request when a failed automatic compaction passes the ${row.name} limit`, function* (s) {
+        s.currentModel = halfWindowModel
+        if (row.priced) s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: row.turn, resume: false })
+        // The threshold is 3,000, so the first response is due. Both summary replies (the first and the nudge) spend
+        // 1,500 and do not follow the template, which fails the compaction.
+        yield* s.llm.push(
+          toolStep({ nonCachedInputTokens: 3_100, outputTokens: 1 }),
+          TestLLM.textWithUsage("not a summary", "past-limit-1", 1_500),
+          TestLLM.textWithUsage("not a summary", "past-limit-2", 1_500),
+          TestLLM.text("Past the limit", "past-limit-final"),
+        )
+
+        expect(yield* limited(s)).toMatchObject({ type: row.expected })
+
+        expect(s.requests).toHaveLength(3)
+        expect((yield* s.messages).filter((message) => message.type === "compaction")).toMatchObject([{ status: "failed" }])
+      })
+
     scenario("refuses a cost limit up front when the model has no price", function* (s) {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(spend))
