@@ -28,7 +28,8 @@ export function plan(sources: ConfigDiscovery.Sources) {
       ...directories.map((path) => ({
         path,
         type: "directory" as const,
-        ignore: ["node_modules", ".git", "**/{node_modules,.git}/**"],
+        // Team memory is written by the agent, not read as config, so its writes must not reload anything.
+        ignore: ["node_modules", ".git", "**/{node_modules,.git}/**", "team-memory", "**/team-memory/**"],
       })),
       ...Array.from(parents, ([parent, files]) => ({
         path: parent,

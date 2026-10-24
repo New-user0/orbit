@@ -21,6 +21,7 @@ import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
 import { ToolCurrentCall } from "./tool/current-call.js"
 import { MemoryStore } from "./memory/store.js"
+import { MemoryTeam } from "./memory/team.js"
 
 const PermissionEffect = Permission.Effect
 export { PermissionEffect as Effect }
@@ -215,6 +216,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const memory = yield* MemoryStore.Service
+    const teams = yield* MemoryTeam.Service
     // The session folder and the project's worktree as written and as the disk has them. A session reached through a link
     // gets real-path leads, so a lead is also written in the project's own spelling before rules are matched against it.
     const spelled = [location.directory, path.resolve(location.project.directory)]
@@ -254,25 +256,39 @@ const layer = Layer.effect(
         ? [path.resolve(location.directory, resource)]
         : []
     }
-    // Whether a file tool's request is for the project's memory folder (context-memory-9): the place it names is in the
-    // folder by one of its spellings, and every real place it leads to is in the real folder, so a link inside the folder
-    // that points out of it is not (class 4). A call that a link of an untrusted project leads in is the person's to
-    // decide (`escaped`). A shell command is never one, nor the folder question it asks: the shell's own rules decide it.
-    const inMemory = (input: Pick<AssertInput, "action" | "escaped" | "leads" | "shell">, resource: string) => {
-      const canonical = ToolNames.canonical(input.action)
-      if (canonical !== "external_directory" && canonical !== "Read" && canonical !== "Edit") return false
-      if (input.shell || input.escaped?.includes(resource)) return false
+    const fileAction = (action: string) => {
+      const canonical = ToolNames.canonical(action)
+      return canonical === "external_directory" || canonical === "Read" || canonical === "Edit"
+    }
+    // The memory folders a request is decided against: the project's private folder, and the team folder while team
+    // memory is on (context-memory-11), as `MemoryTeam` resolved it once for the Location (class 3). Only a file tool's
+    // request can be for one, so no other request asks whether team memory is on.
+    const memoryFolders = Effect.fnUntraced(function* (action: string) {
+      const team = fileAction(action) ? yield* teams.current() : undefined
+      return team === undefined ? [memory] : [memory, team]
+    })
+    // The memory folder a file tool's request is for (context-memory-9), if any: the place it names is in the folder by
+    // one of its spellings, and every real place it leads to is in the real folder, so a link inside the folder that
+    // points out of it is not (class 4). A call that a link of an untrusted project leads in is the person's to decide
+    // (`escaped`). A shell command is never one, nor the folder question it asks: the shell's own rules decide it.
+    const inMemory = (
+      folders: readonly MemoryTeam.Folder[],
+      input: Pick<AssertInput, "action" | "escaped" | "leads" | "shell">,
+      resource: string,
+    ) => {
+      if (!fileAction(input.action)) return undefined
+      if (input.shell || input.escaped?.includes(resource)) return undefined
       const place = path.isAbsolute(resource) ? resource : path.resolve(location.directory, resource)
-      return (
-        [memory.folder, memory.real].some((folder) => FSUtil.contains(folder, place)) &&
-        (input.leads?.[resource] ?? [place]).every((lead) => FSUtil.contains(memory.real, lead))
+      return folders.find(
+        (memory) =>
+          [memory.folder, memory.real].some((folder) => FSUtil.contains(folder, place)) &&
+          (input.leads?.[resource] ?? [place]).every((lead) => FSUtil.contains(memory.real, lead)),
       )
     }
-    // A place in the real memory folder, named as the configured folder spells it. The carve-out accepts either spelling of
-    // a configured folder that is a link, so a deny written with the link's spelling must also decide a call made by the
-    // real path (class 3). A call by the link's spelling brings its real place as a lead, which the deny of the real
-    // spelling meets already.
-    const memorySpelled = (resource: string) => {
+    // A place in the real memory folder, named as the folder is spelled. The carve-out accepts either spelling of a folder
+    // that is a link, so a deny written with the link's spelling must also decide a call made by the real path (class 3).
+    // A call by the link's spelling brings its real place as a lead, which the deny of the real spelling meets already.
+    const memorySpelled = (memory: MemoryTeam.Folder, resource: string) => {
       const inside = path.relative(
         memory.real,
         path.isAbsolute(resource) ? resource : path.resolve(location.directory, resource),
@@ -280,6 +296,7 @@ const layer = Layer.effect(
       return inside.startsWith("..") || path.isAbsolute(inside) ? [] : [path.join(memory.folder, inside)]
     }
     const decide = (
+      folders: readonly MemoryTeam.Folder[],
       input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads" | "shell">,
       resource: string,
       rules: Permission.Ruleset,
@@ -298,16 +315,17 @@ const layer = Layer.effect(
           (input.leads?.[resource] ?? []).every((lead) => folders.some((folder) => FSUtil.contains(folder, lead)))
         )
       }
-      // The memory folder is written and read without a question, as the reference's file tools do: no ask of the
+      // A memory folder is written and read without a question, as the reference's file tools do: no ask of the
       // person's, no default question for a place outside the project and no mode's deny reaches it, while a deny of the
       // person's, the session's or an agent's own still decides, by the last rule that allows or denies (classes 4, 8).
-      if (inMemory(input, resource)) {
+      const memoryFolder = inMemory(folders, input, resource)
+      if (memoryFolder !== undefined) {
         const decisive = rules.filter((rule) => rule.effect !== "ask" && !Agent.isModeRule(rule))
         const decided = evaluate(input.action, resource, decisive, [
           ...(input.aliases?.[resource] ?? []),
           ...resolved(input.action, resource),
           ...respelled(input.action, resource),
-          ...memorySpelled(resource),
+          ...memorySpelled(memoryFolder, resource),
         ])
         if (decided.effect === "deny") return decided
         if (stricter(input.action, input.leads?.[resource], decisive).effect === "deny")
@@ -389,18 +407,19 @@ const layer = Layer.effect(
 
     // The last managed rule that matches a resource decides it. No match leaves the resource to the hooks and the rest.
     function managedEffect(
+      folders: readonly MemoryTeam.Folder[],
       input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads" | "shell">,
       resource: string,
       written: Permission.Ruleset,
     ): Permission.Effect | undefined {
-      // A managed ask does not reach the memory folder either; a managed deny does, by either spelling of the folder.
-      const memoryCall = inMemory(input, resource)
-      const rules = memoryCall ? written.filter((rule) => rule.effect !== "ask") : written
+      // A managed ask does not reach a memory folder either; a managed deny does, by either spelling of the folder.
+      const memoryFolder = inMemory(folders, input, resource)
+      const rules = memoryFolder === undefined ? written : written.filter((rule) => rule.effect !== "ask")
       const subjects = [
         resource,
         ...resolved(input.action, resource),
         ...respelled(input.action, resource),
-        ...(memoryCall ? memorySpelled(resource) : []),
+        ...(memoryFolder === undefined ? [] : memorySpelled(memoryFolder, resource)),
         ...(input.aliases?.[resource] ?? []),
       ]
       const own = rules.findLast(
@@ -452,10 +471,11 @@ const layer = Layer.effect(
     }
 
     function anyDenied(
+      folders: readonly MemoryTeam.Folder[],
       input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped" | "leads" | "shell">,
       rules: Permission.Ruleset,
     ) {
-      return input.resources.some((resource) => decide(input, resource, rules).effect === "deny")
+      return input.resources.some((resource) => decide(folders, input, resource, rules).effect === "deny")
     }
 
     function relevant(input: AssertInput, rules: Permission.Ruleset) {
@@ -467,11 +487,12 @@ const layer = Layer.effect(
       const only = current.restrictions.managed_permissions_only === true
       const configuredRules = yield* configured(input.sessionID, input.agent)
       const rules = configuredRules.rules
-      if (anyDenied(input, rules)) return { effect: "deny" as const, rules }
+      const folders = yield* memoryFolders(input.action)
+      if (anyDenied(folders, input, rules)) return { effect: "deny" as const, rules }
       // Saved approvals are grants; managed_permissions_only ignores every one of them.
       const approvals = only ? [] : yield* savedRules()
       const all = [...rules, ...approvals]
-      const decisions = input.resources.map((resource) => decide(input, resource, rules, approvals))
+      const decisions = input.resources.map((resource) => decide(folders, input, resource, rules, approvals))
       const effect: Permission.Effect = decisions.some((rule) => rule.effect === "ask") ? "ask" : "allow"
       // An ask that a rule wrote (yours, the project's, an agent's built-in `.env` ask) is explicit, and so is a lead onto
       // such a rule (a grant's lead onto the person's ask). A lead onto the built-in default ask is not.
@@ -495,7 +516,7 @@ const layer = Layer.effect(
         ...current.rules,
         ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
       ]
-      const decided = input.resources.map((resource) => managedEffect(input, resource, layer))
+      const decided = input.resources.map((resource) => managedEffect(folders, input, resource, layer))
       const blocked =
         current.organization === undefined
           ? "Blocked by managed settings"
@@ -534,7 +555,8 @@ const layer = Layer.effect(
       const decisive = input.probe
         ? configuredRules.rules.filter((rule) => !Agent.isModeRule(rule))
         : configuredRules.rules
-      if (anyDenied(input, decisive)) return true
+      const folders = yield* memoryFolders(input.action)
+      if (anyDenied(folders, input, decisive)) return true
       if (
         ManagedNetwork.bearsUrl(input.action) &&
         ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)
@@ -544,7 +566,7 @@ const layer = Layer.effect(
         ...current.rules,
         ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
       ]
-      return input.resources.some((resource) => managedEffect(input, resource, layer) === "deny")
+      return input.resources.some((resource) => managedEffect(folders, input, resource, layer) === "deny")
     })
 
     function request(input: AssertInput, message?: string): Request {
@@ -745,5 +767,6 @@ export const node = makeLocationNode({
     Global.node,
     FSUtil.node,
     MemoryStore.node,
+    MemoryTeam.node,
   ],
 })

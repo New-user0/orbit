@@ -6,7 +6,7 @@ import type { ConfigDiscovery } from "@orbit/core/config/discovery"
 import { ConfigWatch } from "@orbit/core/config/watch"
 import { AbsolutePath } from "@orbit/core/schema"
 
-const ignore = ["node_modules", ".git", "**/{node_modules,.git}/**"]
+const ignore = ["node_modules", ".git", "**/{node_modules,.git}/**", "team-memory", "**/team-memory/**"]
 const files = (directory: string, names: string[]) => names.map((name) => AbsolutePath.make(path.join(directory, name)))
 // A directory's orbit files and .orbit root, as discovery lists them for the project walk and for home.
 const level = (directory: string, present: boolean) =>

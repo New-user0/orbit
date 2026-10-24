@@ -75,6 +75,8 @@ export const Plugin = {
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
+              // A credential never reaches team memory, whatever a rule or a person would answer (context-memory-11).
+              yield* access.refuseTeamSecrets([target], input.content)
               yield* access.authorizeExternal([target], context)
               // Locked only now: the lock key resolves the path on disk, which FileAccess must have checked first.
               return yield* Effect.gen(function* () {

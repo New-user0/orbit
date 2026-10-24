@@ -833,6 +833,28 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   with the recorded file system, the read at the checked real path), `test/memory-instructions.test.ts` (the index link to a marker, which
   neither the reader, the carry-over nor the header rewrite goes through, an index link to a share with the recorded file
   system, a dangling index link the carry-over does not write through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
+- Team memory (`MemoryTeam`, `packages/core/src/memory/team.ts`): `.orbit/team-memory/` at the project's root, which the
+  repository ships, so a clone chooses its files and its links. It is on only while memory is on, `memory.team` is set
+  (a key `ConfigTrust` withholds with the rest of `memory` from an untrusted folder, class 8) and `ProjectTrust.trusted()`
+  answers yes, which `current` asks before it resolves anything of the folder (class 1). The folder is then resolved
+  once for the Location: `LinkShare.blocked` is asked about it before anything resolves it (class 6), its real path is
+  the nearest existing part with links followed, and it must be inside the real project folder, compared with
+  `FSUtil.contains` on two real paths (class 4); a refused folder turns team memory off with one log line and costs
+  nothing else, the private index included (class 7). That one value is what the guide's folder creation, the index
+  reader, the permission carve-out and the Read tool's staleness note use (class 3). The index reader
+  (`core/team-memory-index` in `MemoryInstructions`) reads `MEMORY.md` only at a real path inside the real team folder
+  (`MemoryStore.locate`, which asks `LinkShare.blocked` first), takes front matter off through
+  `ConfigInstructionFile.parse` (class 11) and escapes envelope and `<team-memory>` look-alikes (class 9). The carve-out
+  is the memory folder's (`inMemory` in `Permission`, given both folders), so a deny still decides and a shell command
+  is not covered (class 8). The secret guard (`FileAccess.refuseTeamSecrets`, rules in
+  `packages/util/src/secret-scan.ts`) needs no trust: Write, Edit and Patch refuse new text that matches a rule when
+  the target is in the team folder by name or when where it really leads is in the folder's real path (class 3), before
+  any question or write, as a tool error that names the rules and never the text (classes 9, 13); NotebookEdit and Bash
+  are not scanned. Proof: `test/memory-team-instructions.test.ts` (untrusted with a trusted control, the folder as a
+  link out, a `MEMORY.md` link out, the folder as a link to a share with the recorded file system, front matter with a
+  marker file, the tag escape), `test/permission-team-memory.test.ts` (spellings, places beside the folder, the switches,
+  trust, deny, links in and out, the shell, the config key), `test/memory-team.test.ts` (each tool, spellings, a link
+  into the folder, an untrusted project, the config watch) and `packages/util/test/secret-scan.test.ts`.
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and

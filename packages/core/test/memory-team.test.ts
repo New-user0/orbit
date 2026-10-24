@@ -10,7 +10,8 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
+import { ToolFailure } from "@orbit/ai"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { ConfigWatch } from "@orbit/core/config/watch"
 import type { ConfigDiscovery } from "@orbit/core/config/discovery"
@@ -27,6 +28,7 @@ import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
 import { PatchTool } from "@orbit/core/tool/plugin/patch"
 import { WriteTool } from "@orbit/core/tool/plugin/write"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { transformEnvironmentFiles } from "./fixture/environment"
@@ -353,6 +355,44 @@ describe("an Edit in team memory", () => {
       expect(out.unchanged).toBe(original)
       expect(out.removed.status).toBe("completed")
       expect(yield* read(file)).toBe(`# Deploy\nold line\nleft over ${cloud}\nremoved\n`)
+    }),
+  )
+
+  // Edit's validation refuses the key before the file is read, and its `execute`, which decides, refuses it again on its
+  // own: each is run alone here, so neither passes because the other refused.
+  it.live("refuses a key in its validation and again in execute", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const file = path.join(l.team, "deploy.md")
+      yield* Effect.promise(() => fs.writeFile(file, "old line\n"))
+      const log = record()
+      const input = { file_path: ".orbit/team-memory/deploy.md", old_string: "old line", new_string: `token ${pat}` }
+      const context = {
+        sessionID,
+        ...toolIdentity,
+        id: Tool.CallID.make("call-team-edit"),
+        progress: () => Effect.void,
+        traits: ToolTraits.defaults,
+      }
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const tool = (yield* registry.list()).find((item) => item.id === EditTool.name)
+          if (tool?.validate === undefined) return yield* Effect.die("The edit tool has no validate")
+          return {
+            validated: yield* tool.validate(input, context).pipe(Effect.flip),
+            executed: yield* tool.execute(input, context).pipe(Effect.flip),
+            clean: yield* tool.validate({ ...input, new_string: "new line" }, context).pipe(Effect.exit),
+          }
+        }),
+      )
+      for (const error of [out.validated, out.executed]) {
+        expect(error).toBeInstanceOf(ToolFailure)
+        expect(error.message).toContain("GitHub PAT")
+        expect(error.message).not.toContain(pat)
+      }
+      expect(Exit.isSuccess(out.clean)).toBe(true)
+      expect(log.asked).toEqual([])
+      expect(yield* read(file)).toBe("old line\n")
     }),
   )
 })

@@ -7,14 +7,7 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-
-// The scanner is new with context-memory-11. Until it is built, the suite loads it by a name the type checker does not
-// follow, so that the repository still type-checks; the build replaces this with
-// `import { SecretScan } from "@orbit/util/secret-scan"` and drops the type below.
-type Match = { readonly id: string; readonly label: string }
-const SecretScan: { readonly RULES: readonly Match[]; readonly scan: (text: string) => readonly Match[] } = (
-  await import(["@orbit/util", "secret-scan"].join("/"))
-).SecretScan
+import { SecretScan } from "@orbit/util/secret-scan"
 
 const ALNUM = "aB3dE5gH7jK9mN2pQ4rS6tU8vW0xY1zC"
 const HEX = "0a1b2c3d4e5f6789"

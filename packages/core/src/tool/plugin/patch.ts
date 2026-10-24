@@ -134,6 +134,29 @@ export const Plugin = {
                 ),
                 (value) => access.resolve({ path: value, kind: "file" }),
               )
+              // A credential never reaches team memory (context-memory-11): what each hunk adds is scanned before anything
+              // is read or asked, as Write's content and Edit's replacement are. A file moved into the folder is scanned
+              // whole once its text is known, below.
+              yield* Effect.forEach(
+                hunks,
+                (hunk) =>
+                  hunk.type === "delete"
+                    ? Effect.void
+                    : Effect.forEach(
+                        hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
+                        (value) => access.resolve({ path: value, kind: "file" }),
+                      ).pipe(
+                        Effect.flatMap((targets) =>
+                          access.refuseTeamSecrets(
+                            targets,
+                            hunk.type === "add"
+                              ? hunk.contents
+                              : hunk.chunks.flatMap((chunk) => chunk.newLines).join("\n"),
+                          ),
+                        ),
+                      ),
+                { discard: true },
+              )
               return yield* Effect.gen(function* () {
                 const prepared: Prepared[] = []
                 const updates = new Map<string, string>()
@@ -245,6 +268,7 @@ export const Plugin = {
                         new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                     })
                     const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                    if (moveTarget) yield* access.refuseTeamSecrets([moveTarget], update.content)
                     const moveID = moveTarget && hunk.movePath ? yield* identify(moveTarget, hunk.movePath) : undefined
                     // Writing the destination and then removing the source would delete a file moved onto itself.
                     if (moveID !== undefined && moveID === id)
