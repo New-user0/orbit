@@ -1867,8 +1867,10 @@ the session in view: one to three sentences that name the task and the next step
 the request until it ends, and coming back first cancels it. There is at most one
 recap per prompt or `!` command, however many clients ask or however often the terminal loses focus. The recap is
 written by the provider's small model, or by `agents.side.model` when you set one, never by the session's own model;
-with neither, no recap is made. It sees the last 30 messages, with no system prompt and no tools, so the tool calls and
-results among them go as text, and it is never sent to a model afterwards. A recap you come back during is dropped,
+with neither, no recap is made. It sees the last 30 messages, starting at the first user message among them, with
+no system prompt and no tools, so the tool calls and results among them go as text, and it is never sent to a model
+afterwards. Only the main conversation is recapped: a subagent's session in view asks for none, and a prompt another
+agent wrote does not count as one of yours. A recap you come back during is dropped,
 and its estimated cost is still counted, as for a side query that times out. A terminal that does not report focus never asks. The server adds the route
 `POST /api/session/:sessionID/recap` and the durable event `session.recap.recorded`, and session message lists can
 hold a `recap` message. `orb export --sanitize` redacts a recap's text as it does a prompt's.
