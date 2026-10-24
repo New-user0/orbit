@@ -4052,7 +4052,7 @@ highest-priority of those that sets a replacement decides, and an empty string c
   added later is recorded the same way) and what session generations spend (`/btw`, warming, plugin and doctor calls),
   in the session and in its subagents. They used to count only responses, compaction and titles.
 - A response that the provider cut off before it reported usage (a stream that failed part way, a side query that
-  timed out after it was sent, a title or compaction call that failed) is counted by an estimate priced with the model's
+  timed out after it was sent, a title or summary compaction call that failed) is counted by an estimate priced with the model's
   own rates, so recovery after it (continuing the reply, retrying, the fallback model) runs under a cost limit
   instead of ending the turn as `limit.cost-unknown`. A request the provider refused before it began costs nothing.
   An attempt that reported usage and was then retried is counted too.
@@ -4236,3 +4236,37 @@ In YAML an alias names a value that an anchor wrote earlier, and Orbit's readers
 **Affects:** projects whose front matter, workflow or suite files repeat large values through YAML aliases, or nest that deep.
 
 **What to do:** Write the repeated values out, or repeat them less.
+
+## Automatic compaction follows the context window less the summary's room, and a failed one no longer fails the turn
+
+- **Where it starts.** The summary now keeps the smaller of the model's output limit, `output_token_cap` and 20,000
+  tokens free, and automatic compaction starts 13,000 tokens below the window that is left (`compaction.buffer`
+  replaces the 13,000). The summary never keeps more than half the window, and compaction never starts below half the
+  window, so a small window, a model whose output limit fills its window, or a large buffer cannot make every request
+  compact. On a 200,000-token window with a 32,000-token output limit it starts at 167,000 tokens; it used to
+  start at 180,000. A model with an unknown window never compacts automatically and is never refused locally, as before
+  (`session-context-window.test.ts`, "automatic compaction threshold"; `session-runner.test.ts`, "context accounting").
+- **A failed automatic compaction keeps the turn going.** The failure is still recorded as a `compaction.failed`
+  message, but the request is sent without it. It used to end the step with the compaction's error. Three failures in a
+  turn pause automatic compaction until the next turn, and a paused turn also skips the rebuild after a provider
+  rejects a request as too long, so the provider's error ends the step. Input steered into a running turn does not
+  restart the count.
+- **At most one automatic compaction per request.** A retry, a fallback switch or a continuation resends the same
+  request and no longer compacts a second time. A resume after the output limit is a new request and is checked again.
+- **With automatic compaction off, a request that cannot fit is refused.** When the conversation reaches 3,000 tokens
+  below the window that is left, the step fails with the new `context.limit` error, whose message names `/compact`,
+  and no request is sent. On a window under about 46,000 tokens the limit is the point where automatic compaction
+  would have started (half the window at least), so the refusal comes no earlier than that. Clients show it as they
+  show any other failed execution.
+- **New event.** `session.context.updated` reports how full the context is after each measured response, and again
+  with `stale: true` after each compaction. It is not stored.
+- **Native compaction spend.** A native compaction call that reports no usage is recorded with zero tokens, which a
+  turn limit reads as unknown spend, and one that fails or is interrupted after the provider began to answer is
+  recorded as an estimate (`session-native-compaction.test.ts`). A request the provider refused costs nothing, as
+  before. Only a summary compaction call that failed was counted before.
+
+**Affects:** people who set `compaction.buffer` or `output_token_cap`, run with `compaction.auto` off, set
+`--max-cost` or `--max-tokens` with native compaction, or read `session.execution.failed` from scripts or SDKs.
+
+**What to do:** Nothing. A buffer you set still sets how far below the window compaction starts, measured from the
+window less the summary's room instead of the whole window; lower it if compaction now starts earlier than you want.
