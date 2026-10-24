@@ -359,8 +359,12 @@ describe("SessionRetention.prune", () => {
         )
 
         expect(yield* remaining).toEqual(["ses_ret_badclock", "ses_ret_badclock_child", "ses_ret_badid", "ses_x/../y"])
-        // One line for each row that does not decode, and none for the family that went.
-        expect(logged).toHaveLength(2)
+        // One line for each row that does not decode, and none for the family that went. The lines name the reason, so a
+        // family kept only because its removal failed later would not pass for one the check kept.
+        expect(logged.toSorted()).toEqual([
+          "session retention kept a family: a session's ID cannot name a folder",
+          "session retention kept a family: a session's last change does not decode",
+        ])
       }),
     ),
   )
@@ -496,12 +500,15 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
       Effect.gen(function* () {
         const elsewhere = path.join(l.outside, "elsewhere")
         yield* folder(path.join(elsewhere, "ses_ret_gone"))
+        // A flat saved result of an earlier version, past the cutoff: the legacy sweep does not follow the link either.
+        yield* folder(elsewhere, "tool_0123456789ab")
         yield* link(elsewhere, l.outputs)
         yield* folder(path.join(l.scratch, "ses_ret_gone"))
 
         yield* prune({ days: 30, now: later() })
 
         expect(yield* exists(path.join(elsewhere, "ses_ret_gone", "keep.txt"))).toBe(true)
+        expect(yield* exists(path.join(elsewhere, "tool_0123456789ab"))).toBe(true)
         expect((yield* Effect.promise(() => fs.lstat(l.outputs))).isSymbolicLink()).toBe(true)
         expect(yield* exists(path.join(l.scratch, "ses_ret_gone"))).toBe(false)
       }),
@@ -514,15 +521,42 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
     scenario((l) =>
       Effect.gen(function* () {
         yield* row({ id: "ses_ret_CaseKeep", updated: later() - DAY })
+        yield* row({ id: "ses_ret_lowerkeep", updated: later() - DAY })
         yield* folder(path.join(l.outputs, "ses_ret_casekeep"))
         yield* folder(path.join(l.scratch, "ses_ret_casekeep"))
+        // The other way round: the folder's name is the one in mixed case.
+        yield* folder(path.join(l.outputs, "ses_ret_LowerKeep"))
+        yield* folder(path.join(l.scratch, "ses_ret_LowerKeep"))
         yield* folder(path.join(l.outputs, "ses_ret_nolive"))
 
         yield* prune({ days: 30, now: later() })
 
         expect(yield* exists(path.join(l.outputs, "ses_ret_casekeep", "keep.txt"))).toBe(true)
         expect(yield* exists(path.join(l.scratch, "ses_ret_casekeep", "keep.txt"))).toBe(true)
+        expect(yield* exists(path.join(l.outputs, "ses_ret_LowerKeep", "keep.txt"))).toBe(true)
+        expect(yield* exists(path.join(l.scratch, "ses_ret_LowerKeep", "keep.txt"))).toBe(true)
         expect(yield* exists(path.join(l.outputs, "ses_ret_nolive"))).toBe(false)
+      }),
+    ),
+  )
+
+  // A subagent uses its parent's scratchpad and a fork its source's (`SessionScratchpad.key`). When that session was
+  // removed earlier, the live one still works in the folder it names, so the folder stays; a folder nothing names goes.
+  it.live("keeps the scratchpad a live session uses after the session that names it is gone", () =>
+    scenario((l) =>
+      Effect.gen(function* () {
+        yield* row({ id: "ses_ret_keptchild", parent: "ses_ret_goneparent", updated: later() - DAY })
+        yield* row({ id: "ses_ret_keptfork", fork: "ses_ret_gonesource", updated: later() - DAY })
+        yield* folder(path.join(l.scratch, "ses_ret_goneparent"))
+        yield* folder(path.join(l.scratch, "ses_ret_gonesource"))
+        yield* folder(path.join(l.scratch, "ses_ret_noone"))
+
+        yield* prune({ days: 30, now: later() })
+
+        expect(yield* remaining).toEqual(["ses_ret_keptchild", "ses_ret_keptfork"])
+        expect(yield* exists(path.join(l.scratch, "ses_ret_goneparent", "keep.txt"))).toBe(true)
+        expect(yield* exists(path.join(l.scratch, "ses_ret_gonesource", "keep.txt"))).toBe(true)
+        expect(yield* exists(path.join(l.scratch, "ses_ret_noone"))).toBe(false)
       }),
     ),
   )

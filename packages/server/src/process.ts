@@ -249,18 +249,12 @@ function unavailable(status: Status.State) {
 
 /**
  * The retention period as the config of the folder the server runs in gives it: the folder a request without one of
- * its own is served in. Config that cannot be read skips the pass.
+ * its own is served in. Config that cannot be read fails that pass, which the schedule logs and skips.
  */
 const retentionSetting = (locations: LocationServiceMap.Service["Service"]) =>
   SessionRetention.setting.pipe(
     Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
-    Effect.catchCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
-        ? Effect.interrupt
-        : Effect.logWarning("session retention skipped: the config could not be read", { cause }).pipe(
-            Effect.as(undefined),
-          ),
-    ),
+    Effect.orDie,
   )
 
 /**
