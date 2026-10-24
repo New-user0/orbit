@@ -132,33 +132,26 @@ export const Plugin = {
                 return yield* new ToolFailure({ message: "patch rejected: empty patch" })
               }
               // Every path is checked by FileAccess before the lock key resolves it on disk (a share would be opened).
-              const locked = yield* Effect.forEach(
-                hunks.flatMap((hunk) =>
+              // Each hunk's paths are resolved once, for the lock and for the scan below.
+              const named = yield* Effect.forEach(hunks, (hunk) =>
+                Effect.forEach(
                   hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
+                  (value) => access.resolve({ path: value, kind: "file" }),
                 ),
-                (value) => access.resolve({ path: value, kind: "file" }),
               )
+              const locked = named.flat()
               // A credential never reaches team memory (context-memory-11): what each hunk adds is scanned before anything
               // is read or asked, as Write's content and Edit's replacement are. A file moved into the folder is scanned
               // whole once its text is known, below. An update's context lines are already in the file, so a patch that
               // takes a key out beside another one passes, as an Edit that takes one out does.
               yield* Effect.forEach(
                 hunks,
-                (hunk) =>
+                (hunk, index) =>
                   hunk.type === "delete"
                     ? Effect.void
-                    : Effect.forEach(
-                        hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
-                        (value) => access.resolve({ path: value, kind: "file" }),
-                      ).pipe(
-                        Effect.flatMap((targets) =>
-                          access.refuseTeamSecrets(
-                            targets,
-                            hunk.type === "add"
-                              ? hunk.contents
-                              : hunk.chunks.flatMap(added).join("\n"),
-                          ),
-                        ),
+                    : access.refuseTeamSecrets(
+                        named[index],
+                        hunk.type === "add" ? hunk.contents : hunk.chunks.flatMap(added).join("\n"),
                       ),
                 { discard: true },
               )
