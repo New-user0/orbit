@@ -2466,7 +2466,7 @@ export type ConfigEntry =
         attribution?: { commit?: string; pr?: string }
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
         shell_tool?: { timeout?: number; max_timeout?: number }
-        tool_output?: { max_lines?: number; max_bytes?: number }
+        tool_output?: { max_lines?: number; max_bytes?: number; max_result_chars?: number }
         tool_execution?: { max_concurrency?: number }
         mcp?: {
           timeout?: { startup?: number; catalog?: number; execution?: number }

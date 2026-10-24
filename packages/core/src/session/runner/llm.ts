@@ -116,6 +116,7 @@ const layer = Layer.effect(
     const title = yield* SessionTitle.Service
     const turnEnd = yield* SessionTurnEnd.Service
     const reminders = yield* SessionReminders.Service
+    const toolOutput = yield* ToolOutput.Service
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -515,6 +516,7 @@ const layer = Layer.effect(
           messages: loaded.messages,
           insertions: yield* reminders.derive(loaded, step),
           minimal: reminders.minimal,
+          toolOutput: toolOutput.root,
         })
         const prepared = yield* context.request.primary({
           session: loaded.session,
@@ -530,7 +532,7 @@ const layer = Layer.effect(
           toolChoice: handInOnly ? { type: "tool", name: SessionOutput.NAME } : stepLimitReached ? "none" : undefined,
           output: output && { validator: output.validator, schema: output.schema, only: handInOnly },
           webSocket: "session",
-          inputTokens: SessionCompaction.estimatePrompt(loaded, reminders.minimal),
+          inputTokens: SessionCompaction.estimatePrompt(loaded, reminders.minimal, toolOutput.root),
           outputTokenCap: loaded.outputTokenCap,
           outputEscalated: recovery.escalated,
         })

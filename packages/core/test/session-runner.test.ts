@@ -480,6 +480,31 @@ const makeLayer = (persist: boolean, real = false) =>
               traits: { concurrencySafe: true },
               execute: () => Effect.succeed({ output: {} }),
             },
+            // tool-runtime-8: `count` copies of `text`, to make a result of any size.
+            emit: {
+              name: "emit",
+              description: "Repeat text",
+              input: Schema.Struct({ text: Schema.String, count: Schema.Number }),
+              traits: { concurrencySafe: true },
+              execute: ({ text, count }) => Effect.succeed({ content: text.repeat(count) }),
+            },
+            // Returns neither content nor output.
+            silent: {
+              name: "silent",
+              description: "Return nothing",
+              input: Schema.Struct({}),
+              traits: { concurrencySafe: true },
+              execute: () => Effect.succeed({}),
+            },
+            // Returns what the MCP tool returns for a server's empty content: no content and a null output.
+            nulled: {
+              name: "nulled",
+              description: "Return a null output",
+              input: Schema.Struct({}),
+              output: Schema.Null,
+              traits: { concurrencySafe: true },
+              execute: () => Effect.succeed({ output: null }),
+            },
           },
           { codemode: false },
         ),
@@ -1650,9 +1675,12 @@ describe("SessionRunnerLLM", () => {
       "cancelable",
       "defect",
       "echo",
+      "emit",
       "gated",
       "held",
       "mutate",
+      "nulled",
+      "silent",
       "storefail",
     ])
     expect(s.requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
@@ -4313,9 +4341,12 @@ describe("SessionRunnerLLM", () => {
       "cancelable",
       "defect",
       "echo",
+      "emit",
       "gated",
       "held",
       "mutate",
+      "nulled",
+      "silent",
       "storefail",
     ])
     expect(yield* s.context).toMatchObject([
@@ -11178,6 +11209,124 @@ describe("context accounting", () => {
     yield* s.runPrompt("Next question")
 
     expect((yield* compactions(s)).map((message) => message.status)).toEqual(["completed"])
-    expect(s.requests[0]?.generation?.maxTokens).toBe(8_192)
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_192)  })
+})
+
+// tool-runtime-8 end to end, through the real tool registry, step and lowering, with Orbit's data folder on a temporary
+// folder. Every client runs tools through this step and lowers requests the same way (class 12).
+describe("SessionRunnerLLM saved tool results", () => {
+  const savedScenario = scenarioOn(scratchpadIt)
+  const toolResults = (request: LLMRequest | undefined) =>
+    (request?.messages ?? []).flatMap((message) =>
+      message.role === "tool"
+        ? message.content.flatMap((part) => (part.type === "tool-result" ? [{ id: part.id, result: part.result }] : []))
+        : [],
+    )
+
+  savedScenario("saves a large result and the next request carries the wrapper with the saved path", function* (s) {
+    // The temporary Global puts `tmp` and `data` side by side (`tempGlobalLayer`), and the scratchpad is
+    // `<tmp>/sessions/<session>`, so Orbit's data folder is found from it.
+    const scratchpad = (yield* SessionScratchpad.Service).path(yield* s.session.get(sessionID))
+    if (scratchpad === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+    const data = path.join(path.dirname(path.dirname(path.dirname(scratchpad))), "data")
+    yield* s.admit("Repeat it")
+    yield* s.llm.push(
+      TestLLM.tool("call_emit", "emit", { text: "r", count: 60_000 }),
+      TestLLM.text("Done", "done-saved"),
+    )
+    yield* s.resume
+
+    const [result] = toolResults(s.requests[1])
+    if (result?.result.type !== "text") return yield* Effect.die(new Error("Expected a text tool result"))
+    const lines = String(result.result.value).split("\n")
+    expect(lines[0]).toBe("<saved-output>")
+    const saved = /^Output too large to include \(58\.6KB\)\. The full output is saved at: (.+)$/.exec(
+      lines[1] ?? "",
+    )?.[1]
+    if (saved === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${lines[1]}`))
+    // The path the model is shown is the file that was written (class 3), in the session's own folder.
+    expect(path.dirname(saved)).toBe(path.join(data, "tool-output", sessionID))
+    expect(path.basename(saved)).toMatch(/^msg_[A-Za-z0-9]{1,64}-call_emit-[0-9a-f]{8}\.txt$/)
+    expect(yield* Effect.promise(() => fs.readFile(saved, "utf8"))).toBe("r".repeat(60_000))
+    expect(lines.slice(2)).toEqual([
+      "",
+      "Preview of the first 2,000 characters:",
+      "r".repeat(2_000),
+      "...",
+      "</saved-output>",
+    ])
+
+    // The stored result is the tool's own content.
+    const tool = (yield* s.messages)
+      .flatMap((message) => (message.type === "assistant" ? message.content : []))
+      .find((part) => part.type === "tool" && part.id === "call_emit")
+    expect(tool?.type === "tool" && tool.state.status === "completed" ? tool.state.content : undefined).toEqual([
+      { type: "text", text: "r".repeat(60_000) },
+    ])
+
+    // A later request lowers the same history byte for byte.
+    yield* s.admit("And again")
+    yield* s.llm.push(TestLLM.text("Again", "again-saved"))
+    yield* s.resume
+    expect(toolResults(s.requests[2])).toEqual(toolResults(s.requests[1]))
+  })
+
+  // The prompt the runner measures for the output limit is the one it sends: the wrapper, not the 300,000 characters
+  // (about 75,000 tokens) that were saved, which would leave a window of 100,000 tokens room for far less output.
+  savedScenario("fits the output limit to the wrapper the request carries, not to the saved content", function* (s) {
+    s.currentModel = fittedOutputModel
+    yield* s.admit("Repeat it")
+    yield* s.llm.push(
+      TestLLM.tool("call_fitted", "emit", { text: "r", count: 300_000 }),
+      TestLLM.text("Done", "done-fitted"),
+    )
+    yield* s.resume
+
+    const [result] = toolResults(s.requests[1])
+    expect(result?.result.type === "text" ? String(result.result.value).split("\n")[0] : undefined).toBe(
+      "<saved-output>",
+    )
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([64_000, 64_000])
+  })
+
+  savedScenario("sends a result that returned nothing as the empty marker", function* (s) {
+    yield* s.admit("Run the quiet tools")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call_silent", name: "silent", input: {} }),
+        LLMEvent.toolCall({ id: "call_nulled", name: "nulled", input: {} }),
+      ),
+      TestLLM.text("Done", "done-quiet"),
+    )
+    yield* s.resume
+
+    expect(toolResults(s.requests[1])).toEqual([
+      { id: "call_silent", result: { type: "text", value: "(silent finished and returned no output)" } },
+      { id: "call_nulled", result: { type: "text", value: "(nulled finished and returned no output)" } },
+    ])
+  })
+
+  // The `execute.after` hook of a built-in tool sees what the tool returned, never the wrapper.
+  savedScenario("lets the tool's after hook see its own content", function* (s) {
+    const hooks = yield* PluginHooks.Service
+    const seen: number[] = []
+    yield* hooks.register("tool", "execute.after", (event) =>
+      Effect.sync(() => {
+        if (event.status !== "completed") return
+        const content = event.result.content
+        seen.push(
+          typeof content === "string"
+            ? content.length
+            : (content ?? []).reduce((sum, part) => sum + (part.type === "text" ? part.text.length : 0), 0),
+        )
+      }),
+    )
+    yield* s.admit("Repeat it")
+    yield* s.llm.push(
+      TestLLM.tool("call_hooked", "emit", { text: "h", count: 60_000 }),
+      TestLLM.text("Done", "done-hook"),
+    )
+    yield* s.resume
+    expect(seen).toEqual([60_000])
   })
 })

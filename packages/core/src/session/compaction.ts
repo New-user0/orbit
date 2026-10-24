@@ -37,6 +37,7 @@ import { toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
 import { isReminder } from "./reminder-text.js"
 import { toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
+import { ToolOutput } from "../tool-output.js"
 
 export type Settings = {
   auto: boolean
@@ -192,6 +193,7 @@ export const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const requests = yield* SessionModelRequest.Service
     const reminders = yield* SessionReminders.Service
+    const toolOutput = yield* ToolOutput.Service
 
     const state = State.create<Settings, Editor>({
       name: "session-compaction",
@@ -217,7 +219,7 @@ export const layer = Layer.effect(
         found?.effective ?? UNKNOWN_WINDOW - SessionContextWindow.reserve(context.model.limit, context.outputTokenCap)
       // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
       const budget =
-        trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context, reminders.minimal) * SHRINK_STEPS[0])) : cap
+        trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context, reminders.minimal, toolOutput.root) * SHRINK_STEPS[0])) : cap
 
       const compaction =
         context.model.compaction?.type === "native"
@@ -246,7 +248,7 @@ export const layer = Layer.effect(
       // An encrypted native window estimates as nothing, so wait for a response to measure it.
       const measured = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
       if (measured < messages.findLastIndex(SessionProviderContext.isCheckpoint)) return false
-      return estimateContext(context, reminders.minimal) >= ceiling
+      return estimateContext(context, reminders.minimal, toolOutput.root) >= ceiling
     }
 
     /**
@@ -627,7 +629,7 @@ export const layer = Layer.effect(
       webSocket?: "session",
     ) => {
       // Hints and the editor note belong to the request they were written for; the summary request lowers prompts the way the main request does on this instance.
-      const base = transcript(context, messages, reminders.minimal)
+      const base = transcript(context, messages, reminders.minimal, toolOutput.root)
       return requests.compaction({
         session: context.session,
         agent: context.agent.id,
@@ -731,7 +733,7 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, Database.node, llmClient, SessionModelRequest.node, SessionReminders.node],
+  deps: [Bus.node, Database.node, llmClient, SessionModelRequest.node, SessionReminders.node, ToolOutput.node],
 })
 
 /** What a compaction reads: no replaced attempts and no reminder rows, which are collected again after the checkpoint. */
@@ -748,6 +750,7 @@ const transcript = (
   context: SessionContext.Loaded,
   messages: ReadonlyArray<SessionMessage.Info>,
   minimal?: boolean,
+  toolOutput?: string,
 ) =>
   SessionModelRequest.baseTranscript({
     agent: context.agent.info,
@@ -756,6 +759,7 @@ const transcript = (
     initial: context.initial,
     messages,
     minimal,
+    toolOutput,
   })
 
 /**
@@ -929,17 +933,17 @@ export const recentUserMessages = (
   return sendable.slice(oldestToDrop(sendable, estimateMessage, keep))
 }
 
-export const estimateContext = (context: SessionContext.Loaded, minimal?: boolean) => {
-  const prompt = estimatePrompt(context, minimal)
+export const estimateContext = (context: SessionContext.Loaded, minimal?: boolean, toolOutput?: string) => {
+  const prompt = estimatePrompt(context, minimal, toolOutput)
   return prompt.measured + prompt.estimated
 }
 
 /** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
-export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean) => {
+export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean, toolOutput?: string) => {
   const messages = withoutReplaced(context.messages)
   const anchorIndex = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
   const anchor = messages[anchorIndex]
-  const base = transcript(context, messages.slice(Math.max(0, anchorIndex)), minimal)
+  const base = transcript(context, messages.slice(Math.max(0, anchorIndex)), minimal, toolOutput)
   // TODO: Pass compaction history the runner has already shaped. This and `recentUserMessages` repeat the
   // runner's unsupported-media and image-budget passes; here the image budget only sees images since the anchor,
   // so image-heavy sessions can estimate high.
