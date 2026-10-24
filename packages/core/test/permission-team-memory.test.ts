@@ -242,6 +242,42 @@ describe("the team memory folder", () => {
     timeout,
   )
 
+  // A mode is not a rule of the person's: as for the private folder, Plan's deny of every edit does not stop a team
+  // memory write, while it still stops a project file. `Permission.denied`, which hides what a deny covers before a
+  // tool asks, answers the same way.
+  it.live(
+    "writes team memory under a mode's deny of every edit, and the mode still denies a project file",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l, [Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const })])
+          const permission = yield* Permission.Service
+          const denied = (file: string) =>
+            permission.denied({
+              id: Permission.ID.create(),
+              action: "Edit",
+              resources: [file],
+              sessionID: SessionSchema.ID.make(main),
+              agent: probe,
+            })
+          return {
+            team: yield* decide(path.join(l.team, "a.md")),
+            project: yield* decide(path.join(l.project, "a.md")),
+            teamDenied: yield* denied(path.join(l.team, "a.md")),
+            projectDenied: yield* denied(path.join(l.project, "a.md")),
+          }
+        }).pipe(provide(l))
+        expect(out).toEqual({
+          team: allowEdit,
+          project: { effect: "deny", stage: "Edit" },
+          teamDenied: false,
+          projectDenied: true,
+        })
+      }),
+    timeout,
+  )
+
   // Class 1: nothing of the team folder counts before the project is trusted, whatever the person's own config says.
   // The trusted run is the control.
   it.live(

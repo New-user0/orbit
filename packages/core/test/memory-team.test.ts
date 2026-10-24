@@ -123,7 +123,15 @@ const withTools = <A, E>(
   }).pipe(
     Effect.provide(
       AppNodeBuilder.build(
-        LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, FileLedger.node, writeNode, editNode, patchNode]),
+        LayerNode.group([
+          Tool.node,
+          FileAccess.node,
+          FileMutation.node,
+          FileLedger.node,
+          writeNode,
+          editNode,
+          patchNode,
+        ]),
         [
           FileLedger.node.replace(FileLedger.permissiveLayer),
           Environment.node.replace(
@@ -185,7 +193,11 @@ describe("a Write into team memory", () => {
           )
           const clean = yield* executeTool(
             registry,
-            call("Write", { file_path: ".orbit/team-memory/testing.md", content: "Tests hit a real database.\n" }, "w3"),
+            call(
+              "Write",
+              { file_path: ".orbit/team-memory/testing.md", content: "Tests hit a real database.\n" },
+              "w3",
+            ),
           )
           return { refused, askedAfterRefusal, outside, clean }
         }),
@@ -280,6 +292,71 @@ describe("a Write into team memory", () => {
       expect(yield* read(path.join(l.team, "linked.md"))).toBeUndefined()
       expect(out.clean.status).toBe("completed")
       expect(yield* read(path.join(l.team, "clean.md"))).toBe("clean\n")
+    }),
+  )
+
+  // Class 3: a team folder that is a link to another folder of the project is in the repository by both names, so a
+  // write by the name of the folder it leads to is scanned as well. A clean write there is the control.
+  it.live("scans a write by the real name of a team folder that is a link inside the project", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const shared = path.join(l.project, "shared")
+      yield* Effect.promise(async () => {
+        await fs.rm(l.team, { recursive: true })
+        await fs.mkdir(shared)
+        await fs.symlink(shared, l.team, linkType)
+      })
+      const log = record()
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const refused = yield* executeTool(
+            registry,
+            call("Write", { file_path: "shared/real.md", content: `key ${pat}\n` }, "r1"),
+          )
+          const clean = yield* executeTool(
+            registry,
+            call("Write", { file_path: "shared/clean.md", content: "clean\n" }, "r2"),
+          )
+          return { refused, clean }
+        }),
+      )
+      expectRefused(out.refused, "GitHub PAT", pat)
+      expect(log.asked).toEqual(["Edit"])
+      expect(yield* read(path.join(shared, "real.md"))).toBeUndefined()
+      expect(out.clean.status).toBe("completed")
+      expect(yield* read(path.join(shared, "clean.md"))).toBe("clean\n")
+    }),
+  )
+
+  // A team folder that leads out of the project turns team memory off (class 4), but a write by the folder's own name
+  // is still scanned, as the reference's guard asks only whether the path is in the folder. A clean write is the control.
+  it.live("scans a write by the folder's name when the team folder leads out of the project", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      yield* Effect.promise(async () => {
+        await fs.rm(l.team, { recursive: true })
+        await fs.symlink(l.outside, l.team, linkType)
+      })
+      const log = record()
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const refused = yield* executeTool(
+            registry,
+            call("Write", { file_path: ".orbit/team-memory/out.md", content: `key ${pat}\n` }, "o1"),
+          )
+          const askedAfterRefusal = [...log.asked]
+          const clean = yield* executeTool(
+            registry,
+            call("Write", { file_path: ".orbit/team-memory/clean.md", content: "clean\n" }, "o2"),
+          )
+          return { refused, askedAfterRefusal, clean }
+        }),
+      )
+      expectRefused(out.refused, "GitHub PAT", pat)
+      expect(out.askedAfterRefusal).toEqual([])
+      expect(yield* read(path.join(l.outside, "out.md"))).toBeUndefined()
+      expect(out.clean.status).toBe("completed")
+      expect(yield* read(path.join(l.outside, "clean.md"))).toBe("clean\n")
     }),
   )
 
@@ -417,14 +494,20 @@ describe("a Patch into team memory", () => {
           )
           const updated = yield* executeTool(
             registry,
-            call("Patch", { patchText: patch(`*** Update File: .orbit/team-memory/notes.md\n@@\n-first\n+${pat}`) }, "p2"),
+            call(
+              "Patch",
+              { patchText: patch(`*** Update File: .orbit/team-memory/notes.md\n@@\n-first\n+${pat}`) },
+              "p2",
+            ),
           )
           const moved = yield* executeTool(
             registry,
             call(
               "Patch",
               {
-                patchText: patch("*** Update File: carried.md\n*** Move to: .orbit/team-memory/carried.md\n@@\n-keep\n+kept"),
+                patchText: patch(
+                  "*** Update File: carried.md\n*** Move to: .orbit/team-memory/carried.md\n@@\n-keep\n+kept",
+                ),
               },
               "p3",
             ),
