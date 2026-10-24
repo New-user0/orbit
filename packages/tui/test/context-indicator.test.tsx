@@ -115,6 +115,7 @@ test.each([
   // and percent; from 80 columns the whole line shows, beside the model, instead of the context bar and the shortcuts.
   { name: "automatic compaction off", width: 120, report: off, text: "Context almost full (3% left) · run /compact" },
   { name: "automatic compaction off", width: 80, report: off, text: "Context almost full (3% left) · run /compact" },
+  { name: "automatic compaction off", width: 90, report: off, text: "Context almost full (3% left) · run /compact" },
   { name: "automatic compaction off", width: 40, report: off, text: "Context almost full (3%" },
   { name: "automatic compaction on", width: 120, report: on, text: "4% left before auto-compaction" },
   { name: "automatic compaction on", width: 80, report: on, text: "4% left before auto-compaction" },
@@ -139,6 +140,8 @@ test.each([
   expect(footerRow(frame)).toContain("Model")
   // The warning reports the same figure more precisely, so the bar gives way to it.
   expect(footerRow(frame)).not.toContain("88%")
+  // The shortcuts give way to the warning when the row cannot hold both, and stay when it can.
+  expect(footerRow(frame).includes("shift")).toBe(row.width === 120)
 })
 
 test.each([40, 120])("nothing is drawn at %s columns before a report arrives", async (width) => {
