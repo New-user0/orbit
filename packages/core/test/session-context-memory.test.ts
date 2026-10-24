@@ -28,6 +28,7 @@ import { SessionContext } from "@orbit/core/session/context"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionSchema } from "@orbit/core/session/schema"
+import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Tool } from "@orbit/core/tool"
@@ -35,10 +36,12 @@ import { Document, Info, type Entry } from "@orbit/schema/config"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { readInitial, readUpdate } from "./lib/instructions"
 import { noScratchpad } from "./lib/scratchpad"
 import { insertSession } from "./lib/session-row"
 import { stubSnapshot } from "./lib/tool"
@@ -140,6 +143,9 @@ const customPrompt = harness([
     info: Schema.decodeUnknownSync(Info)({ system_prompt: "You are a custom assistant." }),
   }),
 ])
+// The test config keeps this array as its entries, so a row that pushes a document changes the config mid-session.
+const switchable: Entry[] = []
+const switching = harness(switchable)
 // A file of this run alone, which a row makes missing, empty and then filled.
 const promptFile = path.join(os.tmpdir(), `orbit-memory-prompt-${crypto.randomUUID()}.md`)
 const filePrompt = harness([
@@ -273,6 +279,57 @@ describe("memory under a system prompt of the person's", () => {
         expect(filled.present).not.toContain(GUIDE)
         expect(filled.present).toContain(INDEX)
       }),
+  )
+})
+
+// The guide goes for two reasons, and the update a session gets says which. A main thread that moves to an agent with
+// a prompt of its own still has memory: the index stays, and the model must not be told that memory is off. When
+// memory.enabled turns false, the same kind of update says that it is off; that row is the control.
+describe("memory when a main thread's guide goes in the middle of a session", () => {
+  const select = (id: SessionSchema.ID) =>
+    SessionContext.Service.pipe(
+      Effect.flatMap((context) => context.select(id)),
+      Effect.map((selected) => selected.instructions),
+    )
+
+  it.live("does not say memory is off after a switch to an agent with its own prompt", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const before = yield* readInitial(yield* select(ids.main))
+      expect(Object.keys(before.values)).toContain(GUIDE)
+      const database = yield* Database.Service
+      yield* database.db
+        .update(SessionTable)
+        .set({ agent: "own" })
+        .where(eq(SessionTable.id, ids.main))
+        .run()
+        .pipe(Effect.orDie)
+      const after = yield* readUpdate(yield* select(ids.main), before)
+      expect(Object.keys(after.values)).not.toContain(GUIDE)
+      expect(Object.keys(after.values)).toContain(INDEX)
+      expect(after.text).toContain("not part of the current prompt")
+      expect(after.text).not.toContain("Memory is switched off for this session")
+      expect(after.text).not.toContain("do not read or write")
+    }),
+  )
+
+  switching.live("says memory is off once memory.enabled turns false", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const before = yield* readInitial(yield* select(ids.main))
+      expect(Object.keys(before.values)).toContain(GUIDE)
+      switchable.push(
+        new Document({
+          type: "document",
+          scope: "user",
+          path: AbsolutePath.make(FSUtil.resolve("/config/orbit.json")),
+          info: Schema.decodeUnknownSync(Info)({ memory: { enabled: false } }),
+        }),
+      )
+      const after = yield* readUpdate(yield* select(ids.main), before)
+      expect(Object.keys(after.values)).not.toContain(GUIDE)
+      expect(after.text).toContain("Memory is switched off for this session")
+    }),
   )
 })
 

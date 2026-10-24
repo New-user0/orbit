@@ -178,9 +178,22 @@ describe("the memory sources", () => {
       const [guide, index] = list
       const value = { path: path.join(l.memory, "MEMORY.md"), content: "- NEW-ENTRY" }
       expect(guide!.changed(l.memory, path.join(l.root, "elsewhere"))).toContain(path.join(l.root, "elsewhere"))
-      expect(guide!.removed(l.memory)).toContain("switched off")
+      // Memory is on here, so the guide going is a matter of the prompt, and it says so; the row below is its pair.
+      expect(guide!.removed(l.memory)).toContain("not part of the current prompt")
+      expect(guide!.removed(l.memory)).not.toContain("do not read or write")
       expect(index!.changed({ ...value, content: "- OLD" }, value)).toContain("- NEW-ENTRY")
       expect(index!.removed(value)).toContain("no longer applies")
+    }),
+  )
+
+  it.live("say that memory is switched off when the guide goes because memory.enabled is false", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const [guide] = yield* Effect.gen(function* () {
+        const memory = yield* MemoryInstructions.Service
+        return yield* memory.load({ sessionID: session, guide: true, index: true })
+      }).pipe(sources(l, [user({ enabled: false })]))
+      expect(guide!.removed(l.memory)).toContain("Memory is switched off for this session")
     }),
   )
 })

@@ -104,11 +104,15 @@ const layer = Layer.effect(
     })
 
     const load = Effect.fn("MemoryInstructions.load")(function* (input: LoadInput) {
+      // Read once, for both sources and for what the guide says when it goes: it also goes while memory stays on, when
+      // the prompt has no place for it (an agent's own prompt, the person's system prompt), and the model must not then
+      // be told that memory is off.
+      const on = yield* store.enabled()
       const guide = Instructions.make({
         key: GUIDE,
         codec: Schema.toCodecJson(Schema.String),
         read: Effect.gen(function* () {
-          if (!input.guide || !(yield* store.enabled())) return Instructions.removed
+          if (!input.guide || !on) return Instructions.removed
           // The guide tells the model that the folder exists, so it never spends a step making it.
           yield* ensureFolder
           return store.folder
@@ -116,14 +120,17 @@ const layer = Layer.effect(
         render: {
           initial: renderGuide,
           changed: (_previous, folder) => renderGuide(folder),
-          removed: () => "Memory is switched off for this session: do not read or write memory files.",
+          removed: () =>
+            on
+              ? "The memory guide given earlier is not part of the current prompt. Memory itself is not switched off."
+              : "Memory is switched off for this session: do not read or write memory files.",
         },
       })
       const memoryIndex = Instructions.make({
         key: INDEX,
         codec: Schema.toCodecJson(Index),
         read: Effect.gen(function* () {
-          if (!input.index || !(yield* store.enabled())) return Instructions.removed
+          if (!input.index || !on) return Instructions.removed
           const kept = frozen.get(input.sessionID)
           if (kept !== undefined) return kept
           const value = yield* readIndex
