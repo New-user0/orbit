@@ -218,7 +218,7 @@ export const Info = Schema.Struct({
         Schema.Struct({
           after_minutes: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
             description:
-              "Minutes the terminal stays unfocused before the session asks its small model for a short recap of where you left off (default 5); 0 turns the recap off",
+              "Minutes the terminal stays unfocused before the session asks its small model for a short recap of where you left off (default 5); 0 turns the recap off, and a value above 35791 waits 35791 minutes",
           }),
         }),
       ).annotate({ description: "The recap shown when you come back to a session" }),

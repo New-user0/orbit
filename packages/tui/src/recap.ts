@@ -3,6 +3,9 @@
 // back cancels the timer and drops a request in flight, and a terminal that never reports focus never asks. The server
 // decides whether a recap is due and records it; a refusal or a failure is silent.
 
+// A timer's delay is a signed 32-bit count of milliseconds, about 35,791 minutes; a longer one would fire at once.
+const LONGEST_DELAY = 2 ** 31 - 1
+
 type FocusHost = {
   on(event: "focus" | "blur", listener: () => void): unknown
   off(event: "focus" | "blur", listener: () => void): unknown
@@ -46,7 +49,7 @@ export function createRecapTrigger(input: {
         return
       }
       ask()
-    }, minutes * 60_000)
+    }, Math.min(minutes * 60_000, LONGEST_DELAY))
   }
 
   const onFocus = () => {

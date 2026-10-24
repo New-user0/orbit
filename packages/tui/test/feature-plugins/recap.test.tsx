@@ -139,6 +139,11 @@ test("session.recap.after_minutes defaults to the reference's five minutes and t
   const decode = Schema.decodeUnknownOption(Config.Info)
   expect(decode({ session: { recap: { after_minutes: 2.5 } } })._tag).toBe("Some")
   expect(decode({ session: { recap: { after_minutes: -1 } } })._tag).toBe("None")
+  // A delay past what a timer holds is taken, and the trigger waits the longest a timer can (recap-trigger.test.ts).
+  expect(decode({ session: { recap: { after_minutes: 100_000 } } })._tag).toBe("Some")
+  expect(
+    Config.resolve({ session: { recap: { after_minutes: 100_000 } } }, { terminalSuspend: true }).session.recap,
+  ).toEqual({ after_minutes: 100_000 })
 })
 
 test("after the delay the session asks for one recap, and blur cycles with no new prompt ask no more", async () => {

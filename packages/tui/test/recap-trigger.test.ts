@@ -7,12 +7,12 @@ import { createRecapTrigger } from "../src/recap"
 // 30 ms, so a test waits a few delays.
 const delay = 0.0005
 
-function harness(input: { busy?: () => boolean; answered?: boolean } = {}) {
+function harness(input: { busy?: () => boolean; answered?: boolean; minutes?: number } = {}) {
   const renderer = new EventEmitter()
   const asked: Array<{ signal: AbortSignal; settle: () => void }> = []
   const trigger = createRecapTrigger({
     renderer,
-    afterMinutes: () => delay,
+    afterMinutes: () => input.minutes ?? delay,
     busy: input.busy ?? (() => false),
     // Unless `answered`, the answer waits for the test and ignores the abort, as a server that answers after the
     // person came back would.
@@ -77,5 +77,15 @@ test("a deferred request goes out at the turn's end, and a turn's end with nothi
   expect(asked).toHaveLength(1)
   trigger.idle()
   expect(asked).toHaveLength(1)
+  trigger.dispose()
+})
+
+// A delay past a 32-bit count of milliseconds would make the timer fire at once, so a person who sets a huge value to
+// mean "almost never" would be asked on every blur.
+test("a delay longer than a timer holds waits the longest a timer can rather than firing at once", async () => {
+  const { renderer, asked, trigger } = harness({ answered: true, minutes: 100_000 })
+  renderer.emit("blur")
+  await Bun.sleep(80)
+  expect(asked).toHaveLength(0)
   trigger.dispose()
 })

@@ -3,8 +3,10 @@
 // `session.recap.recorded`, projected as a `recap` message, never lowered into a model request, and written at most
 // once per user turn, however many clients ask.
 import { beforeEach, expect } from "bun:test"
-import { LLMEvent, LanguageModel, SystemPart, ToolDefinition, type LLMRequest } from "@orbit/ai"
+import { LLMEvent, LLMRequest, LanguageModel, SystemPart, ToolDefinition } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
+import { AmazonBedrock } from "@orbit/ai/providers"
+import { compileRequest } from "@orbit/ai/route/client"
 import { TestLLM } from "@orbit/ai/testing"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
@@ -274,7 +276,7 @@ const recordedRecaps = (db: Database.Interface["db"]) =>
       ),
     )
 
-const sideQueryPurposes = (db: Database.Interface["db"]) =>
+const sideQueryRecords = (db: Database.Interface["db"]) =>
   db
     .select()
     .from(EventTable)
@@ -289,11 +291,14 @@ const sideQueryPurposes = (db: Database.Interface["db"]) =>
             SessionEventSchema.SideQueryRecorded.type,
             SessionEventSchema.SideQueryRecorded.durable.version,
           )
-            ? [(row.data as { purpose: string }).purpose]
+            ? [row.data as { purpose: string; tokens: { input: number; output: number }; cost: number }]
             : [],
         ),
       ),
     )
+
+const sideQueryPurposes = (db: Database.Interface["db"]) =>
+  sideQueryRecords(db).pipe(Effect.map((records) => records.map((record) => record.purpose)))
 
 it.effect(
   "a recap asks the small model once with the last 30 messages, no system prompt, no tools and the instruction last",
@@ -465,6 +470,12 @@ it.effect("a recap the person came back during is dropped: interrupting it recor
     yield* Fiber.interrupt(fiber)
 
     expect(yield* recordedRecaps(db)).toHaveLength(0)
+    // The request had left, so it was probably billed: its estimated spend lands on the session.
+    const [spent, ...more] = yield* sideQueryRecords(db)
+    expect(more).toEqual([])
+    expect(spent).toMatchObject({ purpose: "session.away_summary", tokens: { output: 32_000 } })
+    expect(spent?.tokens.input).toBeGreaterThan(0)
+    expect(spent?.cost).toBeGreaterThan(0)
     // The next request is not blocked by the one that was dropped.
     yield* gate.release
     yield* test.push(answer("again"))
@@ -647,5 +658,66 @@ it.effect("a window that would open on a tool result starts at the next message 
     expect(request?.messages[0]?.role).toBe("user")
     // The 29 prompts after the step, then the instruction.
     expect(request?.messages).toHaveLength(30)
+  }),
+)
+
+// Some providers refuse tool calls and results in a request that sends no tool definitions (Bedrock Converse wants a
+// toolConfig for them), so the recap window writes them out as text.
+it.effect("a tool call and its result in the window go as text, so the request needs no tool definitions", () =>
+  Effect.gen(function* () {
+    toolDefinitions = [ToolDefinition.make({ name: "lookup", description: "Lookup", inputSchema: { type: "object" } })]
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("build"),
+      model: { providerID: Provider.ID.make("test"), id: Model.ID.make("recap-primary") },
+      started: 0,
+    })
+    yield* bus.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, id: "call_1", name: "lookup" })
+    yield* bus.publish(SessionEvent.Tool.Called, {
+      sessionID,
+      assistantMessageID,
+      id: "call_1",
+      input: { query: "parser" },
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Tool.Success, {
+      sessionID,
+      assistantMessageID,
+      id: "call_1",
+      content: [{ type: "text", text: "found it" }],
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Step.Ended, {
+      sessionID,
+      assistantMessageID,
+      finish: "tool-calls",
+      cost: Money.USD.make(0),
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    yield* test.push(answer("Looking things up."))
+
+    expect(yield* recap.generate(sessionID)).toEqual({ text: "Looking things up." })
+
+    const [request] = yield* test.requests()
+    expect(request?.tools).toEqual([])
+    const parts = (request?.messages ?? []).flatMap((message) => message.content.map((part) => part.type))
+    expect(parts).not.toContain("tool-call")
+    expect(parts).not.toContain("tool-result")
+    expect(request?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "user"])
+    expect(allText(request)).toContain('[Assistant tool call]: lookup({\\"query\\":\\"parser\\"})')
+    expect(allText(request)).toContain("[Tool result]: found it")
+    // Lowered for Bedrock Converse, the request holds no tool blocks, so it needs no toolConfig.
+    const prepared = yield* compileRequest(
+      LLMRequest.update(request!, {
+        model: AmazonBedrock.configure({ baseURL: "https://bedrock-runtime.test", apiKey: "test" }).model("recap"),
+      }),
+    )
+    expect(JSON.stringify(prepared.body)).not.toMatch(/toolUse|toolResult|toolConfig/)
+    expect(JSON.stringify(prepared.body)).toContain("[Tool result]: found it")
   }),
 )

@@ -7,6 +7,7 @@ import { Database } from "../database/database.js"
 import { Instance } from "../instance/service.js"
 import { Plugin } from "../plugin/service.js"
 import type { Instructions } from "../instructions/index.js"
+import { SessionCompaction } from "./compaction.js"
 import { SessionContext } from "./context.js"
 import type { AgentNotFoundError } from "./error.js"
 import { SessionHistory } from "./history.js"
@@ -53,7 +54,8 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
 
 /**
  * The last `count` messages of the settled Session history, lowered for `model` as the runner lowers them, with no
- * system prompt, instructions or system message. The window never opens on a tool result whose call it cut off.
+ * system prompt, instructions or system message. The window never opens on a tool result whose call it cut off, and
+ * its tool calls and results are written out as text.
  */
 export const recent = Effect.fn("SessionGenerate.recent")(function* (
   sessionID: SessionSchema.ID,
@@ -76,7 +78,8 @@ export const recent = Effect.fn("SessionGenerate.recent")(function* (
     .filter((message) => message.role !== "system")
     .slice(-count)
   const start = window.findIndex((message) => message.role !== "tool")
-  return start === -1 ? [] : window.slice(start)
+  // The window goes out with no tool definitions, so its tool calls and results go as text.
+  return start === -1 ? [] : window.slice(start).map(SessionCompaction.withoutToolBlocks)
 })
 
 /** Generates text from current Session context without mutating the Session. */

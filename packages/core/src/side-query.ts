@@ -65,7 +65,7 @@ export interface TextInput {
   /**
    * Sends the Session's settled transcript before the prompt. Off by default. `{ recent }` sends only its last
    * `recent` messages, with no system prompt at all (`system` and what plugin hooks add are dropped) and no tool
-   * definitions.
+   * definitions; its tool calls and results go as text.
    */
   readonly history?: boolean | { readonly recent: number }
   /** Defaults to 30 seconds. */
@@ -123,6 +123,15 @@ export const layer = Layer.effect(
       // Set once the request is about to leave, so a deadline that fires before that records nothing, and cleared once
       // the provider's own figures are recorded.
       let sent: SessionUsage.Recorded | undefined
+      // A call cut off by the deadline or by the caller was probably billed, and its usage never arrives. Recorded once,
+      // whichever of the two ends it.
+      const recordSent = Effect.suspend(() => {
+        const estimate = sent
+        sent = undefined
+        return estimate
+          ? bus.publish(SessionEvent.SideQueryRecorded, { sessionID: session.id, purpose: input.purpose, ...estimate })
+          : Effect.void
+      }).pipe(Effect.uninterruptible)
       return yield* Effect.gen(function* () {
         yield* Plugin.awaitActivation
         const context = yield* SessionContext.Service
@@ -164,8 +173,8 @@ export const layer = Layer.effect(
           ...(typeof input.history === "object" ? { system: [] } : {}),
           ...(input.cache ? { cache: input.cache } : {}),
         })
-        // A call the deadline cuts off was probably billed, and its usage never arrives: the whole prompt and, with no
-        // reply to measure, the largest reply the request allows.
+        // The estimate for a call that is cut off: the whole prompt and, with no reply to measure, the largest reply
+        // the request allows.
         sent = SessionUsage.estimate(model.cost, {
           input: SessionCompaction.estimateRequest(request),
           output: request.generation?.maxTokens ?? model.limit.output,
@@ -179,21 +188,14 @@ export const layer = Layer.effect(
           .pipe(Effect.uninterruptible)
         return { response, model: model.ref }
       }).pipe(
+        Effect.onInterrupt(() => recordSent),
         instances.provide(session),
         Effect.provideService(Database.Service, database),
         // The deadline covers everything the caller waits for, not only the provider call.
         Effect.timeoutOrElse({
           duration: timeout,
           orElse: () =>
-            Effect.suspend(() =>
-              sent
-                ? bus.publish(SessionEvent.SideQueryRecorded, {
-                    sessionID: session.id,
-                    purpose: input.purpose,
-                    ...sent,
-                  })
-                : Effect.void,
-            ).pipe(
+            recordSent.pipe(
               Effect.andThen(
                 Effect.fail(
                   new TimeoutError({
