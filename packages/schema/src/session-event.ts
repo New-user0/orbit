@@ -193,6 +193,35 @@ export const UsageUpdated = Event.ephemeral({
 })
 export type UsageUpdated = typeof UsageUpdated.Type
 
+/**
+ * How full the model's context is, published after each measured response and, with `stale` set, after each completed
+ * compaction. Ephemeral: a client that never saw it loses nothing it can read from the log.
+ */
+export const ContextUpdated = Event.ephemeral({
+  type: "session.context.updated",
+  schema: {
+    ...Base,
+    used: NonNegativeInt.annotate({
+      description: "Prompt tokens in use: the latest measured response, or an estimate when stale.",
+    }),
+    window: NonNegativeInt.annotate({ description: "The model's input window less the room kept for the summary." }),
+    threshold: NonNegativeInt.annotate({ description: "The context size at which automatic compaction starts." }),
+    auto: Schema.Boolean.annotate({ description: "Whether automatic compaction is on." }),
+    percentLeft: NonNegativeInt.annotate({
+      description: "Percent of the threshold (automatic compaction on) or of the window (off) still free.",
+    }),
+    state: Schema.Literals(["ok", "warning", "error"]),
+    blocking: NonNegativeInt.annotate({
+      description: "With automatic compaction off, the size at which a request is refused before it is sent.",
+    }).pipe(optional),
+    paused: Schema.Boolean.annotate({
+      description: "Whether repeated failures paused automatic compaction for this turn.",
+    }),
+    stale: Schema.Boolean.annotate({ description: "True after a compaction, until the next measured response." }),
+  },
+})
+export type ContextUpdated = typeof ContextUpdated.Type
+
 export const Deleted = Event.durable({
   type: "session.deleted",
   durable: {
@@ -699,6 +728,7 @@ export const Definitions = Event.inventory(
   Permissions,
   Viewed,
   UsageUpdated,
+  ContextUpdated,
   Deleted,
   Forked,
   InboxDelivered,
