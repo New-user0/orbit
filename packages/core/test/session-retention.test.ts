@@ -532,6 +532,30 @@ describe("SessionRetention.prune: the order of removal", () => {
       }),
     ),
   )
+
+  // When the first member to go fails, nothing after it is tried: the session it names stays with it, and the next
+  // family still goes.
+  it.live("keeps the session that a member it could not remove names", () =>
+    scenario(() =>
+      Effect.gen(function* () {
+        const now = Date.now()
+        const logged: string[] = []
+        yield* row({ id: "ses_ret_heldroot", updated: now })
+        yield* row({ id: "ses_ret_heldchild", parent: "ses_ret_heldroot", updated: now })
+        yield* row({ id: "ses_ret_heldcontrol", updated: now })
+        const database = yield* Database.Service
+        yield* database.db
+          .run(sql`UPDATE session_v2 SET time_created = 'soon' WHERE id = 'ses_ret_heldchild'`)
+          .pipe(Effect.orDie)
+
+        const pass = yield* prune({ days: 30, now: later() }).pipe(logging(logged))
+
+        expect(pass.removed).toEqual(["ses_ret_heldcontrol"])
+        expect(yield* remaining).toEqual(["ses_ret_heldchild", "ses_ret_heldroot"])
+        expect(logged).toEqual(["session retention could not remove a session"])
+      }),
+    ),
+  )
 })
 
 describe("SessionRetention.prune: the folders that sessions name", () => {

@@ -104,9 +104,8 @@ export interface Interface {
    */
   readonly reload?: () => Effect.Effect<void>
   /**
-   * The documents of the current load that were not taken as written: one that did not parse (no `keys`), one that failed
-   * final validation (`keys` lists its top-level keys) and one that lost top-level keys to normalization (`keys` lists
-   * them). Each still gives what survived. A reader that must not act on a guess, such as retention, asks it.
+   * The documents of the current load that were not taken as written: one that did not parse (no `keys`) and one that
+   * lost top-level keys to normalization (`keys` lists them). Each still gives what survived. A reader that must not act on a guess, such as retention, asks it.
    */
   readonly rejected: () => Effect.Effect<readonly Rejected[]>
 }
@@ -236,11 +235,10 @@ export const layer = (options?: Options) =>
           return
         }
         const info = Option.getOrUndefined(decodeInfo(result.encoded))
-        // The top-level keys normalization dropped a value of, and every key of a document final validation rejects.
-        const lost = new Set([
-          ...result.diagnostics.flatMap((item) => (item.kind === "invalid" ? item.path.slice(0, 1) : [])),
-          ...(info ? [] : Object.keys(result.encoded)),
-        ])
+        // The top-level keys normalization dropped a value of.
+        const lost = new Set(
+          result.diagnostics.flatMap((item) => (item.kind === "invalid" ? item.path.slice(0, 1) : [])),
+        )
         if (lost.size > 0) rejecting.push({ source, scope, keys: [...lost] })
         if (info) return info
         yield* Effect.logWarning("configuration normalization diagnostic", {
