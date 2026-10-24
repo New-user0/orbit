@@ -1376,6 +1376,20 @@ it.effect("a prompt-too-long rejection with a larger gap drops as many oldest gr
   }),
 )
 
+it.effect("a prompt-too-long rejection whose gap the first group exactly covers drops that group only", () =>
+  Effect.gen(function* () {
+    // u0 is 1,001 tokens, so a gap of 1,001 is covered by it alone.
+    const gap = tooLong("prompt is too long: 2001 tokens > 1000 maximum")
+    const run = yield* scripted("ses_cm2_ptl_exact", rounds(3), [gap, gap, answer("<handoff>\nfits\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    const sent = JSON.stringify(run.sent[2]?.messages)
+    expect(sent).not.toContain("U0-")
+    expect(sent).toContain("A1-reply")
+  }),
+)
+
 it.effect("analysis never stored: a second analysis ahead of the handoff", () =>
   Effect.gen(function* () {
     const run = yield* scripted(
@@ -1450,6 +1464,23 @@ for (const [name, history, compacts] of [
       content: [{ type: "reasoning", text: "" }],
       time: { created: 0, completed: 0 },
     }),
+    false,
+  ],
+  [
+    "an assistant message with reasoning text",
+    lone({
+      ...loneBase,
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [{ type: "reasoning", text: "thinking it over" }],
+      time: { created: 0, completed: 0 },
+    }),
+    true,
+  ],
+  [
+    "a reminder",
+    lone({ ...loneBase, type: "synthetic", text: "reminder text", metadata: { reminder: { kind: "todo" } } }),
     false,
   ],
 ] as const)

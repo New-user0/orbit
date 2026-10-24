@@ -838,9 +838,9 @@ const covered = (message: SessionMessage.Info) => {
       return true
     case "assistant":
       return message.content.some((part) => part.type !== "reasoning" || part.text)
-    // Reminders are collected again after the checkpoint, so none is summarized.
+    // `compactable` already left out reminders, which are collected again after the checkpoint.
     case "synthetic":
-      return !isReminder(message)
+      return true
     case "shell":
       return message.metadata?.background !== true
     default:
