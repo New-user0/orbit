@@ -722,7 +722,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   disk only for an `Edit` in history and for each file a completed `Patch` adds, updates or moves a file to (the names
   come from the Patch tool's own parser and pass the same gate and `Permission.allowed` check), and reads at most the
   newest 100 files. The path and the changed lines go only in
-  the reminder's data block. Proof: the "re-read gate" and "rebuild after a restart" rows of
+  the reminder's data block. The re-read changes no freshness record while it runs: each change is an entry's commit,
+  run after the rows are posted and only while the record is the one it checked (`FileLedger.settle`), so a deadline,
+  an interruption, a failed read, a refusal or a compaction meanwhile leaves every stale refusal in place (class 7;
+  the "collection that ends early" rows). Proof: the "re-read gate" and "rebuild after a restart" rows of
   `test/durable-reminders.test.ts` (an outside file after a revoke, a project file swapped for a link out with and
   without trust, a table of the file, its folder and a folder above it swapped for a link or junction into another
   outside folder, for a file outside and inside the project, trusted and revoked, a dangling link, a deny on a link's

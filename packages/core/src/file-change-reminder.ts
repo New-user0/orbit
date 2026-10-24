@@ -30,6 +30,11 @@ import { ReadToolFileSystem } from "./tool/read-filesystem.js"
  * ends. A notebook is recorded the same way but not reported. A file that is gone is forgotten. Anything else (a refusal,
  * a folder, an image, a binary file, a file longer than one read) is skipped and kept for the next step.
  *
+ * Those records and the forgetting are each entry's `commit`, which runs only after the collection posted its rows, and
+ * only while the file's record is still the one this collection checked (`FileLedger.settle`). A collection that runs
+ * past its deadline, is interrupted or fails leaves the ledger as it was, so no change counts as seen unless its row was
+ * posted, and the edit tools still refuse a changed file as stale.
+ *
  * The path and the changed lines come from the disk, so they travel only in `data`; the harness text names neither.
  */
 
@@ -144,28 +149,33 @@ const changed = Effect.fnUntraced(function* (services: Services, input: Input, f
     Effect.catchTag("Environment.NotFound", () => Effect.succeed(undefined)),
     Effect.orElseSucceed(() => Number.NEGATIVE_INFINITY),
   )
-  if (time === undefined) return yield* services.ledger.forget(sessionID, file.path).pipe(Effect.as([]))
+  // Nothing here changes the ledger: each change goes in the entry's commit, which runs only once the rows are posted
+  // (class 7). A collection cut short by its deadline or an interruption leaves every watch and every stale refusal.
+  if (time === undefined)
+    return [{ kind: KIND, text: "", commit: services.ledger.settle(sessionID, file.path, file.seen) }]
   if (time <= file.seen.mtimeMs) return []
   const read = yield* services.reader.read(target.absolute, target.resource).pipe(Effect.orElseSucceed(() => undefined))
   // Only a whole text file is compared. Anything else, a read that failed included, keeps the entry as it was, so it is
   // tried again at the next step (a file deleted since the time was read is forgotten then).
   if (read?.seen === undefined || read.content.type !== "file" || read.content.encoding !== "utf8") return []
-  yield* services.ledger.recordRead(sessionID, file.path, read.seen)
-  if (Notebook.isNotebook(target.absolute)) return []
-  const content = snippet(file.seen.text, read.content.content)
-  if (content === undefined) return []
-  return [{ kind: KIND, text: TEXT, data: { label: `Changed lines of ${file.path}`, content } }]
+  const commit = services.ledger.settle(sessionID, file.path, file.seen, read.seen)
+  const old = shown(file.seen.text)
+  const now = shown(read.content.content)
+  // A notebook, or a file that shows the same, is not reported but counts as seen, as in the reference.
+  if (Notebook.isNotebook(target.absolute) || old === now) return [{ kind: KIND, text: "", commit }]
+  const content = snippet(old, now)
+  // A comparison that ran out of time reports nothing and settles nothing, so the file is tried again at the next step.
+  return content === undefined
+    ? []
+    : [{ kind: KIND, text: TEXT, data: { label: `Changed lines of ${file.path}`, content }, commit }]
 })
 
 /**
- * The changed lines of `after`, compared with `before` in the form the read tool shows text: each hunk's kept and added
- * lines, numbered from where the hunk starts in the old text, as the reference numbers them, and hunks joined by a line
- * that holds only an ellipsis. Undefined when the texts show the same or the comparison ran out of time.
+ * The changed lines of `now`, compared with `old`, both in the form the read tool shows text (`shown`): each hunk's
+ * kept and added lines, numbered from where the hunk starts in the old text, as the reference numbers them, and hunks
+ * joined by a line that holds only an ellipsis. Undefined when the comparison ran out of time.
  */
-const snippet = (before: string, after: string) => {
-  const old = shown(before)
-  const now = shown(after)
-  if (old === now) return undefined
+const snippet = (old: string, now: string) => {
   const patch = structuredPatch(
     "",
     "",

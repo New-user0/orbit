@@ -3250,7 +3250,9 @@ When a file that a session wrote with its file tools is changed afterwards outsi
 conversation (by you, an editor, a formatter or a shell command), the next step of that session gets a hidden reminder
 with the changed lines, numbered as `Read` numbers them, with eight unchanged lines around each change and at most
 8,192 characters in all. The reported change then counts as read, so the edit tools do not refuse the file as changed
-on disk. Before, the model learned of such a change only when an edit was refused.
+on disk. Before, the model learned of such a change only when an edit was refused. A change counts as read only once
+its reminder is stored: when the check runs out of time, is stopped, or a compaction ends while it runs, no file counts
+as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step.
 
 Only what the session itself wrote is watched: a file it only read is not reported, and reading a file after writing it
 ends the watch. A touch, a change of line endings or of the final line break alone, a notebook, an image, a file with a

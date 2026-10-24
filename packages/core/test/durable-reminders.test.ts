@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import net from "net"
 import path from "path"
-import { Effect, Layer, Option, Schedule, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Schedule, Schema, Scope } from "effect"
 import { Document, Info, type Entry } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -301,6 +301,8 @@ const setup = (rules: Permission.Ruleset = [allowAll, denySecrets]) =>
         readonly session?: Session.Info
         readonly tools?: ReadonlyArray<string>
         readonly limit?: { readonly context: number; readonly output: number }
+        /** A node over other lists, built over this graph's bus; the production node by default. */
+        readonly reminders?: SessionReminders.Interface
       } = {},
     ) {
       const target = options.session ?? session
@@ -312,13 +314,22 @@ const setup = (rules: Permission.Ruleset = [allowAll, denySecrets]) =>
         tools: { definitions: (options.tools ?? []).map((name) => ({ name })) },
         messages,
       } as unknown as SessionContext.Loaded
-      yield* reminders.collect({ loaded, step: 1 })
+      yield* (options.reminders ?? reminders).collect({ loaded, step: 1 })
       return (yield* store.context(target.id))
         .filter((message) => !before.has(message.id))
         .flatMap((message) => (message.type === "synthetic" && ReminderText.isReminder(message) ? [parse(message)] : []))
     })
     const changes = (messages?: ReadonlyArray<SessionMessage.Info>, options?: Parameters<typeof collect>[1]) =>
       collect(messages, options).pipe(Effect.map((rows) => rows.filter((row) => row.kind === FILE_CHANGE)))
+    // Every file-change row stored for the session so far, for a collection that never returns.
+    const stored = store.context(session.id).pipe(
+      Effect.map((messages) =>
+        messages.flatMap((message) =>
+          message.type === "synthetic" && ReminderText.isReminder(message) ? [parse(message)] : [],
+        ),
+      ),
+      Effect.map((rows) => rows.filter((row) => row.kind === FILE_CHANGE)),
+    )
     const inside = (name: string) => path.join(location.directory, name)
     // A time well after anything the tools recorded, so the next collection sees the file as newer.
     let offset = 5_000
@@ -351,6 +362,7 @@ const setup = (rules: Permission.Ruleset = [allowAll, denySecrets]) =>
       run,
       collect,
       changes,
+      stored,
       inside,
       stamp,
       change,
@@ -1155,6 +1167,8 @@ describe("the re-read gate (class 4, 7)", () => {
       })
       expect(entries.map((entry) => entry.data?.label)).toEqual([expect.stringContaining(fine)])
       expect(reads).toEqual([fine])
+      // Settled as `collect` settles them once the rows are posted.
+      yield* Effect.forEach(entries, (entry) => entry.commit ?? Effect.void, { discard: true })
       expect((yield* h.ledger.watched(h.session.id)).map((file) => file.path)).toEqual([locked])
       // Once its time can be read again, the change is reported.
       expect(labels(yield* h.changes())).toEqual([expect.stringContaining(locked)])
@@ -1916,6 +1930,225 @@ describe("the rebuild after a restart", () => {
       expect(yield* h.ledger.watched(h.session.id)).toEqual([])
     }),
   )
+})
+
+// Review rows (fix loop 5, class 7): every way a collection can end without posting a file's row leaves that file's
+// record as it was. In each row the session writes kept.txt and cut.txt, someone else changes both, and one collection
+// ends early in its own way. A Write over each file that does not count as seen is then refused and leaves the
+// person's edit on disk, and the next step reports exactly the files whose change no posted row settled. A posted row
+// is the control: its file counts as seen, so a Write over it goes through.
+describe("a collection that ends early (class 7)", () => {
+  type Name = "kept" | "cut"
+  type Read = ReadToolFileSystem.Interface["read"]
+  interface ExitContext {
+    readonly h: Effect.Success<ReturnType<typeof setup>>
+    readonly bus: Bus.Interface
+    readonly real: ReadToolFileSystem.Interface
+    /** A node whose one durable producer is the real file-change one, with the reader replaced for the named files. */
+    readonly over: (reads: Readonly<Record<string, Read>>) => Effect.Effect<SessionReminders.Interface>
+  }
+  interface Exit {
+    readonly name: string
+    /** Runs the collection that ends early. */
+    readonly run: (c: ExitContext) => Effect.Effect<void, unknown, Scope.Scope>
+    /** The files whose rows the early collection posted. */
+    readonly posted: ReadonlyArray<Name>
+    /** The files that count as seen afterwards; a Write over any other one is refused with `refusal`. */
+    readonly seen: ReadonlyArray<Name>
+    readonly refusal: "file.stale" | "file.unread"
+    /** The files the next step reports. */
+    readonly next: ReadonlyArray<Name>
+  }
+
+  const exits: ReadonlyArray<Exit> = [
+    {
+      name: "the producer's deadline, with one file whose read never returns",
+      run: (c) =>
+        Effect.gen(function* () {
+          yield* c.h.collect([], { reminders: yield* c.over({ "cut.txt": () => Effect.never }) })
+        }),
+      posted: [],
+      seen: [],
+      refusal: "file.stale",
+      next: ["cut", "kept"],
+    },
+    {
+      name: "an interruption after the other file was read",
+      run: (c) =>
+        Effect.gen(function* () {
+          const keptRead = yield* Deferred.make<void>()
+          const stuck = yield* Deferred.make<void>()
+          const reminders = yield* c.over({
+            "kept.txt": (file, resource, page) =>
+              c.real.read(file, resource, page).pipe(Effect.ensuring(Deferred.succeed(keptRead, undefined))),
+            // Waits long enough for the kept file's whole check to finish first.
+            "cut.txt": () =>
+              Deferred.await(keptRead).pipe(
+                Effect.andThen(Effect.sleep("100 millis")),
+                Effect.andThen(Deferred.succeed(stuck, undefined)),
+                Effect.andThen(Effect.never),
+              ),
+          })
+          const fiber = yield* c.h.collect([], { reminders }).pipe(Effect.forkChild)
+          yield* Deferred.await(stuck)
+          yield* Fiber.interrupt(fiber)
+        }),
+      posted: [],
+      seen: [],
+      refusal: "file.stale",
+      next: ["cut", "kept"],
+    },
+    {
+      name: "a read that fails for one file",
+      run: (c) =>
+        Effect.gen(function* () {
+          const reminders = yield* c.over({
+            "cut.txt": (file) => Effect.fail(new Environment.Failed({ path: file, cause: new Error("unreadable") })),
+          })
+          yield* c.h.collect([], { reminders })
+        }),
+      posted: ["kept"],
+      seen: ["kept"],
+      refusal: "file.stale",
+      next: ["cut"],
+    },
+    {
+      name: "a deny rule that refuses one file",
+      run: (c) =>
+        Effect.gen(function* () {
+          yield* c.h.permit([allowAll, denySecrets, { action: "Read", resource: "*cut.txt", effect: "deny" }])
+          yield* c.h.changes()
+          yield* c.h.permit([allowAll, denySecrets])
+        }),
+      posted: ["kept"],
+      seen: ["kept"],
+      refusal: "file.stale",
+      next: ["cut"],
+    },
+    {
+      name: "the rebuild's own deadline",
+      run: (c) =>
+        Effect.gen(function* () {
+          const edited = c.h.inside("history.txt")
+          yield* Effect.promise(() => fs.writeFile(edited, text(["a"])))
+          const messages = history([
+            assistant("msg_0000000001", [
+              toolPart("e", "Edit", { file_path: edited, old_string: "a", new_string: "b" }, {}, T(60)),
+            ]),
+          ])
+          yield* c.h.collect(messages, { reminders: yield* c.over({ "history.txt": () => Effect.never }) })
+        }),
+      posted: [],
+      seen: [],
+      refusal: "file.stale",
+      next: ["cut", "kept"],
+    },
+    {
+      name: "a compaction that completes while the collection runs",
+      run: (c) =>
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const reminders = yield* c.over({
+            "cut.txt": (file, resource, page) =>
+              Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(c.real.read(file, resource, page)),
+              ),
+          })
+          const fiber = yield* c.h.collect([], { reminders }).pipe(Effect.forkChild)
+          yield* Deferred.await(started)
+          const sessionID = c.h.session.id
+          yield* c.bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+          yield* c.bus.publish(SessionEvent.Compaction.Ended, {
+            sessionID,
+            reason: "manual",
+            text: "summary",
+            recent: "",
+          })
+          // The ledger hears of the compaction on its own fiber, so wait until it dropped every record.
+          yield* c.h.ledger.watched(sessionID).pipe(
+            Effect.flatMap((watched) => (watched.length === 0 ? Effect.void : Effect.fail("still held"))),
+            Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
+            Effect.orDie,
+          )
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(fiber)
+        }),
+      // Both changes are posted, but the compaction forgot what the model had read, so neither counts as seen.
+      posted: ["cut", "kept"],
+      seen: [],
+      refusal: "file.unread",
+      next: [],
+    },
+  ]
+
+  const names = (rows: ReadonlyArray<Row>) =>
+    rows.map((row) => path.basename(row.label?.slice("Changed lines of ".length) ?? "")).toSorted()
+  const txt = (files: ReadonlyArray<Name>) => files.map((name) => `${name}.txt`)
+
+  for (const exit of exits)
+    it.live(`${exit.name} marks nothing seen that no posted row reported`, () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const bus = yield* Bus.Service
+        const real = yield* ReadToolFileSystem.Service
+        const services = {
+          ledger: h.ledger,
+          access: yield* FileAccess.Service,
+          permission: yield* Permission.Service,
+          trust: h.trust,
+          environment: yield* Environment.Service,
+        }
+        const over: ExitContext["over"] = (reads) =>
+          Effect.gen(function* () {
+            return yield* SessionReminders.Service
+          }).pipe(
+            Effect.provide(
+              AppNodeBuilder.build(
+                LayerNode.group([
+                  Bus.node,
+                  SessionReminders.configured({
+                    durable: [
+                      FileChangeReminder.durable({
+                        ...services,
+                        reader: {
+                          ...real,
+                          read: (file, resource, page) =>
+                            (reads[path.basename(file)] ?? real.read)(file, resource, page),
+                        },
+                      }),
+                    ],
+                    derived: [],
+                  }),
+                ]),
+                [Bus.node.replace(Layer.succeed(Bus.Service, bus))],
+              ),
+            ),
+          )
+        const files = { kept: h.inside("kept.txt"), cut: h.inside("cut.txt") }
+        yield* h.write(files.kept, text(twenty))
+        yield* h.write(files.cut, text(twenty))
+        yield* h.change(files.kept, text(twenty.map((line) => (line === "line4" ? "PERSON-EDIT" : line))))
+        yield* h.change(files.cut, text(twenty.map((line) => (line === "line9" ? "PERSON-EDIT" : line))))
+
+        yield* exit.run({ h, bus, real, over })
+
+        expect(names(yield* h.stored)).toEqual(txt(exit.posted))
+        for (const name of ["kept", "cut"] as const) {
+          const result = yield* h.run("Write", { file_path: files[name], content: "MODEL-OVERWRITE" })
+          if (exit.seen.includes(name)) {
+            expect(status(result)).toBe("completed")
+            continue
+          }
+          expect(errorType(result)).toBe(exit.refusal)
+          expect(yield* Effect.promise(() => fs.readFile(files[name], "utf8"))).toContain("PERSON-EDIT")
+        }
+        expect(names(yield* h.changes())).toEqual(txt(exit.next))
+      }),
+      // A one-second producer deadline and five tool calls; a loaded machine needs more than the default five seconds.
+      20_000,
+    )
 })
 
 describe("the output-style reminder", () => {

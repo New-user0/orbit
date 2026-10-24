@@ -98,8 +98,13 @@ export interface Interface {
   readonly forgetReads: (sessionID: Session.ID) => Effect.Effect<void>
   /** The records that hold text, least recently used first. Listing them is not a use. */
   readonly watched: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<Watched>>
-  /** Drop the record of one file, freshness included, as for a file that is gone. */
-  readonly forget: (sessionID: Session.ID, path: string) => Effect.Effect<void>
+  /**
+   * Replace the record of one file with what a read saw (`next`), or drop it, freshness included, when `next` is
+   * undefined (a file that is gone), but only while the record is still exactly `held`. The file-change reminder settles
+   * what it found this way after its rows are posted, so a record that a write or a compaction changed or dropped in the
+   * meantime stays as that left it.
+   */
+  readonly settle: (sessionID: Session.ID, path: string, held: Seen, next?: Seen) => Effect.Effect<void>
   /**
    * Claim the Session's rebuild from history: true the first time it is asked for the Session in this process, false
    * after. A completed compaction does not reset it. The file-change reminder claims only a Session with no parent.
@@ -245,8 +250,11 @@ const layer = Layer.effect(
           seen.text === undefined ? [] : [{ path, seen: { ...seen, text: seen.text } }],
         )
       }),
-      forget: Effect.fn("FileLedger.forget")(function* (sessionID, path) {
-        sessions.get(sessionID)?.delete(path)
+      settle: Effect.fn("FileLedger.settle")(function* (sessionID, path, held, next) {
+        const seen = sessions.get(sessionID)?.get(path)
+        if (seen === undefined || !same(seen, held)) return
+        if (next === undefined) return sessions.get(sessionID)?.delete(path)
+        remember(sessionID, path, { mtimeMs: next.mtimeMs, digest: next.digest })
       }),
       claim: Effect.fn("FileLedger.claim")(function* (sessionID) {
         if (rebuilt.has(sessionID)) return false
@@ -261,6 +269,12 @@ const layer = Layer.effect(
     })
   }),
 )
+
+const same = (left: Seen, right: Seen) =>
+  left.mtimeMs === right.mtimeMs &&
+  left.digest === right.digest &&
+  left.text === right.text &&
+  left.place === right.place
 
 // A Map keeps insertion order, so its first key is the least recently used. The newest record always stays.
 const bound = (files: Map<string, Seen>) => {
@@ -284,7 +298,7 @@ export const permissiveLayer = Layer.succeed(
     markRead: () => Effect.succeed(false),
     forgetReads: () => Effect.void,
     watched: () => Effect.succeed([]),
-    forget: () => Effect.void,
+    settle: () => Effect.void,
     claim: () => Effect.succeed(false),
     seed: () => Effect.void,
   }),

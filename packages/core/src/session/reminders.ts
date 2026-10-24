@@ -55,7 +55,10 @@ export type Anchor = ReminderText.Anchor
  *
  * The contract:
  * - Reminders appear in list order. Placement in the request comes from `toLLMMessages`.
- * - A durable entry is hidden from clients unless it sets a `description`. An entry with no text and no data is dropped.
+ * - A durable entry is hidden from clients unless it sets a `description`. An entry with no text and no data is not
+ *   published, but its `commit` still runs.
+ * - A producer changes no state while it runs. What it would change goes in an entry's `commit`, which runs only once
+ *   the collection's rows are published, so a deadline, an interruption or a failure leaves that state as it was.
  * - The envelope holds harness text only. Anything read from a file, a tool or an editor goes in `data`, which renders
  *   as a labelled fenced block after the envelope, and is neutralized there.
  * - Spacing (how many steps since the last one of mine) is read from history through the helpers, never from a counter
@@ -90,6 +93,8 @@ export interface Entry {
   /** Short text for clients; stored escaped. Without one the row is hidden. */
   readonly description?: string
   readonly metadata?: Readonly<Record<string, unknown>>
+  /** State the entry stands for, changed only after the collection's rows are published, together with them. */
+  readonly commit?: Effect.Effect<void>
 }
 
 export interface Durable {
@@ -129,8 +134,8 @@ export const DEFAULT_TIMEOUT = Duration.seconds(1)
 
 export interface Interface {
   /**
-   * Runs the durable producers for one logical step and publishes one `session.synthetic` per entry, together.
-   * Returns whether anything was published, so the caller reloads history only then.
+   * Runs the durable producers for one logical step, publishes one `session.synthetic` per entry, together, and then
+   * runs the entries' commits. Returns whether anything was published, so the caller reloads history only then.
    */
   readonly collect: (input: { readonly loaded: SessionContext.Loaded; readonly step: number }) => Effect.Effect<boolean>
   /** Runs the derived producers; the insertions merge in list order. */
@@ -243,8 +248,8 @@ const make = (bus: Bus.Interface, lists: Lists) => {
       (producer) => guarded(producer, given),
       { concurrency: "unbounded" },
     )
-    const events = results
-      .flat()
+    const entries = results.flat()
+    const events = entries
       .filter((entry) => entry.text.length > 0 || entry.data !== undefined)
       .map(
         (entry) =>
@@ -261,10 +266,16 @@ const make = (bus: Bus.Interface, lists: Lists) => {
             },
           ] as const,
       )
-    const [first, ...rest] = events
-    if (first === undefined) return false
-    yield* bus.publishAll([first, ...rest])
-    return true
+    const commits = entries.flatMap((entry) => (entry.commit === undefined ? [] : [entry.commit]))
+    // An interruption lands before the rows and their commits or after both, never between them.
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const [first, ...rest] = events
+        if (first !== undefined) yield* bus.publishAll([first, ...rest])
+        yield* Effect.all(commits, { discard: true })
+        return first !== undefined
+      }),
+    )
   })
 
   const derive: Interface["derive"] = Effect.fnUntraced(function* (loaded, step) {
