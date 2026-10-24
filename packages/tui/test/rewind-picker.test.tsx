@@ -324,3 +324,22 @@ test("Home selects the oldest prompt and End the current row", async () => {
   expect(setup.dryRunsSent()).toEqual(["msg_0001"])
   expect(setup.actions()).toEqual([])
 })
+
+// Class 9: the server's message reaches the error line written out, whatever it holds.
+test("a refused rewind's message is drawn with its control characters written out", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) =>
+      request.path.endsWith("/revert/stage")
+        ? json({ _tag: "UnknownError", message: "boom \u001b]0;pwned\u0007 \u001b[2K" }, { status: 500 })
+        : undefined,
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressEnter()
+  const frame = await setup.waitForFrame((frame) => frame.includes("Could not rewind the code and conversation:"))
+  expect(frame).toContain("boom \\x1b]0;pwned\\x07 \\x1b[2K")
+  expect(controlFree(frame)).toBe(true)
+})
