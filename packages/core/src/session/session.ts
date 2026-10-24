@@ -343,7 +343,19 @@ export const make = Effect.fn("Session.make")(function* () {
     if (yield* execution.isActive(sessionID)) return yield* new BusyError({ sessionID })
     return yield* SessionRevert.commit(bus, session)
   })
-  const revert = { stage, clear, commit }
+  const files = Effect.fn("Session.revert.files")(function* (
+    sessionID: SessionSchema.ID,
+    input: { messageID: SessionMessage.ID; dryRun?: boolean },
+  ) {
+    const session = yield* get(sessionID)
+    // A rewind writes files that a running step may be writing too, so the session must be idle.
+    if (yield* execution.isActive(sessionID)) return yield* new BusyError({ sessionID })
+    return yield* SessionRevert.files({ session, messageID: input.messageID, dryRun: input.dryRun }).pipe(
+      Effect.provideService(Instance.Service, instances),
+      Effect.provideService(Database.Service, database),
+    )
+  })
+  const revert = { stage, clear, commit, files }
   const operations = {
     get,
     message,
@@ -392,7 +404,8 @@ export const make = Effect.fn("Session.make")(function* () {
     const stage = operations.revert.stage.bind(undefined, sessionID)
     const clear = operations.revert.clear.bind(undefined, sessionID)
     const commit = operations.revert.commit.bind(undefined, sessionID)
-    const revert = { stage, clear, commit }
+    const files = operations.revert.files.bind(undefined, sessionID)
+    const revert = { stage, clear, commit, files }
 
     return {
       id: sessionID,

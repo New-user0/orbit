@@ -3616,6 +3616,142 @@
         }
       }
     },
+    "/api/session/{sessionID}/revert/files": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.revert.files",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Session.RewindFiles"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "MessageNotFoundError | SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MessageNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SessionBusyError | RewindFilesError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionBusyErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RewindFilesErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Put the files that the session's own file tools (Edit, Write, Patch, NotebookEdit) changed back as they were when a prompt's work began, leaving shell edits, other edits and the conversation as they are. Takes effect at once and cannot be undone. A dry run lists the files that would change with their line totals, and answers a rewind that cannot happen with `canRewind: false`; a real run refuses one with RewindFilesError.",
+        "summary": "Rewind session files",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string",
+                    "pattern": "^msg_",
+                    "description": "The prompt whose checkpoint the files go back to."
+                  },
+                  "dryRun": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Report what a rewind would change without changing it."
+                  }
+                },
+                "required": ["messageID"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/api/session/{sessionID}/revert": {
       "delete": {
         "tags": ["session"],
@@ -3911,6 +4047,23 @@
                 }
               ],
               "description": "Unchanged lines around each hunk. Omit for full-file patches."
+            },
+            "required": false
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["turn", "prompt"]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`turn` (the default) diffs whole turns. `prompt` diffs from `from` to the next user message and keeps only what the session's file tools changed, a steered prompt's own edits included; it takes no `to`."
             },
             "required": false
           }
@@ -19858,6 +20011,30 @@
           }
         ]
       },
+      "RewindFilesErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["RewindFilesError"]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["disabled", "no-checkpoint", "failed"]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "sessionID", "messageID", "reason", "message"],
+        "additionalProperties": false
+      },
       "Rpc.Input": {
         "type": "object",
         "properties": {
@@ -21327,6 +21504,33 @@
           }
         },
         "required": ["messageID"],
+        "additionalProperties": false
+      },
+      "Session.RewindFiles": {
+        "type": "object",
+        "properties": {
+          "canRewind": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "filesChanged": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "insertions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deletions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["canRewind"],
         "additionalProperties": false
       },
       "Session.StructuredError": {
