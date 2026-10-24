@@ -800,7 +800,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   or a remote one, and `ConfigTrust` withholds all of `memory` from an untrusted folder as `permissions` (class 8). The
   value is refused before any disk access when it is relative, a share or device spelling (two leading separators), a
   root, shorter than 3 characters, holds a NUL, names home or a folder above it through `~/` (with or without trailing
-  separators, as in `~/./` or `~/../`), or on Windows has no drive letter (class 4); the default folder is kept then. The folder and its real path are decided once for the Location.
+  separators, as in `~/./` or `~/../`), or on Windows has no drive letter (class 4); the default folder is kept then. A
+  valid value whose path crosses a link to a share is refused the same way, asked with `LinkShare.blocked` before it is
+  resolved, and the guide does not create a folder whose path has come to cross one since (class 6). The folder and its
+  real path are decided once for the Location.
   The file tools write and read there without a question (`inMemory` in `Permission`): only for `Edit`, `Read` and
   `external_directory`, only when the place is in the folder by one of its spellings and every real place it leads to is
   in the real folder (a link inside the folder that points out is decided as the place it points to), never for a call
@@ -817,14 +820,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   real folder, and asks `LinkShare.blocked` before it resolves the file, so a link to a share is never opened (class 6);
   the carry-over of notes saved before trust adds its lines only to a `MEMORY.md` that is not a link, one that leads
   nowhere included (class 4). The reader takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
-  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) asks `LinkShare.blocked` about each link entry before it
+  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) asks `LinkShare.blocked` about the folder and each link entry before it
   resolves it (class 6), lists only files whose real path is in the folder's, reads each at the real path it checked,
   and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
   asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
   the five places beside the folder, four link targets with a new and an existing file, the data folder and the
   configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a deny that names the
-  other spelling of the folder (linked or real data folder, absolute or relative configured folder, an asker's
-  aliases), a mode's deny, the
+  other spelling of the folder (linked or real data folder, absolute or relative configured folder, linked or
+  real configured folder in the person's and in a managed deny, an asker's aliases), a mode's deny, the
   built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation with the trailing-separator
   and deep-home `~` rows, scopes, the switch order, front matter with a marker file, the scan's links, a link to a share
   with the recorded file system, the read at the checked real path), `test/memory-instructions.test.ts` (the index link to a marker, which

@@ -3441,7 +3441,8 @@ change to it reaches a session from its next compaction or in a new session. A R
 kept, without the line that named the tool. New: `memory.enabled`, `memory.directory` (read only from your own, local,
 command-line and managed configs) and `ORBIT_DISABLE_AUTO_MEMORY`; `orb run --bare` turns memory off. A
 `memory.directory` of `~/` that names home or a folder above it is not used, with or without trailing separators
-(`~/./`, `~//`, `~/../`), and the default folder is kept. A `MEMORY.md` that links out of the memory folder, or to a
+(`~/./`, `~//`, `~/../`), and the default folder is kept; so is one whose path leads through a link to a network
+share. A deny rule written for a `memory.directory` that is a link also decides a file named by the folder's real path. A `MEMORY.md` that links out of the memory folder, or to a
 network share, is not loaded, and notes moved over from before trust add no line to a `MEMORY.md` that is a link.
 
 **Affects:** people with permission rules or hooks written for the `Memory` tool, which now name no tool, and anyone
