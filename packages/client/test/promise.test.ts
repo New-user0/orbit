@@ -1088,6 +1088,20 @@ test("session.revert.files decodes RewindFilesError, and a busy session's Sessio
   expect(isRewindFilesError(busy)).toBe(false)
 })
 
+// clients-ux-5: the diff of one prompt's own file-tool edits is asked for with `scope=prompt`.
+test("session.diff sends the scope", async () => {
+  const urls: string[] = []
+  const client = Orbit.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input) => {
+      urls.push(input instanceof Request ? input.url : String(input))
+      return Response.json({ data: [] })
+    },
+  })
+  expect(await client.session.diff({ sessionID: "ses_test", from: "msg_prompt", scope: "prompt" })).toEqual([])
+  expect(new URL(urls[0]!).searchParams.get("scope")).toBe("prompt")
+})
+
 const session = {
   data: {
     id: "ses_test",
