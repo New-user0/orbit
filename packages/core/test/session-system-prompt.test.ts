@@ -24,7 +24,6 @@ const ALL = [
   "NotebookEdit",
   "TodoWrite",
   "TaskCreate",
-  "Memory",
   "AskUserQuestion",
   "Skill",
   "Agent",

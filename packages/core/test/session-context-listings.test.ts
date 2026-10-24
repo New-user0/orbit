@@ -33,6 +33,7 @@ import { Effect, Layer, Schema } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { insertSession } from "./lib/session-row"
 import { stubSnapshot } from "./lib/tool"
@@ -115,6 +116,7 @@ const it = testEffect(
       McpInstructions.node.replace(Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })),
       PluginSupervisor.node.replace(Layer.empty),
       noScratchpad,
+      noMemory,
       Tool.node.replace(
         Layer.mock(Tool.Service, {
           snapshot: () =>

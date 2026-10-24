@@ -251,23 +251,22 @@ describe("PluginSupervisor", () => {
     )
   }
 
-  // The memory index activates late so it renders last, but the Memory tool itself stays an early built-in that
-  // SDK, instance and package plugins can remove or replace.
+  // A built-in tool is an early plugin that SDK, instance and package plugins can remove or replace.
   for (const mode of ["remove", "replace"] as const) {
-    it.effect(`lets an SDK plugin ${mode} the built-in Memory tool`, () =>
+    it.effect(`lets an SDK plugin ${mode} the built-in Glob tool`, () =>
       Effect.gen(function* () {
         const sdk = yield* SdkPlugins.Service
         yield* sdk.register(
           define({
-            id: `memory-${mode}`,
+            id: `glob-${mode}`,
             effect: (ctx) =>
               ctx.tool
                 .transform((editor) => {
-                  if (mode === "remove") return editor.remove("Memory")
+                  if (mode === "remove") return editor.remove("Glob")
                   editor.add({
-                    name: "Memory",
+                    name: "Glob",
                     options: { codemode: false },
-                    description: "plugin memory",
+                    description: "plugin glob",
                     input: Schema.Struct({}),
                     execute: () => Effect.succeed({ content: "ok" }),
                   })
@@ -277,17 +276,17 @@ describe("PluginSupervisor", () => {
         )
         const directory = yield* tmpdirScoped()
         const locations = yield* LocationServiceMap.Service
-        const memory = yield* Effect.gen(function* () {
+        const tool = yield* Effect.gen(function* () {
           const plugins = yield* Plugin.Service
           yield* plugins.awaitActivation
           const tools = yield* Tool.Service
-          return (yield* tools.list()).find((tool) => tool.name === "Memory")
+          return (yield* tools.list()).find((tool) => tool.name === "Glob")
         }).pipe(
           Effect.scoped,
           Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
         )
-        if (mode === "remove") return expect(memory).toBeUndefined()
-        expect(memory?.description).toBe("plugin memory")
+        if (mode === "remove") return expect(tool).toBeUndefined()
+        expect(tool?.description).toBe("plugin glob")
       }),
     )
   }
