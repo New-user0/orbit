@@ -958,41 +958,39 @@ it.effect("sizes a summary request for an unknown window by the 200,000-token wi
   }),
 )
 
-it.effect(
-  "caps a summary request for an unknown window at 200,000 tokens less the output reserve, not at 200,000",
-  () =>
-    Effect.gen(function* () {
-      requests = []
-      const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap_bound"))
-      // Seven of the earlier messages are about 192,500 tokens: more than the 191,808-token cap this reserve gives, and
-      // less than 200,000, so only six fit and the two oldest are dropped from the request.
-      const messages = Array.from({ length: 9 }, (_, index) =>
-        SessionMessage.User.make({
-          id: SessionMessage.ID.create(),
-          type: "user",
-          text: `marker-${index} ${"a".repeat(110_000)}`,
-          time: { created: DateTime.makeUnsafe(index) },
-        }),
-      )
-      const context = {
-        ...loaded(session, messages),
-        model: { ...resolved, limit: { context: 0, output: 8_192 } },
-      }
-      const compaction = yield* SessionCompaction.Service
-      const bus = yield* Bus.Service
-      const inputID = SessionMessage.ID.create()
-      yield* bus.publish(SessionEvent.Compaction.Started, {
-        sessionID: session.id,
-        reason: "manual",
-        recent: "",
-        inputID,
-      })
-      expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
+it.effect("caps a summary request for an unknown window at 200,000 tokens less the output reserve, not at 200,000", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap_bound"))
+    // Seven of the earlier messages are about 192,500 tokens: more than the 191,808-token cap this reserve gives, and
+    // less than 200,000, so only six fit and the two oldest are dropped from the request.
+    const messages = Array.from({ length: 9 }, (_, index) =>
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: `marker-${index} ${"a".repeat(110_000)}`,
+        time: { created: DateTime.makeUnsafe(index) },
+      }),
+    )
+    const context = {
+      ...loaded(session, messages),
+      model: { ...resolved, limit: { context: 0, output: 8_192 } },
+    }
+    const compaction = yield* SessionCompaction.Service
+    const bus = yield* Bus.Service
+    const inputID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Compaction.Started, {
+      sessionID: session.id,
+      reason: "manual",
+      recent: "",
+      inputID,
+    })
+    expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
 
-      const sent = JSON.stringify(requests[0]?.messages)
-      expect(sent).not.toContain("marker-1 ")
-      expect(sent).toContain("marker-2 ")
-    }),
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).not.toContain("marker-1 ")
+    expect(sent).toContain("marker-2 ")
+  }),
 )
 
 // context-memory-2: the summary prompt, what is stored from the reply, the fallback request and the prompt-too-long
