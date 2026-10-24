@@ -338,6 +338,45 @@ describe("the team memory folder", () => {
     timeout,
   )
 
+  // Class 3: a project reached through a link spells its team folder through the link, while a call can name the real
+  // place. The carve-out takes both spellings, so a deny the person wrote with the link's spelling must decide a call
+  // made by the real path too, as it does for the private folder. A team file the deny does not name is the control.
+  it.live(
+    "denies a team file by the real path under a deny written with the linked project's spelling",
+    () =>
+      Effect.gen(function* () {
+        const real = yield* layout
+        const linkedProject = path.join(real.root, "linked-project")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(real.team, { recursive: true })
+          await fs.symlink(real.project, linkedProject, linkType)
+        })
+        const l = { ...real, project: linkedProject, team: path.join(linkedProject, ".orbit", "team-memory") }
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l, [{ action: "Edit", resource: path.join(l.team, "secret.md"), effect: "deny" }, ...askRules])
+          const permission = yield* Permission.Service
+          // `denied` takes the resource as given, with no aliases or leads that a file tool's resolve would add, so the
+          // folder's own spelling is all that carries the deny over to the real path.
+          const denied = (file: string) =>
+            permission.denied({
+              id: Permission.ID.create(),
+              action: "Edit",
+              resources: [file],
+              sessionID: SessionSchema.ID.make(main),
+              agent: probe,
+            })
+          return {
+            denied: (yield* decide(path.join(real.team, "secret.md"))).effect,
+            control: yield* decide(path.join(real.team, "open.md")),
+            probe: yield* denied(path.join(real.team, "secret.md")),
+            probeControl: yield* denied(path.join(real.team, "open.md")),
+          }
+        }).pipe(provide(l))
+        expect(out).toEqual({ denied: "deny", control: allowEdit, probe: true, probeControl: false })
+      }),
+    timeout,
+  )
+
   // Classes 3 and 4: a link inside the team folder that points out of the project is decided by where it leads, as a
   // place outside the project, never by the team allow.
   it.live(
