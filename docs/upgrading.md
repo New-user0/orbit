@@ -3392,6 +3392,59 @@ an empty entry of a POSIX `PATH` still does.
 
 **What to do:** Nothing. Put commands that must not cancel each other in separate steps, or end them with `|| true`.
 
+### A large tool result is saved in the session's folder and the model sees a preview
+
+Before, a tool result longer than 2,000 lines or 50 KiB (UTF-8 bytes) was cut to that size, the whole text was written
+to a flat `tool-output/tool_<id>` file in Orbit's data folder, and the stored result kept only the cut text. Now size is
+counted in characters. A text-only result above its threshold is written whole to
+`<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt` (`.json`, pretty-printed, when the result has several
+text parts), and the stored result keeps the tool's own full content with a `persisted` entry in its metadata. The model
+gets a `<saved-output>` block instead: the size, the file's path, and the first 2,000 characters (cut back to a line
+break past the first 1,000). Clients and `execute.after` hooks still see the tool's own content. A result that holds an
+image, a PDF or another file part is sent whole, and so is a result whose file cannot be written. The call ID in the
+file name keeps only letters, digits, `_` and `-` (at most 64), and the hash keeps two IDs that differ only in other
+characters or in letter case apart.
+
+The threshold is the tool's declared limit capped by `tool_output.max_result_chars`, which defaults to `max_bytes` and
+otherwise 50,000 characters. Read and the shell never save (the shell keeps its own capture limits and full-output
+file); Grep declares 20,000, so a larger search is saved; MCP tools declare 100,000, so under the default ceiling their
+results are saved above 50,000 characters instead of being cut at 50 KiB; other tools use the ceiling. `max_lines` and `max_bytes` now bound only the shell's own capture of a command's output.
+An untrusted folder cannot set any `tool_output` key.
+
+A session reads the files in its own folder without the question about folders outside the project. Another session's
+folder, a subagent's for its parent, the parent's for a subagent and the source's for a fork are asked about, and so are
+the flat `tool_*` files of earlier builds, which the seven-day cleaning still removes.
+
+**Affects:** people who read tool results in logs or exported sessions, scripts that looked for `tool_*` files or the
+`truncated` and `outputPath` metadata on results that were not from the shell, and people who set `tool_output`.
+
+**What to do:** Nothing, unless you parse result text or metadata. Set `tool_output.max_result_chars` in your own
+config to save results at another size.
+
+### A tool result with nothing in it says so
+
+Before, a tool that returned no content was stored as the text `undefined` (or `null` for an MCP tool whose server sent
+no content), an empty result could stop the step, and a shell command that printed nothing returned `(no output)`. Now
+every successful result that is empty, blank or only whitespace is stored and sent as `(<tool> finished and returned no
+output)`, with the name the model called. A silent shell command's own result text is blank, so the same line applies;
+its exit and timeout notices still follow as before, and a background command's stored output is its notice alone.
+Failed calls are not changed.
+
+**Affects:** people and scripts that read tool results, and plugins that compare a silent shell result with
+`(no output)`.
+
+**What to do:** Nothing, unless you match the old texts.
+
+### A very long tool error is cut in the middle
+
+A failed tool call whose message is longer than 10,000 characters now keeps its first and last 5,000 characters with a
+line counting what was cut between them. The cut message is what is stored, shown by clients and sent to the model.
+Nothing of a failure is saved to a file.
+
+**Affects:** people who read long tool errors, such as a failing build's output.
+
+**What to do:** Nothing.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.

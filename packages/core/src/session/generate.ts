@@ -19,6 +19,7 @@ import { toLLMMessages } from "./runner/to-llm-message.js"
 import { SessionEvent } from "./event.js"
 import type { SessionSchema } from "./schema.js"
 import { SessionUsage } from "./usage.js"
+import { ToolOutput } from "../tool-output.js"
 
 export type Error = AgentNotFoundError | Instructions.InitializationBlocked | SessionRunnerModel.Error | AIError
 
@@ -32,6 +33,7 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
 ) {
   const database = yield* Database.Service
   const reminders = yield* SessionReminders.Service
+  const toolOutput = yield* ToolOutput.Service
   const history = yield* SessionHistory.preview(
     database.db,
     selection.session.id,
@@ -45,6 +47,7 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
     initial: history.initial,
     messages: history.messages,
     minimal: reminders.minimal,
+    toolOutput: toolOutput.root,
   })
   return {
     system: base.system,
