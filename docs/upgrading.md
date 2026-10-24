@@ -3262,12 +3262,14 @@ link or junction, and, once the project's trust is revoked, any file outside it.
 holds about its files is released when its run ends, as it is when a session is deleted. Clients show nothing for
 these rows, and `orb run --bare` adds none.
 
-After a restart, the first step of each session rebuilds what it saw from its history since the latest compaction: a
-whole `Read`, a `Write` (whether or not the call succeeded) and an `Edit` that succeeded. Changes made while Orbit was
-not running are then reported, and a file known this way can be edited without a new read. Only files inside the
-project that `Read` would open without a question are rebuilt, at most the 100 named most recently: a file under an ask
-rule, such as the built-in one for `.env` files, is left out. A continued subagent rebuilds the same way at its first step,
-so a file it read only in part must be read again before an edit. A file tracked for freshness is now dropped once a
+After a restart, the first step of each main session rebuilds what it saw from its history since the latest compaction:
+a whole `Read`, a `Write` (whether or not the call succeeded), and an `Edit` or `Patch` that succeeded, whose files are
+read from disk as they are then. A later `Patch` that deletes or moves a file away, or a later `NotebookEdit`, drops
+what earlier calls showed of that file, so the session's own patch is never reported as someone else's change. Changes
+made while Orbit was not running are then reported, and a file known this way can be edited without a new read. Only
+files inside the project that `Read` would open without a question are rebuilt, at most the 100 named most recently: a
+file under an ask rule, such as the built-in one for `.env` files, is left out. A subagent is never rebuilt: a
+continued or resumed one starts with nothing watched, so it must read a file again before it edits it. A file tracked for freshness is now dropped once a
 session tracks more than 100 files or 25 MB of written text, least recently used first, and must be read again before
 an edit.
 

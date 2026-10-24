@@ -569,7 +569,7 @@ describe("the file-change reminder", () => {
   )
 
   // Review row: the reference releases a subagent's read-file cache when it returns. The end of a child's run drops what
-  // the ledger holds for it, its rebuild claim included; the parent, whose run ends too, keeps its records.
+  // the ledger holds for it; the parent, whose run ends too, keeps its records. A child is never rebuilt (next row).
   it.live("a subagent's records go when its run ends, and a parent's stay", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -579,7 +579,6 @@ describe("the file-change reminder", () => {
       const childs = h.inside("child.txt")
       yield* h.write(mine, text(twenty))
       yield* h.write(childs, text(twenty), child)
-      expect(yield* h.ledger.claim(child.id)).toBe(true)
       expect(yield* h.ledger.claim(h.session.id)).toBe(true)
       yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID: child.id })
       yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID: h.session.id })
@@ -588,10 +587,50 @@ describe("the file-change reminder", () => {
         Effect.flatMap((watched) => (watched.length === 0 ? Effect.void : Effect.fail("still held"))),
         Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
       )
-      expect(yield* h.ledger.claim(child.id)).toBe(true)
       expect((yield* h.ledger.assertRead(child.id, childs, "child.txt").pipe(Effect.flip)).code).toBe("file.unread")
       expect((yield* h.ledger.watched(h.session.id)).map((file) => file.path)).toEqual([mine])
       expect(yield* h.ledger.claim(h.session.id)).toBe(false)
+    }),
+  )
+
+  // Review row (fix loop 4): the reference starts a resumed subagent with an empty read-file cache and rebuilds only the
+  // main conversation. A child that read a file and then patched it, whose run ended, is continued: its history names
+  // both calls, yet nothing is rebuilt, so its own patch is not reported and an edit needs a new read. The main session
+  // given the same history is rebuilt and the file counts as fresh there (control).
+  it.live("a continued subagent starts with nothing watched: its own read and patch are not rebuilt", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const bus = yield* Bus.Service
+      const child = yield* h.create(h.session.id)
+      const file = h.inside("child-patched.txt")
+      yield* Effect.promise(() => fs.writeFile(file, text(twenty)))
+      const read = yield* h.run("Read", { file_path: file }, child)
+      expect(status(read)).toBe("completed")
+      const readAt = Date.now()
+      yield* Effect.sleep("20 millis")
+      const patch = `*** Begin Patch\n*** Update File: ${file}\n@@\n-line1\n+one\n*** End Patch`
+      expect(status(yield* h.run("Patch", { patchText: patch }, child))).toBe("completed")
+      const patchAt = Date.now()
+      yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID: child.id })
+      // The subscription runs on its own fiber, so wait until the child's records are gone.
+      yield* h.ledger
+        .assertRead(child.id, file, "child-patched.txt")
+        .pipe(Effect.flip, Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }))
+      const content = (read as { content?: ReadonlyArray<{ type: string; text?: string }> }).content ?? []
+      const shown = content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join("")
+      const messages = history([
+        assistant("msg_0000000001", [
+          toolPart("c1", "Read", { file_path: file }, { text: shown, metadata: { truncated: false } }, readAt),
+          toolPart("c2", "Patch", { patchText: patch }, { text: "Patched" }, patchAt),
+        ]),
+      ])
+      expect(yield* h.changes(messages, { session: child })).toEqual([])
+      expect((yield* h.ledger.assertRead(child.id, file, "child-patched.txt").pipe(Effect.flip)).code).toBe(
+        "file.unread",
+      )
+      expect(yield* h.ledger.watched(child.id)).toEqual([])
+      expect(yield* h.changes(messages)).toEqual([])
+      yield* h.ledger.assertFresh(h.session.id, file, "child-patched.txt")
     }),
   )
 
@@ -1305,8 +1344,8 @@ describe("the rebuild after a restart", () => {
   it.live("skips ranged, repeated, truncated and failed reads, and the tools the reference does not rebuild", () =>
     Effect.gen(function* () {
       const h = yield* setup()
-      const names = ["ranged.txt", "stub.txt", "truncated.txt", "failed.txt", "patched.txt", "notebook.txt"]
-      for (const name of names) yield* h.change(h.inside(name), text(["changed"]))
+      const names = ["ranged.txt", "stub.txt", "truncated.txt", "failed.txt", "notebook.txt"]
+      for (const name of [...names, "patched.txt"]) yield* h.change(h.inside(name), text(["changed"]))
       yield* h.change(h.inside("control.txt"), text(["changed"]))
       const messages = history([
         assistant("msg_0000000001", [
@@ -1354,6 +1393,75 @@ describe("the rebuild after a restart", () => {
         expect((yield* h.ledger.assertRead(h.session.id, h.inside(name), name).pipe(Effect.flip)).code).toBe(
           "file.unread",
         )
+      // Fix loop 4: a completed Patch is rebuilt as an Edit is, from the disk at the rebuild, so it reports nothing.
+      yield* h.ledger.assertFresh(h.session.id, h.inside("patched.txt"), "patched.txt")
+    }),
+  )
+
+  // Review row (fix loop 4): for some models Patch is the only edit tool, so the reference's rebuild of an edit applies to
+  // it. A Patch reads each file it adds, updates or moves a file to from the disk at the rebuild, and ends what an
+  // earlier call held for a file it deletes or moves away; a NotebookEdit ends what an earlier call held for its file.
+  // So a whole read followed by the session's own patch reports nothing and counts as fresh, and a later outside change
+  // of that file is reported (control).
+  it.live("a patch or notebook edit in history replaces what an earlier call seeded for the file", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const patched = h.inside("patched.txt")
+      const after = twenty.map((line) => (line === "line1" ? "one" : line))
+      yield* Effect.promise(async () => {
+        await fs.writeFile(patched, text(after))
+        await fs.utimes(patched, new Date(T(50)), new Date(T(50)))
+      })
+      // Each file below holds what someone wrote after the session's call, which an earlier seed would report.
+      const ended = ["source.txt", "deleted.txt", "notebook.txt"]
+      for (const name of [...ended, "moved.txt", "added.txt"]) yield* h.change(h.inside(name), text(["disk"]))
+      const write = (id: string, name: string) =>
+        toolPart(id, "Write", { file_path: name, content: text(["old"]) }, {}, T(60))
+      const patch = (id: string, body: string) =>
+        toolPart(id, "Patch", { patchText: `*** Begin Patch\n${body}\n*** End Patch` }, { text: "Patched" }, T(50))
+      const messages = history([
+        assistant("msg_0000000001", [
+          toolPart(
+            "r1",
+            "Read",
+            { file_path: patched },
+            { text: readResult("patched.txt", twenty), metadata: { truncated: false } },
+            T(60),
+          ),
+          patch("p1", `*** Update File: ${patched}\n@@\n-line1\n+one`),
+          write("w1", "source.txt"),
+          write("w2", "moved.txt"),
+          patch("p2", "*** Update File: source.txt\n*** Move to: moved.txt\n@@\n-old\n+disk"),
+          write("w3", "deleted.txt"),
+          patch("p3", "*** Delete File: deleted.txt"),
+          write("w4", "notebook.txt"),
+          toolPart(
+            "n1",
+            "NotebookEdit",
+            { notebook_path: "notebook.txt", mode: "replace", cellId: "x", source: "b" },
+            { text: "Edited" },
+            T(50),
+          ),
+          patch("p4", "*** Add File: added.txt\n+disk"),
+          // A patch the Patch tool's parser refuses names no file, so the write before it still counts.
+          write("w5", "kept.txt"),
+          toolPart("p5", "Patch", { patchText: "*** Begin Patch\n*** Delete File: kept.txt" }, {}, T(50)),
+        ]),
+      ])
+      yield* h.change(h.inside("kept.txt"), text(["disk"]))
+      expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(h.inside("kept.txt"))])
+      for (const name of ["patched.txt", "moved.txt", "added.txt"])
+        yield* h.ledger.assertFresh(h.session.id, h.inside(name), name)
+      for (const name of ended)
+        expect((yield* h.ledger.assertRead(h.session.id, h.inside(name), name).pipe(Effect.flip)).code).toBe(
+          "file.unread",
+        )
+      yield* h.change(patched, text(after.map((line) => (line === "line20" ? "last" : line))))
+      const rows = yield* h.changes(messages)
+      expect(labels(rows)).toEqual([expect.stringContaining(patched)])
+      expect(rows[0].content).toBe(
+        numbered(12, ["line12", "line13", "line14", "line15", "line16", "line17", "line18", "line19", "last"]).join("\n"),
+      )
     }),
   )
 
@@ -1501,6 +1609,16 @@ describe("the rebuild after a restart", () => {
           ...spellings.map((spelling, index) =>
             toolPart(`o${index}`, "Write", { file_path: spelling, content: text(["old"]) }, {}, T(60)),
           ),
+          // A Patch names its files in its text, read with the Patch tool's parser, so each spelling there is checked too.
+          ...spellings.map((spelling, index) =>
+            toolPart(
+              `p${index}`,
+              "Patch",
+              { patchText: `*** Begin Patch\n*** Update File: ${spelling}\n@@\n-a\n+b\n*** End Patch` },
+              {},
+              T(60),
+            ),
+          ),
           toolPart("c", "Write", { file_path: "control.txt", content: text(["old"]) }, {}, T(60)),
         ]),
       ])
@@ -1540,6 +1658,14 @@ describe("the rebuild after a restart", () => {
           toolPart(id, "Read", { file_path: name }, { text: readResult(name, ["x"]), metadata: { truncated: false } }, 0),
         edit: (name: string, id: string) =>
           toolPart(id, "Edit", { file_path: name, old_string: "a", new_string: "b" }, {}, 0),
+        patch: (name: string, id: string) =>
+          toolPart(
+            id,
+            "Patch",
+            { patchText: `*** Begin Patch\n*** Update File: ${name}\n@@\n-a\n+b\n*** End Patch` },
+            {},
+            0,
+          ),
       }
       for (const [kind, call] of Object.entries(calls)) {
         const session = yield* h.create()

@@ -1,10 +1,11 @@
 export * as FileChangeReminder from "./file-change-reminder.js"
 
 import { structuredPatch } from "diff"
-import { DateTime, Effect, Cause } from "effect"
+import { DateTime, Effect, Cause, Result } from "effect"
 import type { Agent } from "@orbit/schema/agent"
 import type { Session } from "@orbit/schema/session"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Patch } from "@orbit/util/patch"
 import type { Environment } from "./environment/index.js"
 import { FileAccess } from "./file-access.js"
 import { FileLedger } from "./file-ledger.js"
@@ -59,8 +60,10 @@ export const durable = (services: Services): Durable => ({
   name: KIND,
   run: (input) =>
     Effect.gen(function* () {
-      // Claimed before the work, so a rebuild that runs past the producer's deadline costs one step, not every step.
-      if (yield* services.ledger.claim(input.session.id)) yield* rebuild(services, input)
+      // Claimed before the work, so a rebuild that runs past the producer's deadline costs one step, not every step. A
+      // subagent is never rebuilt: as in the reference, a resumed or continued one starts with nothing watched.
+      if (input.session.parentID === undefined && (yield* services.ledger.claim(input.session.id)))
+        yield* rebuild(services, input)
       if (postedInRun(input.messages, KIND)) return []
       const watched = yield* services.ledger.watched(input.session.id)
       const entries = yield* Effect.forEach(
@@ -203,10 +206,13 @@ const shown = (text: string) =>
 
 /**
  * After a restart the ledger is empty, so the first collection for a session refills it from the history it is given
- * (after the latest checkpoint), as the reference rebuilds its cache from the transcript on resume. Only three tools
- * count, later calls winning: a whole read that was not a repeat or truncated (the text it showed, stamped with its
- * time), a write whatever its outcome (the text it was given, stamped with its time) and an edit that did not fail (the
- * file as it is now). A path in history may come from an imported session, so it is resolved as the read tool resolves
+ * (after the latest checkpoint), as the reference rebuilds its cache from the transcript on resume. Only the main
+ * conversation is rebuilt, as in the reference. These calls count, later ones winning: a whole read that was not a
+ * repeat or truncated (the text it showed, stamped with its time), a write whatever its outcome (the text it was given,
+ * stamped with its time), and an edit that did not fail (the file as it is now). A completed patch counts as an edit of
+ * each file it adds, updates or moves a file to, since it stands in for Edit and Write for some models, and it ends
+ * what history held for a file it deletes or moves away. A completed notebook edit ends what history held for its
+ * file, which is not seeded. A path in history may come from an imported session, so it is resolved as the read tool resolves
  * it, a share or device spelling is refused before any disk is read, and only a file inside the project that passes
  * `gate` and that the read tool would read without a question is kept. Of those, only the newest `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop
  * the rest. A record that is already there wins over one from history. The session is claimed before the rebuild starts,
@@ -240,6 +246,7 @@ const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
   // The ledger keeps only the newest files, so an older one is not read at all.
   const files = yield* Effect.forEach(
     Array.from(byFile.values())
+      .filter((found) => !found.ended)
       .toSorted((left, right) => left.order - right.order)
       .slice(-FileLedger.MAX_FILES),
     Effect.fnUntraced(function* (found) {
@@ -263,35 +270,58 @@ interface Found {
   readonly at: number
   /** Undefined for an edit, whose file is read from disk. */
   readonly text?: string
+  /** True for a call that ends what history held for the file: nothing of it is seeded. */
+  readonly ended?: boolean
 }
 
 const fromHistory = (messages: ReadonlyArray<SessionMessage.Info>): Found[] =>
   messages
     .flatMap((message) =>
       message.type === "assistant"
-        ? message.content.flatMap((part) => (part.type === "tool" ? [found(part, message.time.created)] : []))
+        ? message.content.flatMap((part) => (part.type === "tool" ? found(part, message.time.created) : []))
         : [],
     )
-    .flatMap((item, order) => (item === undefined ? [] : [{ ...item, order }]))
+    .map((item, order) => ({ ...item, order }))
 
 const found = (
   part: Extract<SessionMessage.Info, { type: "assistant" }>["content"][number] & { type: "tool" },
   created: DateTime.Utc,
-): Omit<Found, "order"> | undefined => {
-  if (part.state.status !== "completed" && part.state.status !== "error") return undefined
+): ReadonlyArray<Omit<Found, "order">> => {
+  if (part.state.status !== "completed" && part.state.status !== "error") return []
   const name = ToolNames.canonical(part.name)
   const given = ToolNames.lowerInput(name, part.state.input)
-  if (typeof given.file_path !== "string") return undefined
   const at = DateTime.toEpochMillis(part.time.completed ?? created)
   if (name === ToolNames.tools.write)
-    return typeof given.content === "string" ? { path: given.file_path, at, text: given.content } : undefined
-  if (part.state.status !== "completed") return undefined
-  if (name === ToolNames.tools.edit) return { path: given.file_path, at }
-  if (name !== ToolNames.tools.read) return undefined
-  if (given.offset !== undefined || given.limit !== undefined || given.pages !== undefined) return undefined
-  if (part.state.metadata?.unchanged === true || part.state.metadata?.truncated === true) return undefined
+    return typeof given.file_path === "string" && typeof given.content === "string"
+      ? [{ path: given.file_path, at, text: given.content }]
+      : []
+  if (part.state.status !== "completed") return []
+  if (name === ToolNames.tools.patch) return typeof given.patchText === "string" ? patched(given.patchText, at) : []
+  if (name === ToolNames.tools.notebook_edit)
+    return typeof given.notebook_path === "string" ? [{ path: given.notebook_path, at, ended: true }] : []
+  if (typeof given.file_path !== "string") return []
+  if (name === ToolNames.tools.edit) return [{ path: given.file_path, at }]
+  if (name !== ToolNames.tools.read) return []
+  if (given.offset !== undefined || given.limit !== undefined || given.pages !== undefined) return []
+  if (part.state.metadata?.unchanged === true || part.state.metadata?.truncated === true) return []
   const text = shownText(part.state.content)
-  return text === undefined ? undefined : { path: given.file_path, at, text }
+  return text === undefined ? [] : [{ path: given.file_path, at, text }]
+}
+
+// The files a completed patch names, read with the Patch tool's own parser: each file it leaves is read from disk, as
+// an edit's is, and a file it deletes or moves away ends what history held for it.
+const patched = (patchText: string, at: number): ReadonlyArray<Omit<Found, "order">> => {
+  const parsed = Patch.parse(patchText)
+  if (Result.isFailure(parsed)) return []
+  return parsed.success.flatMap((hunk) => {
+    if (hunk.type === "delete") return [{ path: hunk.path, at, ended: true }]
+    if (hunk.type === "update" && hunk.movePath !== undefined)
+      return [
+        { path: hunk.path, at, ended: true },
+        { path: hunk.movePath, at },
+      ]
+    return [{ path: hunk.path, at }]
+  })
 }
 
 // The file text a whole read showed: the result without reminder blocks, past its `Read file` header line, with each

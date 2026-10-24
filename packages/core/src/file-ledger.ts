@@ -71,8 +71,9 @@ export const MAX_BYTES = 25 * 1024 * 1024
  * or moved Session do. A completed compaction also forgets freshness and every watch.
  *
  * When a subagent's run ends (a child Session's busy period, however it ended), everything held for it goes, as the
- * reference releases a subagent's read-file cache when the subagent returns. A child that is continued later rebuilds
- * what it saw from its history at its first step.
+ * reference releases a subagent's read-file cache when the subagent returns. A child that is continued later starts
+ * with nothing held, as the reference's resumed subagents do: the file-change reminder rebuilds only a Session with no
+ * parent.
  */
 export interface Interface {
   /** Record that the Session has seen the file as it is now. Freshness only: it never touches the repeat-read marks. */
@@ -101,7 +102,7 @@ export interface Interface {
   readonly forget: (sessionID: Session.ID, path: string) => Effect.Effect<void>
   /**
    * Claim the Session's rebuild from history: true the first time it is asked for the Session in this process, false
-   * after. A completed compaction does not reset it; the end of a subagent's run does, with the rest of its records.
+   * after. A completed compaction does not reset it. The file-change reminder claims only a Session with no parent.
    */
   readonly claim: (sessionID: Session.ID) => Effect.Effect<boolean>
   /** Record each file that has no record yet. A record that is already there wins. */

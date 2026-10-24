@@ -705,8 +705,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
 - The file-change reminder (`FileChangeReminder`, `packages/core/src/file-change-reminder.ts`) reads again, at each
-  logical step, a file the session wrote, and on the first step of a session in a process it rebuilds what the session
-  saw from the history it is given, which `orb session import` can bring from a file or URL. Both resolve a path once
+  logical step, a file the session wrote, and on the first step of a main session (one with no parent) in a process it
+  rebuilds what the session saw from the history it is given, which `orb session import` can bring from a file or URL. Both resolve a path once
   with the read tool's resolver (`FileAccess.locate`: a share or device spelling is refused before any disk is read,
   then a device or, outside Windows, anything but a file or folder), and check and read that same target. The re-read
   (`FileChangeReminder.gate`) asks `ProjectTrust.reachable` on it at every step, skips a name in the project that the
@@ -719,13 +719,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   treats every name in history as hostile (class 5): it keeps only a file inside the project that passes the same gate
   and that `Permission.allowed` says the read tool would read with no question, so a file under an ask rule (the
   built-in `.env` asks, a rule the person wrote, a link onto such a file) is neither seeded nor read. It reads from
-  disk only for an `Edit` in history, and reads at most the newest 100 files. The path and the changed lines go only in
+  disk only for an `Edit` in history and for each file a completed `Patch` adds, updates or moves a file to (the names
+  come from the Patch tool's own parser and pass the same gate and `Permission.allowed` check), and reads at most the
+  newest 100 files. The path and the changed lines go only in
   the reminder's data block. Proof: the "re-read gate" and "rebuild after a restart" rows of
   `test/durable-reminders.test.ts` (an outside file after a revoke, a project file swapped for a link out with and
   without trust, a table of the file, its folder and a folder above it swapped for a link or junction into another
   outside folder, for a file outside and inside the project, trusted and revoked, a dangling link, a deny on a link's
   target, an `external_directory` deny, outside spellings in history including `~`, `..` and shares, ask-ruled names
-  from a failed write, a write, a read and an edit, and a pipe marker server and device names that are never opened).
+  from a failed write, a write, a read, an edit and a patch, outside spellings named in a patch, and a pipe marker server and device names that are never opened).
   The rows that link a file need links, so they run on Linux or with Developer Mode; the rows that swap a folder use a
   junction on Windows, which needs no privilege.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
