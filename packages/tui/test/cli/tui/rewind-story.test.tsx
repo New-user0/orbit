@@ -73,11 +73,16 @@ test.each([64, 120])("the story draws the real picker for each fixture and reset
     for (const control of ["ctrl+g", "ctrl+r"]) expect(first).toContain(control)
 
     // Each fixture is reached with the next-fixture key; the hostile one draws its names written out (class 9).
+    // The label is read from each frame, and each press waits for a frame whose label changed: the frame before the
+    // press already names a fixture.
+    const fixture = (frame: string) => frame.match(/fixture: ([a-z ]+?)(?: ·|\s{2}|$)/m)?.[1]?.trim()
     const seen = new Set<string>()
+    let last = fixture(first)
     for (let press = 0; press < 8 && !seen.has("hostile names"); press++) {
       app.mockInput.pressKey("g", { ctrl: true })
-      const frame = await app.waitForFrame((frame) => /fixture: [a-z ]+/.test(frame))
-      const label = frame.match(/fixture: ([a-z ]+?)(?: ·|\s{2}|$)/m)?.[1]?.trim()
+      const frame = await app.waitForFrame((frame) => fixture(frame) !== undefined && fixture(frame) !== last)
+      const label = fixture(frame)
+      last = label
       if (label) seen.add(label)
       if (label === "hostile names") {
         expect(controlFree(frame)).toBe(true)
@@ -90,6 +95,22 @@ test.each([64, 120])("the story draws the real picker for each fixture and reset
 
     app.mockInput.pressKey("r", { ctrl: true })
     await app.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+// An option chosen in the story acts on the fixture only: the footer names what was chosen and the picker closes.
+test("an option chosen in the story is named in its footer", async () => {
+  const app = await render(120)
+  try {
+    await app.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+    app.mockInput.pressArrow("up")
+    app.mockInput.pressEnter()
+    await app.waitForFrame((frame) => frame.includes("Conversation only"))
+    app.mockInput.pressEnter()
+    const frame = await app.waitForFrame((frame) => frame.includes("conversation chosen for p3"))
+    expect(frame).not.toContain("Never mind")
   } finally {
     app.renderer.destroy()
   }

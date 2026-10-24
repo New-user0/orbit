@@ -88,8 +88,10 @@ export async function rewindApp(input: {
   messages?: unknown[]
   /** The session is running: `/api/session/active` names it. */
   running?: boolean
-  /** Answers a request before the defaults; `undefined` falls through. */
-  answer?: (request: Recorded) => Response | undefined
+  /** Answers a request before the defaults; `undefined` falls through. A promise holds the answer until it settles. */
+  answer?: (request: Recorded) => Response | Promise<Response> | undefined
+  /** A revert staged at this message: the session's own `revert` boundary. */
+  revert?: string
 }) {
   const requests: Recorded[] = []
   const messages = input.messages ?? conversation
@@ -108,12 +110,13 @@ export async function rewindApp(input: {
       const base = `/api/session/${sessionID}`
       if (url.pathname.startsWith(base) || url.pathname === `/api/experimental/session/${sessionID}/wait`)
         requests.push(recorded)
-      const answered = input.answer?.(recorded)
+      const answered = await input.answer?.(recorded)
       if (answered) return answered
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session/active")
         return json({ data: input.running ? { [sessionID]: { type: "running" } } : {} })
-      if (url.pathname === base) return json({ data: session })
+      if (url.pathname === base)
+        return json({ data: input.revert ? { ...session, revert: { messageID: input.revert } } : session })
       if (url.pathname === `${base}/message`) return json({ data: [...messages].reverse(), cursor: {} })
       if (url.pathname === `${base}/inbox` || url.pathname === `${base}/permission`) return json({ data: [] })
       if (url.pathname === `${base}/diff`) {

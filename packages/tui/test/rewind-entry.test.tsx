@@ -95,14 +95,17 @@ test.each([
   expect(frame).not.toContain("Nothing to rewind yet.")
 })
 
+// A select dialog focuses its search field a moment after it is drawn, so each filter is typed after that moment.
 const openFromTimeline = async (setup: Awaited<ReturnType<typeof rewindApp>>, prompt: string) => {
   await setup.mockInput.typeText("/timeline")
   setup.mockInput.pressEnter()
   await setup.waitForFrame((frame) => frame.includes("Timeline"))
+  await Bun.sleep(50)
   await setup.mockInput.typeText(prompt)
   await setup.waitForFrame((frame) => frame.includes(prompt))
   setup.mockInput.pressEnter()
   await setup.waitForFrame((frame) => frame.includes("Message Actions"))
+  await Bun.sleep(50)
   await setup.mockInput.typeText("Rewind")
   await setup.waitForFrame((frame) => frame.includes("Rewind"))
   setup.mockInput.pressEnter()
@@ -175,7 +178,10 @@ test.each([
     running: true,
     messages: [...conversation, quick, reply(row.content, false)],
   })
-  await setup.waitForFrame((frame) => frame.includes("Quick question"))
+  // Esc interrupts only once the app knows the session runs, which its interrupt hint shows.
+  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+    maxPasses: 200,
+  })
   setup.mockInput.pressEscape()
   setup.mockInput.pressEscape()
   await until(() => setup.actions().includes("interrupt"), "the interrupt")
@@ -242,4 +248,197 @@ test("interrupting a prompt whose reply has nothing in it drops the prompt's his
     await Bun.sleep(20)
   }
   expect(saved).toEqual(["Earlier"])
+})
+
+// A click on a person's prompt in the transcript opens the same message dialog as the timeline, and its Rewind opens
+// step 2 for that prompt.
+test("a click on a prompt opens the message dialog, whose Rewind opens step 2 for that prompt", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  const frame = await setup.waitForFrame(loaded)
+  const lines = frame.split("\n")
+  const row = lines.findIndex((line) => line.includes("Rename the helper"))
+  await setup.mockMouse.click(lines[row].indexOf("Rename the helper") + 1, row)
+  await setup.waitForFrame((frame) => frame.includes("Message Actions"))
+  await Bun.sleep(50)
+  await setup.mockInput.typeText("Rewind")
+  await setup.waitForFrame((frame) => frame.includes("code and/or conversation"))
+  setup.mockInput.pressEnter()
+  const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  expect(confirm).toContain("Rewind to just before this prompt:")
+  expect(setup.dryRunsSent()).toEqual(["msg_0003"])
+  expect(setup.actions()).toEqual([])
+})
+
+// A prompt at or after the staged revert's boundary is no longer in the conversation: the message dialog's Rewind
+// closes without asking anything.
+test("the message dialog's Rewind on a prompt a staged revert already took back closes without a dry run", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path, revert: "msg_0005" })
+  await setup.waitForFrame(loaded)
+  await openFromTimeline(setup, "Fix the")
+  await setup.waitForFrame((frame) => !frame.includes("Message Actions"))
+  await Bun.sleep(300)
+  await setup.renderOnce()
+  const frame = setup.captureCharFrame()
+  expect(frame).not.toContain("Checking files")
+  expect(frame).not.toContain("Code and conversation")
+  expect(setup.dryRunsSent()).toEqual([])
+  expect(setup.actions()).toEqual([])
+})
+
+// Class 13: a conversation rewind the server refuses, on the shortcut or after an interrupt, is shown as an error.
+test.each([
+  { label: "the message dialog's shortcut", running: false },
+  { label: "an interrupt", running: true },
+])("a refused conversation rewind from $label is shown", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    running: row.running,
+    messages: [...conversation, quick, reply([], !row.running)],
+    answer: (request) => {
+      if (request.path.endsWith("/revert/files") && request.body?.dryRun)
+        return json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } })
+      if (request.path.endsWith("/revert/stage"))
+        return json({ _tag: "SessionBusyError", sessionID: "ses_rewind", message: "Session is busy" }, { status: 409 })
+      return undefined
+    },
+  })
+  if (row.running) {
+    await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+      maxPasses: 200,
+    })
+    setup.mockInput.pressEscape()
+    setup.mockInput.pressEscape()
+  }
+  if (!row.running) {
+    await setup.waitForFrame((frame) => frame.includes("Quick question"))
+    await openFromTimeline(setup, "Quick question")
+  }
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  await setup.waitForFrame((frame) => frame.includes("Session is busy"), { maxPasses: 200 })
+})
+
+// The interrupt path rewinds nothing when the person has typed something since, or a prompt waits in the inbox: the
+// conversation stays and the input keeps what it holds.
+test.each([
+  { label: "something is typed", typed: "draft", inbox: [] as unknown[] },
+  { label: "a queued prompt waits", typed: "", inbox: [queued] },
+])("interrupting a prompt with no reply rewinds nothing when $label", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    running: true,
+    messages: [...conversation, quick, reply([], false)],
+    answer: (request) => (request.path.endsWith("/inbox") ? json({ data: row.inbox }) : undefined),
+  })
+  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+    maxPasses: 200,
+  })
+  if (row.typed) {
+    await setup.mockInput.typeText(row.typed)
+    await setup.waitForFrame((frame) => frame.includes(row.typed))
+  }
+  setup.mockInput.pressEscape()
+  setup.mockInput.pressEscape()
+  await until(() => setup.actions().includes("wait"), "the wait after the interrupt")
+  await Bun.sleep(500)
+  expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([])
+})
+
+// A prompt still in the inbox is not a message yet, so it is no row of the picker.
+test("a prompt still waiting in the inbox is not a row", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    running: true,
+    answer: (request) => (request.method === "POST" && request.path.endsWith("/prompt") ? held.promise : undefined),
+  })
+  try {
+    await setup.waitForFrame(loaded)
+    await setup.mockInput.typeText("Waiting prompt")
+    setup.mockInput.pressEnter()
+    await until(() => setup.requests.some((request) => request.path.endsWith("/prompt")), "the prompt request")
+    await setup.mockInput.typeText("/rewind")
+    setup.mockInput.pressEnter()
+    await setup.waitForFrame((frame) => frame.includes(listHeading))
+    await until(() => setup.statsSent().length >= 3, "the rows' stats")
+    await Bun.sleep(200)
+    expect(setup.statsSent().sort()).toEqual(["prompt msg_0001", "prompt msg_0003", "prompt msg_0005"])
+  } finally {
+    held.resolve(json({ _tag: "UnknownError", message: "stopped" }, { status: 500 }))
+  }
+})
+
+// The shortcut skips the picker only when nothing a person would miss follows the prompt: a reply holding text, or a
+// later prompt, sends the message dialog's Rewind to step 2 even when no file would change.
+test.each([
+  { label: "a reply with text", messages: conversation, prompt: "Add the parser" },
+  {
+    label: "a later prompt",
+    messages: [
+      { id: "msg_0001", type: "user", text: "First ask", time: { created: Date.now() - 120_000 } },
+      { ...reply([], true), id: "msg_0002" },
+      { ...quick, id: "msg_0003" },
+      { ...reply([], true), id: "msg_0004" },
+    ],
+    prompt: "First ask",
+  },
+])("the message dialog's Rewind opens step 2 when $label follows", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: [...row.messages],
+    answer: (request) =>
+      request.path.endsWith("/revert/files") && request.body?.dryRun
+        ? json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } })
+        : undefined,
+  })
+  await setup.waitForFrame((frame) => frame.includes(row.prompt))
+  await openFromTimeline(setup, row.prompt)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(frame).toContain("Rewind the conversation to just before this prompt:")
+  expect(setup.actions()).toEqual([])
+})
+
+// What counts as something in a reply: text that is only spaces does not, a tool call does.
+test.each([
+  { label: "only spaces", content: [{ type: "text", text: "   " }], restored: true },
+  {
+    label: "a tool call",
+    content: [
+      {
+        type: "tool",
+        id: "call-read",
+        name: "read",
+        state: { status: "running", input: {}, metadata: {} },
+        time: { created: 1 },
+      },
+    ],
+    restored: false,
+  },
+])("interrupting a prompt whose reply holds $label", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    running: true,
+    messages: [...conversation, quick, reply(row.content, false)],
+  })
+  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+    maxPasses: 200,
+  })
+  setup.mockInput.pressEscape()
+  setup.mockInput.pressEscape()
+  await until(() => setup.actions().includes("wait"), "the wait after the interrupt")
+  if (!row.restored) {
+    await Bun.sleep(500)
+    expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([])
+    return
+  }
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([
+    `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
+  ])
 })

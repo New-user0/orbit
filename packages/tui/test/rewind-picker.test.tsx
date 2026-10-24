@@ -343,3 +343,123 @@ test("a refused rewind's message is drawn with its control characters written ou
   expect(frame).toContain("boom \\x1b]0;pwned\\x07 \\x1b[2K")
   expect(controlFree(frame)).toBe(true)
 })
+
+// Classes 7 and 13: code options need a dry run that says it can rewind and lists the files as a list. One that cannot
+// rewind, or whose list is something else, leaves only the conversation, whatever else it names.
+test.each([
+  { label: "cannot rewind", answer: { canRewind: false, filesChanged: ["/tmp/orbit/src/a.ts"], insertions: 3 } },
+  { label: "names its files in a string", answer: { canRewind: true, filesChanged: "src/a.ts", insertions: 3 } },
+])("a dry run that $label offers only the conversation", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) =>
+      request.path.endsWith("/revert/files") && request.body?.dryRun ? json({ data: row.answer }) : undefined,
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(frame).toContain("Rewind the conversation to just before this prompt:")
+  expect(frame).not.toContain("Code and conversation")
+  expect(frame).not.toContain("Code only")
+  expect(frame).toContain("The code stays as it is.")
+})
+
+// Class 7: a prompt whose own edits come back as something other than a list shows the warning, as a refused one does.
+test("a prompt whose own edits come back malformed shows the warning on its row", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) =>
+      request.path.endsWith("/diff") && new URLSearchParams(request.search).get("from") === "msg_0003"
+        ? json({ data: { file: "src/a.ts", additions: 1, deletions: 0 } })
+        : undefined,
+  })
+  await openPicker(setup)
+  const frame = await setup.waitForFrame(
+    (frame) => frame.includes("No code rewind for this prompt") && frame.includes("parser.ts +12 -0"),
+  )
+  expect(linesWith(frame, "No code rewind for this prompt")).toBe(1)
+})
+
+// Seven rows are drawn, the window centred on the selection, and a row asks for its stats only once it is drawn: the
+// list opens on "(current)" with the six newest prompts, and Home brings the oldest ones in.
+test("the list draws seven rows around the selection and asks only drawn rows for their stats", async () => {
+  await using state = await tmpdir()
+  const now = Date.now()
+  const id = (index: number) => `msg_${String(index).padStart(4, "0")}`
+  const ids = Array.from({ length: 10 }, (_, index) => id(index * 2 + 1))
+  const messages = ids.flatMap((prompt, index) => [
+    { id: prompt, type: "user", text: `Prompt number ${index + 1}`, time: { created: now - (20 - index) * 60_000 } },
+    {
+      id: id(index * 2 + 2),
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "provider", id: "model" },
+      time: { created: now - (20 - index) * 60_000 + 1000, completed: now - (20 - index) * 60_000 + 2000 },
+      finish: "stop",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      content: [{ type: "text", text: index === 9 ? "Renamed it." : `Answer ${index + 1}` }],
+    },
+  ])
+  await using setup = await rewindApp({ state: state.path, messages, height: 50 })
+  await openPicker(setup)
+  await until(() => setup.statsSent().length >= 6, "the drawn rows' stats")
+  await Bun.sleep(200)
+  expect(setup.statsSent().sort()).toEqual(ids.slice(4).map((prompt) => `prompt ${prompt}`))
+
+  setup.mockInput.pressKey("HOME")
+  await until(() => setup.statsSent().length >= 10, "the oldest rows' stats")
+  expect(setup.statsSent().sort()).toEqual(ids.map((prompt) => `prompt ${prompt}`))
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(setup.dryRunsSent()).toEqual([ids[0]])
+})
+
+// While the dry run runs the list says so; Enter again asks nothing more, and Esc closes the picker, which its late
+// answer does not reopen.
+test("Enter while the dry run runs asks it once, and Esc then closes the picker for good", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) => (request.path.endsWith("/revert/files") && request.body?.dryRun ? held.promise : undefined),
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+  setup.mockInput.pressEnter()
+  await Bun.sleep(200)
+  expect(setup.dryRunsSent()).toEqual(["msg_0003"])
+
+  setup.mockInput.pressEscape()
+  await setup.waitForFrame((frame) => !frame.includes("Checking files…") && !frame.includes(listHeading))
+  held.resolve(json({ data: { canRewind: true, filesChanged: ["/tmp/orbit/src/a.ts"], insertions: 3, deletions: 5 } }))
+  await Bun.sleep(300)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).not.toContain("Code and conversation")
+  expect(setup.actions()).toEqual([])
+})
+
+// Enter again while a rewind is under way sends nothing more.
+test("Enter while a rewind runs sends it once", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) => (request.path.endsWith("/revert/stage") ? held.promise : undefined),
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  setup.mockInput.pressEnter()
+  await Bun.sleep(300)
+  held.resolve(json({ data: { messageID: "msg_0003", files: [] } }))
+  await setup.waitForFrame((frame) => !frame.includes("Code and conversation"))
+  expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([
+    `stage ${JSON.stringify({ messageID: "msg_0003" })}`,
+  ])
+})
