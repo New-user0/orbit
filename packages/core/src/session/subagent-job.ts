@@ -49,7 +49,7 @@ export const make: Effect.Effect<Runner, never, Session.Service | Job.Service | 
               message.type === "assistant" && message.time.completed !== undefined && message.error === undefined,
           )
           return SubagentCompletion.text(assistant)
-        }),
+        }).pipe(endsShells(sessions, recovery.childSessionID)),
       }),
     background: Effect.fn("SubagentJob.background")(function* (recovery: Recovery) {
       const info = yield* jobs.background(recovery.childSessionID)
@@ -58,3 +58,29 @@ export const make: Effect.Effect<Runner, never, Session.Service | Job.Service | 
     notify,
   }
 })
+
+/**
+ * However a subagent's run ends, the shell commands its child left running end with it and report to no one. Every run of
+ * a subagent job carries it: the one an Agent call starts and the one a restart resumes. Stopping them never changes how
+ * the run ended: a child whose folder is gone cannot open its Location, and that defect is logged, not reported.
+ */
+export const endsShells =
+  (sessions: Session.Interface, childSessionID: Recovery["childSessionID"]) =>
+  <A, E, R>(run: Effect.Effect<A, E, R>) =>
+    run.pipe(
+      Effect.ensuring(
+        sessions
+          .abandonShells(childSessionID)
+          .pipe(
+            Effect.catchCause((cause) => Effect.logWarning("a subagent's shell commands were not stopped", { cause })),
+          ),
+      ),
+    )
+
+/**
+ * Waits for a foreground subagent's run. With background tasks on (`movable`) the call blocks on the job, so the session's
+ * move-to-background signal can move it. With them off it waits without blocking, which that signal does not reach, and
+ * blocks only once the run has ended, to take the finished result.
+ */
+export const waitFor = (jobs: Job.Interface, input: Job.BlockInput, movable: boolean) =>
+  movable ? jobs.block(input) : jobs.wait({ id: input.id }).pipe(Effect.andThen(jobs.block(input)))

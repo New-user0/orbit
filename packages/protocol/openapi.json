@@ -15664,6 +15664,9 @@
             },
             "additionalProperties": false
           },
+          "background_tasks": {
+            "type": "boolean"
+          },
           "tool_output": {
             "type": "object",
             "properties": {

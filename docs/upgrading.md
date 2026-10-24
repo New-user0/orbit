@@ -3509,6 +3509,63 @@ Nothing of a failure is saved to a file.
 
 **What to do:** Nothing.
 
+### A shell result keeps the start of the output, and the rest is saved
+
+Before, a shell command's result kept the last 50 KiB and at most 2,000 lines of its output, followed by a line that
+named the full-output file. Now it keeps the first 30,000 bytes (`tool_output.max_bytes`, at most 150,000), cut back
+to a whole character, and `max_lines` is no longer read. When the output is longer, the step links the command's output
+file, cut to 64 MB, into the session's tool-output folder and the model gets the `<saved-output>` block with the file's
+size before the cut, its path and a preview of the head, which starts at its first line that is not blank; the notices
+after the output follow the block. Output whose head is all blank lines still gets the block, with an empty preview,
+instead of being reported as no output. A command whose exit code reads as a failure is never saved: its text is cut to its
+first and last 5,000 characters. The shell declares a 30,000-character result limit, so a head raised past that by `max_bytes` is saved by
+the step like any other result. A background command's completion message and the result of a command you run with
+`!` carry the head too, and both name the output file when the output did not fit. An output file
+that cannot be read is named in the result instead of giving an empty one, and a link planted at its path is not
+followed.
+
+A finished command dropped from memory (after 25 newer ones) no longer deletes its output file when a result did not
+take all of it; the seven-day cleaning removes it later.
+
+**Affects:** people and scripts that read shell results, and people who set `tool_output.max_lines` or `max_bytes`.
+
+**What to do:** Nothing. Remove `max_lines` from your config at your convenience; it is still accepted.
+
+### Background tasks can be turned off
+
+A new setting, `"background_tasks": false`, keeps work in the foreground. The shell tool (Bash or PowerShell) no longer
+offers `run_in_background` and the Agent tool no longer offers `background`; a call that passes either runs in the
+foreground. A shell command still running at its timeout is stopped instead of moving to the background, moving
+running work to the background leaves shell commands and the subagents of the Agent and Workflow tools where they
+are, and the tool descriptions drop the background guidance. A command defined to run as a subagent still runs in the
+background. A project's or local value applies only once the folder is trusted.
+
+**Affects:** people who want every command and subagent to finish before the model goes on.
+
+**What to do:** Nothing, unless you want it: set `"background_tasks": false` in your own config.
+
+### A background command is stopped at 5 GB of output, and a subagent's commands end with it
+
+A shell command that has left the foreground is killed at once (no grace period) once its output file passes 5 GB,
+checked every five seconds; its completion message starts with a line saying so. When the run that an Agent call
+started ends, whether it finished or failed, in the foreground or the background, and also when a background subagent
+resumed after a restart ends, every shell command the subagent still has running is killed and reports nothing to it,
+and every shell notice still waiting for the subagent is withdrawn. A command you ran in the subagent's session with `!`
+is yours: it keeps running and its notice stays.
+
+**Affects:** people who start long background commands, and subagents that leave servers or watchers running.
+
+**What to do:** Nothing. Start a long-lived server from the main session, not from a subagent, if it must outlive the
+subagent's run.
+
+### A shell timeout written as a string is accepted
+
+The shell tool reads `timeout` written as a decimal string, such as `"5000"`, as that number of milliseconds. Any other
+string, such as `"5s"`, is still invalid input, and the tool's schema still asks for an integer.
+
+**Affects:** models that send numbers as strings.
+
+**What to do:** Nothing.
 ### Memory is kept with the file tools, and the Memory tool is gone
 
 Before, the model saved notes with a `Memory` tool, and Orbit regenerated `MEMORY.md` from them after every save and

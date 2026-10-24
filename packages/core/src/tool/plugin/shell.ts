@@ -7,7 +7,7 @@ import type { ShellCreateBefore } from "@orbit/plugin/effect/shell"
 import type { Tool } from "@orbit/schema/tool"
 import { AppProcess } from "@orbit/util/process"
 import { ConfigShellTool } from "@orbit/schema/config/shell-tool"
-import { Deferred, Duration, Effect, Fiber, Ref, Schema, Scope } from "effect"
+import { Deferred, Duration, Effect, Fiber, Ref, Schema, SchemaGetter, Scope } from "effect"
 import os from "node:os"
 import path from "node:path"
 import { Config } from "../../config.js"
@@ -37,6 +37,7 @@ import { PowerShellParse } from "../../shell/powershell-parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
 import { ShellStall } from "../../shell/stall.js"
+import { ToolOutput } from "../../tool-output.js"
 
 export const name = "Bash"
 
@@ -64,19 +65,50 @@ const duration = (ms: number) => {
   const minutes = Number((ms / 60_000).toFixed(2))
   return minutes < 1 ? `${ms} ms` : `${ms} ms (${minutes} ${minutes === 1 ? "minute" : "minutes"})`
 }
-const description = (shell: string | undefined, limit: ReturnType<typeof limits>) =>
+const description = (shell: string | undefined, limit: ReturnType<typeof limits>, head: number, background: boolean) =>
   [
     "Execute a shell command and return its output.",
     ...(shell ? [`Commands run on ${ShellSelect.platformName(process.platform)} using ${shell}.`] : []),
     "Quote file paths containing spaces or special characters.",
     "Prefer dedicated tools over shell commands when possible.",
-    "When output is large, the full result is saved to a file and a truncated preview is returned.",
+    `Output longer than ${head.toLocaleString("en-US")} bytes does not come back in full: all of it is saved to a file, and the result gives that file's path and a preview of its start.`,
     "Rely on automatic truncation unless filtering the output is more useful.",
-    `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a foreground command waits ${duration(limit.timeout)}.`,
-    "A foreground command still running at its timeout is not stopped: it moves to the background and a message reports back when it ends. A command made only of sleeps is stopped instead.",
-    "Background commands have no timeout unless one is given.",
-    "Background commands return at once and report back in a message when they end.",
+    ...(background
+      ? [
+          `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a foreground command waits ${duration(limit.timeout)}.`,
+          "A foreground command still running at its timeout is not stopped: it moves to the background and a message reports back when it ends. A command made only of sleeps is stopped instead.",
+          "Background commands have no timeout unless one is given.",
+          "Background commands return at once and report back in a message when they end.",
+        ]
+      : [
+          `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a command waits ${duration(limit.timeout)}.`,
+          "A command still running at its timeout is stopped.",
+        ]),
   ].join(" ")
+
+const TIMEOUT_DESCRIPTION =
+  "Timeout in milliseconds for a foreground command. The tool description gives the default and the maximum. Background commands have no timeout unless one is given."
+
+// A timeout written as a decimal string ("5000") is read as its number, which must then be a whole number of
+// milliseconds; any other string is refused. The schema the model is shown still says integer.
+const DECIMAL = /^-?\d+(\.\d+)?$/
+const Timeout = Schema.declare(
+  (input: unknown): input is number | string =>
+    typeof input === "number" || (typeof input === "string" && DECIMAL.test(input)),
+  {
+    expected: "a whole number of milliseconds",
+    toCodecJson: () =>
+      Schema.link<number | string>()(NonNegativeInt.annotate({ description: TIMEOUT_DESCRIPTION }), {
+        decode: SchemaGetter.transform((value: number) => value),
+        encode: SchemaGetter.transform((value: number | string) => Number(value)),
+      }),
+  },
+).pipe(
+  Schema.decodeTo(NonNegativeInt, {
+    decode: SchemaGetter.transform((value: number | string) => Number(value)),
+    encode: SchemaGetter.transform((value: number) => value),
+  }),
+)
 
 export const Input = Schema.Struct({
   command: Schema.String.annotate({ description: "Shell command string to execute" }),
@@ -88,10 +120,7 @@ export const Input = Schema.Struct({
     description:
       "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.",
   }),
-  timeout: Schema.optionalKey(NonNegativeInt).annotate({
-    description:
-      "Timeout in milliseconds for a foreground command. The tool description gives the default and the maximum. Background commands have no timeout unless one is given.",
-  }),
+  timeout: Schema.optionalKey(Timeout).annotate({ description: TIMEOUT_DESCRIPTION }),
   run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
       "Run the command detached and return at once, which suits dev servers and long builds. No trailing ampersand is needed. A notification reports completion, so do not poll. TaskWatch waits for a server to become ready, and TaskStop ends the command.",
@@ -114,14 +143,36 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
+/**
+ * What the call learns when its command ends: the output, the notes that follow it (each a text part of its own, so a
+ * saved head stands for the output alone) and whether anyone should hear of it.
+ */
+type Settled = {
+  readonly output: Output
+  readonly notes: ReadonlyArray<string>
+  // The run that started it ended, so its completion reaches no one.
+  readonly abandoned: boolean
+}
+
 // `exitNotice` says whether a non-zero exit code is written into the text. A timeout and a kill by a signal always are.
-const resultMessages = (output: Output, exitNotice = true) => {
+// `head` keeps the output's part even when it is empty, because a saved copy stands for the first part.
+const resultMessages = (output: Output, exitNotice = true, notes: ReadonlyArray<string> = [], head = false) => {
   const notice =
     output.status === "running"
       ? BACKGROUND_INSTRUCTION
       : ShellResult.notice(exitNotice ? output : { ...output, exit: undefined })
-  return [...(output.output ? [output.output] : []), ...(notice ? [notice] : [])]
+  return [...(output.output || head ? [output.output] : []), ...notes, ...(notice ? [notice] : [])]
 }
+
+// What a command that finished away from its call reports: its result, then the kept file when the output did not fit.
+const completionText = (done: Settled, file: string) =>
+  [
+    ...resultMessages(done.output, true, done.notes),
+    ...(done.output.truncated ? [ShellResult.savedNotice(file)] : []),
+  ].join("\n\n")
+
+// The head that stands for output that did not fit starts at its first line that is not blank and has no trailing space.
+const trimHead = (text: string) => text.replace(/^(?:[ \t]*\r?\n)+/, "").trimEnd()
 
 /**
  * Whether a finished foreground run is a failure by its exit code. A run that timed out or was killed by a signal is a
@@ -142,11 +193,17 @@ const exitFailed = (output: Output, analysis: ShellAnalysis.Analysis | undefined
 // that fails or a removed command included).
 const failedMetadata = (powershell: boolean) => (powershell ? {} : { error: true })
 
-const toolResult = (output: Output, failed = false, powershell = false) => {
+const toolResult = (
+  output: Output,
+  failed = false,
+  powershell = false,
+  notes: ReadonlyArray<string> = [],
+  head = false,
+) => {
   // A foreground run says "Exited with code N" only when that code is a failure of its command (a grep with no match,
   // a diff that found differences and a false test are answers, and say nothing). PowerShell keeps its notice: its
   // codes are not judged.
-  const messages = resultMessages(output, failed || powershell)
+  const messages = resultMessages(output, failed || powershell, notes, head)
   return {
     output,
     // A command that printed nothing and has no notice gives one blank part, so the step stores its empty marker
@@ -214,6 +271,7 @@ export const Plugin = {
       invocation: ShellCreateBefore,
       context: Tool.Context,
       foreground: boolean,
+      background: boolean,
     ) {
       const source = {
         type: "tool" as const,
@@ -252,7 +310,8 @@ export const Plugin = {
       }).pipe(Effect.provideContext(guarded))
       // The deadline as the hooks left it. A foreground command is moved to the background at its deadline, so the Shell
       // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
-      // be analysed counts as not sleep-led, so it is moved and never killed.
+      // be analysed counts as not sleep-led, so it is moved and never killed. With background tasks off nothing moves, so
+      // every command is killed at its deadline.
       const deadline = invocation.timeout
       // Approval can outlive the directory, so validate immediately before spawning.
       const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
@@ -264,7 +323,8 @@ export const Plugin = {
         return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.absolute}`))
       // The analysis also reads the exit code of a foreground call.
       if (!foreground) return { budget: deadline, autoBackground: false, analysis: undefined }
-      if (deadline <= 0 || analysis.sleepLed) return { budget: deadline, autoBackground: false, analysis }
+      if (deadline <= 0 || analysis.sleepLed || !background)
+        return { budget: deadline, autoBackground: false, analysis }
       invocation.timeout = 0
       return { budget: deadline, autoBackground: true, analysis }
     })
@@ -275,8 +335,11 @@ export const Plugin = {
         id: string,
         shellID: string,
         command: string,
-        settled: Deferred.Deferred<Output>,
+        file: string,
+        settled: Deferred.Deferred<Settled>,
       ) {
+        // Every command that leaves the foreground goes through here, and from now on its output size is watched.
+        yield* shell.background(Shell.ID.make(shellID)).pipe(Effect.ignore)
         // Watched until the command ends.
         const watcher = yield* ShellStall.watch({
           size: shell.output(Shell.ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER }).pipe(
@@ -309,9 +372,15 @@ export const Plugin = {
         }).pipe(Effect.forkChild({ startImmediately: true }))
         const info = (yield* jobs.wait({ id }).pipe(Effect.ensuring(Fiber.interrupt(watcher)))).info
         if (!info || info.status === "running") return
-        const output = info.status === "completed" ? yield* Deferred.await(settled) : undefined
-        const text = output
-          ? resultMessages(output).join("\n\n")
+        const done = info.status === "completed" ? yield* Deferred.await(settled) : undefined
+        const output = done?.output
+        // The run that started the command has ended, and so has the session's interest in it: only its marker goes.
+        if (done?.abandoned) {
+          if (info.notificationID) yield* jobs.completeBackground(info.notificationID)
+          return
+        }
+        const text = done
+          ? completionText(done, file)
           : info.status === "error"
             ? (info.error ?? "Command failed")
             : "Cancelled"
@@ -368,18 +437,25 @@ export const Plugin = {
                 })
               }),
             // interruptBehavior stays "block": a new user message does not cancel a running shell call.
-            // The shell bounds its own capture (`Shell.result`) and points at its own full-output file, so the step does
-            // not save that bounded text a second time behind a preview that hides its tail and that notice.
-            maxResultChars: Infinity,
+            // The result is at most the head of the output (`Shell.result`); output that did not fit is offered to the step
+            // as the saved copy. A head raised past this by `tool_output.max_bytes` is saved by the step like any result.
+            maxResultChars: 30_000,
           },
-          description: description(undefined, limits()),
+          description: description(undefined, limits(), Shell.HEAD_BYTES, true),
           input: Input,
           output: Output,
           execute: (input, context) => {
             let powershell = false
             return Effect.gen(function* () {
               // Read at call time, so a config change applies to the next call.
-              const timeout = budget(input, limits(Config.latest(yield* config.entries(), "shell_tool")))
+              const entries = yield* config.entries()
+              // With background tasks off a background request runs in the foreground, and nothing moves later.
+              const background = Config.latest(entries, "background_tasks") !== false
+              const detached = background && input.run_in_background === true
+              const timeout = budget(
+                { ...input, run_in_background: detached },
+                limits(Config.latest(entries, "shell_tool")),
+              )
               let finalTimeout = timeout
               let autoBackground = false
               let analysis: ShellAnalysis.Analysis | undefined
@@ -399,13 +475,13 @@ export const Plugin = {
                     invocation.env.ORBIT = "1"
                     invocation.env.AI_AGENT ||= "orbit"
                     invocation.env.ORBIT_SESSION_ID = context.sessionID
-                    const prepared = yield* prepare(invocation, context, input.run_in_background !== true)
+                    const prepared = yield* prepare(invocation, context, !detached, background)
                     finalTimeout = prepared.budget
                     autoBackground = prepared.autoBackground
                     analysis = prepared.analysis
                   }),
               )
-              const settled = yield* Deferred.make<Output>()
+              const settled = yield* Deferred.make<Settled>()
               const startedJob = yield* Ref.make<string | undefined>(undefined)
               // An interrupt after create returns and before block takes over would leave the command running until its
               // timeout, and for ever without one: take the shell back, and the job once it has started.
@@ -416,15 +492,18 @@ export const Plugin = {
                   if (!result.capture) return yield* new Shell.NotFoundError({ id: info.id })
                   const output = ShellResult.output(result)
                   return {
-                    ...output,
-                    output: output.timeout
-                      ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-                      : output.output,
-                    status: "completed" as const,
+                    output: { ...output, status: "completed" as const },
+                    notes: output.timeout
+                      ? [
+                          `Command exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
+                        ]
+                      : [],
+                    abandoned: result.abandoned === true,
                   }
                 }).pipe(
-                  Effect.tap((output) => Deferred.succeed(settled, output)),
-                  Effect.map((output) => resultMessages(output).join("\n\n")),
+                  Effect.tap((done) => Deferred.succeed(settled, done)),
+                  // The job's output is what a restart delivers, so it names the kept file too.
+                  Effect.map((done) => completionText(done, info.file)),
                   Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
                 )
                 const started = yield* jobs.start({
@@ -433,12 +512,17 @@ export const Plugin = {
                   type: "shell",
                   title: input.description ?? info.command,
                   metadata: { sessionID: context.sessionID, shellID: info.id },
-                  recovery: {
-                    kind: "shell",
-                    sessionID: context.sessionID,
-                    shellID: info.id,
-                    command: info.command,
-                  },
+                  // Only a command that can leave the foreground needs its notice delivered after a restart.
+                  ...(background
+                    ? {
+                        recovery: {
+                          kind: "shell" as const,
+                          sessionID: context.sessionID,
+                          shellID: info.id,
+                          command: info.command,
+                        },
+                      }
+                    : {}),
                   run,
                 })
                 yield* Ref.set(startedJob, started.id)
@@ -453,9 +537,9 @@ export const Plugin = {
                 ),
               )
 
-              if (input.run_in_background === true) {
+              if (detached) {
                 yield* jobs.background(job.id)
-                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, info.file, settled)
                 return toolResult(backgroundResult(info.id, info.file))
               }
 
@@ -476,13 +560,21 @@ export const Plugin = {
                 if (timer) yield* Fiber.interrupt(timer)
                 return yield* Ref.get(moved)
               })
-              const result = yield* jobs.block({ id: job.id, sessionID: context.sessionID }).pipe(
+              // With background tasks off the call waits without blocking on the job, so the session's move-to-background
+              // signal, which moves only what blocks, leaves the command where it is.
+              const result = yield* (
+                background
+                  ? jobs.block({ id: job.id, sessionID: context.sessionID })
+                  : jobs
+                      .wait({ id: job.id })
+                      .pipe(Effect.map((waited) => waited.info && { type: "finished" as const, info: waited.info }))
+              ).pipe(
                 Effect.onInterrupt(() =>
                   Effect.gen(function* () {
                     // Stop the timer before cancelling, or it could move a job that was just cancelled and leave a marker
                     // that only a restart would deliver.
                     if (yield* stopTimer)
-                      return yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                      return yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, info.file, settled)
                     yield* jobs.cancel(job.id)
                   }).pipe(Effect.ignore),
                 ),
@@ -493,7 +585,7 @@ export const Plugin = {
               const notificationID = result?.info.notificationID ?? timerMoved?.notificationID
               if (result?.type === "backgrounded" && !(yield* Deferred.isDone(settled))) {
                 if (!timerMoved) yield* shell.timeout(info.id, 0)
-                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, info.file, settled)
                 return toolResult(backgroundResult(info.id, info.file, timerMoved ? finalTimeout : undefined))
               }
               if (notificationID) yield* jobs.completeBackground(notificationID)
@@ -504,8 +596,28 @@ export const Plugin = {
                 })
               if (result?.info.status === "cancelled") return yield* Effect.fail(new Error("Command cancelled"))
 
-              const output = yield* Deferred.await(settled)
-              return toolResult(output, exitFailed(output, analysis, powershell), powershell)
+              const done = yield* Deferred.await(settled)
+              // A failure is never saved: its text is cut to its first and last 5,000 characters.
+              if (exitFailed(done.output, analysis, powershell))
+                return toolResult(
+                  { ...done.output, output: ToolOutput.cutError(done.output.output) },
+                  true,
+                  powershell,
+                  done.notes,
+                )
+              if (!done.output.truncated) return toolResult(done.output, false, powershell, done.notes)
+              // Output that did not fit: the step saves the whole file behind its head, which the result keeps.
+              yield* shell
+                .offer({ id: info.id, sessionID: context.sessionID, messageID: context.messageID, callID: context.id })
+                .pipe(Effect.ignore)
+              // The head keeps its part even when trimming leaves it blank, so `parts: 1` names the output, not a note.
+              return toolResult(
+                { ...done.output, output: trimHead(done.output.output) },
+                false,
+                powershell,
+                done.notes,
+                true,
+              )
             }).pipe(
               Effect.mapError(
                 (error) =>
@@ -531,20 +643,30 @@ export const Plugin = {
       Effect.gen(function* () {
         const tool = event.tools[name]
         if (!tool) return
-        const limit = limits(Config.latest(yield* config.entries(), "shell_tool"))
-        tool.description = description(ShellSelect.name(yield* compatibleShell), limit)
+        const entries = yield* config.entries()
+        const limit = limits(Config.latest(entries, "shell_tool"))
+        const background = Config.latest(entries, "background_tasks") !== false
+        tool.description = description(
+          ShellSelect.name(yield* compatibleShell),
+          limit,
+          Shell.headLimit(Config.latest(entries, "tool_output")),
+          background,
+        )
         // The inputs are shared shallow copies, so this assigns a new object rather than changing the shared one.
-        const properties = tool.input.properties
+        const properties =
+          typeof tool.input.properties === "object" && tool.input.properties !== null ? tool.input.properties : {}
+        const { run_in_background: _, ...foreground } = properties as Record<string, unknown>
         tool.input = {
           ...tool.input,
           properties: {
-            ...(typeof properties === "object" && properties !== null ? properties : {}),
+            // With background tasks off the model is not offered a background run.
+            ...(background ? properties : foreground),
             timeout: {
-              ...(typeof properties === "object" && properties !== null && "timeout" in properties
-                ? (properties.timeout as object)
-                : {}),
+              ...("timeout" in properties ? (properties.timeout as object) : {}),
               maximum: limit.max,
-              description: `Timeout in milliseconds for a foreground command, at most ${limit.max}. A foreground command that is still running then moves to the background. Background commands have no timeout unless one is given.`,
+              description: background
+                ? `Timeout in milliseconds for a foreground command, at most ${limit.max}. A foreground command that is still running then moves to the background. Background commands have no timeout unless one is given.`
+                : `Timeout in milliseconds, at most ${limit.max}. A command still running then is stopped.`,
             },
           },
         }
