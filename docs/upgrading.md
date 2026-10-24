@@ -1864,10 +1864,13 @@ which one of those folders is a link.
 `/rewind` (also `/checkpoint`) opens a picker that lists your prompts, oldest first, each with the files its own file
 tools changed (`<name> +A -D` or `N files +A -D`), and a `(current)` row. Choosing a prompt asks the server what a code
 rewind would change on disk now and offers `Code and conversation`, `Conversation only` and `Code only` when at least one
-file would change, or only `Conversation only` otherwise; `Never mind` goes back. Every option interrupts the session and
-waits for it before acting. A conversation rewind is staged as `/undo` stages one, so `/redo` brings it back until your
-next prompt, and puts the prompt back in the input; `Code only` puts the files back at once, with no redo, and leaves the
-input alone. A refused rewind keeps the picker open with a line naming what failed.
+file would change, or only `Conversation only` otherwise; `Never mind` goes back. The server answers that question only
+for a session that is not running, so choosing a prompt while the session runs interrupts it and waits for it first.
+Every option also interrupts the session and waits for it before acting. A conversation rewind is staged as `/undo`
+stages one, so `/redo` brings it back until your next prompt, and puts the prompt back in the input; `Code only` puts the
+files back at once, with no redo, and leaves the input alone. While a chosen rewind runs the picker shows `Rewinding…`
+and Esc does nothing; a refused rewind keeps the picker open with a line naming what failed. If the picker was closed
+another way meanwhile (ctrl+c or a click outside it), a refusal is shown as a notice instead.
 
 Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. While a session runs, Esc
 keeps interrupting it as before.
