@@ -3,6 +3,7 @@ export * as SessionCompaction from "./compaction.js"
 import {
   AIError,
   type ContentPart,
+  GenerationOptions,
   InvalidProviderOutputError,
   InvalidRequestError,
   isContextOverflowFailure,
@@ -10,6 +11,7 @@ import {
   LLMEvent,
   LLMRequest,
   Message,
+  SystemPart,
   type ToolEntry,
   UnknownProviderError,
   type Usage,
@@ -38,12 +40,14 @@ import { isReminder } from "./reminder-text.js"
 import { toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
 import { ToolOutput } from "../tool-output.js"
+import COMPACTION_PROMPT from "./runner/prompt/compaction.txt"
+import COMPACTION_REMINDER from "./runner/prompt/compaction-reminder.txt"
 
 export type Settings = {
   auto: boolean
   /** Tokens kept free below the effective window before compacting. Unset keeps 13,000 free. */
   buffer?: number
-  /** Tokens of recent conversation kept verbatim beside the summary. */
+  /** Tokens of the newest user messages that a native compaction keeps beside the provider's window. */
   keep: number
 }
 
@@ -55,7 +59,13 @@ export type Trigger =
   /** `overflow`: the provider just rejected this context as too long. */
   | { readonly reason: "auto" | "overflow"; readonly context: SessionContext.Loaded }
   /** `inputID` is the `/compact` inbox item, whose message shows the outcome. */
-  | { readonly reason: "manual"; readonly context: SessionContext.Loaded; readonly inputID: SessionMessage.ID }
+  | {
+      readonly reason: "manual"
+      readonly context: SessionContext.Loaded
+      readonly inputID: SessionMessage.ID
+      /** Text from the person, added to the summary prompt. Blank counts as none. */
+      readonly instructions?: string
+    }
 
 export type Outcome =
   /** Only `auto` skips: the context fits, or automatic compaction is off. */
@@ -74,10 +84,9 @@ export interface Interface extends State.Transformable<Editor> {
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/SessionCompaction") {}
 
-/** A summary fills `text` and `recent`; a native compaction fills `providerContext`. */
+/** A summary fills `text`; a native compaction fills `providerContext`. `recent` is text kept by checkpoints stored earlier. */
 type Result = {
   readonly text: string
-  // todo: this should become a msg reference, we shouldnt be stringifying the recent history (confuses some models...)
   readonly recent: string
   // todo: consolidate these 2
   readonly providerState?: SessionMessage.ProviderState
@@ -97,7 +106,7 @@ type Streamed = {
 }
 
 const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
-/** After each "too long" rejection, the next attempt aims at this share of the first rejected request's size. */
+/** After each "too long" rejection of a native compaction, the next attempt aims at this share of the first rejected request's size. */
 const SHRINK_STEPS = [0.7, 0.5, 0.35]
 /** A common window size, assumed for the compaction request when the model's window is unknown. */
 const UNKNOWN_WINDOW = 200_000
@@ -105,85 +114,34 @@ const TOOL_OUTPUT_MAX_CHARS = 1_250
 const IMAGE_TOKEN_ESTIMATE = 1_500
 const PDF_TOKEN_ESTIMATE = 2_000
 
-const SUMMARY_TEMPLATE = `You MUST use this format for your response (you may omit sections that aren't applicable). Do not include the <template> tags in your response.
-<template>
-## Objective
-- [one or two brief sentences describing what the user is trying to accomplish]
+/** The text a summary compaction asks for, and the line that closes the request. */
+const PROMPT = COMPACTION_PROMPT.trim()
+const REMINDER = COMPACTION_REMINDER.trim()
+const FALLBACK_SYSTEM = "You write summaries of conversations so that the work in them can continue."
+const LEFT_OUT = "[Earlier messages were left out so that this summary request fits.]"
+const TOO_LONG = "The conversation is too long to compact. Go back a few messages and try again."
+const NO_SUMMARY: Failure = { error: { type: "compaction.failed", message: "Compaction produced no summary" } }
+/** How often a rejected summary request is shortened and sent again. */
+const MAX_DROPS = 3
+const FALLBACK_OUTPUT_MAX = 20_000
 
-## Requirements
-- [constraints, preferences, requirements, and scope boundaries stated by the user, or "(none)"]
-
-## Decisions
-- [decisions already made and why, or "(none)"]
-
-## Work State
-Break the objective into smaller goals and report which are completed, which are being worked on, and which are blocked.
-### Completed
-- [goals that have been completed; otherwise "(none)"]
-
-### Active
-- [goals currently being worked on; otherwise "(none)"]
-
-### Blocked
-- [anything blocking progress, and why; otherwise "(none)"]
-
-## Next Move
-1. [ordered list of next actions, or "(none)"]
-
-## Relevant Files
-List the files and directories, other than the current working directory, that another agent would need to open to continue this work. Include at most 15, most important first. Do not list every file that was read or changed. Include paths outside the current working directory when relevant. If none, write "(none)".
-- \`[file or directory path]\`: [brief reason it matters]
-
-## Important Context
-- [facts the next agent cannot continue without and cannot easily find on its own; or "(none)"]
-</template>`
-
-const SUMMARY_RULES = `Rules:
-- Keep each section concise. Use terse, single-line bullets, not prose paragraphs or nested lists.
-- Prefer short references over detailed restatement. It is fine to leave out information the next agent can recover from the code or the files listed above.
-- Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers.
-- Carry forward only user questions or requests that remain unanswered or require further action. Do not repeat ones that newer history has answered or resolved. Preserve exact wording when carrying one forward.
-- Preserve consequential workflow state, including whether changes are uncommitted, committed, pushed, under review, or merged.
-- Do not mention the summary process or that context was compacted.`
-
-export const buildPrompt = (update: boolean, legacy = false) => {
-  const shared = [
-    "Summarize only what the user and the assistant said and did. Leave out instructions and setup the assistant was given rather than told by the user: repository conventions, instruction files such as AGENTS.md, and environment details like the session ID. The next agent receives current versions of all of these separately.",
-    SUMMARY_TEMPLATE,
-    SUMMARY_RULES,
-    "Do not continue the task or call tools.",
-    "Return only the structured summary in the requested format. Do not include a preamble, explanation, or other commentary.",
-  ]
-  if (!update) {
-    return [
-      "You MUST summarize the conversation above into a structured summary that will be given to another agent to resume the work.",
-      ...shared,
-    ].join("\n\n")
-  }
-  return [
-    "Update the existing checkpoint in the conversation above into one consolidated summary.",
-    // Before #48058 (Sep 2026), summaries kept nearly everything: every file touched, per-edit changelogs,
-    // restated AGENTS.md conventions, and an "Additional Context" section that grew on every update. The
-    // preserve-first update prompt would carry that detail forward indefinitely, so a checkpoint from that
-    // template is rewritten once at the current level of detail. The rewrite uses the new headings, so later
-    // updates skip this. Remove once no session still in use has a latest checkpoint older than #48058.
-    ...(legacy
-      ? [
-          "The existing checkpoint was written with an earlier format that recorded far more detail than this one asks for. Rewrite it at the level of detail described below rather than carrying its detail forward. Keep its requirements, decisions, and open questions; they came from earlier conversation with the user.",
-        ]
-      : []),
-    "Newer history always takes precedence over the existing checkpoint. Preserve previous information unless newer history clearly contradicts, supersedes, resolves, or makes it stale. If something is no longer relevant to continuing the work, you may remove it.",
-    "Incorporate newer requirements, decisions, progress, and context. Reconcile Work State and Next Move: move completed work out of Active, remove resolved blockers and answered questions, and preserve unresolved or pending work.",
-    "Return only the updated Markdown sections. Do not reproduce the `<conversation-checkpoint>`, `<summary>`, or `<recent-context>` wrapper tags from the previous checkpoint.",
-    ...shared,
-  ].join("\n\n")
+/** The summary prompt. Instructions from the person sit in a block of their own, before the closing reminder. */
+export const buildPrompt = (instructions?: string) => {
+  const extra = instructions?.trim()
+  return [PROMPT, ...(extra ? [`Additional instructions for this handoff:\n${extra}`] : []), REMINDER].join("\n\n")
 }
 
-const NUDGE =
-  "The previous response did not fill in the required summary template. Do not call tools. Return the summary as text using the exact section headings from the template."
-
-/** Summaries written with the previous template carry this catch-all heading. */
-const LEGACY_HEADING = "## Additional Context"
+/**
+ * What is stored from a reply: the drafting block never, the handoff block under a "Summary:" heading. A handoff that
+ * was cut off before its closing tag stays as written.
+ */
+export const formatSummary = (raw: string) =>
+  raw
+    .replace(/<analysis>[\s\S]*?<\/analysis>/g, "")
+    .replace(/<analysis>[\s\S]*$/, "")
+    .replace(/<handoff>([\s\S]*?)<\/handoff>/, (_, inner: string) => `Summary:\n${inner.trim()}`)
+    .replace(/(?:\r?\n){2,}/g, "\n\n")
+    .trim()
 
 export const layer = Layer.effect(
   Service,
@@ -224,7 +182,7 @@ export const layer = Layer.effect(
       const compaction =
         context.model.compaction?.type === "native"
           ? compactNatively(trigger, budget, settings.keep)
-          : summarize(trigger, budget, settings.keep)
+          : summarize(trigger, budget)
       return yield* compaction.pipe(
         Effect.matchEffect({
           onSuccess: (result) => publish(trigger, result),
@@ -252,62 +210,89 @@ export const layer = Layer.effect(
     }
 
     /**
-     *   first:  [E1 … E8][E9 E10]                  →  [S1 + "E9 E10"]
-     *   again:  [S1 + "E9 E10"][E11 … E18][E19]    →  [S2 + "E19"]      S2 covers S1, E9 E10, and E11–E18
+     *   first:  [E1 … E8][E9 E10]               →  [S1]
+     *   again:  [S1][E11 … E18][E19]            →  [S2]      S2 covers S1 and everything after it
      *
-     * The model is sent the older part, then the summary prompt:
+     * The model is sent everything since the newest checkpoint, then the summary prompt:
      *
-     *   [system][S1 + "E9 E10"][E11 … E18][prompt]    plus one nudge if the reply skips the template
+     *   [system][S1][E11 … E18][E19][prompt]
      *
-     * Later requests open with the checkpoint as one user message:
+     * Later requests open with the checkpoint as one user message, followed by the new messages.
      *
-     *   <conversation-checkpoint>
-     *     <summary>S2</summary>
-     *     <recent-context>E19</recent-context>
-     *   </conversation-checkpoint>
-     *   [new messages…]
+     * E = one exchange: a user message and the replies to it. S = a summary.
      *
-     * E = one exchange: a user message and the replies to it. S = a summary. [S + "…"] = one checkpoint: a summary
-     * plus the newest `keep` tokens of messages, saved as text.
+     * The first request shares the main request's system prompt, tools and settings. Its reply decides by its text
+     * alone: a tool call is never run. When that request yields no text, or fails, one fallback request is made with
+     * a one-line system prompt, no media, no reasoning and the read tool only. A rejection of the fallback as too long
+     * drops the oldest round groups of the history and starts again, at most three times.
      */
-    const summarize = Effect.fnUntraced(function* (
-      trigger: Trigger,
-      budget: number,
-      keep: number,
-    ): Effect.fn.Return<Result, Failure> {
+    const summarize = Effect.fnUntraced(function* (trigger: Trigger, budget: number): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      const split = splitConversation(compactable(context.messages), keep)
-      if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
+      const messages = compactable(context.messages)
+      if (!messages.some(covered)) return yield* Effect.fail(NOTHING_TO_COMPACT)
 
-      const previous = previousCompaction(context.messages)
-      const prompt = buildPrompt(previous !== undefined, previous?.summary.includes(LEGACY_HEADING) ?? false)
-      const headings = SUMMARY_TEMPLATE.split("\n").filter((line) => line.startsWith("##"))
-      const filled = (text: string) => text.split("\n").some((line) => headings.includes(line.trim()))
-      const prepared = yield* prepare(context, split.older, budget)
+      const prepared = yield* prepare(context, messages, budget)
+      // The runner opened the manual compaction's message when it delivered the `/compact` item.
+      if (trigger.reason !== "manual") {
+        yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent: "" })
+      }
+      if (prepared.event.result) {
+        const supplied = formatSummary(prepared.event.result.summary)
+        if (!supplied) return yield* Effect.fail(NO_SUMMARY)
+        return yield* fromHook(context, { ...prepared.event.result, summary: supplied })
+      }
 
-      // Hooks saw the request without the summary prompt, so it is appended here. A reply that ignores the
-      // template gets one reminder before it counts as a failure.
-      const send = (request: LLMRequest) =>
-        Effect.gen(function* () {
-          const prompted = LLMRequest.update(request, { messages: [...request.messages, Message.user(prompt)] })
-          const reply = yield* stream(context, prompted, prepared.options)
-          if (filled(reply.text)) return { ...reply, recent: split.recent }
+      const policy = yield* SessionRunnerRetry.policy(context.session.id)
+      // Hooks saw the request without the summary prompt, so it is appended here.
+      const prompt = Message.user(buildPrompt(trigger.reason === "manual" ? trigger.instructions : undefined))
+      const outputMax = Math.min(FALLBACK_OUTPUT_MAX, context.model.limit.output || FALLBACK_OUTPUT_MAX)
 
-          const nudged = LLMRequest.update(prompted, { messages: [...prompted.messages, Message.user(NUDGE)] })
-          const retry = yield* stream(context, nudged, prepared.options)
-          if (filled(retry.text)) return { ...retry, recent: split.recent }
-          return yield* Effect.fail<Failure>({
-            error: {
-              type: "compaction.failed",
-              message: retry.text.trim()
-                ? "Compaction summary did not match the required template"
-                : "Compaction produced no summary",
-            },
+      // One call, resent under the session's retry policy. A rejection as too long is left to the caller.
+      const call = Effect.fnUntraced(function* (request: LLMRequest): Effect.fn.Return<Streamed, AIError | Failure> {
+        while (true) {
+          const attempt = yield* Effect.result(stream(context, request, prepared.options))
+          if (Result.isSuccess(attempt)) return attempt.success
+          const cause = attempt.failure
+          if (!(cause instanceof AIError) || isContextOverflowFailure(cause)) return yield* Effect.fail(cause)
+          const decision = yield* policy({
+            cause,
+            error: toSessionError(cause),
+            agent: context.agent.id,
+            model: context.model.ref,
+            hook: prepared.retry,
+            retry: SessionRunnerRetry.isRetryable(cause),
           })
-        })
+          if (!decision.retry) return yield* Effect.fail(cause)
+          yield* Effect.sleep(decision.delay)
+        }
+      })
 
-      const overhead = Token.estimate(prompt) + Token.estimate(NUDGE)
-      return yield* deliver(trigger, prepared, split.recent, budget - overhead, send)
+      const finish = (reply: Streamed) => {
+        const text = formatSummary(reply.text)
+        if (!text) return Effect.fail(NO_SUMMARY)
+        return Effect.succeed<Result>({ text, recent: "", providerState: reply.providerState })
+      }
+
+      let history = prepared.request.messages
+      let drops = 0
+      while (true) {
+        const request = LLMRequest.update(prepared.request, {
+          messages: [...(history[0]?.role === "assistant" ? [Message.user(LEFT_OUT)] : []), ...history, prompt],
+        })
+        const first = yield* Effect.result(call(request))
+        if (Result.isSuccess(first) && first.success.text.trim()) return yield* finish(first.success)
+
+        const second = yield* Effect.result(call(fallbackRequest(request, outputMax)))
+        if (Result.isSuccess(second)) return yield* second.success.text.trim() ? finish(second.success) : Effect.fail(NO_SUMMARY)
+        const cause = second.failure
+        if (!(cause instanceof AIError)) return yield* Effect.fail(cause)
+        if (!isContextOverflowFailure(cause)) return yield* Effect.fail<Failure>({ error: toSessionError(cause) })
+
+        const shorter = drops < MAX_DROPS ? dropOldestGroups(history, toSessionError(cause).message) : undefined
+        if (!shorter) return yield* Effect.fail<Failure>({ error: { type: "compaction.failed", message: TOO_LONG } })
+        history = shorter
+        drops++
+      }
     })
 
     /**
@@ -328,7 +313,7 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      if (!compactable(context.messages).some(messageToText)) return yield* Effect.fail(NOTHING_TO_COMPACT)
+      if (!compactable(context.messages).some(covered)) return yield* Effect.fail(NOTHING_TO_COMPACT)
       const unsupported = (message: string) =>
         Effect.fail<Failure>({ error: { type: "provider.unsupported-operation", message } })
       const prepared = yield* prepare(context, compactable(context.messages), budget, "session")
@@ -394,7 +379,7 @@ export const layer = Layer.effect(
         return unsupported(`Native compaction is not supported for ${request.model.provider}/${request.model.route.id}`)
       }
 
-      return yield* deliver(trigger, prepared, "", budget, send)
+      return yield* deliver(trigger, prepared, budget, send)
     })
 
     /**
@@ -410,16 +395,15 @@ export const layer = Layer.effect(
     const deliver = Effect.fnUntraced(function* (
       trigger: Trigger,
       prepared: Prepared,
-      recent: string,
       target: number,
       send: (request: LLMRequest) => Effect.Effect<Result, AIError | Failure>,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
       // The runner opened the manual compaction's message when it delivered the `/compact` item.
       if (trigger.reason !== "manual") {
-        yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent })
+        yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent: "" })
       }
-      if (prepared.event.result) return yield* fromHook(context, prepared.event.result, recent)
+      if (prepared.event.result) return yield* fromHook(context, prepared.event.result)
 
       const policy = yield* SessionRunnerRetry.policy(context.session.id)
       let rejections = 0
@@ -583,11 +567,6 @@ export const layer = Layer.effect(
                 return Effect.fail(
                   new AIError({ reason: new UnknownProviderError({ message: "Compaction generation failed" }) }),
                 )
-              case "length":
-                return unusable({
-                  type: "compaction.failed",
-                  message: "Compaction summary reached the output token limit",
-                })
               case "content-filter":
                 return unusable({
                   type: "provider.content-filter",
@@ -643,7 +622,7 @@ export const layer = Layer.effect(
     }
 
     /** A request hook supplied the summary itself, so no model call happens. */
-    const fromHook = (context: SessionContext.Loaded, supplied: SessionCompactionResult, recent: string) => {
+    const fromHook = (context: SessionContext.Loaded, supplied: SessionCompactionResult) => {
       const reported = supplied.tokens && {
         tokens: supplied.tokens,
         cost: SessionUsage.calculateCost(context.model.cost, supplied.tokens),
@@ -654,7 +633,7 @@ export const layer = Layer.effect(
       return spend(context.session.id, usage).pipe(
         Effect.as<Result>({
           text: supplied.summary,
-          recent,
+          recent: "",
           providerState: supplied.providerState,
           metadata: supplied.metadata,
         }),
@@ -763,45 +742,69 @@ const transcript = (
   })
 
 /**
- * `older` gets summarized; `recent`, the newest messages within `keep` tokens, is kept verbatim as text beside
- * the summary. Undefined when there is nothing to compact.
+ * The same request for a reply that the first one did not give: a one-line system prompt, no media, no reasoning, and
+ * only the read tool so that tool calls in the history stay valid. It is never run.
  */
-const splitConversation = (messages: ReadonlyArray<SessionMessage.Info>, keep: number) => {
-  const entries = messages.flatMap((message, index) => {
-    const text = messageToText(message)
-    return text ? [{ message, text, index }] : []
+const fallbackRequest = (request: LLMRequest, outputMax: number) =>
+  LLMRequest.update(request, {
+    system: [SystemPart.make(FALLBACK_SYSTEM)],
+    messages: request.messages.flatMap(withoutMedia),
+    tools: request.tools.filter((tool) => tool.name === "Read"),
+    generation: GenerationOptions.make({ maxTokens: outputMax }),
+    providerOptions: undefined,
   })
-  if (entries.length === 0) return undefined
 
-  const recent = entries.slice(recentStart(entries, keep, previousCompaction(messages)))
-  return {
-    older: messages.slice(0, recent[0]?.index ?? messages.length),
-    recent: recent.map((entry) => entry.text).join("\n\n"),
-  }
+const placeholder = (mime: string) => (mime.toLowerCase().startsWith("image/") ? "[image]" : "[document]")
+
+/** The message with media as bracketed text and reasoning effort notes left out; nothing when no content is left. */
+const withoutMedia = (message: Message) => {
+  const content = message.content.flatMap((part): ContentPart[] => {
+    if (part.type === "effort") return []
+    if (part.type === "media") return [{ type: "text", text: placeholder(part.media.mediaType) }]
+    if (part.type !== "tool-result" || part.result.type !== "content") return [part]
+    return [
+      {
+        ...part,
+        result: {
+          type: "content",
+          value: part.result.value.map((item) =>
+            item.type === "text" ? item : { type: "text", text: placeholder(item.mime) },
+          ),
+        },
+      },
+    ]
+  })
+  return content.length === 0 ? [] : [Message.make({ ...message, content })]
 }
 
-const recentStart = (
-  entries: ReadonlyArray<{ readonly message: SessionMessage.Info; readonly text: string }>,
-  keep: number,
-  previous: SessionMessage.CompactionCompleted | undefined,
-) => {
-  // Drop the oldest entries until the rest fit the allowance, but always keep the newest one.
-  const dropped = Math.min(
-    oldestToDrop(entries, (entry) => Token.estimate(entry.text), keep),
-    entries.length - 1,
-  )
+/**
+ * Drops the oldest round groups, each starting at an assistant message, until they cover the gap the provider reported
+ * (a fifth of the groups when it gave none). One group always stays. Undefined when nothing can be dropped.
+ */
+const dropOldestGroups = (messages: ReadonlyArray<Message>, rejection: string) => {
+  const groups = messages.reduce<Message[][]>((all, message) => {
+    if (message.role === "assistant" || all.length === 0) all.push([message])
+    else all[all.length - 1].push(message)
+    return all
+  }, [])
+  if (groups.length < 2) return undefined
 
-  // Start at a user message so an assistant's tool calls and results stay together.
-  const userBoundary = entries.findLastIndex((entry, index) => index <= dropped && entry.message.type === "user")
-  if (userBoundary > 0) return userBoundary
-
-  // Everything fits. Keep only the latest exchange so there is an older part left to summarize.
-  const latestUser = entries.findLastIndex((entry) => entry.message.type === "user")
-  if (latestUser > 0) return latestUser
-
-  // One exchange, nothing older. Summarize it all and keep nothing, unless a previous summary already
-  // kept recent text, in which case keep everything and summarize only the summary before it.
-  return previous?.recent ? 0 : entries.length
+  const reported = /prompt is too long[^0-9]*([\d,]+)\s*tokens?\s*>\s*([\d,]+)/i.exec(rejection)
+  const gap = reported ? Number(reported[1].replaceAll(",", "")) - Number(reported[2].replaceAll(",", "")) : 0
+  const count =
+    gap > 0
+      ? groups.slice(0, -1).reduce(
+          (state, group) => {
+            if (state.covered >= gap) return state
+            return {
+              covered: state.covered + group.reduce((sum, message) => sum + estimateMessage(message), 0),
+              count: state.count + 1,
+            }
+          },
+          { covered: 0, count: 0 },
+        ).count
+      : Math.max(1, Math.floor(groups.length * 0.2))
+  return groups.slice(Math.min(count, groups.length - 1)).flat()
 }
 
 const oldestToDrop = <T>(items: ReadonlyArray<T>, size: (item: T) => number, budget: number) => {
@@ -816,59 +819,22 @@ const oldestToDrop = <T>(items: ReadonlyArray<T>, size: (item: T) => number, bud
   return start
 }
 
-/** One message as the recent, verbatim part of a summary shows it. Empty for messages that part leaves out. */
-const messageToText = (message: SessionMessage.Info): string => {
+/** Whether a message holds conversation that a compaction can cover. Checkpoints and instruction updates do not. */
+const covered = (message: SessionMessage.Info) => {
   switch (message.type) {
-    // Earlier summaries and instruction updates are handled outside the recent part.
-    case "compaction":
-    case "system":
-      return ""
-
-    case "user": {
-      const skills =
-        message.skills?.flatMap((skill) =>
-          skill.text === undefined ? [] : [`[Skill activated: ${skill.name}]\n${skill.text}`],
-        ) ?? []
-      const files =
-        message.files?.map((file) => {
-          const name = file.name ?? (file.source.type === "uri" ? file.source.uri : "inline attachment")
-          return `[Attached ${file.mime}: ${name}]`
-        }) ?? []
-      return [...skills, `[User]: ${message.text}`, ...files].join("\n")
-    }
-
+    case "user":
     case "location-switched":
-      return `[User]: The working directory has been changed to ${message.location.directory}.`
-
-    case "assistant":
-      return message.content
-        .flatMap((part) => {
-          if (part.type === "text") return [`[Assistant]: ${part.text}`]
-          if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
-
-          const input = typeof part.state.input === "string" ? part.state.input : JSON.stringify(part.state.input)
-          const call = `[Assistant tool call]: ${part.name}(${input})`
-          if (part.state.status === "completed") {
-            return [call, `[Tool result]: ${truncateToolOutput(serializeToolContent(part.state.content))}`]
-          }
-          if (part.state.status === "error") return [call, `[Tool error]: ${part.state.error.message}`]
-          return [call]
-        })
-        .join("\n")
-
-    case "synthetic":
-      // Reminders are collected again after the checkpoint, so none is summarized or kept as recent text.
-      return isReminder(message) ? "" : `[Synthetic context]: ${message.text}`
-
     case "skill":
-      return `[Skill activated: ${message.name}]\n${message.text}`
-
+      return true
+    case "assistant":
+      return message.content.some((part) => part.type !== "reasoning" || part.text)
+    // Reminders are collected again after the checkpoint, so none is summarized.
+    case "synthetic":
+      return !isReminder(message)
     case "shell":
-      if (message.metadata?.background === true) return ""
-      return `[Shell]: ${message.command}\n${truncateToolOutput(message.output?.output ?? "")}`
-
+      return message.metadata?.background !== true
     default:
-      return ""
+      return false
   }
 }
 

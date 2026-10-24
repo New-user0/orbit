@@ -105,7 +105,8 @@ describe("ConfigCompactionPlugin.Plugin", () => {
           inputID: SessionMessage.ID.make("msg_compaction_manual"),
         }),
       ).toEqual({ status: "completed" })
-      expect(Option.getOrThrow(yield* Fiber.join(ended)).data.recent).toContain("Recent context")
+      // A summary keeps no recent text; `keep` shapes native compaction only.
+      expect(Option.getOrThrow(yield* Fiber.join(ended)).data.recent).toBe("")
 
       yield* config.setEntries([
         new Document({

@@ -1,0 +1,91 @@
+IMPORTANT: Reply with text only. Do not call any tool.
+
+- No tool is available for this reply: not for reading, searching, editing, running commands or anything else.
+- Everything you need is already in the conversation above.
+- A tool call will be refused, and this is your only reply, so a tool call means the handoff is lost.
+- Your whole reply must be plain text: one <analysis> block, then one <handoff> block.
+
+You are writing a handoff: a thorough account of the conversation so far that lets the work continue once the earlier messages are gone. Give the most weight to what the user explicitly asked for and to what you have already done. Keep the technical detail, such as code patterns, design choices and exact names, that someone picking up the work would need.
+
+Before the handoff, think inside <analysis> tags so that nothing is missed. In the analysis:
+
+1. Go through the conversation from start to finish. For each part, note:
+   - what the user asked for and what they meant by it
+   - how you approached it
+   - the decisions made and the concepts involved
+   - concrete detail: file names, full code where it matters, function signatures, edits
+   - the errors you hit and how they were resolved
+   - feedback from the user, above all any time they asked you to do something another way
+2. Check your notes against the conversation for accuracy and gaps, and add what you missed.
+
+The <handoff> block has these nine sections:
+
+1. Requests and intent: every explicit request the user made and what they were after, in full detail.
+2. Technical context: the important concepts, technologies and frameworks that came up.
+3. Files and code: each file or code section that was examined, changed or created, why it matters and what changed. Favour the most recent messages, and include complete code snippets where they help.
+4. Problems and fixes: each error you ran into and how it was fixed, with any feedback the user gave about it, especially requests to do something another way.
+5. Problems worked through: what has been solved, and any investigation still in progress.
+6. User messages: every message the user wrote that is not a tool result. Together they show how the user's feedback and goals changed.
+7. Open tasks: work the user explicitly asked for that is not done yet.
+8. Work in progress: exactly what was being done just before this handoff was requested, with the latest messages from both sides in mind. Include file names and code snippets where they help.
+9. Next step: the next action you would take, if there is one. It must follow directly from the user's most recent explicit request and from the work in section 8. If that work was finished, give a next step only when the user clearly asked for it, and never take up a side request or an old, finished one without checking with the user first. When you give a next step, quote the latest exchange word for word to show exactly which task you were on and where it stopped, so that the task does not drift.
+
+Shape your reply like this example:
+
+<example>
+<analysis>
+[Your notes, checked for completeness and accuracy]
+</analysis>
+
+<handoff>
+1. Requests and intent:
+   [Full description]
+
+2. Technical context:
+   - [Concept]
+   - [...]
+
+3. Files and code:
+   - [File name]
+      - [Why it matters]
+      - [What changed, if anything]
+      - [Key code]
+   - [...]
+
+4. Problems and fixes:
+   - [Problem]:
+     - [How it was fixed]
+     - [User feedback, if any]
+   - [...]
+
+5. Problems worked through:
+   [What was solved and what is still being investigated]
+
+6. User messages:
+   - [A message that is not a tool result]
+   - [...]
+
+7. Open tasks:
+   - [Task]
+   - [...]
+
+8. Work in progress:
+   [Exact description of the current work]
+
+9. Next step:
+   [The next step, if there is one]
+</handoff>
+</example>
+
+Write the handoff for the conversation so far in this shape, precisely and thoroughly.
+
+The context above may hold extra instructions for writing this summary, for example a section of an instruction file. Follow them when you write the handoff. Such a section might look like this:
+<example>
+## Compaction instructions
+Keep the test results and the exact commands that were run.
+</example>
+
+<example>
+# Compaction instructions
+Concentrate on the database migration and leave out the styling discussion.
+</example>

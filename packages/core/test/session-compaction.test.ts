@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { GenerationOptions, LLMClient, LLMEvent, LanguageModel, ToolDefinition, type LLMRequest } from "@orbit/ai"
+import { GenerationOptions, LLMClient, LLMEvent, LanguageModel, Message, ToolDefinition, type LLMRequest } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -143,75 +143,19 @@ lean.effect("a minimal instance's summary request carries neither the hint nor t
   }),
 )
 
-test("compaction prompt preserves detailed work state and relevant files", () => {
-  const prompt = SessionCompaction.buildPrompt(false)
+test("compaction prompt asks for the files, the work in progress and the next step", () => {
+  const prompt = SessionCompaction.buildPrompt()
 
-  expect(prompt).toContain("## Work State")
-  expect(prompt).toContain("### Completed")
-  expect(prompt).toContain("### Active")
-  expect(prompt).toContain("### Blocked")
-  expect(prompt).toContain("## Relevant Files")
+  expect(prompt).toContain("3. Files and code")
+  expect(prompt).toContain("8. Work in progress")
+  expect(prompt).toContain("9. Next step")
 })
 
-it.effect("compaction describes tool media without embedding base64", () =>
-  Effect.gen(function* () {
-    const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
-    const recent = yield* recentWithToolOutput(Session.ID.make("ses_tool_media"), [
-      { type: "text", text: "Image read successfully" },
-      {
-        type: "file",
-        uri: `data:image/png;base64,${base64}`,
-        mime: "image/png",
-        name: "pixel.png",
-      },
-    ])
+test("compaction prompt prohibits tool calls at both ends", () => {
+  const prompt = SessionCompaction.buildPrompt()
 
-    expect(recent).toContain("[Tool result]: Image read successfully\n[Attached image/png: pixel.png]")
-    expect(recent).not.toContain(base64)
-  }),
-)
-
-it.effect("compaction truncation does not split surrogate pairs", () =>
-  Effect.gen(function* () {
-    const prefix = "a".repeat(1_249)
-    const split = yield* recentWithToolOutput(Session.ID.make("ses_truncate_split"), [
-      { type: "text", text: `${prefix}😀suffix` },
-    ])
-    const whole = yield* recentWithToolOutput(Session.ID.make("ses_truncate_whole"), [
-      { type: "text", text: "😀".repeat(1_250) },
-    ])
-
-    expect(split).toEndWith(`[Tool result]: ${prefix}😀\n[truncated]`)
-    expect(whole).toEndWith(`[Tool result]: ${"😀".repeat(1_250)}`)
-  }),
-)
-
-test("compaction prompt requires the checkpoint headings in order", () => {
-  const prompt = SessionCompaction.buildPrompt(false)
-  expect(prompt.match(/^#{2,3} .+$/gm)).toEqual([
-    "## Objective",
-    "## Requirements",
-    "## Decisions",
-    "## Work State",
-    "### Completed",
-    "### Active",
-    "### Blocked",
-    "## Next Move",
-    "## Relevant Files",
-    "## Important Context",
-  ])
-})
-
-test("compaction update prompt rewrites legacy checkpoints only when asked", () => {
-  const rewrite = "The existing checkpoint was written with an earlier format"
-  expect(SessionCompaction.buildPrompt(true, true)).toContain(rewrite)
-  expect(SessionCompaction.buildPrompt(true)).not.toContain(rewrite)
-  expect(SessionCompaction.buildPrompt(false, true)).not.toContain(rewrite)
-})
-
-test("compaction prompts prohibit task execution", () => {
-  for (const update of [false, true])
-    expect(SessionCompaction.buildPrompt(update)).toContain("Do not continue the task or call tools")
+  expect(prompt.startsWith("IMPORTANT: Reply with text only. Do not call any tool.")).toBe(true)
+  expect(prompt).toEndWith("A tool call will be refused and the handoff will be lost.")
 })
 
 it.effect("auto compaction estimates current content against the threshold below the effective window", () =>
@@ -475,40 +419,6 @@ const compactManually = (
   })
 
 /** The recent text a manual compaction keeps when the latest exchange is one tool call with this output. */
-const recentWithToolOutput = (id: Session.ID, content: SessionMessage.ToolStateCompleted["content"]) =>
-  Effect.gen(function* () {
-    const session = yield* insertSession(id)
-    const user = (text: string) =>
-      SessionMessage.User.make({
-        id: SessionMessage.ID.create(),
-        type: "user",
-        text,
-        time: { created: DateTime.makeUnsafe(0) },
-      })
-    const assistant = Schema.decodeUnknownSync(SessionMessage.Assistant)({
-      id: SessionMessage.ID.create(),
-      type: "assistant",
-      agent: Agent.defaultID,
-      model: { id: "summary-model", providerID: "test" },
-      content: [
-        {
-          type: "tool",
-          id: "call_read",
-          name: "Read",
-          state: { status: "completed", input: {}, content },
-          time: { created: 0 },
-        },
-      ],
-      time: { created: 0, completed: 0 },
-    })
-    expect(yield* compactManually(session, [user("Earlier question"), user("Read it"), assistant])).toEqual({
-      status: "completed",
-    })
-    const store = yield* SessionStore.Service
-    const stored = (yield* store.context(id))[0]
-    return stored?.type === "compaction" && stored.status === "completed" ? stored.recent : ""
-  })
-
 it.effect("manual compaction summarizes short context instead of no-op", () =>
   Effect.gen(function* () {
     requests = []
@@ -538,7 +448,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     yield* hooks.register("session", "compaction", (event) =>
       Effect.sync(() => {
         hooked = event.messages.length
-        expect(JSON.stringify(event.messages)).not.toContain("Summarize only what")
+        expect(JSON.stringify(event.messages)).not.toContain("IMPORTANT: Reply with text only")
       }),
     )
     const messages = [
@@ -583,7 +493,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("agent named below")
     expect(JSON.stringify(requests[0]?.messages)).toContain("open-file.ts")
     expect(requests[0]?.messages).toHaveLength(hooked + 1)
-    expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("Summarize only what")
+    expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("IMPORTANT: Reply with text only")
     expect(JSON.stringify(requests[0]?.messages)).not.toContain("display-only-output")
     // The compaction message carries its own request usage so clients can show what compacting cost.
     expect(yield* store.context(sessionID)).toMatchObject([
@@ -858,24 +768,6 @@ it.effect("summary compaction leaves out an escalated attempt and its notice", (
   }),
 )
 
-it.effect("the recent text of a summary leaves out an escalated attempt and its notice", () =>
-  Effect.gen(function* () {
-    requests = []
-    const session = yield* insertSession(Session.ID.make("ses_escalated_recent"))
-    const history = escalatedHistory()
-    // An earlier user message gives the summary something older, so the exchange below is kept as recent text.
-    const earlier = SessionMessage.User.make({ ...history.user, id: SessionMessage.ID.create(), text: "Earlier question" })
-    expect(
-      yield* compactManually(session, [earlier, history.user, history.cut, history.notice, history.answer]),
-    ).toEqual({ status: "completed" })
-    const stored = (yield* (yield* SessionStore.Service).context(session.id))[0]
-    const recent = stored?.type === "compaction" && stored.status === "completed" ? stored.recent : ""
-    expect(recent).toContain("WholeAnswerText")
-    expect(recent).not.toContain("FirstCutText")
-    expect(recent).not.toContain("escalated")
-  }),
-)
-
 it.effect("native compaction finds nothing to compact in a replaced attempt", () =>
   Effect.gen(function* () {
     requests = []
@@ -923,47 +815,10 @@ it.effect("a minimal estimate leaves out the editor selection that the full esti
   }),
 )
 
-it.effect("sizes a summary request for an unknown window by the 200,000-token window less the output reserve", () =>
+it.effect("a summary request for an unknown window is sent whole, with nothing shrunk to fit", () =>
   Effect.gen(function* () {
     requests = []
     const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap"))
-    // The last message stays verbatim; the eight before it are about 212,000 tokens, and seven of them are 185,500, which fits a 191,808-token cap but not the 180,000 a fixed 20,000 reserve gives.
-    const messages = Array.from({ length: 9 }, (_, index) =>
-      SessionMessage.User.make({
-        id: SessionMessage.ID.create(),
-        type: "user",
-        text: `marker-${index} ${"a".repeat(106_000)}`,
-        time: { created: DateTime.makeUnsafe(index) },
-      }),
-    )
-    const context = {
-      ...loaded(session, messages),
-      model: { ...resolved, limit: { context: 0, output: 8_192 } },
-    }
-    const compaction = yield* SessionCompaction.Service
-    const bus = yield* Bus.Service
-    const inputID = SessionMessage.ID.create()
-    yield* bus.publish(SessionEvent.Compaction.Started, {
-      sessionID: session.id,
-      reason: "manual",
-      recent: "",
-      inputID,
-    })
-    expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
-
-    const sent = JSON.stringify(requests[0]?.messages)
-    expect(sent).not.toContain("marker-0 ")
-    expect(sent).toContain("marker-1 ")
-    expect(sent).toContain("marker-6 ")
-  }),
-)
-
-it.effect("caps a summary request for an unknown window at 200,000 tokens less the output reserve, not at 200,000", () =>
-  Effect.gen(function* () {
-    requests = []
-    const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap_bound"))
-    // Seven of the earlier messages are about 192,500 tokens: more than the 191,808-token cap this reserve gives, and
-    // less than 200,000, so only six fit and the two oldest are dropped from the request.
     const messages = Array.from({ length: 9 }, (_, index) =>
       SessionMessage.User.make({
         id: SessionMessage.ID.create(),
@@ -987,9 +842,10 @@ it.effect("caps a summary request for an unknown window at 200,000 tokens less t
     })
     expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
 
+    expect(requests).toHaveLength(1)
     const sent = JSON.stringify(requests[0]?.messages)
-    expect(sent).not.toContain("marker-1 ")
-    expect(sent).toContain("marker-2 ")
+    expect(sent).toContain("marker-0 ")
+    expect(sent).toContain("marker-8 ")
   }),
 )
 
@@ -1427,5 +1283,77 @@ it.effect("compaction instructions go in a block of their own before the closing
     // The trailer is still last, and the block is the only difference.
     expect(paragraphsOf(prompt).at(-1)).toBe(paragraphsOf(promptOf(plain.sent[0])).at(-1))
     expect(prompt.replace(/\n\n[^\n]+\nKeep the MIGRATION-COMMANDS exactly\./, "")).toBe(promptOf(plain.sent[0]))
+  }),
+)
+
+it.effect("the fallback leaves out reasoning settings and effort notes, and names each kind of media", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "compaction", (event) =>
+      Effect.sync(() => {
+        event.options.reasoningEffort = "high"
+        event.messages.unshift(Message.effort({ effort: "high" }))
+      }),
+    )
+    const document = Schema.decodeUnknownSync(SessionMessage.User)({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Read this report",
+      files: [{ mime: "application/pdf", data: "JVBERi0=", source: { type: "inline" } }],
+      time: { created: 0 },
+    })
+    const toolImage = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.create(),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [
+        {
+          type: "tool",
+          id: "call_read",
+          name: "Read",
+          state: {
+            status: "completed",
+            input: {},
+            content: [
+              { type: "text", text: "TOOL-TEXT" },
+              { type: "file", uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png", name: "pixel.png" },
+            ],
+          },
+          time: { created: 0 },
+        },
+      ],
+      time: { created: 0, completed: 0 },
+    })
+    const run = yield* scripted(
+      "ses_cm2_fallback_media",
+      [document, toolImage],
+      [silent, answer("<handoff>\nok\n</handoff>")],
+      {
+        context: (context) => {
+          const selected = withTools(32_000)(context)
+          return {
+            ...selected,
+            model: { ...selected.model, capabilities: { tools: true, input: ["text", "image", "pdf"], output: ["text"] } },
+          }
+        },
+      },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    const [primary, fallback] = run.sent
+    // The first request keeps what the hooks and the history gave it.
+    expect(primary?.providerOptions).toMatchObject({ reasoningEffort: "high" })
+    const parts = (request: LLMRequest | undefined) => request?.messages.flatMap((message) => message.content) ?? []
+    expect(parts(primary).some((part) => part.type === "effort")).toBe(true)
+    expect(parts(primary).some((part) => part.type === "media")).toBe(true)
+    // The fallback has no reasoning setting, no effort note and no media; each kind of media is named.
+    expect(fallback?.providerOptions).toBeUndefined()
+    expect(parts(fallback).some((part) => part.type === "effort")).toBe(false)
+    expect(parts(fallback).some((part) => part.type === "media")).toBe(false)
+    const sent = JSON.stringify(fallback?.messages)
+    expect(sent).toContain("[document]")
+    expect(sent).toContain("[image]")
+    expect(sent).toContain("TOOL-TEXT")
+    expect(sent).not.toContain("iVBORw0KGgo")
   }),
 )
