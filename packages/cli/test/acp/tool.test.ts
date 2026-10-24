@@ -226,6 +226,41 @@ describe("acp tools", () => {
     expect(toLocations("patch", {}, "/workspace")).toEqual([])
   })
 
+  test("draws a completed Edit whose recorded diff has two hunks as both sides with a gap between the hunks", () => {
+    const patch = [
+      "--- file",
+      "+++ file",
+      "@@ -1,2 +1,2 @@",
+      " keep",
+      "-one",
+      "+ONE",
+      "@@ -9,2 +9,2 @@",
+      " also",
+      "-two",
+      "\\ No newline at end of file",
+      "+TWO",
+      "\\ No newline at end of file",
+      "",
+    ].join("\n")
+    expect(
+      completedToolUpdate({
+        toolCallId: "call",
+        toolName: "edit",
+        input: { path: "src/b.ts", oldString: "one", newString: "ONE" },
+        content: [],
+        metadata: { files: [{ file: "file", patch }] },
+        cwd: "/workspace",
+      }).content,
+    ).toEqual([
+      {
+        type: "diff",
+        path: resolve("/workspace", "src/b.ts"),
+        oldText: "keep\none\n...\nalso\ntwo",
+        newText: "keep\nONE\n...\nalso\nTWO",
+      },
+    ])
+  })
+
   test("reports resolved locations on completed and failed updates", () => {
     const patchText = ["*** Begin Patch", "*** Add File: src/a.ts", "+a", "*** End Patch"].join("\n")
     expect(

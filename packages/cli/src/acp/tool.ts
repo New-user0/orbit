@@ -315,7 +315,7 @@ export function patchSides(patch: string) {
       after.push("...")
       return
     }
-    if (hunks === 0 || line.startsWith("\\")) return
+    if (hunks === 0) return
     const text = line.slice(1)
     if (line.startsWith("-")) before.push(text)
     else if (line.startsWith("+")) after.push(text)

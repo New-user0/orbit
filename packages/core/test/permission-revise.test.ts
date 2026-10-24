@@ -242,6 +242,8 @@ describe("an approval answered with the person's revised content", () => {
         const [approved] = files(reply)
         expect(approved?.place).toBe(files(request?.metadata)[0]?.place)
         expect(approved?.file).toBe(files(request?.metadata)[0]?.file)
+        // An Edit changes a file that is there, so the approved diff is a modification, as the request's own diff is.
+        expect(approved?.status).toBe("modified")
         expect(approved && applyPatch("alpha\nbeta\n", approved.patch)).toBe("alpha\nREVISED\n")
         // What ran is what was approved: the tool's own record of the change ends at the same text.
         const [ran] = files(
