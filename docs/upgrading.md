@@ -3424,6 +3424,23 @@ Nothing of a failure is saved to a file.
 
 **What to do:** Nothing.
 
+### The tool results of one step share a size budget
+
+Before, each tool result was measured on its own, so a step that ran many tools in parallel could send all of their
+results to the model however large they were together. Now, before each request, the results of the newest step are
+added up. When they pass `tool_output.max_message_chars` (200,000 characters by default), the largest are saved to the
+session's tool-output folder and sent as the same `<saved-output>` preview a large single result gets, one after
+another until the rest fit; equal sizes go in call order. A step's results are decided once: the request after them is
+the first to carry them, and every later request, a fork and compaction send the same text. Results of a tool without
+a result limit (such as Read), results already saved on their own, failed calls, results from tools the
+provider runs and results that hold an image or another file part neither count nor go. A result whose file cannot be
+written is sent whole. The stored result keeps the tool's own content, and clients show it as before. An untrusted
+folder cannot set the key (`tool_output` is withheld whole).
+
+**Affects:** people whose model runs many tools in one step, such as several large searches at once.
+
+**What to do:** Nothing. Set `tool_output.max_message_chars` in your own config to change the budget.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.
