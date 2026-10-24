@@ -3461,13 +3461,15 @@ trusted, the model also keeps team memory in `.orbit/team-memory/` at the projec
 code and so shared with everyone who works in the repository. Its guide then names both folders, says which kind of
 memory goes where, and forbids secrets in team memory; the team folder is made with the guide; the folder's own
 `MEMORY.md` loads after the private index, wrapped in a `<team-memory source="repository">` tag, with the same caps and
-front matter handling; and Read, Write and Edit in the folder ask no question, while a deny rule still wins. A team folder
-that leads out of the project through a link, or through a link to a network share, turns team memory off for that
-folder, and a team `MEMORY.md` that links out of it is not loaded. The config watch of `.orbit` no longer reloads
-anything when a file below `team-memory` changes.
+front matter handling; and Read, Write and Edit in the folder ask no question, while a deny rule still wins. Team memory
+is on only for a plain folder: a `.orbit/team-memory` that is a link (out of the project, to a network share, or to the
+project itself, `.orbit`, `.git` or any other folder in it), or one under an `.orbit` that is a link, turns team memory
+off for that project, and a team `MEMORY.md` that links out of the folder is not loaded. The config watch of a
+project's `.orbit` no longer reloads anything when a file below its `team-memory` folder changes; a skill, agent or
+command in a folder of that name further down still reloads.
 
-Whatever `memory.team` says, and in a project that is not trusted too, Write, Edit (its `new_string`) and Patch (what
-it adds, and the whole of a file it moves in) refuse to write text that looks like a credential into
+Whatever `memory.team` says, and in a project that is not trusted too, Write, Edit (its `new_string`) and Patch (the
+lines each hunk adds, not its context lines, and the whole of a file it moves in) refuse to write text that looks like a credential into
 `.orbit/team-memory/`, before anything is asked or written, including through a link elsewhere in the project that leads
 into the folder. The tool error names the kinds of credential found, never the text. The rules are 36 high-confidence
 patterns from gitleaks v8.30.1; keyword rules such as `password = ...` are not among them. NotebookEdit and Bash are not
