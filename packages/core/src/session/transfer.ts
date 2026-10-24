@@ -17,6 +17,7 @@ import { Project } from "../project.js"
 import { upsertProject } from "../project/sql.js"
 import { AbsolutePath, RelativePath } from "../schema.js"
 import { Session } from "../session.js"
+import { Snapshot } from "../snapshot.js"
 import { Slug } from "../util/slug.js"
 import { SessionEvent } from "./event.js"
 import { SessionMessage } from "./message.js"
@@ -75,7 +76,8 @@ const layer = Layer.effect(
         const project = yield* projects.resolve(input.location.directory)
         yield* upsertProject(db, project).pipe(Effect.orDie)
         const importedAt = yield* Clock.currentTimeMillis
-        const messages = input.data.messages.filter(isSettled).map((message, index) => {
+        const settled = yield* Effect.forEach(input.data.messages.filter(isSettled), checkpoints)
+        const messages = settled.map((message, index) => {
           const encoded = encodeMessage(escapeImported(message))
           const { id: _, type, ...data } = encoded
           return {
@@ -176,6 +178,33 @@ function escapeImported(message: SessionMessage.Info): SessionMessage.Info {
       part.type === "tool" && part.displayName !== undefined ? { ...part, displayName: plain(part.displayName) } : part,
     ),
   }
+}
+
+// A step's checkpoints and changed paths reach git and the restore (class 5). A checkpoint that is not a tree ID, or a
+// path that is not a plain name inside the work tree, is dropped with one log line, and the message keeps the rest
+// (class 7).
+const checkpoints = Effect.fnUntraced(function* (message: SessionMessage.Info) {
+  if (message.type !== "assistant" || !message.snapshot) return message
+  const snapshot = message.snapshot
+  const start = snapshot.start === undefined || Snapshot.isTree(snapshot.start) ? snapshot.start : undefined
+  const end = snapshot.end === undefined || Snapshot.isTree(snapshot.end) ? snapshot.end : undefined
+  const files = snapshot.files?.filter(plainPath)
+  const dropped = [
+    start !== snapshot.start ? "start" : undefined,
+    end !== snapshot.end ? "end" : undefined,
+    files?.length !== snapshot.files?.length ? "files" : undefined,
+  ].filter((field) => field !== undefined)
+  if (dropped.length === 0) return message
+  yield* Effect.logWarning("import dropped checkpoint fields that are not well formed", {
+    messageID: message.id,
+    fields: dropped,
+  })
+  return { ...message, snapshot: { start, end, files } }
+})
+
+// An empty name and an absolute one have an empty part, so the part check refuses them too.
+function plainPath(file: string) {
+  return !/[\\:\0]/.test(file) && file.split("/").every((part) => part !== "" && part !== "." && part !== "..")
 }
 
 function isSettled(message: SessionMessage.Info) {

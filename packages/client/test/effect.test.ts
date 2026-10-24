@@ -125,6 +125,49 @@ test("session instructions methods use the public HTTP contract", async () => {
   ])
 })
 
+// clients-ux-5: a code rewind's dry run and a prompt's own diff reach the server as the HTTP contract says.
+test("session.revert.files sends a dry run and decodes its result; session.diff sends the prompt scope", async () => {
+  const requests: Array<{ method: string; url: string; query: unknown; body?: unknown }> = []
+  const dry = { canRewind: true, filesChanged: ["/repo/a.txt"], insertions: 0, deletions: 1 }
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      query: Object.fromEntries(request.urlParams.params),
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(request, Response.json({ data: request.method === "POST" ? dry : [] })),
+    )
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const rewound = yield* client.session.revert.files({
+      sessionID: Session.ID.make("ses_test"),
+      messageID: SessionMessage.ID.make("msg_prompt"),
+      dryRun: true,
+    })
+    const diff = yield* client.session.diff({ sessionID: Session.ID.make("ses_test"), scope: "prompt" })
+    return { rewound, diff }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual({ rewound: dry, diff: [] })
+  expect(requests).toEqual([
+    {
+      method: "POST",
+      url: "http://localhost:3000/api/session/ses_test/revert/files",
+      query: {},
+      body: { messageID: "msg_prompt", dryRun: true },
+    },
+    {
+      method: "GET",
+      url: "http://localhost:3000/api/session/ses_test/diff",
+      query: { scope: "prompt" },
+      body: undefined,
+    },
+  ])
+})
+
 // A grant names the location and how long it lasts, and nothing else: the trust is decided for the location's project.
 test("location.trust.update sends the trust and its persistence, and decodes the status", async () => {
   const requests: Array<{ method: string; url: URL; body: unknown }> = []

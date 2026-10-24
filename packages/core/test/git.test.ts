@@ -294,6 +294,32 @@ describe("Git trees", () => {
       expect(yield* read(path.join(root.path, "scope", "tracked.txt"))).toBe("one\n")
       expect(yield* read(path.join(root.path, "scope", "added.txt"))).toBe("added\n")
       expect(yield* read(path.join(root.path, "outside.txt"))).toBe("changed outside\n")
+
+      // A path absent from the tree goes only when it is a file or a link: a folder that now stands there stays with what
+      // it holds, the file beside it still goes, and the restore then fails so that its caller knows it was partial.
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(root.path, "scope", "grown"))
+        await fs.writeFile(path.join(root.path, "scope", "grown", "inner.txt"), "inner\n")
+      })
+      const partial = yield* git.tree
+        .restore({
+          repository,
+          files: new Map([
+            [RelativePath.make("scope/grown"), before],
+            [RelativePath.make("scope/added.txt"), before],
+          ]),
+        })
+        .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "succeeded" }))
+      expect({
+        partial,
+        inner: yield* read(path.join(root.path, "scope", "grown", "inner.txt")),
+        added: yield* Effect.promise(() =>
+          fs.stat(path.join(root.path, "scope", "added.txt")).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      }).toEqual({ partial: "Git.OperationError", inner: "inner\n", added: false })
     }),
   )
 })
@@ -337,7 +363,11 @@ describe("Git.index.ignored and the config of the repository", () => {
         const git = yield* Git.Service
         const repository = yield* git.repo.discover(AbsolutePath.make(found.root))
 
-        const ignored = yield* git.index.ignored({ repository: repository!, paths: [RelativePath.make("a.txt")], tracked })
+        const ignored = yield* git.index.ignored({
+          repository: repository!,
+          paths: [RelativePath.make("a.txt")],
+          tracked,
+        })
 
         expect([...ignored]).toEqual([])
         expect(yield* found.ran()).toEqual([])

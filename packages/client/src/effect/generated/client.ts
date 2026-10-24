@@ -74,6 +74,8 @@ import type {
   SessionWaitOutput,
   SessionRevertStageInput,
   SessionRevertStageOutput,
+  SessionRevertFilesInput,
+  SessionRevertFilesOutput,
   SessionRevertClearInput,
   SessionRevertClearOutput,
   SessionRevertCommitInput,
@@ -655,6 +657,17 @@ const EndpointSessionRevertStage = (raw: RawClient["server.session"]) => (input:
     ),
   )
 
+const EndpointSessionRevertFiles = (raw: RawClient["server.session"]) => (input: SessionRevertFilesInput) =>
+  preserveEffect<SessionRevertFilesOutput>()(
+    raw["session.revert.files"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { messageID: input["messageID"], dryRun: input["dryRun"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointSessionRevertClear = (raw: RawClient["server.session"]) => (input: SessionRevertClearInput) =>
   preserveEffect<SessionRevertClearOutput>()(
     raw["session.revert.clear"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
@@ -677,7 +690,7 @@ const EndpointSessionDiff = (raw: RawClient["server.session"]) => (input: Sessio
   preserveEffect<SessionDiffOutput>()(
     raw["session.diff"]({
       params: { sessionID: input["sessionID"] },
-      query: { from: input["from"], to: input["to"], context: input["context"] },
+      query: { from: input["from"], to: input["to"], context: input["context"], scope: input["scope"] },
     }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
@@ -869,6 +882,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   wait: EndpointSessionWait(raw),
   revert: {
     stage: EndpointSessionRevertStage(raw),
+    files: EndpointSessionRevertFiles(raw),
     clear: EndpointSessionRevertClear(raw),
     commit: EndpointSessionRevertCommit(raw),
   },
