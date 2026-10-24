@@ -1859,6 +1859,31 @@ which one of those folders is a link.
 
 **What to do:** nothing. If clean names a link, remove the link and run it again.
 
+### A rewind picker in the terminal UI, and Rewind in the message dialog
+
+`/rewind` (also `/checkpoint`) opens a picker that lists your prompts, oldest first, each with the files its own file
+tools changed (`<name> +A -D` or `N files +A -D`), and a `(current)` row. Choosing a prompt asks the server what a code
+rewind would change on disk now and offers `Code and conversation`, `Conversation only` and `Code only` when at least one
+file would change, or only `Conversation only` otherwise; `Never mind` goes back. Every option interrupts the session and
+waits for it before acting. A conversation rewind is staged as `/undo` stages one, so `/redo` brings it back until your
+next prompt, and puts the prompt back in the input; `Code only` puts the files back at once, with no redo, and leaves the
+input alone. A refused rewind keeps the picker open with a line naming what failed.
+
+Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. While a session runs, Esc
+keeps interrupting it as before.
+
+The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
+confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only replies with nothing in them follow the prompt
+and no file would change, it rewinds the conversation at once and puts the prompt back in the input, without asking.
+
+Interrupting a prompt (Esc twice while it runs) before its reply holds any text or tool call, with nothing typed and
+nothing queued, now rewinds the conversation to before that prompt and puts it back in the input; the prompt-history
+entry it added is dropped. Files are not touched.
+
+**Affects:** people who use the terminal UI's message dialog or press Esc on an idle prompt.
+
+**What to do:** Nothing. Use `Rewind`, then `Code and conversation`, where you used `Revert`.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -3083,6 +3108,17 @@ project, and keeps the rest of the step. Such a value used to reach git: `--outp
 diff write that file. Comparing, restoring and rewinding refuse such an ID before git starts.
 
 **Affects:** imported sessions whose files were edited by hand.
+
+**What to do:** Nothing.
+
+### A conversation-only revert leaves the files an earlier staged revert put back
+
+Staging a revert without its files (`files: false`) while a revert with its files was already staged first put those
+files back to their latest content, and then moved the boundary. It now leaves every file as it is and keeps the staged
+revert's list of files, so `/redo` still puts back everything the staged reverts changed (`session-revert.test.ts`,
+"Session.revert conversation only over a staged revert").
+
+**Affects:** SDK callers that stage a revert with `files: false`, and the terminal UI's `Conversation only`.
 
 **What to do:** Nothing.
 
