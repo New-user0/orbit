@@ -1488,15 +1488,21 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   with one log line unless that folder leads where its name says (`FSUtil.contains` of the name and the real place, so
   a folder whose name changed case on Windows still counts). It also skips a path whose own name is now a link or a
   folder: git writes a file there by removing what stands in its way, and git for Windows takes a junction for a folder
-  and removes the files it leads to. So nothing is written through a link, and no folder is removed with what it holds.
-  A file that git fails to put back costs only itself: the others still go back and the restore then fails (class 7).
-  The rewind's dry run lists only the paths the same decision lets through (`Snapshot.restorable`). A capture leaves out
-  every path behind a link, and on Windows a path that is a link, because git for Windows lists and adds the files a
-  junction leads to (`packages/core/test/snapshot-restore-links.test.ts`: a junction, a folder replaced by a link, a link
-  to the project itself, a dangling link, a link to a share, a grown folder, a file whose name became a link, a folder
-  where the checkpoint had a file, a file git fails on, `.` and `../`, each beside a control that goes back, and "does
-  not capture the files a link leads to"; `packages/server/test/session-revert-files.test.ts`, "does not restore over a
-  file whose name became a link to an outside folder, and restores the control").
+  and removes the files it leads to. It skips a path, too, when a folder on its way is now a file: git makes the folder
+  by removing that file, which is the person's own. So nothing is written through a link, no folder is removed with
+  what it holds, and no file is removed to make room for a folder. A file that git fails to put back costs only itself:
+  the others still go back and the restore then fails (class 7). The rewind's dry run lists only the paths the same
+  decision lets through (`Snapshot.restorable`). A capture leaves out every path behind a link, and on Windows a path
+  that is a link, because git for Windows lists and adds the files a junction leads to; the ignore check
+  (`Git.index.ignored`, which `Lsp.ignored` uses) answers such a path by asking about the first linked folder on its
+  way, so an ignored result below a link stays hidden (`packages/core/test/lsp-ignored.test.ts`, "hides an ignored file
+  below a linked folder, and shows one below a link that is not ignored"). Rows:
+  `packages/core/test/snapshot-restore-links.test.ts`: a junction, a folder replaced by a link, a link to the project
+  itself, a dangling link, a link to a share, a grown folder, a file whose name became a link, a folder where the
+  checkpoint had a file, a file where the checkpoint had a folder ("does not remove a file that now stands where the
+  checkpoint had a folder"), a file git fails on, `.` and `../`, each beside a control that goes back, and "does not
+  capture the files a link leads to"; `packages/server/test/session-revert-files.test.ts`, "does not restore over a
+  file whose name became a link to an outside folder, and restores the control".
 - A name that becomes a file name is one plain name (the output style rule in
   `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
   `packages/core/src/tool/plugin/memory.ts`).

@@ -3011,9 +3011,10 @@ conversation revert with its files"). To record what it changed, Write now names
 Edit already did, and a Patch move names its source beside its destination.
 
 A restore now skips, with a log line, a file whose folder became a link after the snapshot (a junction, a dangling link
-or a link to a share), and a file whose own name is now a link or a folder; the other files still go back. Before, git
-wrote through the link, removed a junction's target files on Windows, removed a folder with what it held, or the whole
-restore failed. No folder is removed with what it holds. A file that git fails to put back no longer stops the rest:
+or a link to a share), a file whose own name is now a link or a folder, and a file one of whose folders is now a file
+of yours; the other files still go back. Before, git wrote through the link, removed a junction's target files on
+Windows, removed a folder with what it held, removed your file to make the folder again, or the whole restore failed.
+No folder is removed with what it holds. A file that git fails to put back no longer stops the rest:
 the others go back and the restore then reports that it failed (`snapshot-restore-links.test.ts`). A tracked folder
 that became a link no longer stops snapshots: git refuses a path beyond a link, which made every later snapshot fail on
 Linux, so a rewind answered that snapshots were unavailable. The files behind the link now leave the snapshot and the
@@ -3021,8 +3022,13 @@ rest is recorded (`snapshot-restore-links.test.ts`, "takes the capture without t
 the control"). On Windows a snapshot no longer stores the files that a junction in the project leads to ("does not
 capture the files a link leads to").
 
-A Write or Patch call that fails after it changed a file now names that file in the failed call too, so an undo or a
-rewind puts it back.
+An Edit, Write, Patch or NotebookEdit call that fails after it changed a file now names that file in the failed call
+too, so an undo or a rewind puts it back.
+
+An undo with its files now fails, and stages nothing, when Orbit cannot take the snapshot of the files it compares the
+edits with (git fails on the snapshot repository, say). Before, it staged the conversation alone and reported success
+without putting any file back (`session-revert.test.ts`, "fails a revert with its files when the capture before it
+fails, and stages one without its files"). Undoing the conversation alone still works.
 
 **Affects:** people who undo after letting the agent run shell commands that change files, and folders whose layout
 changed to links after a step.
@@ -3040,8 +3046,8 @@ a folder without snapshots or a restore that failed (409 `RewindFilesError` with
 `canRewind: false` instead). `orb run --rewind-files <message id>` and `orb -p --rewind-files <message id>` call it
 once; they need `--session`, `--continue` or `--resume`, take no prompt, print one line and exit. A file that git leaves
 out of snapshots (one the repository ignores, or an untracked file over 2 MB) is not rewound, and neither is a file
-whose name or folder is now a link, nor one where a folder now stands; the dry run leaves those out too. Prompts
-delivered together (sent while a step ran) share the checkpoint of the step after them.
+whose name or folder is now a link, nor one where a folder now stands, nor one whose folder is now a file; the dry run
+leaves those out too. Prompts delivered together (sent while a step ran) share the checkpoint of the step after them.
 
 `GET /api/session/:sessionID/diff` takes `scope=prompt`, which diffs from `from` to the next prompt and counts only the
 file tools' edits, so a prompt steered in while the session was busy gets its own diff; `scope=turn`, the default, is
