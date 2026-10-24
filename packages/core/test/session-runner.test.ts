@@ -98,6 +98,7 @@ import { tempGlobalLayer } from "./fixture/global"
 import { SessionContext } from "@orbit/core/session/context"
 import { SessionHistory } from "@orbit/core/session/history"
 import { SessionScratchpad } from "@orbit/core/session/scratchpad"
+import { noMemory } from "./lib/memory"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { SessionTitle } from "@orbit/core/session/title"
 import { Global } from "@orbit/util/global"
@@ -614,6 +615,7 @@ const makeLayer = (persist: boolean, real = false) =>
       InstructionBuiltIns.node.replace(systemContext),
       InstructionDiscovery.node.replace(instructionContext),
       ...scratchpad,
+      noMemory,
       noVcsSnapshot,
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SkillInstructions.node.replace(skillInstructions),

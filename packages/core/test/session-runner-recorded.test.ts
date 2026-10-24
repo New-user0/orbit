@@ -45,6 +45,7 @@ import { testEffect } from "./lib/effect"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { permissionLayer } from "./lib/permission"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
@@ -106,6 +107,7 @@ const runnerLayer = (llmClient: Layer.Layer<LLMClientService>) =>
     InstructionBuiltIns.node.replace(systemContext),
     InstructionDiscovery.node.replace(instructionContext),
     noScratchpad,
+    noMemory,
     noVcsSnapshot,
     Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
     SkillInstructions.node.replace(skillInstructions),
@@ -165,6 +167,7 @@ const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
       InstructionBuiltIns.node.replace(systemContext),
       InstructionDiscovery.node.replace(instructionContext),
       noScratchpad,
+      noMemory,
       noVcsSnapshot,
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SkillInstructions.node.replace(skillInstructions),

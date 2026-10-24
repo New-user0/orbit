@@ -168,9 +168,9 @@ describe("Agent", () => {
       const folders = (info?.permissions ?? []).filter(
         (rule) => rule.action === "external_directory" && rule.effect === "allow",
       )
-      expect(folders).toHaveLength(4)
-      expect(folders.map(Agent.isOwnFolder)).toEqual([true, true, true, true])
-      expect(folders.map((rule) => Agent.isOwnFolder({ ...rule }))).toEqual([false, false, false, false])
+      expect(folders).toHaveLength(5)
+      expect(folders.map(Agent.isOwnFolder)).toEqual([true, true, true, true, true])
+      expect(folders.map((rule) => Agent.isOwnFolder({ ...rule }))).toEqual([false, false, false, false, false])
 
       yield* agent.transform((editor) => editor.remove(id))
       expect(yield* agent.get(id)).toBeUndefined()

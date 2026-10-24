@@ -33,6 +33,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { Effect, Layer } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
+import { noMemory } from "./lib/memory"
 import { testEffect } from "./lib/effect"
 import { insertSession } from "./lib/session-row"
 import { stubSnapshot } from "./lib/tool"
@@ -73,6 +74,7 @@ const it = testEffect(
     ]),
     [
       Global.node.replace(tempGlobalLayer),
+      noMemory,
       Config.node.replace(Config.testLayer()),
       SessionRunnerModel.node.replace(models),
       InstructionDiscovery.node.replace(
