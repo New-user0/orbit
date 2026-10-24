@@ -188,6 +188,33 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_removed\` (
+          \`id\` text PRIMARY KEY
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_stats_archive\` (
+          \`id\` integer PRIMARY KEY AUTOINCREMENT,
+          \`session_id\` text NOT NULL,
+          \`project_id\` text NOT NULL,
+          \`subagent\` integer NOT NULL,
+          \`bucket\` integer NOT NULL,
+          \`kind\` text NOT NULL,
+          \`provider_id\` text,
+          \`model_id\` text,
+          \`variant\` text,
+          \`name\` text,
+          \`status\` text,
+          \`count\` integer NOT NULL,
+          \`cost\` real NOT NULL,
+          \`tokens_input\` integer NOT NULL,
+          \`tokens_output\` integer NOT NULL,
+          \`tokens_reasoning\` integer NOT NULL,
+          \`tokens_cache_read\` integer NOT NULL,
+          \`tokens_cache_write\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_v2\` (
           \`id\` text PRIMARY KEY,
           \`project_id\` text NOT NULL,
@@ -297,6 +324,8 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_pending_session_admitted_seq_idx\` ON \`session_pending\` (\`session_id\`,\`admitted_seq\`);`,
       )
+      yield* tx.run(`CREATE INDEX \`session_stats_archive_session_idx\` ON \`session_stats_archive\` (\`session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_stats_archive_bucket_idx\` ON \`session_stats_archive\` (\`bucket\`);`)
       yield* tx.run(`CREATE INDEX \`session_v2_project_idx\` ON \`session_v2\` (\`project_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_v2_workspace_idx\` ON \`session_v2\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_v2_parent_idx\` ON \`session_v2\` (\`parent_id\`);`)

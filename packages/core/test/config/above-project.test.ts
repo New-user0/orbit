@@ -279,8 +279,9 @@ describe("config sources that are skipped", () => {
           const real = yield* FSUtil.Service
           return FSUtil.Service.of({
             ...real,
-            readFileStringSafe: (file) =>
-              real.readFileStringSafe(file).pipe(
+            // The read the loader makes of a config file (it tells a file that is missing from one it cannot read).
+            readFileString: (file, encoding) =>
+              real.readFileString(file, encoding).pipe(
                 Effect.tap(() =>
                   move && file === own
                     ? Effect.promise(async () => {
