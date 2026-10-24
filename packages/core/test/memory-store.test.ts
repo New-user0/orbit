@@ -61,6 +61,13 @@ describe("MemoryStore.truncateIndex", () => {
     expect(result.content).not.toContain("50 lines")
   })
 
+  test("does not keep part of the line that crosses 25,000 characters", () => {
+    // Lines of 997 characters and a line break: the 26th line runs from 24,950 to 25,947, so a cut at the cap itself
+    // would keep its first 50 characters.
+    const result = MemoryStore.truncateIndex(lines(50, 997).join("\n"))
+    expect(result.content.slice(0, result.content.indexOf("\n\n"))).toBe(lines(25, 997).join("\n"))
+  })
+
   test("cuts hard at 25,000 characters when no line break comes before the cap", () => {
     const result = MemoryStore.truncateIndex("y".repeat(30_000))
     expect(result.content.startsWith("y".repeat(25_000) + "\n\n")).toBe(true)
