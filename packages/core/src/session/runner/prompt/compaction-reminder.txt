@@ -1,1 +1,1 @@
-Reminder: do not call any tool. Reply with plain text only: an <analysis> block, then a <handoff> block. A tool call will be refused and the handoff will be lost.
+Last word: answer in plain text with an <analysis> block followed by a <handoff> block, and make no tool call. Any tool call is turned down and the handoff is lost.

@@ -133,15 +133,26 @@ export const buildPrompt = (instructions?: string) => {
 
 /**
  * What is stored from a reply: the drafting block never, the handoff block under a "Summary:" heading. A handoff that
- * was cut off before its closing tag stays as written.
+ * was cut off before its closing tag stays as written. The text of a closed handoff is kept as the model wrote it,
+ * since section 6 quotes user messages that may mention an `<analysis>` tag.
  */
-export const formatSummary = (raw: string) =>
-  raw
-    .replace(/<analysis>[\s\S]*?<\/analysis>/g, "")
-    .replace(/<analysis>[\s\S]*$/, "")
-    .replace(/<handoff>([\s\S]*?)<\/handoff>/, (_, inner: string) => `Summary:\n${inner.trim()}`)
+export const formatSummary = (raw: string) => {
+  const handoff = /<handoff>([\s\S]*?)<\/handoff>/.exec(raw)
+  return (
+    handoff
+      ? [
+          withoutAnalysis(raw.slice(0, handoff.index)),
+          `Summary:\n${handoff[1].trim()}`,
+          withoutAnalysis(raw.slice(handoff.index + handoff[0].length)),
+        ].join("")
+      : withoutAnalysis(raw)
+  )
     .replace(/(?:\r?\n){2,}/g, "\n\n")
     .trim()
+}
+
+const withoutAnalysis = (text: string) =>
+  text.replace(/<analysis>[\s\S]*?<\/analysis>/g, "").replace(/<analysis>[\s\S]*$/, "")
 
 export const layer = Layer.effect(
   Service,
@@ -175,7 +186,7 @@ export const layer = Layer.effect(
       // The request may fill the effective window, which leaves the summary exactly its reserve for output.
       const cap =
         found?.effective ?? UNKNOWN_WINDOW - SessionContextWindow.reserve(context.model.limit, context.outputTokenCap)
-      // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
+      // The provider just rejected this context, so the estimate ran low; a native compaction aims below it from the start.
       const budget =
         trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context, reminders.minimal, toolOutput.root) * SHRINK_STEPS[0])) : cap
 
@@ -596,10 +607,9 @@ export const layer = Layer.effect(
     /**
      * The conversation as the runner would send it, after request hooks.
      *
-     * The output limit leaves room for `budget`, the most `deliver` sends. The request prepared here can be larger
-     * when the conversation overshot the threshold, and is only shrunk to fit after hooks have seen it, so sizing the
-     * output to it would leave next to no room. A prompt the estimate undersells is rejected and shrunk like any
-     * other.
+     * The output limit leaves room for `budget`. Only a native compaction shrinks its request to `budget` (in
+     * `deliver`, after hooks have seen it); a summary request is sent as prepared, and `budget` just sizes its output
+     * so that an overshooting conversation does not leave next to no room.
      */
     const prepare = (
       context: SessionContext.Loaded,

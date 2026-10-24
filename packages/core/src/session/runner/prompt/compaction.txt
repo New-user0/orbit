@@ -1,9 +1,9 @@
-IMPORTANT: Reply with text only. Do not call any tool.
+IMPORTANT: Reply with text only. No tool calls.
 
-- No tool is available for this reply: not for reading, searching, editing, running commands or anything else.
-- Everything you need is already in the conversation above.
-- A tool call will be refused, and this is your only reply, so a tool call means the handoff is lost.
-- Your whole reply must be plain text: one <analysis> block, then one <handoff> block.
+- You have no tools in this reply, whether to read, search, edit or run anything.
+- The whole conversation is already in front of you, so nothing needs looking up.
+- This is the only reply you get. A tool call would be turned down, and the handoff would never be written.
+- Produce plain text in two parts: an <analysis> block first, then a <handoff> block.
 
 You are writing a handoff: a thorough account of the conversation so far that lets the work continue once the earlier messages are gone. Give the most weight to what the user explicitly asked for and to what you have already done. Keep the technical detail, such as code patterns, design choices and exact names, that someone picking up the work would need.
 
@@ -22,13 +22,13 @@ The <handoff> block has these nine sections:
 
 1. Requests and intent: every explicit request the user made and what they were after, in full detail.
 2. Technical context: the important concepts, technologies and frameworks that came up.
-3. Files and code: each file or code section that was examined, changed or created, why it matters and what changed. Favour the most recent messages, and include complete code snippets where they help.
+3. Files and code: each file or code section that was examined, changed or created, why it matters and what changed. Favour the most recent messages, and give full snippets of code that a successor would need.
 4. Problems and fixes: each error you ran into and how it was fixed, with any feedback the user gave about it, especially requests to do something another way.
 5. Problems worked through: what has been solved, and any investigation still in progress.
 6. User messages: every message the user wrote that is not a tool result. Together they show how the user's feedback and goals changed.
 7. Open tasks: work the user explicitly asked for that is not done yet.
-8. Work in progress: exactly what was being done just before this handoff was requested, with the latest messages from both sides in mind. Include file names and code snippets where they help.
-9. Next step: the next action you would take, if there is one. It must follow directly from the user's most recent explicit request and from the work in section 8. If that work was finished, give a next step only when the user clearly asked for it, and never take up a side request or an old, finished one without checking with the user first. When you give a next step, quote the latest exchange word for word to show exactly which task you were on and where it stopped, so that the task does not drift.
+8. Work in progress: exactly what was being done just before this handoff was requested, with the latest messages from both sides in mind. Name the files involved and quote the code that matters.
+9. Next step: the next action you would take, if there is one. It must follow directly from the user's most recent explicit request and from the work in section 8. If that work was finished, give a next step only when the user clearly asked for it, and never take up a side request or an old, finished one without checking with the user first. Whenever you give one, copy the most recent exchange verbatim, so that the task you were on and the point where it stopped cannot be misread.
 
 Shape your reply like this example:
 

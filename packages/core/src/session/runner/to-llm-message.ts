@@ -567,11 +567,11 @@ function toLLMMessage(
             id: message.id,
             role: "user",
             content: [
-              "This session continues an earlier conversation that ran out of context. The summary below covers the earlier part of that conversation.",
+              "Earlier messages in this session were replaced by the summary below because the conversation outgrew the context window.",
               ReminderText.neutralize(message.summary),
               ...(message.reason === "auto"
                 ? [
-                    'Carry on from where the conversation stopped, without asking the user anything further. Start on the work at once: do not acknowledge this summary, do not recap it, and do not open with a phrase such as "Picking up where I left off". Take up the last task as if nothing had interrupted it.',
+                    'Keep working without checking in with the user. Go straight to the task that was underway, and say nothing about this summary or about having resumed.',
                   ]
                 : []),
             ].join("\n\n"),

@@ -154,8 +154,8 @@ test("compaction prompt asks for the files, the work in progress and the next st
 test("compaction prompt prohibits tool calls at both ends", () => {
   const prompt = SessionCompaction.buildPrompt()
 
-  expect(prompt.startsWith("IMPORTANT: Reply with text only. Do not call any tool.")).toBe(true)
-  expect(prompt).toEndWith("A tool call will be refused and the handoff will be lost.")
+  expect(prompt.startsWith("IMPORTANT: Reply with text only. No tool calls.")).toBe(true)
+  expect(prompt).toEndWith("Any tool call is turned down and the handoff is lost.")
 })
 
 it.effect("auto compaction estimates current content against the threshold below the effective window", () =>
@@ -1387,6 +1387,84 @@ it.effect("analysis never stored: a second analysis ahead of the handoff", () =>
     expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
   }),
 )
+
+it.effect("a handoff that quotes an <analysis> tag is stored whole", () =>
+  Effect.gen(function* () {
+    // Section 6 quotes user messages, and one of them may name the tag without closing it.
+    const handoff = [
+      "<handoff>",
+      "6. User messages:",
+      '   - "Why does the eval prompt open an <analysis> tag first?"',
+      "8. Work in progress: QUOTED-WORK",
+      "9. Next step: QUOTED-NEXT",
+      "</handoff>",
+    ].join("\n")
+    const run = yield* scripted(
+      "ses_cm2_quoted_tag",
+      [userText("Do it")],
+      [answer(`<analysis>DRAFT-Q</analysis>\n${handoff}`)],
+    )
+    expect(run.summary).toContain("QUOTED-WORK")
+    expect(run.summary).toContain("QUOTED-NEXT")
+    expect(run.summary?.startsWith("Summary:\n6. User messages:")).toBe(true)
+    expect(run.summary).not.toContain("<handoff>")
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-Q")
+  }),
+)
+
+// Which history counts as something to compact: each row is compacted, or fails as nothing to compact.
+const lone = (message: unknown) => [Schema.decodeUnknownSync(SessionMessage.Info)(message)]
+const loneBase = { id: "msg_lone", time: { created: 0 } }
+for (const [name, history, compacts] of [
+  [
+    "a skill message",
+    lone({ ...loneBase, type: "skill", skill: "sk", name: "sk", text: "Use the skill" }),
+    true,
+  ],
+  [
+    "a location switch",
+    lone({ ...loneBase, type: "location-switched", location: { directory: "/destination" } }),
+    true,
+  ],
+  [
+    "a background shell",
+    lone({
+      ...loneBase,
+      type: "shell",
+      shellID: "sh_lone",
+      status: "exited",
+      command: "pwd",
+      metadata: { background: true },
+      output: { output: "x", cursor: 1, size: 1, truncated: false },
+      time: { created: 0, completed: 1 },
+    }),
+    false,
+  ],
+  [
+    "an assistant message with only empty reasoning",
+    lone({
+      ...loneBase,
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [{ type: "reasoning", text: "" }],
+      time: { created: 0, completed: 0 },
+    }),
+    false,
+  ],
+] as const)
+  it.effect(`a history of only ${name} ${compacts ? "compacts" : "fails as nothing to compact"}`, () =>
+    Effect.gen(function* () {
+      const run = yield* scripted(`ses_cm2_lone_${name.replaceAll(" ", "_")}`, history, [
+        answer("<handoff>\nok\n</handoff>"),
+      ])
+      expect(run.outcome).toEqual(
+        compacts
+          ? { status: "completed" }
+          : { status: "failed", error: { type: "compaction.unavailable", message: "Nothing to compact yet" } },
+      )
+    }),
+  )
 
 // Gate mutations: each test below fails when the line named in its comment is broken.
 const failedFinish = () =>

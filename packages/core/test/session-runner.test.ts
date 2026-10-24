@@ -3724,7 +3724,7 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[0])).toContain("Recent exact request ".repeat(180))
     expect(userTexts(s.requests[1])).toHaveLength(1)
     expect(userTexts(s.requests[1])[0]).toContain("## Objective\n- Preserve the task")
-    expect(userTexts(s.requests[1])[0]).toContain("without asking the user anything further")
+    expect(userTexts(s.requests[1])[0]).toContain("Keep working without checking in with the user")
 
     const context = yield* store.context(sessionID)
     expect(context.map((message) => message.type)).toEqual(["compaction", "assistant"])

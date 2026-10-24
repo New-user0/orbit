@@ -4278,15 +4278,15 @@ window less the summary's room instead of the whole window; lower it if compacti
   request to think in an `<analysis>` block and write a nine-section `<handoff>`. The earlier seven-heading template,
   its "update" variant and the retry that asked again for a missing heading are gone, and a summary no longer keeps
   the newest 15,000 tokens as text beside it. `compaction.keep.tokens` now shapes native compaction only. A checkpoint
-  stored before this change keeps its recent text and renders as it did
+  stored with recent text keeps its wrapper and renders as before; one stored without recent text now reaches the model as the resume message below
   (`session-compaction.test.ts`; `session-runner-message.test.ts`, "checkpoint resume message").
 - **What is stored.** The `<analysis>` block is never stored: every closed block is removed, and so is one that was cut
   off, through to the end of the reply. The `<handoff>` block is stored under a `Summary:` heading, and runs of blank
-  lines collapse to one. A summary that a `compaction` hook supplies is formatted the same way. A reply that is only an
+  lines collapse to one. A handoff that quotes an `<analysis>` tag is stored whole, with its later sections. A summary that a `compaction` hook supplies is formatted the same way. A reply that is only an
   unfinished analysis fails as "Compaction produced no summary". A reply that stopped at the output limit is stored as
   it is, where it used to fail (`session-compaction.test.ts`, "analysis never stored").
-- **The next request.** A summary checkpoint reaches the model as one user message that says the session continues an
-  earlier conversation that ran out of context, followed by the summary. An automatic compaction adds a line telling the
+- **The next request.** A summary checkpoint reaches the model as one user message that says earlier messages
+  were replaced by the summary because the conversation outgrew the context window, followed by the summary. An automatic compaction adds a line telling the
   model to carry on without asking the user anything; a manual one does not
   (`session-runner-message.test.ts`).
 - **A reply with no text gets one more request.** The first request shares the main request's system prompt, tools and
