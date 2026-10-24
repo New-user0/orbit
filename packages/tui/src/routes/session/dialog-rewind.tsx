@@ -2,11 +2,12 @@ import path from "path"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { plain } from "@orbit/flow/plain"
-import { createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js"
+import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
 import { dialogWidth, useDialog } from "../../ui/dialog"
+import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 import { bodyText } from "../../util/renderer"
@@ -53,6 +54,7 @@ export function DialogRewind(props: {
   preselected?: string
 }) {
   const dialog = useDialog()
+  const toast = useToast()
   const theme = useTheme().surface("dialog")
   const dimensions = useTerminalDimensions()
   const width = createMemo(() => Math.max(10, Math.min(dialogWidth("xlarge"), dimensions().width - 2) - 6))
@@ -96,6 +98,10 @@ export function DialogRewind(props: {
 
   // Closing removes the picker, so a dry run that answers later has nothing left to update.
   const close = () => props.onClose()
+  // Esc waits for a chosen rewind, but ctrl+c or a click outside still removes the picker. Its rewind's answer then
+  // must not clear whatever dialog came next, and a refusal goes to a toast in place of the error line.
+  let mounted = true
+  onCleanup(() => (mounted = false))
 
   function confirm(messageID: string) {
     const prompt = props.prompts.find((item) => item.id === messageID)
@@ -129,11 +135,14 @@ export function DialogRewind(props: {
     if (!prompt || state.acting) return
     if (current === "never") return back()
     setState("acting", true)
-    props
-      .act(current, prompt.id)
-      .then(close, (error) =>
-        setState({ acting: false, step: "error", error: `${failures[current]}: ${plain(errorMessage(error))}` }),
-      )
+    props.act(current, prompt.id).then(
+      () => mounted && close(),
+      (error) => {
+        const message = `${failures[current]}: ${plain(errorMessage(error))}`
+        if (mounted) return setState({ acting: false, step: "error", error: message })
+        toast.show({ message, variant: "error", duration: 5000 })
+      },
+    )
   }
 
   const move = (by: number) => {
@@ -151,7 +160,11 @@ export function DialogRewind(props: {
         bind: "escape",
         title: "Close rewind",
         group: "Dialog",
-        run: () => (state.step === "confirm" ? back() : close()),
+        run: () => {
+          if (state.acting) return
+          if (state.step === "confirm") return back()
+          close()
+        },
       },
       { bind: "up", title: "Previous", group: "Dialog", run: () => move(-1) },
       { bind: "down", title: "Next", group: "Dialog", run: () => move(1) },
@@ -282,6 +295,9 @@ export function DialogRewind(props: {
                   )}
                 </For>
               </box>
+              <Show when={state.acting}>
+                <text fg={theme.text.muted}>Rewinding…</text>
+              </Show>
               <Show when={state.code}>
                 <text fg={theme.text.feedback.warning.base}>
                   ⚠ Only edits made by Orbit's file tools go back; shell commands and edits made outside Orbit stay.

@@ -190,6 +190,72 @@ test("a busy session is interrupted and waited for before the rewind acts", asyn
   ])
 })
 
+// While a chosen rewind runs, Esc leaves the picker up with a line saying so, and the server's answer is drawn there:
+// a refusal arriving after the person pressed Esc is not dropped.
+test("Esc while a rewind runs keeps the picker up, and a late refusal is drawn", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) => (request.path.endsWith("/revert/files") && !request.body?.dryRun ? held.promise : undefined),
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressArrow("down")
+  setup.mockInput.pressArrow("down")
+  setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => action.startsWith("files")), "the rewind request")
+  await setup.waitForFrame((frame) => frame.includes("Rewinding…"))
+  setup.mockInput.pressEscape()
+  setup.mockInput.pressEscape()
+  await Bun.sleep(200)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("Rewinding…")
+  held.resolve(
+    json(
+      { _tag: "RewindFilesError", sessionID, messageID: "msg_0003", reason: "failed", message: "Not restored." },
+      { status: 409 },
+    ),
+  )
+  await setup.waitForFrame((frame) => frame.includes("Could not rewind the code: Not restored."))
+})
+
+// A picker closed some other way while its rewind runs (ctrl+c here) leaves alone the dialog opened after it: a late
+// success does not clear that dialog, and a late refusal is shown as a toast instead.
+test.each([
+  { label: "succeeds", response: () => json({ data: { messageID: "msg_0003", files: [] } }), toast: "" },
+  {
+    label: "is refused",
+    response: () => json({ _tag: "SessionBusyError", sessionID, message: "Session is busy" }, { status: 409 }),
+    toast: "Could not rewind the code and conversation:",
+  },
+])("a rewind that $label after its picker closed leaves the next dialog open", async (row) => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) => (request.path.endsWith("/revert/stage") ? held.promise : undefined),
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  await setup.waitForFrame((frame) => frame.includes("Rewinding…"))
+  setup.mockInput.pressKey("c", { ctrl: true })
+  await setup.waitForFrame((frame) => !frame.includes("Rewinding…"))
+  await Bun.sleep(50)
+  await setup.mockInput.typeText("/timeline")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Timeline"))
+  held.resolve(row.response())
+  if (row.toast) await setup.waitForFrame((frame) => frame.includes(row.toast))
+  await Bun.sleep(300)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("Timeline")
+})
+
 // Classes 1, 7 and 13: what the server answers is what the picker shows. A dry run that is refused (the folder's trust
 // ended: 403), that an older server does not know (404) or that fails (500) costs only the code options; the
 // conversation can still go back. A real rewind the server refuses after the dry run allowed it (class 3: the server
