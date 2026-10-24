@@ -29,7 +29,7 @@ import { testEffect } from "./lib/effect"
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, Bus.node, SessionProjector.node, Session.node, LocationServiceMap.node]),
+    LayerNode.group([Database.node, Bus.node, SessionProjector.node, Session.node, LocationServiceMap.node, Global.node]),
     [
       Bus.node.replace(Bus.configured({ persist: true })),
       Global.node.replace(tempGlobalLayer),
@@ -249,6 +249,94 @@ describe("Session.revert files", () => {
           .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }))
         expect(moved).toMatchObject({ _tag: "Session.RewindError", reason: "no-checkpoint" })
         expect(yield* Effect.promise(() => Bun.file(written).text())).toBe("again\n")
+      }),
+    { timeout: 15_000 },
+  )
+
+  // A revert compares the file-tool edits with a capture of the files taken first. When that capture fails (here the
+  // snapshot repository's index is damaged, so git refuses it), a revert that asked for its files fails instead of
+  // staging the conversation alone and reporting success; the file stays. The control is the same revert without its
+  // files, which needs no capture and is staged.
+  it.live(
+    "fails a revert with its files when the capture before it fails, and stages one without its files",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const directory = path.join(tmp.path, "project")
+        const written = path.join(directory, "written.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(directory)
+          await Bun.write(path.join(directory, "other.txt"), "other\n")
+          await $`git init -q`.cwd(directory).quiet()
+          await $`git -c core.fsmonitor=false add .`.cwd(directory).quiet()
+        })
+
+        const session = yield* Session.Service
+        const database = yield* Database.Service
+        const bus = yield* Bus.Service
+        const global = yield* Global.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(directory) } })
+        const prompt = yield* session.prompt({ sessionID: created.id, text: "Write a file", resume: false })
+        yield* SessionInbox.promote(database.db, bus, created.id, "steer")
+
+        yield* Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          yield* plugins.awaitActivation
+          const snapshot = yield* Snapshot.Service
+          const before = yield* snapshot.capture()
+          if (!before) throw new Error("Initial snapshot missing")
+          const assistantMessageID = SessionMessage.ID.create()
+          yield* bus.publish(SessionEvent.Step.Started, {
+            sessionID: created.id,
+            assistantMessageID,
+            agent: Agent.defaultID,
+            model: { id: Model.ID.make("test-model"), providerID: Provider.ID.make("test-provider") },
+            snapshot: before,
+            started: 0,
+          })
+          const call = { sessionID: created.id, assistantMessageID, id: "call_write" }
+          yield* bus.publish(SessionEvent.Tool.Input.Started, { ...call, name: "Write" })
+          yield* bus.publish(SessionEvent.Tool.Called, { ...call, input: {}, executed: true })
+          yield* Effect.promise(() => Bun.write(written, "one\n"))
+          yield* bus.publish(SessionEvent.Tool.Success, {
+            ...call,
+            content: [{ type: "text", text: "done" }],
+            metadata: { files: [{ file: "written.txt", status: "added", additions: 1, deletions: 0, patch: "" }] },
+            executed: true,
+          })
+          const after = yield* snapshot.capture()
+          if (!after) throw new Error("Written snapshot missing")
+          yield* bus.publish(SessionEvent.Step.Ended, {
+            sessionID: created.id,
+            assistantMessageID,
+            finish: "stop",
+            cost: Money.USD.zero,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            snapshot: after,
+            files: yield* snapshot.files({ from: before, to: after }),
+          })
+        }).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
+
+        yield* Effect.promise(async () => {
+          const root = path.join(global.data, "snapshot")
+          for (const project of await fs.readdir(root))
+            for (const repository of await fs.readdir(path.join(root, project)))
+              await fs.writeFile(path.join(root, project, repository, "index"), "not an index")
+        })
+        const failed = yield* session.revert
+          .stage({ sessionID: created.id, messageID: prompt.id })
+          .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }))
+        expect({
+          failed: failed?._tag,
+          written: yield* Effect.promise(() => Bun.file(written).text()),
+          revert: (yield* session.get(created.id)).revert,
+        }).toEqual({ failed: "Snapshot.Error", written: "one\n", revert: undefined })
+
+        const staged = yield* session.revert.stage({ sessionID: created.id, messageID: prompt.id, files: false })
+        expect({ staged, written: yield* Effect.promise(() => Bun.file(written).text()) }).toEqual({
+          staged: { messageID: prompt.id, snapshot: undefined, files: [] },
+          written: "one\n",
+        })
       }),
     { timeout: 15_000 },
   )

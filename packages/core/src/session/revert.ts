@@ -40,6 +40,13 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
       ? Snapshot.ID.make(input.session.revert.snapshot)
       : yield* snapshot.capture()
     const planned = yield* plan(database.db, { sessionID: input.session.id, messageID: input.messageID })
+    // Without the state before the revert there is nothing to compare the file-tool edits with, and so no way to put
+    // them back. The revert fails rather than stage only the conversation and report success (class 7).
+    if (input.files !== false && planned.size > 0 && !original)
+      return yield* new Snapshot.Error({
+        operation: "capture",
+        message: "The files could not be captured before the revert, so it was not staged",
+      })
     // Like a code-only rewind, the file half puts back only what the session's own file tools changed, and only the
     // paths git reports as different from the state before the revert: a stored name never becomes a path by itself.
     const next =
