@@ -210,7 +210,7 @@ test("compaction prompts prohibit task execution", () => {
     expect(SessionCompaction.buildPrompt(update)).toContain("Do not continue the task or call tools")
 })
 
-it.effect("auto compaction estimates current content against the buffered prompt ceiling", () =>
+it.effect("auto compaction estimates current content against the threshold below the effective window", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service
     const session = yield* insertSession(Session.ID.make("ses_input_limit"))
@@ -248,27 +248,27 @@ it.effect("auto compaction estimates current content against the buffered prompt
     const due = (context: SessionContext.Loaded) =>
       compaction.compact({ reason: "auto", context }).pipe(Effect.map((outcome) => outcome.status !== "skipped"))
 
-    // 90% of the input limit, which takes precedence over the context window.
+    // The input limit takes precedence over the context window.
     const inputLimited = { context: 400_000, input: 272_000, output: 128_000 }
-    expect(yield* due(input(244_799, inputLimited))).toBe(false)
-    expect(yield* due(input(244_800, inputLimited))).toBe(true)
+    expect(yield* due(input(238_999, inputLimited))).toBe(false)
+    expect(yield* due(input(239_000, inputLimited))).toBe(true)
     const native = (tokens: number, limit: { context: number; input?: number; output: number } = inputLimited) => {
       const selected = input(tokens, limit)
       return { ...selected, model: { ...selected.model, compaction: { type: "native" as const } } }
     }
-    expect(yield* due(native(244_799))).toBe(false)
-    expect(yield* due(native(244_800))).toBe(true)
+    expect(yield* due(native(238_999))).toBe(false)
+    expect(yield* due(native(239_000))).toBe(true)
     expect(yield* due(native(1_000_000, { context: 0, input: undefined, output: 0 }))).toBe(false)
 
-    // The summary's 16k output limit is more than 10% of a 100k window, so it sets the ceiling.
+    // The summary keeps the model's 10k output limit free and 13k more below that.
     const contextLimited = { context: 100_000, output: 10_000 }
-    expect(yield* due(input(83_999, contextLimited))).toBe(false)
-    expect(yield* due(input(84_000, contextLimited))).toBe(true)
+    expect(yield* due(input(76_999, contextLimited))).toBe(false)
+    expect(yield* due(input(77_000, contextLimited))).toBe(true)
 
-    // The reply limit does not lower the ceiling.
+    // A larger output limit keeps no more than 20k free.
     const outputLimited = { context: 100_000, output: 30_000 }
-    expect(yield* due(input(83_999, outputLimited))).toBe(false)
-    expect(yield* due(input(84_000, outputLimited))).toBe(true)
+    expect(yield* due(input(66_999, outputLimited))).toBe(false)
+    expect(yield* due(input(67_000, outputLimited))).toBe(true)
 
     const assistant = input(89_000, contextLimited).messages[0]
     const tool = SessionMessage.AssistantTool.make({
@@ -377,7 +377,7 @@ it.effect("auto compaction measures a saved tool result by its wrapper", () =>
       model: SessionRunnerModel.resolved(model, {
         capabilities: { tools: true, input: ["text"], output: ["text"] },
         cost: [],
-        limit: { context: 100_000, output: 10_000 },
+        limit: { context: 110_000, output: 10_000 },
       }),
     })
     const saved = savedResult(session.id, 80_000)
@@ -385,7 +385,7 @@ it.effect("auto compaction measures a saved tool result by its wrapper", () =>
       compaction
         .compact({ reason: "auto", context: context(message) })
         .pipe(Effect.map((outcome) => outcome.status !== "skipped"))
-    // The whole text would pass the 84,000-token ceiling; the wrapper stays under it.
+    // The whole text would pass the 87,000-token threshold; the wrapper stays under it.
     expect(yield* due(saved)).toBe(false)
     const content = saved.content.map((part) =>
       part.type === "tool" && part.state.status === "completed"
@@ -916,5 +916,75 @@ it.effect("a minimal estimate leaves out the editor selection that the full esti
     expect(SessionCompaction.estimatePrompt(context, true).estimated).toBeLessThan(
       SessionCompaction.estimatePrompt(context, false).estimated,
     )
+  }),
+)
+
+it.effect("sizes a summary request for an unknown window by the 200,000-token window less the output reserve", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap"))
+    // The last message stays verbatim; the eight before it are about 212,000 tokens, and seven of them are 185,500, which fits a 191,808-token cap but not the 180,000 a fixed 20,000 reserve gives.
+    const messages = Array.from({ length: 9 }, (_, index) =>
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: `marker-${index} ${"a".repeat(106_000)}`,
+        time: { created: DateTime.makeUnsafe(index) },
+      }),
+    )
+    const context = {
+      ...loaded(session, messages),
+      model: { ...resolved, limit: { context: 0, output: 8_192 } },
+    }
+    const compaction = yield* SessionCompaction.Service
+    const bus = yield* Bus.Service
+    const inputID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Compaction.Started, {
+      sessionID: session.id,
+      reason: "manual",
+      recent: "",
+      inputID,
+    })
+    expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
+
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).not.toContain("marker-0 ")
+    expect(sent).toContain("marker-1 ")
+    expect(sent).toContain("marker-6 ")
+  }),
+)
+
+it.effect("caps a summary request for an unknown window at 200,000 tokens less the output reserve, not at 200,000", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap_bound"))
+    // Seven of the earlier messages are about 192,500 tokens: more than the 191,808-token cap this reserve gives, and
+    // less than 200,000, so only six fit and the two oldest are dropped from the request.
+    const messages = Array.from({ length: 9 }, (_, index) =>
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: `marker-${index} ${"a".repeat(110_000)}`,
+        time: { created: DateTime.makeUnsafe(index) },
+      }),
+    )
+    const context = {
+      ...loaded(session, messages),
+      model: { ...resolved, limit: { context: 0, output: 8_192 } },
+    }
+    const compaction = yield* SessionCompaction.Service
+    const bus = yield* Bus.Service
+    const inputID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Compaction.Started, {
+      sessionID: session.id,
+      reason: "manual",
+      recent: "",
+      inputID,
+    })
+    expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
+
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).not.toContain("marker-1 ")
+    expect(sent).toContain("marker-2 ")
   }),
 )

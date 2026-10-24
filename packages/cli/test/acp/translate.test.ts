@@ -137,6 +137,10 @@ describe("acp turn translation", () => {
     const noTokens = started(failed(root, { type: "limit.tokens-unknown", message: "No tokens." }))
     expect(ACPTranslate.failure(noTokens.state)).toMatchObject({ errorName: "limit.tokens-unknown" })
     expect(ACPTranslate.response(noTokens.state, root, "failed").stopReason).not.toBe("max_turn_requests")
+    // A request refused locally because the conversation no longer fits is a failure, not a reached limit.
+    const noRoom = started(failed(root, { type: "context.limit", message: "Run /compact." }))
+    expect(ACPTranslate.failure(noRoom.state)).toMatchObject({ errorName: "context.limit" })
+    expect(ACPTranslate.response(noRoom.state, root, "failed").stopReason).not.toBe("max_turn_requests")
   })
 
   test("forwards any synthetic message that names a notice, and none that does not", () => {
