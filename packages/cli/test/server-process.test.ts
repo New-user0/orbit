@@ -138,6 +138,7 @@ const headless = {
   auto: false,
   yolo: false,
   dangerouslySkipPermissions: false,
+  rewindFiles: Option.none<string>(),
 }
 
 test("a bare run leaves the retention switch for its private server in this process's environment", async () => {
