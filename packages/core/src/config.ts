@@ -108,7 +108,7 @@ export interface Interface {
    * final validation (`keys` lists its top-level keys) and one that lost top-level keys to normalization (`keys` lists
    * them). Each still gives what survived. A reader that must not act on a guess, such as retention, asks it.
    */
-  readonly rejected?: () => Effect.Effect<readonly Rejected[]>
+  readonly rejected: () => Effect.Effect<readonly Rejected[]>
 }
 
 export interface Rejected {

@@ -60,7 +60,7 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Sessi
 export const setting = Effect.gen(function* () {
   const config = yield* Config.Service
   const entries = yield* config.entries()
-  const rejected = config.rejected === undefined ? [] : yield* config.rejected()
+  const rejected = yield* config.rejected()
   const days = Config.latest(entries, "cleanup_period_days")
   if (rejected.some((item) => item.keys === undefined)) {
     yield* Effect.logWarning("session retention skipped: a config file does not parse", {
