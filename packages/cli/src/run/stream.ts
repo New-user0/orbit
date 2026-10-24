@@ -1024,7 +1024,8 @@ export async function runStream(input: StreamInput) {
       if (!selected) throw new Error("This folder has no default model")
       return void (await input.client.session.switchModel({ sessionID, model: selected }))
     }
-    // end: stop what is running, then finish as at the end of the input.
+    // end: stop what is running, then finish. Unlike the end of the input, it does not wait for a suggestion in flight.
+    suggesting?.controller.abort()
     reading = false
     inputStopped.resolve()
     if (period) await input.client.session.interrupt({ sessionID })
@@ -1159,7 +1160,8 @@ export async function runStream(input: StreamInput) {
     closed = true
     await settleAll()
     await settled()
-    // A suggestion still being written when the input ends gets a short grace before the run exits.
+    // A suggestion still being written when standard input closes gets a short grace before the run exits; an `end`
+    // line, an interrupt, a signal and a fatal stop abort it instead.
     if (suggesting) await Promise.race([suggesting.done, Bun.sleep(5_000)])
   } catch (error) {
     await fatal(errorMessage(error))

@@ -1866,8 +1866,8 @@ stream-json output. `--tool-labels` asks the side model for a short label after 
 writes it as a `tool_label` line (`messageID`, `toolIDs`, `label`) before the result of that batch's message; a batch
 that was interrupted gets none. `--prompt-suggestions` asks the session's own model, with the conversation, what you
 might type next after each result that was not interrupted, and writes a `prompt_suggestion` line (`suggestion`). A new
-`user` or `interrupt` line drops a suggestion still being written, and when the input ends the run waits up to five
-seconds for one. Each label and each suggestion is a model call that spends tokens. Without the flags nothing is asked.
+`user`, `interrupt` or `end` line drops a suggestion still being written, and when standard input closes the run waits up
+to five seconds for one. Each label and each suggestion is a model call that spends tokens. Without the flags nothing is asked.
 
 The server has two new routes for this, `POST /api/session/:sessionID/assist/label` and
 `POST /api/session/:sessionID/assist/suggestion`. They store nothing and send nothing to the session; they answer with

@@ -259,6 +259,31 @@ test("the end of the input waits for the suggestion in flight before the run exi
   )
 }, 240_000)
 
+// The test above is the control: there standard input closes, and the run waits for the suggestion.
+test("an end line drops the suggestion in flight, and the run writes no line for it", async () => {
+  await scripted(
+    [read(), "done"],
+    { suggestion: () => ({ chunks: ["commit this"], delayMs: 3_000 }) },
+    async (own, home) => {
+      const run = controller(home, own, { args: ["--prompt-suggestions"], workspace })
+      run.send({ type: "user", text: "read the notes" })
+      await run.until((line) => line.type === "result")
+      const deadline = Date.now() + 90_000
+      while (!own.requests.some(isSuggestion)) {
+        if (Date.now() > deadline) throw new Error("The model was not asked for a suggestion")
+        await Bun.sleep(50)
+      }
+      // Standard input stays open: only the end line stops the run. Had the run waited, the answer would have been
+      // written 3 s after the request.
+      run.send({ type: "end" })
+      const done = await run.finish()
+
+      expect(done.code).toBe(0)
+      expect(of(run.lines, "prompt_suggestion")).toEqual([])
+    },
+  )
+}, 240_000)
+
 // A batch the controller interrupts gets no label, as in the reference; the control replies to the same ask.
 test.each([
   { settle: "permission_reply", labelled: true },

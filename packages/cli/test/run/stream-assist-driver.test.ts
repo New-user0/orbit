@@ -289,3 +289,59 @@ test("a label request an interruption aborted and a suggestion an interrupt line
   expect(warned).not.toContain("request aborted")
   expect(h.lines.filter((line) => line.type === "tool_label" || line.type === "prompt_suggestion")).toEqual([])
 })
+
+// An event stream that answers 403 cannot be reopened, which is a fatal stop of the run.
+const refuseStream = (h: ReturnType<typeof harness>) => {
+  h.state.refuse = Object.assign(new Error("Unexpected status"), { cause: { status: 403 } })
+  h.drop()
+}
+
+// What stops the run while a suggestion is being written: an end line, a signal and a fatal stop abort the request at
+// once, so its answer is not written. Standard input closing is the control: the run waits for that answer.
+test.each([
+  { stop: "standard input closing", aborted: false },
+  { stop: "an end line", aborted: true },
+  { stop: "SIGINT", aborted: true },
+  { stop: "a fatal stop", aborted: true },
+])("$stop with a suggestion in flight: aborted $aborted", async (row) => {
+  const h = harness({ suggestions: true })
+  await period(h, "one", "succeeded")
+  await waitFor(() => h.state.suggestions.length === 1)
+  const request = h.state.suggestions[0]
+
+  if (row.stop === "standard input closing") h.close()
+  if (row.stop === "an end line") h.send({ type: "end" })
+  if (row.stop === "SIGINT") process.emit("SIGINT")
+  if (row.stop === "a fatal stop") refuseStream(h)
+  // Well under the 5 s the run gives a suggestion before it aborts it on the way out.
+  await waitFor(() => request.signal?.aborted === true, 2_000).catch(() => {})
+  expect(request.signal?.aborted).toBe(row.aborted)
+  request.answer({ suggestion: "late suggestion" })
+  h.close()
+  h.idle()
+  await h.settle()
+
+  expect(suggestions(h)).toEqual(row.aborted ? [] : ["late suggestion"])
+})
+
+test("a fatal stop aborts the label in flight, and its answer is not written", async () => {
+  const h = harness({ labels: true })
+  h.send({ type: "user", text: "one" })
+  await waitFor(() => h.state.admitted.length === 1)
+  h.emit(delivered(h.state.admitted[0]))
+  batch("msg_a", "call_1").forEach((event) => h.emit(event))
+  await waitFor(() => h.state.labels.length === 1)
+
+  refuseStream(h)
+  await h.until((line) => line.type === "result")
+  expect(h.state.labels[0].signal?.aborted).toBe(true)
+  h.state.labels[0].answer({ label: "late label" })
+  h.close()
+  h.idle()
+
+  expect(await h.settle()).toBe(1)
+  expect(labels(h)).toEqual([])
+  expect(h.lines.filter((line) => line.type === "result")).toEqual([
+    expect.objectContaining({ outcome: "failed", reason: "error" }),
+  ])
+})
