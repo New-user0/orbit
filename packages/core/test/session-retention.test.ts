@@ -718,8 +718,11 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         yield* folder(path.join(l.outputs, "ses_ret_LowerKeep"))
         yield* folder(path.join(l.scratch, "ses_ret_LowerKeep"))
         yield* folder(path.join(l.outputs, "ses_ret_nolive"))
+        // A removed session whose ID has capitals and that no live session names in any case: its folder goes.
+        yield* folder(path.join(l.outputs, "ses_ret_MixedGone"))
+        yield* folder(path.join(l.scratch, "ses_ret_MixedGone"))
         // Each folder's own spelling is a session this database removed, so only the live ID in the other case keeps it.
-        yield* removedEarlier("ses_ret_casekeep", "ses_ret_LowerKeep")
+        yield* removedEarlier("ses_ret_casekeep", "ses_ret_LowerKeep", "ses_ret_MixedGone")
         yield* row({ id: "ses_ret_nolive", updated: Date.now() })
 
         yield* prune({ days: 30, now: later() })
@@ -729,6 +732,8 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         expect(yield* exists(path.join(l.outputs, "ses_ret_LowerKeep", "keep.txt"))).toBe(true)
         expect(yield* exists(path.join(l.scratch, "ses_ret_LowerKeep", "keep.txt"))).toBe(true)
         expect(yield* exists(path.join(l.outputs, "ses_ret_nolive"))).toBe(false)
+        expect(yield* exists(path.join(l.outputs, "ses_ret_MixedGone"))).toBe(false)
+        expect(yield* exists(path.join(l.scratch, "ses_ret_MixedGone"))).toBe(false)
       }),
     ),
   )
@@ -785,11 +790,16 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
       Effect.gen(function* () {
         const old = path.join(l.outputs, "tool_0123456789ab")
         const recent = path.join(l.outputs, "tool_0123456789ac")
+        // Only plain files go: a link of that name past the period stays, and so does what it points at.
+        const linked = path.join(l.outputs, "tool_0123456789ad")
+        const target = path.join(l.root, "elsewhere")
+        yield* folder(target)
+        yield* link(target, linked)
         yield* Effect.promise(async () => {
-          await fs.mkdir(l.outputs, { recursive: true })
           await fs.writeFile(old, "old")
           await fs.writeFile(recent, "recent")
           await fs.utimes(old, new Date(), new Date(Date.now() - 10 * DAY))
+          await fs.lutimes(linked, new Date(), new Date(Date.now() - 10 * DAY))
         })
 
         yield* prune({ days: 30, now: Date.now() })
@@ -798,6 +808,8 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         yield* prune({ days: 5, now: Date.now() })
         expect(yield* exists(old)).toBe(false)
         expect(yield* exists(recent)).toBe(true)
+        expect(yield* exists(linked)).toBe(true)
+        expect(yield* exists(path.join(target, "keep.txt"))).toBe(true)
       }),
     ),
   )
