@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { Global } from "@orbit/util/global"
-import { afterAll, expect, mock, test } from "bun:test"
+import { afterAll, expect, test } from "bun:test"
 import { Effect, Option } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -8,13 +8,10 @@ import path from "node:path"
 import print from "../../src/commands/handlers/print"
 import { headlessInput } from "../../src/commands/handlers/run"
 import { Config } from "../../src/config"
-import type { StreamInput } from "../../src/run/stream"
-import { ORBIT_VERSION } from "../../src/version"
 
 // clients-ux-37, in this process: `--tool-labels` and `--prompt-suggestions` are refused before any server is asked when
-// the run could not print their lines, and otherwise reach the stream driver as its `labels` and `suggestions`.
-// `stream-assist.test.ts` runs the same doors as child processes against a real server and model; this pins the two
-// handlers' checks and the hand-over from the command to the driver, which a child process does not report.
+// the run could not print their lines. `stream-assist.test.ts` runs the same doors as child processes against a real
+// server and model, and pins there that both flags reach the stream driver from `orb -p` and from `orb run`.
 
 const headless: Parameters<typeof headlessInput>[0] = {
   server: Option.none(),
@@ -101,53 +98,6 @@ test.each([
   expect((await Effect.runPromise(Effect.flip(provided(run)))).message).toBe(row.message)
 })
 
-// A server that answers what the command asks before the run starts: its version, a trusted folder, the folder and a
-// new session. Everything else is not found.
-const server = Bun.serve({
-  hostname: "127.0.0.1",
-  port: 0,
-  fetch(request) {
-    const url = new URL(request.url)
-    const directory = url.searchParams.get("location[directory]") ?? process.cwd()
-    if (url.pathname === "/api/location/trust")
-      return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
-    if (url.pathname === "/api/location") return Response.json({ directory, project: { id: "prj_flags" } })
-    if (url.pathname === "/api/session" && request.method === "POST")
-      return Response.json({ data: { id: "ses_flags", location: { directory }, agent: "build" } })
-    if (url.pathname === "/api/info") return Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [] })
-    return Response.json({ _tag: "NotFound", message: "not found" }, { status: 404 })
-  },
-})
-
 afterAll(async () => {
-  server.stop(true)
-  mock.restore()
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
-})
-
-test.each([
-  { flags: { toolLabels: true, promptSuggestions: true }, driver: { labels: true, suggestions: true } },
-  { flags: { toolLabels: false, promptSuggestions: false }, driver: { labels: false, suggestions: false } },
-])("orb run with stream input hands $flags to the stream driver as $driver", async (row) => {
-  const driven: StreamInput[] = []
-  const stream = await import("../../src/run/stream")
-  mock.module("../../src/run/stream", () => ({
-    ...stream,
-    runStream: async (input: StreamInput) => {
-      driven.push(input)
-      return 0
-    },
-  }))
-  // The run sets the exit code the driver returns; the test runner's own must stay as it was.
-  const exitCode = process.exitCode
-  try {
-    await Effect.runPromise(
-      provided(headlessInput({ ...headless, server: Option.some(server.url.origin), ...row.flags })),
-    )
-  } finally {
-    process.exitCode = exitCode
-    mock.restore()
-  }
-
-  expect(driven.map((input) => ({ labels: input.labels, suggestions: input.suggestions }))).toEqual([row.driver])
 })

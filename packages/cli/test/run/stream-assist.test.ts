@@ -146,38 +146,45 @@ test.each([
   240_000,
 )
 
-test("--prompt-suggestions writes a prompt_suggestion line after the result, from the second assistant message on, from the session's model and history", async () => {
-  await scripted(["first answer", "second answer"], { suggestion: () => "run the tests" }, async (own, home) => {
-    const run = controller(home, own, { args: ["--prompt-suggestions"], workspace })
-    run.send({ type: "user", text: "first line" })
-    const first = await run.until((line) => line.type === "result")
-    run.send({ type: "user", text: "second line" })
-    const second = await run.until((line) => line.type === "result", first.next)
-    const suggestion = await run.until((line) => line.type === "prompt_suggestion", second.next)
-    run.end()
-    const done = await run.finish()
+test.each([
+  { door: "orb -p", print: true },
+  { door: "orb run", print: false },
+])(
+  "$door --prompt-suggestions writes a prompt_suggestion line after the result, from the second assistant message on, from the session's model and history",
+  async (row) => {
+    await scripted(["first answer", "second answer"], { suggestion: () => "run the tests" }, async (own, home) => {
+      const run = controller(home, own, { args: ["--prompt-suggestions"], workspace, print: row.print })
+      run.send({ type: "user", text: "first line" })
+      const first = await run.until((line) => line.type === "result")
+      run.send({ type: "user", text: "second line" })
+      const second = await run.until((line) => line.type === "result", first.next)
+      const suggestion = await run.until((line) => line.type === "prompt_suggestion", second.next)
+      run.end()
+      const done = await run.finish()
 
-    expect(done.code).toBe(0)
-    expect(suggestion.line).toEqual({
-      type: "prompt_suggestion",
-      timestamp: expect.any(Number),
-      sessionID: run.lines[0].sessionID,
-      suggestion: "run the tests",
+      expect(done.code).toBe(0)
+      expect(suggestion.line).toEqual({
+        type: "prompt_suggestion",
+        timestamp: expect.any(Number),
+        sessionID: run.lines[0].sessionID,
+        suggestion: "run the tests",
+      })
+      // After the first result the session held one assistant message, too early for a suggestion: the model was asked
+      // once, after the second, with the session's model and both user lines.
+      expect(of(run.lines, "prompt_suggestion")).toHaveLength(1)
+      const asked = own.requests.filter(isSuggestion)
+      expect(asked).toHaveLength(1)
+      expect(asked[0].body.model).toBe("scripted:1b")
+      const history = JSON.stringify(asked[0].body.messages)
+      expect(history).toContain("first line")
+      expect(history).toContain("second line")
+      expect(history).toContain("second answer")
+      // Labels were not asked for.
+      expect(of(run.lines, "tool_label")).toEqual([])
     })
-    // After the first result the session held one assistant message, too early for a suggestion: the model was asked
-    // once, after the second, with the session's model and both user lines.
-    expect(of(run.lines, "prompt_suggestion")).toHaveLength(1)
-    const asked = own.requests.filter(isSuggestion)
-    expect(asked).toHaveLength(1)
-    expect(asked[0].body.model).toBe("scripted:1b")
-    const history = JSON.stringify(asked[0].body.messages)
-    expect(history).toContain("first line")
-    expect(history).toContain("second line")
-    expect(history).toContain("second answer")
-    // Labels were not asked for.
-    expect(of(run.lines, "tool_label")).toEqual([])
-  })
-}, 240_000)
+  },
+  240_000,
+)
 
 test("label and suggestion text reaches the output with its control and format characters written out (class 9)", async () => {
   const label = "Read\u001b]0;owned\u0007 notes‮"

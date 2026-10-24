@@ -343,6 +343,34 @@ test.each([
   expect(suggestions(h)).toEqual(row.aborted ? [] : ["late suggestion"])
 })
 
+// The row above in which standard input closes is the control: a suggestion answered within the grace is written.
+test("a suggestion never answered when standard input closes holds the run about 5 s, then is aborted and writes no line", async () => {
+  const h = harness({ suggestions: true })
+  await period(h, "one", "succeeded")
+  await waitFor(() => h.state.suggestions.length === 1)
+  const request = h.state.suggestions[0]
+
+  const started = Date.now()
+  h.close()
+  h.idle()
+  // Well under the server's 30 s limit on a side query, which is how long a stalled model would hold the run without
+  // the grace.
+  const code = await Promise.race([
+    h.settle(),
+    Bun.sleep(7_000).then(() => {
+      throw new Error("The run did not exit within 7 s")
+    }),
+  ])
+  const elapsed = Date.now() - started
+
+  expect(code).toBe(0)
+  expect(elapsed).toBeGreaterThanOrEqual(4_500)
+  expect(request.signal?.aborted).toBe(true)
+  request.answer({ suggestion: "late suggestion" })
+  await Bun.sleep(50)
+  expect(suggestions(h)).toEqual([])
+}, 20_000)
+
 test("a fatal stop aborts the label in flight, and its answer is not written", async () => {
   const h = harness({ labels: true })
   h.send({ type: "user", text: "one" })
