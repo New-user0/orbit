@@ -4818,6 +4818,85 @@
         }
       }
     },
+    "/api/session/{sessionID}/recap": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.recap",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionRecapResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRecapResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the small model for a short recap of the session for a person returning to it, at most once per turn of their input. Answers recorded: false when no recap was due, another request is writing one, no small model is available, or the call failed.",
+        "summary": "Record an away summary"
+      }
+    },
     "/api/session/{sessionID}/assist/label": {
       "post": {
         "tags": ["session"],
@@ -21281,6 +21360,9 @@
           },
           {
             "$ref": "#/components/schemas/Session.Message.Idle"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Message.Recap"
           }
         ]
       },
@@ -21395,6 +21477,37 @@
       },
       "Session.Message.ProviderState_5": {
         "type": "object"
+      },
+      "Session.Message.Recap": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^msg_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": ["created"],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": ["recap"]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "time", "type", "text"],
+        "additionalProperties": false
       },
       "Session.Message.Shell": {
         "type": "object",
@@ -22068,6 +22181,16 @@
           }
         },
         "required": ["_tag", "sessionID", "message"],
+        "additionalProperties": false
+      },
+      "SessionRecapResponse": {
+        "type": "object",
+        "properties": {
+          "recorded": {
+            "type": "boolean"
+          }
+        },
+        "required": ["recorded"],
         "additionalProperties": false
       },
       "SessionStats.Activity": {

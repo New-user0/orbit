@@ -254,6 +254,14 @@ export type SessionMessageIdle = {
   outcome: "succeeded" | "failed" | "interrupted"
 }
 
+export type SessionMessageRecap = {
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  type: "recap"
+  text: string
+}
+
 export type SessionActive = { type: "running" }
 
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
@@ -289,6 +297,8 @@ export type InstructionStatusWarning = {
 export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
+
+export type SessionRecapResponse = { recorded: boolean }
 
 export type SessionAssistLabelSkip = "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
 
@@ -929,6 +939,16 @@ export type SessionSynthetic = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
+}
+
+export type SessionRecapRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.recap.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; text: string }
 }
 
 export type SessionSkillActivated = {
@@ -2763,6 +2783,7 @@ export type SessionMessageInfo =
   | SessionMessageAssistant
   | SessionMessageCompaction
   | SessionMessageIdle
+  | SessionMessageRecap
 
 export type SessionMessageContentUpdated = {
   id: string
@@ -2817,6 +2838,7 @@ export type SessionEventDurable =
   | SessionExecutionInterrupted
   | SessionInstructionsUpdated
   | SessionSynthetic
+  | SessionRecapRecorded
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -2883,6 +2905,7 @@ export type V2Event =
   | SessionExecutionInterrupted
   | SessionInstructionsUpdated
   | SessionSynthetic
+  | SessionRecapRecorded
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -3874,6 +3897,13 @@ export type SessionImportInput = {
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
         }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
+        }
     >
     readonly location?: { readonly directory: string } | null
   }["info"]
@@ -4225,6 +4255,13 @@ export type SessionImportInput = {
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
         }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
+        }
     >
     readonly location?: { readonly directory: string } | null
   }["messages"]
@@ -4575,6 +4612,13 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
         }
     >
     readonly location?: { readonly directory: string } | null
@@ -5342,6 +5386,10 @@ export type SessionGenerateInput = {
 }
 
 export type SessionGenerateOutput = SessionGenerateResponse["data"]
+
+export type SessionRecapInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionRecapOutput = SessionRecapResponse
 
 export type SessionAssistLabelInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

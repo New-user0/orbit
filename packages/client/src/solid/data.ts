@@ -818,6 +818,14 @@ export function createData(config: CreateDataInput) {
           time: { created: event.created },
         })
         return
+      case "session.recap.recorded":
+        message.insert(event.data.sessionID, {
+          id: messageIDFromEvent(event.id),
+          type: "recap",
+          text: event.data.text,
+          time: { created: event.created },
+        })
+        return
       case "session.shell.started":
         message.insert(event.data.sessionID, {
           id: messageIDFromEvent(event.id),

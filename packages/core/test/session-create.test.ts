@@ -1481,6 +1481,67 @@ describe("SessionTransfer", () => {
     }),
   )
 
+  // The away summary restates the person's task and next step, so a sanitized export redacts it like a prompt.
+  it.effect("a sanitized export redacts the away summary's text", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const template = yield* session.create({ location })
+      const sessionID = Session.ID.create()
+      const recapID = SessionMessage.ID.create()
+      yield* transfer.import({
+        data: {
+          info: { ...template, id: sessionID },
+          messages: [
+            { id: recapID, type: "recap", text: "Shipping the secret plan. Next: deploy.", time: { created: DateTime.makeUnsafe(1) } },
+          ],
+        },
+        location,
+      })
+
+      expect((yield* transfer.export({ sessionID })).messages).toMatchObject([
+        { id: recapID, type: "recap", text: "Shipping the secret plan. Next: deploy." },
+      ])
+      expect((yield* transfer.export({ sessionID, sanitize: true })).messages).toMatchObject([
+        { id: recapID, type: "recap", text: `[redacted:recap:${recapID}]` },
+      ])
+    }),
+  )
+
+  // Class 9: an imported file is as untrusted as a clone, so a recap it carries is stored escaped, as SessionRecap
+  // stores one, and an SDK or API reader never gets the raw characters. Text already escaped is the control.
+  it.effect("an imported away summary's text is stored with its control and bidi characters written out", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const template = yield* session.create({ location })
+      const sessionID = Session.ID.create()
+      const hostileID = SessionMessage.ID.create()
+      const escapedID = SessionMessage.ID.create()
+      const escaped = "a\\x1b]0;pwned\\x07b\\u{202e}c\\x9b2J\\x0dd\nNext: tests."
+      yield* transfer.import({
+        data: {
+          info: { ...template, id: sessionID },
+          messages: [
+            {
+              id: hostileID,
+              type: "recap",
+              text: "a\u001b]0;pwned\u0007b‮c\u009b2J\rd\nNext: tests.",
+              time: { created: DateTime.makeUnsafe(1) },
+            },
+            { id: escapedID, type: "recap", text: escaped, time: { created: DateTime.makeUnsafe(2) } },
+          ],
+        },
+        location,
+      })
+
+      expect(yield* session.messages({ sessionID, order: "asc" })).toMatchObject([
+        { id: hostileID, type: "recap", text: escaped },
+        { id: escapedID, type: "recap", text: escaped },
+      ])
+    }),
+  )
+
   it.effect("rejects an existing session ID without changing its transcript", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
