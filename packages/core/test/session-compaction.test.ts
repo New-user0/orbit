@@ -51,9 +51,13 @@ const cost = [
 ]
 // When set, the provider answers with this instead of the summary.
 let override: (() => Stream.Stream<LLMEvent>) | undefined
+// When not empty, each request takes the next scripted answer, ahead of `override`.
+let replies: Array<() => Stream.Stream<LLMEvent>> = []
 const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
+    const scripted = replies.shift()
+    if (scripted) return scripted()
     if (override) return override()
     return Stream.make(
       LLMEvent.textDelta({ id: "summary", text: "## Objective\n- manual summary" }),
@@ -954,26 +958,138 @@ it.effect("sizes a summary request for an unknown window by the 200,000-token wi
   }),
 )
 
-it.effect("caps a summary request for an unknown window at 200,000 tokens less the output reserve, not at 200,000", () =>
+it.effect(
+  "caps a summary request for an unknown window at 200,000 tokens less the output reserve, not at 200,000",
+  () =>
+    Effect.gen(function* () {
+      requests = []
+      const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap_bound"))
+      // Seven of the earlier messages are about 192,500 tokens: more than the 191,808-token cap this reserve gives, and
+      // less than 200,000, so only six fit and the two oldest are dropped from the request.
+      const messages = Array.from({ length: 9 }, (_, index) =>
+        SessionMessage.User.make({
+          id: SessionMessage.ID.create(),
+          type: "user",
+          text: `marker-${index} ${"a".repeat(110_000)}`,
+          time: { created: DateTime.makeUnsafe(index) },
+        }),
+      )
+      const context = {
+        ...loaded(session, messages),
+        model: { ...resolved, limit: { context: 0, output: 8_192 } },
+      }
+      const compaction = yield* SessionCompaction.Service
+      const bus = yield* Bus.Service
+      const inputID = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.Compaction.Started, {
+        sessionID: session.id,
+        reason: "manual",
+        recent: "",
+        inputID,
+      })
+      expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
+
+      const sent = JSON.stringify(requests[0]?.messages)
+      expect(sent).not.toContain("marker-1 ")
+      expect(sent).toContain("marker-2 ")
+    }),
+)
+
+// context-memory-2: the summary prompt, what is stored from the reply, the fallback request and the prompt-too-long
+// retry. The section headings, the error texts and the placeholder are the spec's (ref-specs/context-memory-2.md).
+
+const SECTIONS = [
+  "Requests and intent",
+  "Technical context",
+  "Files and code",
+  "Problems and fixes",
+  "Problems worked through",
+  "User messages",
+  "Open tasks",
+  "Work in progress",
+  "Next step",
+]
+const NO_SUMMARY = "Compaction produced no summary"
+const TOO_LONG = "The conversation is too long to compact. Go back a few messages and try again."
+
+const usage = {
+  inputTokens: 15,
+  outputTokens: 6,
+  nonCachedInputTokens: 10,
+  cacheReadInputTokens: 3,
+  cacheWriteInputTokens: 2,
+  reasoningTokens: 2,
+}
+const answer =
+  (text: string, finish: "stop" | "length" = "stop") =>
+  () =>
+    Stream.make(
+      LLMEvent.textDelta({ id: "summary", text }),
+      LLMEvent.stepFinish({ index: 0, reason: { normalized: finish }, usage }),
+      LLMEvent.finish({ reason: { normalized: finish } }),
+    )
+const toolCallOnly = () =>
+  Stream.make(
+    LLMEvent.toolCall({ id: "call_summary_read", name: "Read", input: { path: "/project/a.ts" } }),
+    LLMEvent.stepFinish({ index: 0, reason: { normalized: "tool-calls" }, usage }),
+    LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
+  )
+const silent = () =>
+  Stream.make(
+    LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" }, usage }),
+    LLMEvent.finish({ reason: { normalized: "stop" } }),
+  )
+const tooLong = (message: string) => () =>
+  Stream.make(LLMEvent.providerError({ message, classification: "context-overflow" }))
+
+const textOf = (message: LLMRequest["messages"][number] | undefined) =>
+  (message?.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("")
+/** The compaction prompt: the user message appended after the conversation. */
+const promptOf = (request: LLMRequest | undefined) => textOf(request?.messages.at(-1))
+const paragraphsOf = (prompt: string) => prompt.split(/\n\s*\n/).filter((paragraph) => paragraph.trim())
+
+const userText = (text: string) =>
+  SessionMessage.User.make({
+    id: SessionMessage.ID.create(),
+    type: "user",
+    text,
+    time: { created: DateTime.makeUnsafe(0) },
+  })
+const assistantText = (text: string) =>
+  Schema.decodeUnknownSync(SessionMessage.Assistant)({
+    id: SessionMessage.ID.create(),
+    type: "assistant",
+    agent: Agent.defaultID,
+    model: { id: "summary-model", providerID: "test" },
+    content: [{ type: "text", text }],
+    time: { created: 0, completed: 0 },
+  })
+const previousCheckpoint = (summary: string) =>
+  Schema.decodeUnknownSync(SessionMessage.CompactionCompleted)({
+    id: SessionMessage.ID.create(),
+    type: "compaction",
+    status: "completed",
+    reason: "auto",
+    summary,
+    recent: "",
+    time: { created: 0, completed: 0 },
+  })
+
+/** Runs a manual compaction with scripted answers, returning the outcome, the requests and what was stored. */
+const scripted = (
+  name: string,
+  messages: readonly SessionMessage.Info[],
+  answers: Array<() => Stream.Stream<LLMEvent>>,
+  options: { instructions?: string; context?: (context: ReturnType<typeof loaded>) => SessionContext.Loaded } = {},
+) =>
   Effect.gen(function* () {
     requests = []
-    const session = yield* insertSession(Session.ID.make("ses_unknown_window_cap_bound"))
-    // Seven of the earlier messages are about 192,500 tokens: more than the 191,808-token cap this reserve gives, and
-    // less than 200,000, so only six fit and the two oldest are dropped from the request.
-    const messages = Array.from({ length: 9 }, (_, index) =>
-      SessionMessage.User.make({
-        id: SessionMessage.ID.create(),
-        type: "user",
-        text: `marker-${index} ${"a".repeat(110_000)}`,
-        time: { created: DateTime.makeUnsafe(index) },
-      }),
-    )
-    const context = {
-      ...loaded(session, messages),
-      model: { ...resolved, limit: { context: 0, output: 8_192 } },
-    }
-    const compaction = yield* SessionCompaction.Service
+    replies = [...answers]
+    const db = (yield* Database.Service).db
     const bus = yield* Bus.Service
+    const store = yield* SessionStore.Service
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make(name))
     const inputID = SessionMessage.ID.create()
     yield* bus.publish(SessionEvent.Compaction.Started, {
       sessionID: session.id,
@@ -981,10 +1097,337 @@ it.effect("caps a summary request for an unknown window at 200,000 tokens less t
       recent: "",
       inputID,
     })
-    expect(yield* compaction.compact({ reason: "manual", context, inputID })).toEqual({ status: "completed" })
+    const base = loaded(session, messages)
+    const context = options.context ? options.context(base) : base
+    // `instructions` is the trigger field this task adds; the base ignores it.
+    const trigger = { reason: "manual" as const, context, inputID, instructions: options.instructions }
+    const outcome = yield* compaction.compact(trigger).pipe(Effect.ensuring(Effect.sync(() => (replies = []))))
+    const stored = (yield* store.context(session.id))[0]
+    const completed = stored?.type === "compaction" && stored.status === "completed" ? stored : undefined
+    const events = yield* db
+      .select({ type: EventTable.type, data: EventTable.data })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, session.id))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    return { outcome, sent: [...requests], summary: completed?.summary, recent: completed?.recent, events }
+  })
 
-    const sent = JSON.stringify(requests[0]?.messages)
-    expect(sent).not.toContain("marker-1 ")
-    expect(sent).toContain("marker-2 ")
+it.effect("the compaction prompt opens and closes with the no-tools rule and asks for an analysis then a handoff", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_prompt",
+      [userText("Plan the migration")],
+      [answer("<handoff>\nok\n</handoff>")],
+    )
+    const prompt = promptOf(run.sent[0])
+    const paragraphs = paragraphsOf(prompt)
+    const preamble = paragraphs.slice(0, 2).join("\n\n")
+    // The preamble comes first and the trailer last: each forbids tools and names both blocks.
+    for (const part of [preamble, paragraphs.at(-1) ?? ""]) {
+      expect(part).toMatch(/tool/i)
+      expect(part).toContain("<analysis>")
+      expect(part).toContain("<handoff>")
+    }
+    // The analysis instruction comes before the nine sections, which are listed and then shown in the example.
+    const analysis = prompt.indexOf("<analysis>", prompt.indexOf(preamble) + preamble.length)
+    const listed = SECTIONS.map((section, index) => prompt.indexOf(`${index + 1}. ${section}`))
+    expect(analysis).toBeGreaterThan(0)
+    expect(listed.every((at) => at > analysis)).toBe(true)
+    expect(listed).toEqual([...listed].sort((a, b) => a - b))
+    const example = prompt.indexOf("<example>")
+    const handoff = prompt.indexOf("<handoff>", example)
+    const shown = SECTIONS.map((section, index) => prompt.indexOf(`${index + 1}. ${section}`, handoff))
+    expect(example).toBeGreaterThan(listed[8])
+    expect(shown.every((at) => at > handoff)).toBe(true)
+    expect(shown).toEqual([...shown].sort((a, b) => a - b))
+    expect(prompt.indexOf("</handoff>", handoff)).toBeGreaterThan(shown[8])
+    // The closing note tells the model to follow summary instructions it finds in the context.
+    expect(prompt.slice(prompt.indexOf("</example>", handoff))).toMatch(/instructions/i)
+  }),
+)
+
+it.effect("every summary compaction sends the one base prompt, a previous checkpoint included", () =>
+  Effect.gen(function* () {
+    const first = yield* scripted(
+      "ses_cm2_first",
+      [userText("Start the work")],
+      [answer("<handoff>\nfirst\n</handoff>")],
+    )
+    const again = yield* scripted(
+      "ses_cm2_again",
+      [previousCheckpoint("PREVIOUS-SUMMARY"), userText("Continue the work")],
+      [answer("<handoff>\nsecond\n</handoff>")],
+    )
+    expect(promptOf(again.sent[0])).toBe(promptOf(first.sent[0]))
+    // The previous summary is summarized again with everything after it.
+    const history = JSON.stringify(again.sent[0]?.messages.slice(0, -1))
+    expect(history).toContain("PREVIOUS-SUMMARY")
+    expect(history).toContain("Continue the work")
+  }),
+)
+
+it.effect("a summary compaction keeps no verbatim tail and summarizes the latest exchange too", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_no_tail",
+      [
+        userText("OLDER-REQUEST"),
+        assistantText("older answer"),
+        userText("LATEST-REQUEST"),
+        assistantText("latest answer"),
+      ],
+      [answer("<handoff>\nsummary\n</handoff>")],
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.recent).toBe("")
+    const history = JSON.stringify(run.sent[0]?.messages.slice(0, -1))
+    expect(history).toContain("LATEST-REQUEST")
+    expect(history).toContain("latest answer")
+  }),
+)
+
+// Plan test: analysis never stored. A closed block, a second block and a block cut off by the output limit are all
+// removed, and no durable event carries them.
+for (const [name, text, finish] of [
+  ["a closed analysis", "<analysis>\nDRAFT-A\n</analysis>\n\n<handoff>\n## Objective\n- keep\n</handoff>", "stop"],
+  [
+    "a second analysis",
+    "<analysis>DRAFT-A</analysis>\n<handoff>\n## Objective\n- keep\n</handoff>\n<analysis>DRAFT-B</analysis>",
+    "stop",
+  ],
+  [
+    "an analysis cut off by the output limit",
+    "<handoff>\n## Objective\n- keep\n</handoff>\n<analysis>DRAFT-C cut",
+    "length",
+  ],
+] as const)
+  it.effect(`analysis never stored: ${name}`, () =>
+    Effect.gen(function* () {
+      const run = yield* scripted(
+        `ses_cm2_analysis_${name.replaceAll(" ", "_")}`,
+        [userText("Do it")],
+        [answer(text, finish)],
+      )
+      expect(run.outcome).toEqual({ status: "completed" })
+      expect(run.summary).toBe("Summary:\n## Objective\n- keep")
+      expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
+    }),
+  )
+
+it.effect("a reply that is only an unfinished analysis fails as no summary and stores nothing", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_only_analysis",
+      [userText("Do it")],
+      [answer("<analysis>DRAFT-D cut", "length")],
+    )
+    expect(run.outcome).toMatchObject({ status: "failed", error: { type: "compaction.failed", message: NO_SUMMARY } })
+    expect(run.sent).toHaveLength(1)
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
+    expect(run.events.map((event) => event.type)).not.toContain(
+      Bus.versionedType(SessionEvent.Compaction.Ended.type, 1),
+    )
+  }),
+)
+
+it.effect("the stored summary turns the handoff block into a Summary heading and collapses blank lines", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_format",
+      [userText("Do it")],
+      [answer("Intro line\n\n\n<handoff>\n\n## Objective\n- a\n\n\n- b\n</handoff>\n")],
+    )
+    expect(run.summary).toBe("Intro line\n\nSummary:\n## Objective\n- a\n\n- b")
+  }),
+)
+
+it.effect("a summary that a compaction hook supplies is formatted the same way", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "compaction", (event) =>
+      Effect.sync(() => {
+        event.result = { summary: "<analysis>DRAFT-H</analysis>\n<handoff>\n## Objective\n- hooked\n</handoff>" }
+      }),
+    )
+    const run = yield* scripted("ses_cm2_hook_format", [userText("Do it")], [])
+    expect(run.sent).toEqual([])
+    expect(run.summary).toBe("Summary:\n## Objective\n- hooked")
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
+  }),
+)
+
+const withTools = (output: number) => (context: ReturnType<typeof loaded>) => ({
+  ...context,
+  model: { ...context.model, limit: { context: 200_000, output } },
+  tools: stubSnapshot({
+    definitions: [
+      ToolDefinition.make({ name: "Read", description: "Read files", inputSchema: { type: "object" } }),
+      ToolDefinition.make({ name: "Shell", description: "Run commands", inputSchema: { type: "object" } }),
+    ],
+    execute: () => Effect.die("Compaction must not execute tools"),
+  }),
+})
+const withImage = () =>
+  Schema.decodeUnknownSync(SessionMessage.User)({
+    id: SessionMessage.ID.create(),
+    type: "user",
+    text: "Look at this screenshot",
+    files: [{ mime: "image/png", data: "iVBORw0KGgo=", source: { type: "inline" } }],
+    time: { created: 0 },
+  })
+
+it.effect("a reply with no text gets one fallback request: one system line, no media, the read tool only", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_fallback",
+      [withImage()],
+      [toolCallOnly, answer("<handoff>\nfallback\n</handoff>")],
+      { context: withTools(12_000) },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(2)
+    const [primary, fallback] = run.sent
+    // The first request shares the main request's system prompt and tools, media included.
+    expect(primary?.tools.map((tool) => tool.name)).toEqual(["Read", "Shell"])
+    expect(primary?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBe(true)
+    expect(fallback?.system).toHaveLength(1)
+    expect(fallback?.system[0]?.text).not.toBe(primary?.system[0]?.text)
+    expect(fallback?.tools.map((tool) => tool.name)).toEqual(["Read"])
+    expect(fallback?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBe(false)
+    expect(JSON.stringify(fallback?.messages)).toContain("[image]")
+    expect(fallback?.generation?.maxTokens).toBe(12_000)
+    expect(promptOf(fallback)).toBe(promptOf(primary))
+    expect(run.summary).toBe("Summary:\nfallback")
+  }),
+)
+
+it.effect("the fallback is made once: a second reply without text fails as no summary", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted("ses_cm2_fallback_once", [userText("Do it")], [silent, silent, answer("unused")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toMatchObject({ status: "failed", error: { message: NO_SUMMARY } })
+    expect(run.sent).toHaveLength(2)
+    expect(run.sent[1]?.system).toHaveLength(1)
+  }),
+)
+
+it.effect("a first request the provider refuses goes to the fallback", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_refused",
+      [userText("Do it")],
+      [
+        () => Stream.make(LLMEvent.providerError({ message: "The provider refused this request" })),
+        answer("<handoff>\nok\n</handoff>"),
+      ],
+      { context: withTools(32_000) },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(2)
+    expect(run.sent[1]?.system).toHaveLength(1)
+  }),
+)
+
+/** u0 is about 1,000 tokens; each later round group (an assistant reply and the user message after it) is small. */
+const rounds = (count: number) => [
+  userText(`U0-${"x".repeat(4_000)}`),
+  ...Array.from({ length: count }, (_, index) => [
+    assistantText(`A${index + 1}-reply`),
+    userText(`U${index + 1}-ask`),
+  ]).flat(),
+]
+
+it.effect("a prompt-too-long rejection drops the oldest round groups covering the reported gap and retries", () =>
+  Effect.gen(function* () {
+    const gap = tooLong("prompt is too long: 1600 tokens > 600 maximum")
+    const run = yield* scripted("ses_cm2_ptl_gap", rounds(3), [gap, gap, answer("<handoff>\nfits\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(3)
+    // The rejected first request went to the fallback, which was rejected too.
+    expect(run.sent[1]?.system).toHaveLength(1)
+    // The retry is the first request again, with the oldest group (u0, 1,000 tokens) gone and the rest as messages.
+    const retry = run.sent[2]
+    expect(retry?.system.length).toBe(run.sent[0]?.system.length)
+    const sent = retry?.messages ?? []
+    expect(JSON.stringify(sent)).not.toContain("U0-")
+    const first = sent.findIndex((message) => textOf(message).includes("A1-reply"))
+    expect(first).toBeGreaterThan(0)
+    expect(sent[first]?.role).toBe("assistant")
+    // The slice would open with an assistant reply, so a marker user message goes first.
+    expect(sent[first - 1]?.role).toBe("user")
+    expect(JSON.stringify(sent)).toContain("U3-ask")
+  }),
+)
+
+it.effect("a prompt-too-long rejection without a readable gap drops a fifth of the round groups", () =>
+  Effect.gen(function* () {
+    const unknown = tooLong("Input is longer than the context window")
+    // Ten groups: u0, then nine reply-and-ask pairs. A fifth is two groups: u0, and A1 with U1.
+    const run = yield* scripted(
+      "ses_cm2_ptl_fifth",
+      rounds(9),
+      [unknown, unknown, answer("<handoff>\nfits\n</handoff>")],
+      { context: withTools(32_000) },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(3)
+    const sent = JSON.stringify(run.sent[2]?.messages)
+    expect(sent).not.toContain("U0-")
+    expect(sent).not.toContain("A1-reply")
+    expect(sent).not.toContain("U1-ask")
+    expect(sent).toContain("A2-reply")
+    expect(run.sent[2]?.messages.some((message) => message.role === "assistant")).toBe(true)
+  }),
+)
+
+it.effect("prompt-too-long gives up after three retries with a message that says to go back", () =>
+  Effect.gen(function* () {
+    const unknown = tooLong("Input is longer than the context window")
+    const run = yield* scripted(
+      "ses_cm2_ptl_exhausted",
+      rounds(9),
+      Array.from({ length: 12 }, () => unknown),
+      { context: withTools(32_000) },
+    )
+    expect(run.outcome).toMatchObject({ status: "failed", error: { type: "compaction.failed", message: TOO_LONG } })
+    // The first try and three retries, each a first request and its fallback.
+    expect(run.sent).toHaveLength(8)
+  }),
+)
+
+it.effect("prompt-too-long with one round group left fails at once", () =>
+  Effect.gen(function* () {
+    const unknown = tooLong("Input is longer than the context window")
+    const run = yield* scripted("ses_cm2_ptl_single", [userText("Only one message")], [unknown, unknown, unknown], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toMatchObject({ status: "failed", error: { message: TOO_LONG } })
+    expect(run.sent).toHaveLength(2)
+  }),
+)
+
+it.effect("compaction instructions go in a block of their own before the closing reminder", () =>
+  Effect.gen(function* () {
+    const done = () => [answer("<handoff>\nok\n</handoff>")]
+    const plain = yield* scripted("ses_cm2_no_instructions", [userText("Do it")], done())
+    const blank = yield* scripted("ses_cm2_blank_instructions", [userText("Do it")], done(), {
+      instructions: "  \n\t ",
+    })
+    const given = yield* scripted("ses_cm2_instructions", [userText("Do it")], done(), {
+      instructions: "  Keep the MIGRATION-COMMANDS exactly.  ",
+    })
+    // Empty or blank instructions are none.
+    expect(promptOf(blank.sent[0])).toBe(promptOf(plain.sent[0]))
+    const prompt = promptOf(given.sent[0])
+    expect(prompt).toContain("\nKeep the MIGRATION-COMMANDS exactly.\n")
+    expect(prompt.indexOf("MIGRATION-COMMANDS")).toBeGreaterThan(prompt.lastIndexOf("</example>"))
+    // The trailer is still last, and the block is the only difference.
+    expect(paragraphsOf(prompt).at(-1)).toBe(paragraphsOf(promptOf(plain.sent[0])).at(-1))
+    expect(prompt.replace(/\n\n[^\n]+\nKeep the MIGRATION-COMMANDS exactly\./, "")).toBe(promptOf(plain.sent[0]))
   }),
 )
