@@ -105,7 +105,8 @@ export interface Interface {
   readonly reload?: () => Effect.Effect<void>
   /**
    * The documents of the current load that were not taken as written: one that did not parse (no `keys`) and one that
-   * lost top-level keys to normalization (`keys` lists them). Each still gives what survived. A reader that must not act on a guess, such as retention, asks it.
+   * lost top-level keys to normalization (`keys` lists them), from every scope, managed files included. Each still gives
+   * what survived. A reader that must not act on a guess, such as retention, asks it.
    */
   readonly rejected: () => Effect.Effect<readonly Rejected[]>
 }
@@ -520,6 +521,18 @@ export const layer = (options?: Options) =>
         )
         // The managed document exists only when a managed settings file was read.
         const managedSnapshot = managedSettings.current()
+        // A managed file with a problem is a document of this load that was not taken as written, as a native one is: a
+        // problem with the whole file (`$`) leaves no keys to look in, and one with a field names its top-level key.
+        const invalid = managedSnapshot.diagnostics.filter((diagnostic) => diagnostic.kind === "invalid")
+        rejecting.push(
+          ...[...new Set(invalid.map((diagnostic) => diagnostic.source))].map((source) => {
+            const paths = invalid
+              .filter((diagnostic) => diagnostic.source === source)
+              .map((diagnostic) => diagnostic.path)
+            if (paths.includes("$")) return { source, scope: "managed" as const }
+            return { source, scope: "managed" as const, keys: [...new Set(paths.map((at) => at.split(".")[1]))] }
+          }),
+        )
         const organization =
           managedSnapshot.sources.length > 0
             ? [
