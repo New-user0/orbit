@@ -8,7 +8,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Deferred, Duration, Effect, Fiber, Layer, Scope, Stream } from "effect"
+import { DateTime, Deferred, Duration, Effect, Fiber, Layer, Scope, Stream } from "effect"
 import { Money } from "@orbit/schema/money"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -33,6 +33,7 @@ import { Session } from "@orbit/core/session"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionMessage } from "@orbit/core/session/message"
+import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { SessionStore } from "@orbit/core/session/store"
 import { Permission } from "@orbit/core/permission"
 import { ProjectTrust } from "@orbit/core/project-trust"
@@ -231,6 +232,45 @@ const settled = (registry: Tool.Interface, input: ReturnType<typeof call>) =>
     }
   })
 
+/** The text the model is sent for a settled outcome, lowered as a request lowers it from the stored result. */
+const lowered = (outcome: Tool.NormalizedResult, root: string) => {
+  const created = DateTime.makeUnsafe(0)
+  const part = toLLMMessages(
+    [
+      SessionMessage.Assistant.make({
+        id: SessionMessage.ID.make("msg_lowered"),
+        type: "assistant",
+        agent: Agent.defaultID,
+        model: sessionModel,
+        content: [
+          SessionMessage.AssistantTool.make({
+            type: "tool",
+            id: "call-cap",
+            name: "Bash",
+            state: { status: "completed", input: {}, content: outcome.content, metadata: outcome.metadata } as never,
+            time: { created, completed: created },
+          }),
+        ],
+        time: { created, completed: created },
+      }),
+    ],
+    sessionModel,
+    undefined,
+    [],
+    { toolOutput: root },
+  ).flatMap((message) => (message.role === "tool" ? message.content : []))[0]
+  if (part?.type !== "tool-result" || typeof part.result.value !== "string") throw new Error("Expected a text tool result")
+  return part.result.value
+}
+
+// Output that opens with more blank lines than the head holds: the 31,000 line breaks fill the 30,000-byte head, the
+// marker lies past it, and the head is blank once trimmed.
+const blankHeadCommand = (tail: string) =>
+  isWindows
+    ? `[Console]::Out.Write(([string][char]10 * 31000) + 'tail-' + 'marker')${tail ? `; ${tail}` : ""}`
+    : `head -c 31000 /dev/zero | tr '\\0' '\\n'; printf 'tail-''marker'${tail ? `; ${tail}` : ""}`
+const blankHeadBytes = 31_000 + "tail-marker".length
+
 describe("ShellTool output cap", () => {
   // Fails on the base, which declares `Infinity` and bounds its own tail.
   shellIt.live("declares a 30,000-character result limit", () =>
@@ -289,6 +329,52 @@ describe("ShellTool output cap", () => {
           const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
           expect(saved).toStartWith("\n  \noutput-start")
           expect(saved).toEndWith(`${" ".repeat(2_000)}output-end`)
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  // Class 7: output that did not fit is never reported as no output, even when its head is blank once trimmed. The model
+  // gets the wrapper with the saved file's size and path. Fails when settling reads a blank head as an empty result
+  // before it takes the offered file: the model is told the command printed nothing and nothing is saved.
+  shellIt.live(
+    "saves output whose head is blank and sends the wrapper",
+    () =>
+      inFolder(undefined, (registry) =>
+        Effect.gen(function* () {
+          const result = yield* settled(registry, call({ command: blankHeadCommand("") }))
+          expect(result.persisted).toMatchObject({ session: sessionID, parts: 1, size: blankHeadBytes })
+          expect(text(result.outcome)).not.toContain("returned no output")
+          const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
+          expect(saved).toEndWith("\ntail-marker")
+          expect(saved.length).toBe(blankHeadBytes)
+          const shown = lowered(result.outcome, result.root)
+          expect(shown).toStartWith("<saved-output>")
+          expect(shown).toContain(`The full output is saved at: ${result.saved}`)
+          expect(shown).toEndWith("</saved-output>")
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  // Class 7: the saved copy stands for the output, and the notes after it follow the wrapper. Fails when a blank head
+  // drops its part: `parts: 1` then names the timeout note, which is shown as the preview inside the wrapper.
+  shellIt.live(
+    "keeps a blank head's part so the timeout note follows the wrapper",
+    () =>
+      inFolder({ background_tasks: false }, (registry) =>
+        Effect.gen(function* () {
+          const wait = isWindows ? "Start-Sleep -Seconds 30" : "sleep 30"
+          const result = yield* settled(registry, call({ command: blankHeadCommand(wait), timeout: 3_000 }))
+          expect(result.outcome.metadata).toMatchObject({ timeout: true })
+          expect(result.persisted).toMatchObject({ parts: 1, size: blankHeadBytes })
+          expect(result.outcome.content[0]).toEqual({ type: "text", text: "" })
+          const shown = lowered(result.outcome, result.root)
+          const closed = shown.indexOf("</saved-output>")
+          expect(shown).toStartWith("<saved-output>")
+          expect(closed).toBeGreaterThan(0)
+          expect(shown.slice(0, closed)).not.toContain("exceeded timeout")
+          expect(shown.slice(closed)).toContain("Command exceeded timeout of 3000 ms")
         }),
       ),
     { timeout: 30_000 },

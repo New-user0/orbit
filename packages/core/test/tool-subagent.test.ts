@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Duration, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Schedule, Schema, Stream } from "effect"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { TestLLM } from "@orbit/ai/testing"
@@ -1164,7 +1164,7 @@ describe("SubagentTool in Plan mode", () => {
 
 // shell-safety-6 (FU-M3-152): when the run that an Agent call started ends, by completing, by failing or in the
 // background, every shell the child session still has running is killed, and none of them reports back to the child.
-// The parent's shell is the control: it keeps running.
+// The parent's shell is the control: it keeps running, and so does the person's own `!` command in the child.
 describe("SubagentTool and the child's shells", () => {
   const idleCommand = process.platform === "win32" ? "Start-Sleep -Seconds 60" : "sleep 60"
 
@@ -1193,6 +1193,17 @@ describe("SubagentTool and the child's shells", () => {
             shell.create({ shell: selected, command: idleCommand, timeout: 0, metadata: { sessionID } })
           const childShell = yield* start(child.id)
           const parentShell = yield* start(parent.id)
+          // The person's own `!` command in the child, started through the door a client uses. `sleep` is also a
+          // PowerShell alias, so the command runs in whatever shell the session resolves.
+          const personCommand = "sleep 61"
+          yield* sessions.shell({ sessionID: child.id, command: personCommand }).pipe(Effect.scoped, Effect.forkScoped)
+          const personShell = yield* shell.list().pipe(
+            Effect.map((running) =>
+              running.find((info) => info.command === personCommand && info.metadata.sessionID === child.id),
+            ),
+            Effect.repeat({ until: (found) => found !== undefined, schedule: Schedule.spaced("20 millis") }),
+            Effect.timeout(Duration.seconds(10)),
+          )
 
           yield* executeTool(registry, {
             sessionID: parent.id,
@@ -1215,7 +1226,12 @@ describe("SubagentTool and the child's shells", () => {
           const ended = yield* shell.wait(childShell.id).pipe(Effect.timeout(Duration.seconds(15)))
           expect(ended.status).toBe("killed")
           expect((yield* shell.get(parentShell.id)).status).toBe("running")
+          // Fails when the end of the run kills every command of the child, the person's own included. A background run
+          // stops its commands one by one after the call returned, so the check waits a moment for a kill to land.
+          const personEnded = yield* shell.wait(personShell!.id).pipe(Effect.timeoutOption(Duration.seconds(2)))
+          expect(personEnded._tag).toBe("None")
           yield* shell.kill(parentShell.id)
+          yield* shell.kill(personShell!.id)
         }),
       ),
     )

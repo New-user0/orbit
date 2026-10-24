@@ -824,14 +824,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   of that call, which links it into the session's tool-output folder, creating a name only where none is, through the
   same door and checks as saved tool results above: the same ID shapes (class 5), the same `lstat` on
   `tool-output` and the session's folder (class 4), and a result sent whole with one log line when anything fails
-  (class 7). Its marker carries `parts: 1`, and lowering ignores a `parts` that does not decode or names more parts than
+  (class 7). A head that is blank once trimmed keeps its part and still takes the offered file, so the output is never
+  reported as no output and `parts: 1` never names a note (class 7). Its marker carries `parts: 1`, and lowering ignores a `parts` that does not decode or names more parts than
   the result has (classes 5 and 7) and escapes the parts after the wrapper like any tool text (class 9).
   `tool_output.max_bytes` and the new `background_tasks` are withheld in an untrusted folder (class 8). Proof:
   `test/shell-output-cap.test.ts` (a link planted at the output file, on Linux and on Windows where a file link can be
   made; the writer's `O_NOFOLLOW`, read back from `/proc` on Linux; a vanished file), `test/tool-shell-output-cap.test.ts`
   (the linked session folder, a message ID that cannot name a file, a hostile call ID, the 64 MB cut, a copy when the
   shell file is on another volume, a replay that keeps the first copy, a copy that cannot be made on Linux, the withheld
-  keys with trusted controls), `test/tool-output.test.ts` (an offer used once, the bound on unsettled offers),
+  keys with trusted controls, a blank head alone and before a timeout note), `test/tool-output.test.ts` (an offer used once, the bound on unsettled offers),
   `test/tool-output-lowering.test.ts` (the `parts` that do not decode, a look-alike after the wrapper).
 
 **CLI and flow** (`packages/cli`, `packages/flow`):

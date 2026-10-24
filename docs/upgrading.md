@@ -3431,7 +3431,8 @@ named the full-output file. Now it keeps the first 30,000 bytes (`tool_output.ma
 to a whole character, and `max_lines` is no longer read. When the output is longer, the step links the command's output
 file, cut to 64 MB, into the session's tool-output folder and the model gets the `<saved-output>` block with the file's
 size before the cut, its path and a preview of the head, which starts at its first line that is not blank; the notices
-after the output follow the block. A command whose exit code reads as a failure is never saved: its text is cut to its
+after the output follow the block. Output whose head is all blank lines still gets the block, with an empty preview,
+instead of being reported as no output. A command whose exit code reads as a failure is never saved: its text is cut to its
 first and last 5,000 characters. The shell declares a 30,000-character result limit, so a head raised past that by `max_bytes` is saved by
 the step like any other result. A background command's completion message and the result of a command you run with
 `!` carry the head too, and both name the output file when the output did not fit. An output file
@@ -3464,7 +3465,8 @@ A shell command that has left the foreground is killed at once (no grace period)
 checked every five seconds; its completion message starts with a line saying so. When the run that an Agent call
 started ends, whether it finished or failed, in the foreground or the background, and also when a background subagent
 resumed after a restart ends, every shell command the subagent still has running is killed and reports nothing to it,
-and every shell notice still waiting for the subagent is withdrawn (a command you ran there with `!` excepted).
+and every shell notice still waiting for the subagent is withdrawn. A command you ran in the subagent's session with `!`
+is yours: it keeps running and its notice stays.
 
 **Affects:** people who start long background commands, and subagents that leave servers or watchers running.
 

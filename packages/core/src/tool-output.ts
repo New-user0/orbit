@@ -252,17 +252,18 @@ const layer = Layer.effect(
       offers.delete(key(input))
       const { persisted: _, ...metadata } = input.result.metadata ?? {}
       const result = { ...input.result, ...(input.result.metadata === undefined ? {} : { metadata }) }
-      if (result.content.every((part) => part.type === "text" && part.text.trim() === ""))
-        return { ...result, content: [{ type: "text" as const, text: `(${input.tool} finished and returned no output)` }] }
       const texts = result.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
-      // An image, a PDF or any other file part goes whole, however large the text beside it.
-      if (texts.length !== result.content.length) return result
-      // The offered file holds the whole output behind the first part; the parts after it follow the wrapper.
+      // The offered file holds the whole output behind the first part; the parts after it follow the wrapper. It is
+      // saved before the empty check, so output whose head is blank still reaches the model as the wrapper and its path.
       const adopted =
-        offered === undefined
+        offered === undefined || texts.length !== result.content.length
           ? undefined
           : yield* save({ ...input, extension: "txt", write: (target) => copyAdopted(offered, target) })
       if (adopted !== undefined) return { ...result, metadata: { ...metadata, persisted: { ...adopted, parts: 1 } } }
+      if (result.content.every((part) => part.type === "text" && part.text.trim() === ""))
+        return { ...result, content: [{ type: "text" as const, text: `(${input.tool} finished and returned no output)` }] }
+      // An image, a PDF or any other file part goes whole, however large the text beside it.
+      if (texts.length !== result.content.length) return result
       if (texts.reduce((sum, text) => sum + text.length, 0) <= input.limit) return result
       const saved = savedText(texts)
       const persisted = yield* save({

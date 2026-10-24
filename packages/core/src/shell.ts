@@ -104,7 +104,8 @@ export interface Interface {
   readonly result: (started: Shell.Info) => Effect.Effect<ShellResult.Result>
   // Says the command left the foreground: from then on it is killed once its output passes the background limit.
   readonly background: (id: Shell.ID) => Effect.Effect<void, NotFoundError>
-  // Kills every running command started for this session and marks it abandoned.
+  // Kills every running command started for this session and marks it abandoned. The person's own command (metadata
+  // `origin: "user"`) is theirs, not the run's, and keeps running.
   readonly abandon: (sessionID: string) => Effect.Effect<void>
   // Hands a finished command's output file to the step that settles the result of this call, as its saved copy.
   readonly offer: (input: {
@@ -365,7 +366,10 @@ const layer = (options: Options) =>
 
       const abandon = Effect.fn("Shell.abandon")(function* (sessionID: string) {
         const owned = Array.from(commands.values()).filter(
-          (command) => command.info.status === "running" && command.info.metadata.sessionID === sessionID,
+          (command) =>
+            command.info.status === "running" &&
+            command.info.metadata.sessionID === sessionID &&
+            command.info.metadata.origin !== "user",
         )
         yield* Effect.forEach(
           owned,

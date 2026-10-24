@@ -155,12 +155,13 @@ type Settled = {
 }
 
 // `exitNotice` says whether a non-zero exit code is written into the text. A timeout and a kill by a signal always are.
-const resultMessages = (output: Output, exitNotice = true, notes: ReadonlyArray<string> = []) => {
+// `head` keeps the output's part even when it is empty, because a saved copy stands for the first part.
+const resultMessages = (output: Output, exitNotice = true, notes: ReadonlyArray<string> = [], head = false) => {
   const notice =
     output.status === "running"
       ? BACKGROUND_INSTRUCTION
       : ShellResult.notice(exitNotice ? output : { ...output, exit: undefined })
-  return [...(output.output ? [output.output] : []), ...notes, ...(notice ? [notice] : [])]
+  return [...(output.output || head ? [output.output] : []), ...notes, ...(notice ? [notice] : [])]
 }
 
 // What a command that finished away from its call reports: its result, then the kept file when the output did not fit.
@@ -192,11 +193,17 @@ const exitFailed = (output: Output, analysis: ShellAnalysis.Analysis | undefined
 // that fails or a removed command included).
 const failedMetadata = (powershell: boolean) => (powershell ? {} : { error: true })
 
-const toolResult = (output: Output, failed = false, powershell = false, notes: ReadonlyArray<string> = []) => {
+const toolResult = (
+  output: Output,
+  failed = false,
+  powershell = false,
+  notes: ReadonlyArray<string> = [],
+  head = false,
+) => {
   // A foreground run says "Exited with code N" only when that code is a failure of its command (a grep with no match,
   // a diff that found differences and a false test are answers, and say nothing). PowerShell keeps its notice: its
   // codes are not judged.
-  const messages = resultMessages(output, failed || powershell, notes)
+  const messages = resultMessages(output, failed || powershell, notes, head)
   return {
     output,
     // A command that printed nothing and has no notice gives one blank part, so the step stores its empty marker
@@ -603,7 +610,14 @@ export const Plugin = {
               yield* shell
                 .offer({ id: info.id, sessionID: context.sessionID, messageID: context.messageID, callID: context.id })
                 .pipe(Effect.ignore)
-              return toolResult({ ...done.output, output: trimHead(done.output.output) }, false, powershell, done.notes)
+              // The head keeps its part even when trimming leaves it blank, so `parts: 1` names the output, not a note.
+              return toolResult(
+                { ...done.output, output: trimHead(done.output.output) },
+                false,
+                powershell,
+                done.notes,
+                true,
+              )
             }).pipe(
               Effect.mapError(
                 (error) =>
