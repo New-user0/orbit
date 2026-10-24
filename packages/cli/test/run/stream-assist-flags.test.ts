@@ -45,6 +45,7 @@ const headless: Parameters<typeof headlessInput>[0] = {
   auto: false,
   yolo: false,
   dangerouslySkipPermissions: false,
+  rewindFiles: Option.none(),
 }
 
 const printInput = (flags: {
