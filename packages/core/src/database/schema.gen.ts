@@ -188,6 +188,11 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_removed\` (
+          \`id\` text PRIMARY KEY
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_stats_archive\` (
           \`id\` integer PRIMARY KEY AUTOINCREMENT,
           \`session_id\` text NOT NULL,

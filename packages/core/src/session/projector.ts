@@ -18,6 +18,7 @@ import {
   SessionAdmissionTable,
   SessionInboxTable,
   SessionMessageTable,
+  SessionRemovedTable,
   SessionTable,
   SessionUsageTable,
 } from "./sql.js"
@@ -610,7 +611,15 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* bus.project(SessionEvent.Deleted, (event) =>
-      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
+      Effect.gen(function* () {
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+        yield* db
+          .insert(SessionRemovedTable)
+          .values({ id: event.data.sessionID })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+      }),
     )
     yield* bus.project(SessionEvent.AgentSelected, (event) =>
       Effect.gen(function* () {

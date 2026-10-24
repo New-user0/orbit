@@ -22,6 +22,7 @@ import {
   SessionInboxTable,
   SessionMessageTable,
   SessionPendingTable,
+  SessionRemovedTable,
   SessionStatsArchiveTable,
   SessionTable,
   SessionUsageTable,
@@ -37,8 +38,9 @@ export interface Interface {
    * One pass: removes every family (a session with its subagents and forks) whose members all last changed before
    * `now` less `days`, counting no change from before retention started on this database, unless a member has queued or
    * pending input, holds the execution claim, is shared, or has an ID or clock that does not decode. A family's stats go
-   * to the archive first. Then the session folders under the saved-results and scratchpad roots that no session names
-   * any longer go, and the flat saved results of earlier versions past the cutoff.
+   * to the archive first, and a family whose stats cannot be folded stays. Then the folders under the saved-results and
+   * scratchpad roots of the sessions this database removed go, unless a live session still names them, and the flat
+   * saved results of earlier versions past the cutoff.
    */
   readonly prune: (input: {
     readonly days: number
@@ -175,11 +177,21 @@ const layer = Layer.effect(
             return yield* Effect.logWarning("session retention kept a family: its sessions name each other in a loop", {
               ids: family.map((member) => plain(member.id).slice(0, 100)),
             }).pipe(Effect.as([]))
-          yield* archive(family)
+          // A stored row the fold cannot read (message data that is not JSON) keeps only its own family (class 7).
+          const folded = yield* archive(family).pipe(
+            Effect.as(true),
+            Effect.catch((error) =>
+              Effect.logWarning("session retention kept a family: its stats could not be folded", {
+                ids: family.map((member) => plain(member.id).slice(0, 100)),
+                error,
+              }).pipe(Effect.as(false)),
+            ),
+          )
+          if (!folded) return []
           return yield* removeInOrder(order)
         }),
       ).pipe(Effect.map((lists) => lists.flat()))
-      yield* sweep(new Set(removed.map((id) => id.toLowerCase())), cutoff)
+      yield* sweep(cutoff)
       return { removed }
     })
 
@@ -224,7 +236,6 @@ const layer = Layer.effect(
           ORDER BY message.time_created, message.seq
         `,
         )
-        .pipe(Effect.orDie)
       const tools = yield* db
         .all<{ sessionID: string; timeCreated: number; name: string | null; status: string | null }>(
           sql`
@@ -243,7 +254,6 @@ const layer = Layer.effect(
           ORDER BY message.time_created, message.seq, content.key
         `,
         )
-        .pipe(Effect.orDie)
       const usage = yield* db
         .all<{
           sessionID: string
@@ -270,7 +280,6 @@ const layer = Layer.effect(
           ORDER BY time_created, seq
         `,
         )
-        .pipe(Effect.orDie)
 
       const members = new Map(family.map((member) => [member.id, member]))
       const buckets = new Map<string, typeof SessionStatsArchiveTable.$inferInsert>()
@@ -356,7 +365,6 @@ const layer = Layer.effect(
             )
           }),
         )
-        .pipe(Effect.orDie)
     })
 
     // Through `Session.remove`, so every subscriber of the deletion runs. A session no other member names goes before
@@ -380,11 +388,15 @@ const layer = Layer.effect(
       return removed
     })
 
-    // The folders that no session names any longer. The names of the live sessions, of their scratchpads and of the
-    // saved results their messages still point to are compared in lower case, because Windows and macOS treat two
-    // spellings as one folder (class 4). A folder of a session this pass removed goes; any other one only once its own
-    // last change is past the cutoff, since another channel's database keeps its sessions under the same folders.
-    const sweep = Effect.fnUntraced(function* (removed: ReadonlySet<string>, cutoff: number) {
+    // The folders of the sessions this database removed (`SessionRemovedTable`), in this pass, by hand or earlier. The
+    // roots are shared by every database on the machine (each channel and `ORBIT_DB` has its own), so a folder whose
+    // name this database never removed stays whatever its age: it may belong to another database's live, shared or new
+    // session. A removed session's folder also stays while a live session, its scratchpad or a saved-result marker in
+    // its messages names it. Names are compared in lower case, because Windows and macOS treat two spellings as one
+    // folder (class 4). A record goes once neither root holds a folder of its name.
+    const sweep = Effect.fnUntraced(function* (cutoff: number) {
+      const records = yield* db.select({ id: SessionRemovedTable.id }).from(SessionRemovedTable).all().pipe(Effect.orDie)
+      const removed = new Set(records.map((record) => record.id.toLowerCase()))
       const live = yield* db
         .select({ id: SessionTable.id, parentID: SessionTable.parent_id, forkID: SessionTable.fork_session_id })
         .from(SessionTable)
@@ -408,46 +420,69 @@ const layer = Layer.effect(
       const named = markers.flatMap((marker) =>
         typeof marker.session === "string" ? [marker.session.toLowerCase()] : [],
       )
-      yield* sweepRoot(outputs, new Set([...ids, ...named]), removed, cutoff)
-      yield* sweepRoot(scratch, new Set([...ids, ...keys]), removed, cutoff)
+      const outputsLeft = yield* sweepRoot(outputs, new Set([...ids, ...named]), removed)
+      const scratchLeft = yield* sweepRoot(scratch, new Set([...ids, ...keys]), removed)
       yield* ToolOutput.cleanup(outputs, cutoff)
+      // A root that was not read may still hold a removed session's folder, so every record waits for a later pass.
+      if (outputsLeft === undefined || scratchLeft === undefined) return
+      const done = records
+        .filter((record) => !outputsLeft.has(record.id.toLowerCase()) && !scratchLeft.has(record.id.toLowerCase()))
+        .map((record) => record.id)
+      yield* Effect.forEach(
+        Array.from({ length: Math.ceil(done.length / 500) }, (_, index) => done.slice(index * 500, (index + 1) * 500)),
+        (batch) => db.delete(SessionRemovedTable).where(inArray(SessionRemovedTable.id, batch)).run(),
+        { discard: true },
+      ).pipe(Effect.orDie)
     })
 
     // The root is Orbit's own folder, checked with `lstat` and left alone when it is a link or not a folder. Each entry
     // is `lstat`ed and removed at the joined path that was checked: a link goes as a link, and nothing is followed or
     // resolved before the decision, so a link to a share is never opened (class 4). Only a name a session ID can take is
-    // a session's folder (class 5).
-    const sweepRoot = (root: string, keep: ReadonlySet<string>, removed: ReadonlySet<string>, cutoff: number) =>
+    // a session's folder (class 5). Gives the lower-case names of the session folders still in the root, or undefined
+    // when the root was not read.
+    const sweepRoot = (root: string, keep: ReadonlySet<string>, removed: ReadonlySet<string>) =>
       Effect.tryPromise(async () => {
         const info = await fs.lstat(root).catch((error: NodeJS.ErrnoException) => {
           if (error.code === "ENOENT") return undefined
           throw error
         })
-        if (info === undefined) return { link: false, failed: 0 }
-        if (!info.isDirectory()) return { link: true, failed: 0 }
+        if (info === undefined) return { link: false, outcomes: [] }
+        if (!info.isDirectory()) return { link: true, outcomes: [] }
         const outcomes = await Promise.all(
           (await fs.readdir(root))
-            .map(async (name) => {
-              if (!SessionFolder.KEY.test(name) || keep.has(name.toLowerCase())) return true
+            .filter((name) => SessionFolder.KEY.test(name))
+            .map((name) => {
+              const key = name.toLowerCase()
+              if (keep.has(key) || !removed.has(key)) return { key, state: "left" as const }
               const entry = path.join(root, name)
-              const found = await fs.lstat(entry)
-              if (!removed.has(name.toLowerCase()) && found.mtimeMs >= cutoff) return true
-              if (found.isSymbolicLink()) return fs.unlink(entry).then(() => true)
-              if (found.isDirectory()) return fs.rm(entry, { recursive: true, force: true }).then(() => true)
-              return true
-            })
-            .map((outcome) => outcome.catch(() => false)),
+              return fs
+                .lstat(entry)
+                .then(async (found) => {
+                  if (!found.isSymbolicLink() && !found.isDirectory()) return { key, state: "left" as const }
+                  await (found.isSymbolicLink() ? fs.unlink(entry) : fs.rm(entry, { recursive: true, force: true }))
+                  return { key, state: "removed" as const }
+                })
+                .catch(() => ({ key, state: "failed" as const }))
+            }),
         )
-        return { link: false, failed: outcomes.filter((ok) => !ok).length }
+        return { link: false, outcomes }
       }).pipe(
-        Effect.flatMap((result) =>
-          result.link
-            ? Effect.logWarning("session retention left a folder alone: it is a link or not a folder", { root })
-            : result.failed > 0
-              ? Effect.logWarning("session retention could not remove some entries", { root, failed: result.failed })
-              : Effect.void,
+        Effect.flatMap((result) => {
+          const left = new Set(result.outcomes.flatMap((outcome) => (outcome.state === "removed" ? [] : [outcome.key])))
+          const failed = result.outcomes.filter((outcome) => outcome.state === "failed").length
+          if (result.link)
+            return Effect.logWarning("session retention left a folder alone: it is a link or not a folder", {
+              root,
+            }).pipe(Effect.as(undefined))
+          if (failed > 0)
+            return Effect.logWarning("session retention could not remove some entries", { root, failed }).pipe(
+              Effect.as(left),
+            )
+          return Effect.succeed(left)
+        }),
+        Effect.catch((error) =>
+          Effect.logWarning("session retention could not read a folder", { root, error }).pipe(Effect.as(undefined)),
         ),
-        Effect.catch((error) => Effect.logWarning("session retention could not read a folder", { root, error })),
       )
 
     const busy = Effect.gen(function* () {

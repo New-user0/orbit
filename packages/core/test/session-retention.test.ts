@@ -2,10 +2,11 @@
 // Orbit removes a family (a session, its subagents and its forks) whole, only when no member has queued or pending
 // work, holds the execution claim or is shared (V2 durable admission and restart recovery). A family that existed before
 // the upgrade counts its idle time from the upgrade (owner, 2026-10-21). The stats of a removed family stay in
-// `orb stats`, as the reference's stats cache keeps them. The pass also sweeps the folders that sessions name: the saved
-// results under `<data>/tool-output` and the scratchpads under `<tmp>/sessions`. A folder is named by a session ID, so the
-// name is shape-checked, a link is removed as a link, a root that is a link is left alone, and a folder that a live ID
-// names in another letter case stays (classes 4 and 5). A row whose ID or clock does not decode keeps its family (class 7).
+// `orb stats`, as the reference's stats cache keeps them. The pass also sweeps the folders of the sessions this database
+// removed: the saved results under `<data>/tool-output` and the scratchpads under `<tmp>/sessions`, roots that other
+// databases share. A folder is named by a session ID, so the name is shape-checked, a link is removed as a link, a root
+// that is a link is left alone, and a folder that a live ID names in another letter case stays (classes 4 and 5). A row
+// whose ID or clock does not decode, or whose stats cannot be folded, keeps its family (class 7).
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -33,7 +34,7 @@ import { SessionModelTransport } from "@orbit/core/session/model-transport"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionRetention } from "@orbit/core/session/retention"
 import { SessionSchema } from "@orbit/core/session/schema"
-import { SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
+import { SessionMessageTable, SessionRemovedTable, SessionTable } from "@orbit/core/session/sql"
 import { SessionStats } from "@orbit/core/session/stats"
 import { SessionStore } from "@orbit/core/session/store"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -84,36 +85,37 @@ type Layout = Effect.Success<typeof layout>
 
 type Services = Database.Service | Bus.Service | Session.Service
 
+// Each build has its own in-memory database over the folders of `l`, so two builds over one layout stand for two
+// channels' databases on one machine.
+const graph = (l: Layout, execution: Layer.Layer<SessionExecution.Service> = SessionExecution.noopLayer) =>
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionEnvironment.node,
+      Session.node,
+      Instance.node,
+      LocationServiceMap.node,
+      SessionRetention.node,
+    ]),
+    [
+      Project.node.replace(globalProjectNode),
+      SessionExecution.node.replace(execution),
+      SessionModelTransport.node.replace(transport),
+      offlineModels,
+      Global.node.replace(Global.layerWith({ data: l.data, tmp: l.tmp, config: path.join(l.root, "config") })),
+    ],
+  )
+
 const scenario = <A, E>(
   body: (l: Layout) => Effect.Effect<A, E, Services | Scope.Scope>,
-  execution: Layer.Layer<SessionExecution.Service> = SessionExecution.noopLayer,
+  execution?: Layer.Layer<SessionExecution.Service>,
 ) =>
   Effect.gen(function* () {
     const l = yield* layout
-    return yield* body(l).pipe(
-      Effect.provide(
-        AppNodeBuilder.build(
-          LayerNode.group([
-            Database.node,
-            Bus.node,
-            SessionProjector.node,
-            SessionStore.node,
-            SessionEnvironment.node,
-            Session.node,
-            Instance.node,
-            LocationServiceMap.node,
-            SessionRetention.node,
-          ]),
-          [
-            Project.node.replace(globalProjectNode),
-            SessionExecution.node.replace(execution),
-            SessionModelTransport.node.replace(transport),
-            offlineModels,
-            Global.node.replace(Global.layerWith({ data: l.data, tmp: l.tmp, config: path.join(l.root, "config") })),
-          ],
-        ),
-      ),
-    )
+    return yield* body(l).pipe(Effect.provide(graph(l, execution)))
   })
 
 // A session row written straight into the store, so a test can name any ID and any clock.
@@ -160,6 +162,27 @@ const remaining = Effect.gen(function* () {
   const rows = yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie)
   return rows.map((item) => String(item.id)).toSorted()
 })
+
+// What `Session.remove` records for a session that went in an earlier version of the store, where no row of it is left.
+const removedEarlier = (...ids: string[]) =>
+  Database.Service.use((database) =>
+    database.db
+      .insert(SessionRemovedTable)
+      .values(ids.map((id) => ({ id: SessionSchema.ID.make(id) })))
+      .run()
+      .pipe(Effect.orDie, Effect.asVoid),
+  )
+
+const records = Database.Service.use((database) =>
+  database.db
+    .select({ id: SessionRemovedTable.id })
+    .from(SessionRemovedTable)
+    .all()
+    .pipe(
+      Effect.orDie,
+      Effect.map((rows) => rows.map((item) => String(item.id)).toSorted()),
+    ),
+)
 
 const exists = (file: string) =>
   Effect.promise(() =>
@@ -383,6 +406,37 @@ describe("SessionRetention.prune", () => {
       }),
     ),
   )
+
+  // Class 7: a stored message whose data is not JSON stops the fold of its own family's stats, so that family stays with
+  // one line; the family after it and the folder sweep still run in the same pass.
+  it.live("keeps a family whose stats cannot be folded", () =>
+    scenario((l) =>
+      Effect.gen(function* () {
+        const logged: string[] = []
+        const now = Date.now()
+        yield* row({ id: "ses_ret_badjson", updated: now })
+        yield* row({ id: "ses_ret_badjson_child", parent: "ses_ret_badjson", updated: now })
+        yield* row({ id: "ses_ret_goodjson", updated: now })
+        const database = yield* Database.Service
+        yield* database.db
+          .run(
+            sql`INSERT INTO session_message (id, session_id, seq, type, time_created, time_updated, data)
+                VALUES ('msg_ret_badjson', 'ses_ret_badjson_child', 1, 'assistant', ${now}, ${now}, 'not json')`,
+          )
+          .pipe(Effect.orDie)
+        yield* folder(path.join(l.outputs, "ses_ret_goodjson"))
+        yield* folder(path.join(l.outputs, "ses_ret_badjson_child"))
+
+        const pass = yield* prune({ days: 30, now: later() }).pipe(logging(logged))
+
+        expect(pass.removed).toEqual(["ses_ret_goodjson"])
+        expect(yield* remaining).toEqual(["ses_ret_badjson", "ses_ret_badjson_child"])
+        expect(logged).toEqual(["session retention kept a family: its stats could not be folded"])
+        expect(yield* exists(path.join(l.outputs, "ses_ret_goodjson"))).toBe(false)
+        expect(yield* exists(path.join(l.outputs, "ses_ret_badjson_child", "keep.txt"))).toBe(true)
+      }),
+    ),
+  )
 })
 
 describe("SessionRetention.prune: the order of removal", () => {
@@ -502,8 +556,77 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         expect(yield* exists(path.join(l.outputs, "ses_ret_live", "keep.txt"))).toBe(true)
         expect(yield* exists(path.join(l.scratch, "ses_ret_froot"))).toBe(false)
         expect(yield* exists(path.join(l.scratch, "ses_ret_live", "keep.txt"))).toBe(true)
+        // The record of a removed session stays while one of its folders does, so the folder goes once nothing names it.
+        expect(yield* records).toEqual(["ses_ret_froot"])
+
+        const sessions = yield* Session.Service
+        yield* sessions.remove(SessionSchema.ID.make("ses_ret_live"))
+        yield* prune({ days: 30, now: later() })
+
+        expect(yield* exists(path.join(l.outputs, "ses_ret_froot"))).toBe(false)
+        expect(yield* exists(path.join(l.outputs, "ses_ret_live"))).toBe(false)
+        expect(yield* exists(path.join(l.scratch, "ses_ret_live"))).toBe(false)
+        expect(yield* records).toEqual([])
       }),
     ),
+  )
+
+  // The roots are shared by every database on the machine: each channel (a source build is `local`) and `ORBIT_DB` have
+  // their own. A pass in one database removes only the folders of sessions it removed itself, at any period, so another
+  // database's shared session, and its session still inside the upgrade grace, keep their folders however old they are.
+  it.live("leaves the folders of sessions another database holds", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const old = new Date(Date.now() - 40 * DAY)
+      const age = (target: string) => Effect.promise(() => fs.utimes(target, old, old))
+      const kept = ["ses_ret_other_shared", "ses_ret_other_grace"]
+      yield* Effect.gen(function* () {
+        yield* row({ id: "ses_ret_other_shared", updated: Date.now() - 40 * DAY })
+        yield* row({ id: "ses_ret_other_grace", updated: Date.now() - 40 * DAY })
+        const database = yield* Database.Service
+        yield* database.db
+          .update(SessionTable)
+          .set({ share_url: "https://share.invalid/s/other" })
+          .where(eq(SessionTable.id, SessionSchema.ID.make("ses_ret_other_shared")))
+          .run()
+          .pipe(Effect.orDie)
+        yield* Effect.forEach(
+          kept.flatMap((id) => [path.join(l.outputs, id), path.join(l.scratch, id)]),
+          (target) => folder(target).pipe(Effect.andThen(age(target))),
+          { discard: true },
+        )
+        yield* prune({ days: 30 })
+        expect(yield* remaining).toEqual(kept.toSorted())
+      }).pipe(Effect.provide(graph(l)))
+
+      yield* Effect.gen(function* () {
+        // Controls in the same pass: one session this database removes and one it removed by hand earlier.
+        yield* row({ id: "ses_ret_mine_idle", updated: Date.now() })
+        yield* row({ id: "ses_ret_mine_hand", updated: Date.now() })
+        yield* Effect.forEach(
+          ["ses_ret_mine_idle", "ses_ret_mine_hand"].flatMap((id) => [
+            path.join(l.outputs, id),
+            path.join(l.scratch, id),
+          ]),
+          (target) => folder(target),
+          { discard: true },
+        )
+        const sessions = yield* Session.Service
+        yield* sessions.remove(SessionSchema.ID.make("ses_ret_mine_hand"))
+
+        yield* prune({ days: 0, now: Date.now() + 1_000 })
+
+        expect(yield* remaining).toEqual([])
+        for (const id of kept) {
+          expect(yield* exists(path.join(l.outputs, id, "keep.txt"))).toBe(true)
+          expect(yield* exists(path.join(l.scratch, id, "keep.txt"))).toBe(true)
+        }
+        for (const id of ["ses_ret_mine_idle", "ses_ret_mine_hand"]) {
+          expect(yield* exists(path.join(l.outputs, id))).toBe(false)
+          expect(yield* exists(path.join(l.scratch, id))).toBe(false)
+        }
+      }).pipe(Effect.provide(graph(l)))
+    }),
   )
 
   // Class 4: a link where a session's folder should be is removed as a link; what it leads to is never entered.
@@ -520,9 +643,12 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         yield* link(scratchTarget, path.join(l.scratch, "ses_ret_linked"))
         yield* link(missing, path.join(l.outputs, "ses_ret_dangling"))
         yield* Effect.promise(() => fs.rm(missing, { recursive: true, force: true }))
+        yield* row({ id: "ses_ret_linked", updated: Date.now() })
+        yield* row({ id: "ses_ret_dangling", updated: Date.now() })
 
         yield* prune({ days: 30, now: later() })
 
+        expect(yield* remaining).toEqual([])
         expect(yield* exists(path.join(l.outputs, "ses_ret_linked"))).toBe(false)
         expect(yield* exists(path.join(l.scratch, "ses_ret_linked"))).toBe(false)
         expect(yield* exists(path.join(l.outputs, "ses_ret_dangling"))).toBe(false)
@@ -543,6 +669,7 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         yield* folder(elsewhere, "tool_0123456789ab")
         yield* link(elsewhere, l.outputs)
         yield* folder(path.join(l.scratch, "ses_ret_gone"))
+        yield* row({ id: "ses_ret_gone", updated: Date.now() })
 
         yield* prune({ days: 30, now: later() })
 
@@ -550,6 +677,8 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         expect(yield* exists(path.join(elsewhere, "tool_0123456789ab"))).toBe(true)
         expect((yield* Effect.promise(() => fs.lstat(l.outputs))).isSymbolicLink()).toBe(true)
         expect(yield* exists(path.join(l.scratch, "ses_ret_gone"))).toBe(false)
+        // A root left alone may still hold the session's folder, so its record waits for a later pass.
+        expect(yield* records).toEqual(["ses_ret_gone"])
       }),
     ),
   )
@@ -562,6 +691,7 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
       Effect.gen(function* () {
         const logged: string[] = []
         yield* folder(path.join(l.outputs, "ses_ret_unread"))
+        yield* row({ id: "ses_ret_unread", updated: Date.now() })
         yield* Effect.promise(async () => {
           await fs.rm(l.tmp, { recursive: true, force: true })
           await fs.writeFile(l.tmp, "not a folder")
@@ -588,6 +718,9 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         yield* folder(path.join(l.outputs, "ses_ret_LowerKeep"))
         yield* folder(path.join(l.scratch, "ses_ret_LowerKeep"))
         yield* folder(path.join(l.outputs, "ses_ret_nolive"))
+        // Each folder's own spelling is a session this database removed, so only the live ID in the other case keeps it.
+        yield* removedEarlier("ses_ret_casekeep", "ses_ret_LowerKeep")
+        yield* row({ id: "ses_ret_nolive", updated: Date.now() })
 
         yield* prune({ days: 30, now: later() })
 
@@ -610,6 +743,7 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         yield* folder(path.join(l.scratch, "ses_ret_goneparent"))
         yield* folder(path.join(l.scratch, "ses_ret_gonesource"))
         yield* folder(path.join(l.scratch, "ses_ret_noone"))
+        yield* removedEarlier("ses_ret_goneparent", "ses_ret_gonesource", "ses_ret_noone")
 
         yield* prune({ days: 30, now: later() })
 
@@ -630,6 +764,8 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         yield* folder(path.join(l.scratch, "notes"))
         yield* Effect.promise(() => fs.writeFile(path.join(l.outputs, "readme.txt"), "kept"))
         yield* folder(path.join(l.outputs, "ses_ret_orphan"))
+        // An ID can take the dash spelling (a row an import wrote), but no folder of that shape is a session's.
+        yield* removedEarlier("ses-dash", "ses_ret_orphan")
 
         yield* prune({ days: 30, now: later() })
 
@@ -638,26 +774,6 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         expect(yield* exists(path.join(l.scratch, "notes", "keep.txt"))).toBe(true)
         expect(yield* exists(path.join(l.outputs, "readme.txt"))).toBe(true)
         expect(yield* exists(path.join(l.outputs, "ses_ret_orphan"))).toBe(false)
-      }),
-    ),
-  )
-
-  // Another channel's database (`orbit-<channel>.db`) keeps its sessions' folders under the same roots, so a folder that
-  // no session here names goes only once its own last change is past the cutoff; a folder of a session this pass
-  // removed goes at once (the rows above).
-  it.live("keeps a folder no session names while it changed inside the period", () =>
-    scenario((l) =>
-      Effect.gen(function* () {
-        yield* folder(path.join(l.outputs, "ses_ret_elsewhere"))
-        yield* folder(path.join(l.scratch, "ses_ret_elsewhere"))
-
-        yield* prune({ days: 30, now: Date.now() + DAY })
-        expect(yield* exists(path.join(l.outputs, "ses_ret_elsewhere", "keep.txt"))).toBe(true)
-        expect(yield* exists(path.join(l.scratch, "ses_ret_elsewhere", "keep.txt"))).toBe(true)
-
-        yield* prune({ days: 30, now: later() })
-        expect(yield* exists(path.join(l.outputs, "ses_ret_elsewhere"))).toBe(false)
-        expect(yield* exists(path.join(l.scratch, "ses_ret_elsewhere"))).toBe(false)
       }),
     ),
   )
@@ -843,14 +959,14 @@ describe("SessionRetention.schedule", () => {
   const gone = (id: string) => eventually(remaining.pipe(Effect.map((ids) => !ids.includes(id))))
 
   // The reference's first pass runs ten minutes after start. The `orb` server lives for days, so it repeats daily. The
-  // orphan folder goes last in a pass (S4.6), so once it is gone the schedule is about to sleep for a day; the test
-  // clock does not move on its own, so the short real wait after it only lets the fiber reach that sleep.
+  // removed session's folder goes last in a pass (S4.6), so once it is gone the schedule is about to sleep for a day;
+  // the test clock does not move on its own, so the short real wait after it only lets the fiber reach that sleep.
   it.effect("runs the first pass 10 minutes after start and the next 24 hours later", () =>
     scenario((l) =>
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.now() + 40 * DAY)
         yield* row({ id: "ses_ret_first", updated: Date.now() })
-        yield* folder(path.join(l.outputs, "ses_ret_orphan"))
+        yield* folder(path.join(l.outputs, "ses_ret_first"))
         yield* Effect.forkScoped(schedule(Effect.succeed(30)))
 
         yield* TestClock.adjust("9 minutes")
@@ -858,7 +974,7 @@ describe("SessionRetention.schedule", () => {
         yield* TestClock.adjust("1 minute")
         expect(yield* gone("ses_ret_first")).toBe(true)
         expect(
-          yield* eventually(exists(path.join(l.outputs, "ses_ret_orphan")).pipe(Effect.map((there) => !there))),
+          yield* eventually(exists(path.join(l.outputs, "ses_ret_first")).pipe(Effect.map((there) => !there))),
         ).toBe(true)
         yield* Effect.promise(() => Bun.sleep(200))
 

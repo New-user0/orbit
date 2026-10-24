@@ -206,6 +206,16 @@ export const SessionStatsArchiveTable = sqliteTable(
 )
 
 /**
+ * The IDs of the sessions this database removed (`SessionRetention`). Their saved-result and scratchpad folders lie under
+ * roots that every database on the machine shares (each channel and `ORBIT_DB` has its own), so retention removes only a
+ * folder named here and never one that another database's session may still use. A row goes once neither root holds a
+ * folder of its name. It outlives its session, so it has no foreign key.
+ */
+export const SessionRemovedTable = sqliteTable("session_removed", {
+  id: text().$type<SessionSchema.ID>().primaryKey(),
+})
+
+/**
  * When each user input was admitted, kept after the input leaves the inbox: a turn limit binds a subagent to the turn
  * that admitted its prompt, and the delivered message only records the delivery time. Cancelled inputs are removed.
  */

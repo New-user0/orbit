@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "ad2a907d-a9d2-4a01-b0c3-e17c66090596",
-  "prevIds": ["5b0824b7-9e81-4c61-950d-f11cb6848cfb"],
+  "id": "c9d282d4-2a7f-4c7d-a53f-f04672f710e6",
+  "prevIds": ["ad2a907d-a9d2-4a01-b0c3-e17c66090596"],
   "ddl": [
     {
       "name": "account_state",
@@ -70,6 +70,10 @@
     },
     {
       "name": "session_pending",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_removed",
       "entityType": "tables"
     },
     {
@@ -1113,6 +1117,16 @@
       "table": "session_pending"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_removed"
+    },
+    {
       "type": "integer",
       "notNull": false,
       "autoincrement": true,
@@ -2126,6 +2140,13 @@
       "nameExplicit": false,
       "name": "session_pending_pk",
       "table": "session_pending",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "session_removed_pk",
+      "table": "session_removed",
       "entityType": "pks"
     },
     {
