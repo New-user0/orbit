@@ -1828,7 +1828,7 @@ describe("the rebuild after a restart", () => {
   const producer = Effect.fnUntraced(function* (
     h: Effect.Success<ReturnType<typeof setup>>,
     read: ReadToolFileSystem.Interface["read"],
-    deadline: Duration.Input = SessionReminders.DEFAULT_TIMEOUT,
+    deadline?: Duration.Input,
   ) {
     const reader = yield* ReadToolFileSystem.Service
     const agents = yield* Agent.Service
@@ -1844,7 +1844,7 @@ describe("the rebuild after a restart", () => {
     return (messages: ReadonlyArray<SessionMessage.Info>) =>
       made
         .run({ session: h.session, agent, tools: [], model: {} as never, messages, step: 1, firstStep: true })
-        .pipe(Effect.timeoutOption(deadline))
+        .pipe(Effect.timeoutOption(deadline ?? made.timeout ?? SessionReminders.DEFAULT_TIMEOUT))
   })
   const edits = (files: ReadonlyArray<string>) =>
     history([
@@ -1856,15 +1856,19 @@ describe("the rebuild after a restart", () => {
       ),
     ])
 
-  it.live("a rebuild that runs past the deadline is not started again at the next step", () =>
+  // A slow read is left out within the rebuild's own budget, so a collection is cut short here before that budget ends.
+  it.live("a rebuild cut short is not started again at the next step", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const edited = h.inside("edited.txt")
       yield* h.change(edited, text(twenty))
       const reads: Array<string> = []
-      const run = yield* producer(h, (file) => Effect.sync(() => reads.push(file)).pipe(Effect.andThen(Effect.never)))
+      const read: ReadToolFileSystem.Interface["read"] = (file) =>
+        Effect.sync(() => reads.push(file)).pipe(Effect.andThen(Effect.never))
       const messages = edits([edited])
-      expect(Option.isNone(yield* run(messages))).toBe(true)
+      const cut = yield* producer(h, read, "300 millis")
+      expect(Option.isNone(yield* cut(messages))).toBe(true)
+      const run = yield* producer(h, read)
       expect(reads).toEqual([edited])
       // The next step finds the session claimed, so it reads nothing and finishes in time.
       expect(yield* run(messages)).toEqual(Option.some([]))
@@ -1943,7 +1947,8 @@ describe("the rebuild after a restart", () => {
 // record as it was. In each row the session writes kept.txt and cut.txt, someone else changes both, and one collection
 // ends early in its own way. A Write over each file that does not count as seen is then refused and leaves the
 // person's edit on disk, and the next step reports exactly the files whose change no posted row settled. A posted row
-// is the control: its file counts as seen, so a Write over it goes through.
+// is the control: its file counts as seen, so a Write over it goes through. Fix loop 6: a file that is slow to check
+// or read costs only itself, so the other file is posted at the same step.
 describe("a collection that ends early (class 7)", () => {
   type Name = "kept" | "cut"
   type Read = ReadToolFileSystem.Interface["read"]
@@ -1951,8 +1956,14 @@ describe("a collection that ends early (class 7)", () => {
     readonly h: Effect.Success<ReturnType<typeof setup>>
     readonly bus: Bus.Interface
     readonly real: ReadToolFileSystem.Interface
-    /** A node whose one durable producer is the real file-change one, with the reader replaced for the named files. */
-    readonly over: (reads: Readonly<Record<string, Read>>) => Effect.Effect<SessionReminders.Interface>
+    /**
+     * A node whose one durable producer is the real file-change one, with the reader replaced for the named files, and
+     * `allowed` for a request on a file named in `asks`.
+     */
+    readonly over: (
+      reads: Readonly<Record<string, Read>>,
+      asks?: Readonly<Record<string, Permission.Interface["allowed"]>>,
+    ) => Effect.Effect<SessionReminders.Interface>
   }
   interface Exit {
     readonly name: string
@@ -1969,15 +1980,15 @@ describe("a collection that ends early (class 7)", () => {
 
   const exits: ReadonlyArray<Exit> = [
     {
-      name: "the producer's deadline, with one file whose read never returns",
+      name: "one file whose read never returns",
       run: (c) =>
         Effect.gen(function* () {
           yield* c.h.collect([], { reminders: yield* c.over({ "cut.txt": () => Effect.never }) })
         }),
-      posted: [],
-      seen: [],
+      posted: ["kept"],
+      seen: ["kept"],
       refusal: "file.stale",
-      next: ["cut", "kept"],
+      next: ["cut"],
     },
     {
       name: "an interruption after the other file was read",
@@ -2033,7 +2044,9 @@ describe("a collection that ends early (class 7)", () => {
       next: ["cut"],
     },
     {
-      name: "the rebuild's own deadline",
+      // The file from history is left out of the rebuild, and the watched files get a budget of their own after it, which
+      // the producer's deadline leaves room for: cut.txt's read never returns either, and kept.txt is still posted.
+      name: "a rebuild whose read of an edited file never returns, and then one file's read",
       run: (c) =>
         Effect.gen(function* () {
           const edited = c.h.inside("history.txt")
@@ -2043,12 +2056,30 @@ describe("a collection that ends early (class 7)", () => {
               toolPart("e", "Edit", { file_path: edited, old_string: "a", new_string: "b" }, {}, T(60)),
             ]),
           ])
-          yield* c.h.collect(messages, { reminders: yield* c.over({ "history.txt": () => Effect.never }) })
+          const reminders = yield* c.over({ "history.txt": () => Effect.never, "cut.txt": () => Effect.never })
+          yield* c.h.collect(messages, { reminders })
         }),
-      posted: [],
-      seen: [],
+      posted: ["kept"],
+      seen: ["kept"],
       refusal: "file.stale",
-      next: ["cut", "kept"],
+      next: ["cut"],
+    },
+    {
+      name: "a rebuild whose permission check of a file in history never returns",
+      run: (c) =>
+        Effect.gen(function* () {
+          const written = c.h.inside("history.txt")
+          const messages = history([
+            assistant("msg_0000000001", [
+              toolPart("w", "Write", { file_path: written, content: "a\n" }, {}, T(60)),
+            ]),
+          ])
+          yield* c.h.collect(messages, { reminders: yield* c.over({}, { "history.txt": () => Effect.never }) })
+        }),
+      posted: ["cut", "kept"],
+      seen: ["cut", "kept"],
+      refusal: "file.stale",
+      next: [],
     },
     {
       name: "a compaction that completes while the collection runs",
@@ -2107,7 +2138,7 @@ describe("a collection that ends early (class 7)", () => {
           trust: h.trust,
           environment: yield* Environment.Service,
         }
-        const over: ExitContext["over"] = (reads) =>
+        const over: ExitContext["over"] = (reads, asks = {}) =>
           Effect.gen(function* () {
             return yield* SessionReminders.Service
           }).pipe(
@@ -2119,6 +2150,11 @@ describe("a collection that ends early (class 7)", () => {
                     durable: [
                       FileChangeReminder.durable({
                         ...services,
+                        permission: {
+                          ...services.permission,
+                          allowed: (request) =>
+                            (asks[path.basename(request.resources[0] ?? "")] ?? services.permission.allowed)(request),
+                        },
                         reader: {
                           ...real,
                           read: (file, resource, page) =>
@@ -2153,9 +2189,37 @@ describe("a collection that ends early (class 7)", () => {
         }
         expect(names(yield* h.changes())).toEqual(txt(exit.next))
       }),
-      // A one-second producer deadline and five tool calls; a loaded machine needs more than the default five seconds.
-      20_000,
+      // Five tool calls and, should a budget break, the producer's own deadline; a loaded machine needs more than the
+      // default five seconds.
+      30_000,
     )
+
+  // The review's case without stubs: a formatter rewrites every line of files the agent wrote, each as long as one read
+  // returns, while the person changes one line of a small file. The comparisons of the large rewrites take seconds
+  // together, so the small file is compared first and reported at once, and every large file is reported once, at this
+  // step or a later one.
+  it.live(
+    "a large rewrite of many files does not hold up a small change",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const original = Array.from({ length: 1_990 }, (_, index) => `  a${index}()`)
+        const large = Array.from({ length: 8 }, (_, index) => h.inside(`big${index}.ts`))
+        const small = h.inside("small.txt")
+        for (const file of large) yield* h.write(file, text(original))
+        yield* h.write(small, text(twenty))
+        for (const file of large) yield* h.change(file, text(original.map((line) => `  ${line};`)))
+        yield* h.change(small, text(twenty.map((line) => (line === "line4" ? "PERSON-EDIT" : line))))
+
+        const first = yield* h.changes()
+        expect(contentOf(first, ["small.txt"])[0]).toContain("4: PERSON-EDIT")
+        expect(status(yield* h.run("Write", { file_path: small, content: "MODEL-OVERWRITE" }))).toBe("completed")
+
+        const later = [...(yield* h.changes()), ...(yield* h.changes())]
+        expect(names([...first, ...later])).toEqual([...large, small].map((file) => path.basename(file)).toSorted())
+      }),
+    60_000,
+  )
 })
 
 describe("the output-style reminder", () => {

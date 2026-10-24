@@ -1,7 +1,7 @@
 export * as FileChangeReminder from "./file-change-reminder.js"
 
 import { structuredPatch } from "diff"
-import { DateTime, Effect, Cause, Result } from "effect"
+import { DateTime, Duration, Effect, Cause, Option, Result } from "effect"
 import type { Agent } from "@orbit/schema/agent"
 import type { Session } from "@orbit/schema/session"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -13,7 +13,7 @@ import type { Permission } from "./permission.js"
 import type { ProjectTrust } from "./project-trust.js"
 import type { SessionMessage } from "./session/message.js"
 import { postedInRun } from "./session/reminder-text.js"
-import type { Durable, Input } from "./session/reminders.js"
+import type { Durable, Entry, Input } from "./session/reminders.js"
 import { ToolNames } from "./tool/names.js"
 import { Notebook } from "./tool/notebook.js"
 import { ReadToolFileSystem } from "./tool/read-filesystem.js"
@@ -35,6 +35,11 @@ import { ReadToolFileSystem } from "./tool/read-filesystem.js"
  * past its deadline, is interrupted or fails leaves the ledger as it was, so no change counts as seen unless its row was
  * posted, and the edit tools still refuse a changed file as stale.
  *
+ * A slow file costs only itself. The files are checked and read within `FILE_BUDGET_MS`; a file not done by then is left
+ * as it is for the next step, and the others are reported. The comparisons run after that, smallest first, within the
+ * reference's `DIFF_TIMEOUT_MS` all together. The producer's own deadline is longer than all of it, so it is not what ends
+ * a collection whose files keep to their budgets.
+ *
  * The path and the changed lines come from the disk, so they travel only in `data`; the harness text names neither.
  */
 
@@ -43,8 +48,10 @@ const KIND = "file-change"
 const CONTEXT_LINES = 8
 /** The longest snippet, in characters; a longer one is cut at a line break and says how many lines it left out. */
 const MAX_SNIPPET = 8_192
-// A comparison is synchronous, so it gets no more than the producer's own deadline.
-const DIFF_TIMEOUT_MS = 1_000
+/** How long the checks and reads of the files may take, and those of the rebuild; a file not done by then waits. */
+const FILE_BUDGET_MS = 750
+/** How long the comparisons of one step may take together: the reference's limit for one comparison. */
+const DIFF_TIMEOUT_MS = 5_000
 
 const TEXT =
   "A file you worked with earlier in this session has since been changed outside the conversation, by the user or by a tool such as a linter. " +
@@ -63,6 +70,8 @@ export interface Services {
 
 export const durable = (services: Services): Durable => ({
   name: KIND,
+  // The rebuild's budget, the checks' budget and the comparisons' time, with room to spare.
+  timeout: Duration.millis(2 * FILE_BUDGET_MS + DIFF_TIMEOUT_MS + 500),
   run: (input) =>
     Effect.gen(function* () {
       // Claimed before the work, so a rebuild that runs past the producer's deadline costs one step, not every step. A
@@ -71,10 +80,11 @@ export const durable = (services: Services): Durable => ({
         yield* rebuild(services, input)
       if (postedInRun(input.messages, KIND)) return []
       const watched = yield* services.ledger.watched(input.session.id)
-      const entries = yield* Effect.forEach(
+      const deadline = Date.now() + FILE_BUDGET_MS
+      const checked = yield* Effect.forEach(
         watched,
-        (file) =>
-          changed(services, input, file).pipe(
+        (file, index) =>
+          inTime(input, deadline, changed(services, input, file)).pipe(
             // One file that fails costs only itself.
             Effect.catchCauseIf(
               (cause) => !Cause.hasInterruptsOnly(cause),
@@ -84,12 +94,39 @@ export const durable = (services: Services): Durable => ({
                   Effect.as([]),
                 ),
             ),
+            Effect.map((found) => found.map((item) => ({ ...item, index }))),
           ),
         { concurrency: 8 },
       )
-      return entries.flat()
+      // The smallest comparisons first, so one large rewrite cannot use up the others' time; the rows keep the files'
+      // order.
+      const end = Date.now() + DIFF_TIMEOUT_MS
+      return checked
+        .flat()
+        .toSorted((left, right) => left.size - right.size)
+        .map((item) => ({ index: item.index, entries: item.report(end) }))
+        .toSorted((left, right) => left.index - right.index)
+        .flatMap((item) => item.entries)
     }),
 })
+
+// What `effect` found, or nothing once `deadline` has passed, so the file waits for a later step and the others go on.
+const inTime = <A>(input: Input, deadline: number, effect: Effect.Effect<ReadonlyArray<A>>) =>
+  Effect.suspend(() => {
+    const left = deadline - Date.now()
+    if (left <= 0) return Effect.succeed([])
+    return effect.pipe(
+      Effect.timeoutOption(left),
+      Effect.flatMap((found) =>
+        Option.isSome(found)
+          ? Effect.succeed(found.value)
+          : Effect.logWarning("A watched file took too long to check, so it was skipped this time").pipe(
+              Effect.annotateLogs({ sessionID: input.session.id }),
+              Effect.as([]),
+            ),
+      ),
+    )
+  })
 
 /**
  * The target a path stands for, when a read of it needs nobody's answer and no deny rule stops it, and undefined
@@ -139,7 +176,18 @@ const readRequest = (
   ...base,
 })
 
-const changed = Effect.fnUntraced(function* (services: Services, input: Input, file: FileLedger.Watched) {
+/** A file whose check is done: `report` gives its entries, comparing within the time left until `end`. */
+interface Checked {
+  /** How much text the comparison holds; none for a file that needs no comparison. */
+  readonly size: number
+  readonly report: (end: number) => ReadonlyArray<Entry>
+}
+
+const changed = Effect.fnUntraced(function* (
+  services: Services,
+  input: Input,
+  file: FileLedger.Watched,
+): Effect.fn.Return<ReadonlyArray<Checked>> {
   const sessionID = input.session.id
   const target = yield* gate(services, sessionID, input.agent.id, file.path, file.seen.place)
   if (target === undefined) return []
@@ -152,7 +200,7 @@ const changed = Effect.fnUntraced(function* (services: Services, input: Input, f
   // Nothing here changes the ledger: each change goes in the entry's commit, which runs only once the rows are posted
   // (class 7). A collection cut short by its deadline or an interruption leaves every watch and every stale refusal.
   if (time === undefined)
-    return [{ kind: KIND, text: "", commit: services.ledger.settle(sessionID, file.path, file.seen) }]
+    return [settled({ kind: KIND, text: "", commit: services.ledger.settle(sessionID, file.path, file.seen) })]
   if (time <= file.seen.mtimeMs) return []
   const read = yield* services.reader.read(target.absolute, target.resource).pipe(Effect.orElseSucceed(() => undefined))
   // Only a whole text file is compared. Anything else, a read that failed included, keeps the entry as it was, so it is
@@ -162,20 +210,32 @@ const changed = Effect.fnUntraced(function* (services: Services, input: Input, f
   const old = shown(file.seen.text)
   const now = shown(read.content.content)
   // A notebook, or a file that shows the same, is not reported but counts as seen, as in the reference.
-  if (Notebook.isNotebook(target.absolute) || old === now) return [{ kind: KIND, text: "", commit }]
-  const content = snippet(old, now)
-  // A comparison that ran out of time reports nothing and settles nothing, so the file is tried again at the next step.
-  return content === undefined
-    ? []
-    : [{ kind: KIND, text: TEXT, data: { label: `Changed lines of ${file.path}`, content }, commit }]
+  if (Notebook.isNotebook(target.absolute) || old === now) return [settled({ kind: KIND, text: "", commit })]
+  return [
+    {
+      size: old.length + now.length,
+      report: (end) => {
+        const content = snippet(old, now, end)
+        // A comparison that ran out of time reports nothing and settles nothing, so the file is tried again at the next
+        // step.
+        return content === undefined
+          ? []
+          : [{ kind: KIND, text: TEXT, data: { label: `Changed lines of ${file.path}`, content }, commit }]
+      },
+    },
+  ]
 })
+
+const settled = (entry: Entry): Checked => ({ size: 0, report: () => [entry] })
 
 /**
  * The changed lines of `now`, compared with `old`, both in the form the read tool shows text (`shown`): each hunk's
  * kept and added lines, numbered from where the hunk starts in the old text, as the reference numbers them, and hunks
- * joined by a line that holds only an ellipsis. Undefined when the comparison ran out of time.
+ * joined by a line that holds only an ellipsis. Undefined when the comparison ran out of time or `end` has passed.
  */
-const snippet = (old: string, now: string) => {
+const snippet = (old: string, now: string, end: number) => {
+  const left = end - Date.now()
+  if (left <= 0) return undefined
   const patch = structuredPatch(
     "",
     "",
@@ -185,7 +245,7 @@ const snippet = (old: string, now: string) => {
     undefined,
     {
       context: CONTEXT_LINES,
-      timeout: DIFF_TIMEOUT_MS,
+      timeout: left,
     },
   )
   if (patch === undefined) return undefined
@@ -225,26 +285,17 @@ const shown = (text: string) =>
  * file, which is not seeded. A path in history may come from an imported session, so it is resolved as the read tool resolves
  * it, a share or device spelling is refused before any disk is read, and only a file inside the project that passes
  * `gate` and that the read tool would read without a question is kept. Of those, only the newest `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop
- * the rest. A record that is already there wins over one from history. The session is claimed before the rebuild starts,
+ * the rest. A record that is already there wins over one from history. A file whose check or read is not done within
+ * `FILE_BUDGET_MS` is left out, so one slow file costs only itself. The session is claimed before the rebuild starts,
  * so one that runs past the producer's deadline is not tried again in this process.
  */
 const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
+  const deadline = Date.now() + FILE_BUDGET_MS
   // The newest call for each spelling; then the newest for each file, whatever spelling named it.
   const bySpelling = new Map(fromHistory(input.messages).map((found) => [found.path, found] as const))
   const resolved = yield* Effect.forEach(
     Array.from(bySpelling.values()),
-    Effect.fnUntraced(function* (found) {
-      // Given no recorded place, `gate` refuses every target outside the project, so only project files remain.
-      const target = yield* gate(services, input.session.id, input.agent.id, found.path)
-      if (target === undefined) return []
-      // The session may never have read this file: the call can have failed, and the store can be imported. So a file
-      // that the read tool would ask about first (the built-in `.env` ask, a rule the person wrote, a link onto such a
-      // file) is not seeded, and nothing of it is read (class 5).
-      const quiet = yield* services.permission
-        .allowed(readRequest(target, { sessionID: input.session.id, agent: input.agent.id }))
-        .pipe(Effect.orElseSucceed(() => false))
-      return quiet ? [{ ...found, target }] : []
-    }),
+    (found) => inTime(input, deadline, located(services, input, found)),
     { concurrency: 8 },
   )
   const byFile = new Map(
@@ -259,19 +310,35 @@ const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
       .filter((found) => !found.ended)
       .toSorted((left, right) => left.order - right.order)
       .slice(-FileLedger.MAX_FILES),
-    Effect.fnUntraced(function* (found) {
-      if (found.text !== undefined)
-        return [{ path: found.target.absolute, seen: { mtimeMs: found.at, text: found.text } }]
-      // An edit's result holds no text of the file, so the file is read as it is now.
-      const read = yield* services.reader
-        .read(found.target.absolute, found.target.resource)
-        .pipe(Effect.orElseSucceed(() => undefined))
-      if (read?.seen === undefined || read.content.type !== "file" || read.content.encoding !== "utf8") return []
-      return [{ path: found.target.absolute, seen: { ...read.seen, text: read.content.content } }]
-    }),
+    (found) => inTime(input, deadline, seeded(services, found)),
     { concurrency: 8 },
   )
   yield* services.ledger.seed(input.session.id, files.flat())
+})
+
+// The target a call in history names, when it may be seeded.
+const located = Effect.fnUntraced(function* (services: Services, input: Input, found: Found) {
+  // Given no recorded place, `gate` refuses every target outside the project, so only project files remain.
+  const target = yield* gate(services, input.session.id, input.agent.id, found.path)
+  if (target === undefined) return []
+  // The session may never have read this file: the call can have failed, and the store can be imported. So a file
+  // that the read tool would ask about first (the built-in `.env` ask, a rule the person wrote, a link onto such a
+  // file) is not seeded, and nothing of it is read (class 5).
+  const quiet = yield* services.permission
+    .allowed(readRequest(target, { sessionID: input.session.id, agent: input.agent.id }))
+    .pipe(Effect.orElseSucceed(() => false))
+  return quiet ? [{ ...found, target }] : []
+})
+
+// What the ledger is seeded with for a located call.
+const seeded = Effect.fnUntraced(function* (services: Services, found: Found & { readonly target: FileAccess.Target }) {
+  if (found.text !== undefined) return [{ path: found.target.absolute, seen: { mtimeMs: found.at, text: found.text } }]
+  // An edit's result holds no text of the file, so the file is read as it is now.
+  const read = yield* services.reader
+    .read(found.target.absolute, found.target.resource)
+    .pipe(Effect.orElseSucceed(() => undefined))
+  if (read?.seen === undefined || read.content.type !== "file" || read.content.encoding !== "utf8") return []
+  return [{ path: found.target.absolute, seen: { ...read.seen, text: read.content.content } }]
 })
 
 interface Found {
