@@ -489,16 +489,20 @@ describe("Snapshot with a checkpoint ID that is not a tree", () => {
       withProject((fixture) =>
         Effect.gen(function* () {
           const tree = yield* capture
-          const marker = path.join(fixture.root, `${name}.marker`)
-          const forged = Snapshot.ID.make(`--output=${marker}`)
-          // The refusal names the ID check, not a git failure: git never sees the forged value.
-          const refused = yield* operation(forged, tree).pipe(
-            Effect.match({ onFailure: (error) => `${error._tag}: ${error.message}`, onSuccess: () => "succeeded" }),
-          )
-          expect({ refused, marker: yield* exists(marker) }).toEqual({
-            refused: "Snapshot.Error: The checkpoint is not a snapshot tree",
-            marker: false,
-          })
+          // The marker's name ends in 40 hex digits, so an ID check that looks only at the end of the value lets the
+          // option through; an ID one digit longer than a tree ID is refused by the same check, not by git.
+          const marker = path.join(fixture.root, `${name}-${"a".repeat(40)}`)
+          for (const forged of [`--output=${marker}`, "a".repeat(41)]) {
+            // The refusal names the ID check, not a git failure: git never sees the forged value.
+            const refused = yield* operation(Snapshot.ID.make(forged), tree).pipe(
+              Effect.match({ onFailure: (error) => `${error._tag}: ${error.message}`, onSuccess: () => "succeeded" }),
+            )
+            expect({ forged, refused, marker: yield* exists(marker) }).toEqual({
+              forged,
+              refused: "Snapshot.Error: The checkpoint is not a snapshot tree",
+              marker: false,
+            })
+          }
           // The control: a real tree goes through the same operation.
           yield* operation(tree, tree)
         }),
