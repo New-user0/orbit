@@ -50,10 +50,10 @@ export interface Loaded {
   readonly messages: ReadonlyArray<SessionMessage.Info>
   readonly tools: Tool.Snapshot
   /**
-   * The session model again with the variant that reasons least, set only when the session selected a variant. A
-   * request that must not think, such as the compaction fallback, is built on it.
+   * Resolves the session model again with the variant that reasons least; nothing when the session selected no
+   * variant. Only a request that must not think, such as the compaction fallback, runs it, so a step pays nothing.
    */
-  readonly unreasoned?: SessionRunnerModel.Resolved
+  readonly unreasoned?: Effect.Effect<SessionRunnerModel.Resolved | undefined>
   /** The configured `output_token_cap`, when set. */
   readonly outputTokenCap?: number
 }
@@ -69,6 +69,11 @@ export interface Interface {
   readonly select: (sessionID: SessionSchema.ID) => Effect.Effect<Selection, AgentNotFoundError>
   /** Resolves the model and active history for that selection. */
   readonly load: (selection: Selection) => Effect.Effect<Loaded, SessionRunnerModel.Error>
+  /** The session model again without its reasoning variant; nothing when the session selected no variant. */
+  readonly unreasoned: (
+    session: SessionSchema.Info,
+    resolved: SessionRunnerModel.Resolved,
+  ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
   readonly resolveModel: (
     session: SessionSchema.Info,
   ) => Effect.Effect<SessionRunnerModel.Resolved, SessionRunnerModel.Error>
@@ -129,7 +134,6 @@ const layer = Layer.effect(
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
-    const catalog = model
     // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
     const leastReasoning = (session: SessionSchema.Info, info: Model.Info | undefined, pinned?: Model.VariantID) =>
       Effect.gen(function* () {
@@ -140,6 +144,13 @@ const layer = Layer.effect(
           model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
         }).pipe(Effect.orElseSucceed(() => undefined))
       })
+
+    const unreasonedFor = (session: SessionSchema.Info, resolved: SessionRunnerModel.Resolved) =>
+      resolved.ref.variant && resolved.ref.variant !== "default"
+        ? model
+            .get(resolved.ref.providerID, resolved.ref.id)
+            .pipe(Effect.flatMap((info) => leastReasoning(session, info)))
+        : Effect.succeed(undefined)
 
     const selectAuxiliary = Effect.fn("SessionContext.selectAuxiliary")(function* (
       session: SessionSchema.Info,
@@ -272,14 +283,11 @@ const layer = Layer.effect(
         selection.instructions,
         SessionProviderContext.provenance(model) ?? "local",
       )
-      const unreasoned = model.ref.variant && model.ref.variant !== "default"
-        ? yield* leastReasoning(selection.session, yield* catalog.get(model.ref.providerID, model.ref.id))
-        : undefined
       return {
         session: selection.session,
         agent: selection.agent,
         model,
-        unreasoned,
+        unreasoned: unreasonedFor(selection.session, model),
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
         tools: selection.tools,
@@ -287,7 +295,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ select, load, resolveModel, selectAuxiliary, resolveFallback, request })
+    return Service.of({ select, load, resolveModel, unreasoned: unreasonedFor, selectAuxiliary, resolveFallback, request })
   }),
 )
 

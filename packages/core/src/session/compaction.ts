@@ -9,6 +9,7 @@ import {
   isContextOverflowFailure,
   LLMClient,
   LLMEvent,
+  LanguageModel,
   LLMRequest,
   Message,
   SystemPart,
@@ -327,7 +328,10 @@ export const layer = Layer.effect(
         const first = yield* Effect.result(call(fitOutput(request)))
         if (Result.isSuccess(first) && first.success.text.trim()) return yield* finish(first.success)
 
-        const second = yield* Effect.result(call(fitOutput(fallbackRequest(request, outputMax, context.unreasoned ?? context.model))))
+        const unreasoned = context.unreasoned ? yield* context.unreasoned : undefined
+        const second = yield* Effect.result(
+          call(fitOutput(fallbackRequest(request, outputMax, unreasoned?.model, context.model.model))),
+        )
         if (Result.isSuccess(second)) return yield* finish(second.success)
         const cause = second.failure
         if (!(cause instanceof AIError)) return yield* Effect.fail(cause)
@@ -798,9 +802,21 @@ const transcript = (
  * reasoning options or effort notes, the session model without its reasoning variant (`model`), and only the read tool
  * so that tool calls in the history stay valid.
  */
-const fallbackRequest = (request: LLMRequest, outputMax: number, model: SessionContext.Loaded["model"]) =>
+const fallbackRequest = (
+  request: LLMRequest,
+  outputMax: number,
+  unreasoned: LanguageModel | undefined,
+  selected: LanguageModel,
+) =>
   LLMRequest.update(request, {
-    model: model.model,
+    // The prepared request's model already carries the route a model.request hook chose. A model without the reasoning
+    // variant takes over that route, so the fallback goes where the first request went.
+    model:
+      unreasoned === undefined
+        ? request.model
+        : request.model.route === selected.route
+          ? unreasoned
+          : LanguageModel.update(unreasoned, { route: request.model.route }),
     system: [SystemPart.make(FALLBACK_SYSTEM)],
     messages: request.messages.flatMap(withoutMedia),
     tools: request.tools.filter((tool) => tool.name === "Read"),

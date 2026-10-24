@@ -1807,7 +1807,7 @@ it.effect("the fallback is built on the model without the session's reasoning va
       {
         context: (context) => {
           const selected = withTools(32_000)(context)
-          return { ...selected, model: { ...selected.model, model: thinking }, unreasoned: selected.model }
+          return { ...selected, model: { ...selected.model, model: thinking }, unreasoned: Effect.succeed(selected.model) }
         },
       },
     )
@@ -1816,6 +1816,41 @@ it.effect("the fallback is built on the model without the session's reasoning va
     expect(run.sent[1]?.model.defaults?.providerOptions).toBeUndefined()
   }),
 )
+
+// A model.request hook that reroutes the request moves the fallback too, with or without a reasoning variant.
+for (const withVariant of [false, true]) {
+  for (const hooked of [false, true]) {
+    it.effect(`the fallback goes where the first request went: variant ${withVariant}, route hook ${hooked}`, () =>
+      Effect.gen(function* () {
+        if (hooked) {
+          const hooks = yield* PluginHooks.Service
+          yield* hooks.register("session", "model.request", (event) =>
+            Effect.sync(() => {
+              event.baseURL = "https://gateway.example.test/v1"
+              event.headers["x-gateway-key"] = "GATEWAY-SECRET"
+            }),
+          )
+        }
+        const run = yield* scripted(
+          `ses_cm2_route_${withVariant}_${hooked}`,
+          [userText("Do it")],
+          [silent, answer("<handoff>\nok\n</handoff>")],
+          {
+            context: (context) => {
+              const selected = withTools(32_000)(context)
+              return withVariant ? { ...selected, unreasoned: Effect.succeed(selected.model) } : selected
+            },
+          },
+        )
+        expect(run.outcome).toEqual({ status: "completed" })
+        expect(run.sent).toHaveLength(2)
+        expect(run.sent[1]?.model.route.endpoint.baseURL).toBe(run.sent[0]?.model.route.endpoint.baseURL)
+        expect(run.sent[1]?.http?.headers).toEqual(run.sent[0]?.http?.headers)
+        if (hooked) expect(run.sent[1]?.model.route.endpoint.baseURL).toBe("https://gateway.example.test/v1")
+      }),
+    )
+  }
+}
 
 it.effect("a summary request keeps the output limit a hook set, and none when a hook removed it", () =>
   Effect.gen(function* () {

@@ -603,7 +603,7 @@ it.effect("load sets the model without its reasoning variant when the session se
   Effect.gen(function* () {
     const loaded = yield* loadSelected("high")
     expect(String(loaded.model.ref.variant)).toBe("high")
-    expect(String(loaded.unreasoned?.ref.variant)).toBe("none")
+    expect(String((yield* (loaded.unreasoned ?? Effect.succeed(undefined)))?.ref.variant)).toBe("none")
   }),
 )
 
@@ -611,7 +611,7 @@ it.effect("load leaves the unreasoned model unset when the session selected no v
   Effect.gen(function* () {
     const loaded = yield* loadSelected()
     expect(String(loaded.model.ref.variant)).toBe("default")
-    expect(loaded.unreasoned).toBeUndefined()
+    expect(yield* (loaded.unreasoned ?? Effect.succeed(undefined))).toBeUndefined()
   }),
 )
 
@@ -619,6 +619,6 @@ it.effect("load leaves the unreasoned model unset when the catalog does not list
   Effect.gen(function* () {
     const loaded = yield* loadSelected("high", "side-small")
     expect(String(loaded.model.ref.variant)).toBe("high")
-    expect(loaded.unreasoned).toBeUndefined()
+    expect(yield* (loaded.unreasoned ?? Effect.succeed(undefined))).toBeUndefined()
   }),
 )
