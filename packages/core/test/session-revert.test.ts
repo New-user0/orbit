@@ -489,8 +489,8 @@ describe("Session.revert names from another folder", () => {
   )
 
   // Before Write named its file in its result, a recorded Write carried only the path it was given. That path, in each
-  // spelling an older session can hold, still lets a rewind remove the file; a Write that failed, and a file changed
-  // outside the file tools, are left.
+  // spelling an older session can hold, still lets a rewind remove the file; a Write that failed, another tool's call
+  // that names no file, and a file changed outside the file tools are left.
   it.live(
     "rewinds a Write recorded before Write named its file, by the path it was given",
     () =>
@@ -508,10 +508,11 @@ describe("Session.revert names from another folder", () => {
             { name: "Write", input: { file_path: path.join(directory, "absolute.txt"), content: "one\n" } },
             { name: "write", input: { path: "legacy.txt", content: "one\n" } },
             { name: "Write", input: { file_path: "failed.txt", content: "one\n" }, failed: true },
+            { name: "Edit", input: { file_path: "edited.txt" } },
           ],
           () =>
             Promise.all(
-              ["relative.txt", "absolute.txt", "legacy.txt", "failed.txt"]
+              ["relative.txt", "absolute.txt", "legacy.txt", "failed.txt", "edited.txt"]
                 .map((file) => Bun.write(path.join(directory, file), "one\n"))
                 .concat(Bun.write(path.join(directory, "other.txt"), "other two\n")),
             ),
@@ -524,6 +525,7 @@ describe("Session.revert names from another folder", () => {
             absolute: text(path.join(directory, "absolute.txt")),
             legacy: text(path.join(directory, "legacy.txt")),
             failed: text(path.join(directory, "failed.txt")),
+            edited: text(path.join(directory, "edited.txt")),
             other: text(path.join(directory, "other.txt")),
           }),
         ).toEqual({
@@ -531,6 +533,7 @@ describe("Session.revert names from another folder", () => {
           absolute: undefined,
           legacy: undefined,
           failed: "one\n",
+          edited: "one\n",
           other: "other two\n",
         })
       }),

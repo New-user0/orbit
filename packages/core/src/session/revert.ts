@@ -78,11 +78,11 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
 
 /**
  * Code-only rewind: puts the files that the session's own file tools changed back as they were when a prompt's work
- * began, and leaves the conversation as it is. The restore set is every path a recorded file-tool call named anywhere in
- * the session, kept only where git reports it as different between the prompt's checkpoint and a capture taken now; a
- * path absent from the checkpoint is removed. A dry run says what would change instead, and answers a rewind that cannot
- * happen with `canRewind: false`; a real run fails with `RewindError`. The folder must be trusted now: the rewind reads
- * its git and writes its files (class 1).
+ * began, and leaves the conversation as it is. The restore set is every path a recorded file-tool call of the session
+ * named in its current folder, kept only where git reports it as different between the prompt's checkpoint and a
+ * capture taken now; a path absent from the checkpoint is removed. A dry run says what would change instead, and
+ * answers a rewind that cannot happen with `canRewind: false`; a real run fails with `RewindError`. The folder must be
+ * trusted now: the rewind reads its git and writes its files (class 1).
  */
 export const files = Effect.fn("SessionRevert.files")(function* (input: {
   session: SessionSchema.Info
