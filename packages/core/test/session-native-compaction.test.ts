@@ -24,7 +24,9 @@ import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { SessionStore } from "@orbit/core/session/store"
+import { SessionUsageTable } from "@orbit/core/session/sql"
 import { LayerNode } from "@orbit/util/effect/layer-node"
+import { eq } from "drizzle-orm"
 import { DateTime, Deferred, Effect, Fiber, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 import { stubSnapshot } from "./lib/tool"
@@ -60,7 +62,19 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
   const hooks = yield* PluginHooks.Service
   const blocked = Deferred.makeUnsafe<void>()
   const hanging = Promise.withResolvers<Response>()
-  const state = { failure: false, flaky: false, hang: false, overflow: false, calls: 0 }
+  const state = {
+    failure: false,
+    flaky: false,
+    hang: false,
+    overflow: false,
+    // FU-M4-228: a completed reply without usage, a trigger stream that ends incomplete or stalls after it began, and
+    // an endpoint reply that answers 200 with a body that cannot be read.
+    noUsage: false,
+    incomplete: false,
+    stall: false,
+    invalid: false,
+    calls: 0,
+  }
   const bodies: Record<string, unknown>[] = []
   const headers: Headers[] = []
   const server = yield* Effect.acquireRelease(
@@ -106,7 +120,12 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
             id: `cmp_${state.calls}`,
             encrypted_content: `encrypted_${state.calls}`,
           }
-          if (new URL(request.url).pathname.endsWith("/compact"))
+          const usage = state.noUsage ? {} : { usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 } }
+          if (new URL(request.url).pathname.endsWith("/compact")) {
+            if (state.invalid)
+              return new Response('{"object":"response.compaction","output":[', {
+                headers: { "content-type": "application/json" },
+              })
             return Response.json({
               id: "compact_endpoint",
               object: "response.compaction",
@@ -114,8 +133,31 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
                 { type: "message", role: "user", content: [{ type: "input_text", text: "endpoint retained" }] },
                 checkpoint,
               ],
-              usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 },
+              ...usage,
             })
+          }
+          const created = `data: ${JSON.stringify({
+            type: "response.created",
+            response: { id: `resp_${state.calls}`, status: "in_progress", output: [] },
+          })}\n\n`
+          if (trigger && state.incomplete)
+            return new Response(
+              `${created}data: ${JSON.stringify({
+                type: "response.incomplete",
+                response: { id: `resp_${state.calls}`, status: "incomplete", output: [] },
+              })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          if (trigger && state.stall)
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode(created))
+                  Deferred.doneUnsafe(blocked, Effect.void)
+                },
+              }),
+              { headers: { "content-type": "text/event-stream" } },
+            )
           const output = trigger ? [checkpoint] : []
           return new Response(
             `data: ${JSON.stringify({
@@ -124,7 +166,7 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
                 id: `resp_${state.calls}`,
                 status: "completed",
                 output,
-                usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 },
+                ...usage,
               },
             })}\n\n`,
             { headers: { "content-type": "text/event-stream" } },
@@ -423,6 +465,79 @@ it.live("rejects request-hook route rewrites before provider compaction", () =>
       error: { type: "provider.unsupported-operation" },
     })
     expect(fixture.state.calls).toBe(0)
+  }),
+)
+
+// FU-M4-228: a native compaction call is spend like any other model call. A completed call that reports no usage is
+// recorded as a zero (which a turn limit reads as unknown), and a call that fails or is interrupted after the provider
+// answered is recorded as an estimate. A refusal before any answer billed nothing and records nothing.
+const usageRows = (sessionID: SessionSchema.ID) =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    return yield* db
+      .select()
+      .from(SessionUsageTable)
+      .where(eq(SessionUsageTable.session_id, sessionID))
+      .all()
+      .pipe(Effect.orDie)
+  })
+
+for (const endpoint of [false, true])
+  it.live(`records a zero usage row for a ${endpoint ? "endpoint" : "trigger"} compaction that reports no usage`, () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup({ endpoint })
+      yield* fixture.prompt("Original user")
+      fixture.state.noUsage = true
+      expect(yield* fixture.compact).toEqual({ status: "completed" })
+      expect(yield* usageRows(fixture.sessionID)).toMatchObject([
+        { source: "compaction", tokens_input: 0, tokens_output: 0 },
+      ])
+    }),
+  )
+
+for (const [name, endpoint, flag, records] of [
+  ["a trigger stream that ended incomplete", false, "incomplete", true],
+  ["an endpoint reply whose body cannot be read", true, "invalid", true],
+  ["a refusal before any response", false, "failure", false],
+  ["an endpoint refusal before any response", true, "failure", false],
+] as const)
+  it.live(`records an estimated native compaction spend for ${name}: ${records}`, () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup({ endpoint })
+      // Each failure is final, so the session's retry backoff stays out of the test.
+      yield* fixture.hooks.register("session", "retry", (event) =>
+        Effect.sync(() => {
+          event.decision = { retry: false }
+        }),
+      )
+      yield* fixture.prompt("Original user")
+      fixture.state[flag] = true
+      expect(yield* fixture.compact).toMatchObject({ status: "failed" })
+      const rows = yield* usageRows(fixture.sessionID)
+      expect(rows.length > 0).toBe(records)
+      for (const row of rows) {
+        expect(row.source).toBe("compaction")
+        expect(row.tokens_input).toBeGreaterThan(0)
+        // The estimate covers the request, which is the base prompt and a few lines of text, and nothing more.
+        expect(row.tokens_input).toBeLessThan(2_500)
+        expect(row.tokens_output).toBe(0)
+      }
+    }),
+  )
+
+it.live("records an estimated native compaction spend when a trigger stream that began is interrupted", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup()
+    yield* fixture.prompt("Original user")
+    fixture.state.stall = true
+    const pending = yield* fixture.compact.pipe(Effect.forkScoped)
+    yield* Deferred.await(fixture.blocked)
+    // The server has sent its 200 and the first event; give the client a moment to read them before interrupting.
+    yield* Effect.sleep("250 millis")
+    yield* Fiber.interrupt(pending)
+    const rows = yield* usageRows(fixture.sessionID)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.tokens_input).toBeGreaterThan(0)
   }),
 )
 

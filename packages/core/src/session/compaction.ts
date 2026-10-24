@@ -25,6 +25,7 @@ import { llmClient } from "../effect/app-node-platform.js"
 import { State } from "../state.js"
 import { Token } from "../util/token.js"
 import type { SessionContext } from "./context.js"
+import { SessionContextWindow } from "./context-window.js"
 import { SessionEvent } from "./event.js"
 import { SessionHistory } from "./history.js"
 import type { SessionMessage } from "./message.js"
@@ -40,7 +41,7 @@ import { ToolOutput } from "../tool-output.js"
 
 export type Settings = {
   auto: boolean
-  /** Tokens kept free below the model's limits before compacting. Unset keeps 10% free. */
+  /** Tokens kept free below the effective window before compacting. Unset keeps 13,000 free. */
   buffer?: number
   /** Tokens of recent conversation kept verbatim beside the summary. */
   keep: number
@@ -64,6 +65,11 @@ export type Outcome =
 
 export interface Interface extends State.Transformable<Editor> {
   readonly compact: (trigger: Trigger) => Effect.Effect<Outcome>
+  /** Whether automatic compaction is on, and where the loaded model's thresholds sit (undefined for an unknown window). */
+  readonly thresholds: (context: SessionContext.Loaded) => {
+    readonly auto: boolean
+    readonly thresholds: SessionContextWindow.Thresholds | undefined
+  }
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/SessionCompaction") {}
@@ -93,8 +99,6 @@ type Streamed = {
 const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
 /** After each "too long" rejection, the next attempt aims at this share of the first rejected request's size. */
 const SHRINK_STEPS = [0.7, 0.5, 0.35]
-// The least of the window kept free for the last reply before compaction and for the summary itself.
-const RESERVE_MIN = 16_000
 /** A common window size, assumed for the compaction request when the model's window is unknown. */
 const UNKNOWN_WINDOW = 200_000
 const TOOL_OUTPUT_MAX_CHARS = 1_250
@@ -207,12 +211,12 @@ export const layer = Layer.effect(
 
       // Only the user compacts when automatic compaction is off, overflow included.
       if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
-      const ceiling = calculateCeiling(context.model.limit, settings.buffer)
-      if (trigger.reason === "auto" && !due(context, ceiling)) return { status: "skipped" }
+      const found = thresholds(context, settings)
+      if (trigger.reason === "auto" && !(found && due(context, found.threshold))) return { status: "skipped" }
       // An unknown window never triggers auto compaction, but the compaction request still needs a size to aim for.
-      const cap = Number.isFinite(ceiling)
-        ? ceiling
-        : calculateCeiling({ ...context.model.limit, context: UNKNOWN_WINDOW }, settings.buffer)
+      // The request may fill the effective window, which leaves the summary exactly its reserve for output.
+      const cap =
+        found?.effective ?? UNKNOWN_WINDOW - SessionContextWindow.reserve(context.model.limit, context.outputTokenCap)
       // The provider just rejected this context, so the estimate ran low; the first attempt already aims below it.
       const budget =
         trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context, reminders.minimal, toolOutput.root) * SHRINK_STEPS[0])) : cap
@@ -228,6 +232,13 @@ export const layer = Layer.effect(
         }),
       )
     })
+
+    const thresholds = (context: SessionContext.Loaded, settings: Settings) =>
+      SessionContextWindow.thresholds({
+        limit: context.model.limit,
+        outputTokenCap: context.outputTokenCap,
+        buffer: settings.buffer,
+      })
 
     const due = (context: SessionContext.Loaded, ceiling: number) => {
       const messages = context.messages
@@ -332,8 +343,9 @@ export const layer = Layer.effect(
         )
       }
 
+      // A call that completed without reporting usage records zeros, which a turn limit reads as unknown, never as free.
       const toResult = (window: ReadonlyArray<Message>, usage: Usage | undefined) =>
-        spend(context.session.id, usage && SessionUsage.record(usage, context.model.cost)).pipe(
+        spend(context.session.id, SessionUsage.record(usage, context.model.cost)).pipe(
           Effect.as<Result>({
             text: "",
             recent: "",
@@ -342,18 +354,42 @@ export const layer = Layer.effect(
         )
 
       const send = (request: LLMRequest) => {
+        // A call that fails or is interrupted after the provider began to answer was probably billed, though its usage
+        // never arrived: an estimate keeps it from reading as free. A request the provider refused billed nothing.
+        let answered = false
+        const onResponse = () => {
+          answered = true
+        }
+        const estimated = <A, E>(call: Effect.Effect<A, E>) =>
+          call.pipe(
+            Effect.onError(() =>
+              Effect.suspend(() =>
+                answered
+                  ? spend(
+                      context.session.id,
+                      SessionUsage.estimate(context.model.cost, { input: estimateRequest(request), output: 0 }),
+                    )
+                  : Effect.void,
+              ),
+            ),
+          )
         if (LLMClient.canCompact(request, { mechanism: "trigger" })) {
           return Effect.gen(function* () {
             const history = yield* SessionHistory.load(db, context.session.id, "local").pipe(Effect.orDie)
             const retained = recentUserMessages(history, context.model, keep)
-            const response = yield* llm.compact(request, { ...prepared.options, mechanism: "trigger" })
+            const response = yield* llm
+              .compact(request, { ...prepared.options, mechanism: "trigger", onResponse })
+              .pipe(estimated)
             return yield* toResult([...retained, Message.assistant(response.checkpoint)], response.usage)
           })
         }
         if (LLMClient.canCompact(request)) {
           return llm
-            .compact(request, { mechanism: "endpoint", http: prepared.options.http })
-            .pipe(Effect.flatMap((response) => toResult(response.replacement, response.usage)))
+            .compact(request, { mechanism: "endpoint", http: prepared.options.http, onResponse })
+            .pipe(
+              estimated,
+              Effect.flatMap((response) => toResult(response.replacement, response.usage)),
+            )
         }
         return unsupported(`Native compaction is not supported for ${request.model.provider}/${request.model.route.id}`)
       }
@@ -626,7 +662,8 @@ export const layer = Layer.effect(
     }
 
     /**
-     * Each model call is billed as soon as it finishes, so failed and interrupted compactions are billed too. The
+     * A call that completes is billed when it finishes, and one that fails or is interrupted after the provider began
+     * to answer is billed by estimate; a request the provider refused before any response costs nothing. The
      * compaction's message shows the total across all of its calls. A session never runs two compactions at once.
      */
     const spent = new Map<SessionContext.Loaded["session"]["id"], SessionUsage.Recorded>()
@@ -679,6 +716,7 @@ export const layer = Layer.effect(
       transform: state.transform,
       reload: state.reload,
       // A manual compaction settles through its `/compact` inbox item, which the runner owns.
+      thresholds: (context) => ({ auto: state.get().auto, thresholds: thresholds(context, state.get()) }),
       compact: (trigger) =>
         compact(trigger).pipe(
           Effect.onInterrupt(() =>
@@ -926,20 +964,6 @@ export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean
     measured: tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning,
     estimated: unmeasured.reduce((sum, message) => sum + estimateMessage(message), 0),
   }
-}
-
-/**
- * The largest request the model takes while leaving room for its reply: 10% of the window, or `RESERVE_MIN` when that
- * is more. The summary request is capped at the same size, so its output limit is whatever the reserve leaves. A window
- * too small to give up `RESERVE_MIN` keeps 10%.
- */
-const calculateCeiling = (limit: SessionContext.Loaded["model"]["limit"], buffer: number | undefined) => {
-  // Unknown limits are reported as 0. An unknown input limit falls back to the context window; with no window at
-  // all, only a provider rejection can limit the request.
-  const window = limit.input || limit.context
-  if (window <= 0) return Number.POSITIVE_INFINITY
-  if (buffer !== undefined) return window - buffer
-  return window - Math.max(Math.floor(window * 0.1), window >= 2 * RESERVE_MIN ? RESERVE_MIN : 0)
 }
 
 /**
