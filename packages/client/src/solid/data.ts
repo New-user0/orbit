@@ -720,6 +720,7 @@ export function createData(config: CreateDataInput) {
             projectID: current.projectID,
             subpath: current.subpath,
           }
+          setStore("session", "context", produce((draft) => void delete draft[event.data.sessionID]))
           setStore("session", "info", event.data.sessionID, "location", event.data.location)
           if (event.data.projectID) setStore("session", "info", event.data.sessionID, "projectID", event.data.projectID)
           setStore("session", "info", event.data.sessionID, "subpath", event.data.subpath)
@@ -1292,6 +1293,16 @@ export function createData(config: CreateDataInput) {
         )
         break
       case "config.updated":
+        // The report carries the automatic-compaction mode from this location's config, so it can no longer be trusted.
+        setStore(
+          "session",
+          "context",
+          produce((draft) => {
+            Object.keys(draft)
+              .filter((id) => locationKey(store.session.info[id].location) === locationKey(location))
+              .forEach((id) => delete draft[id])
+          }),
+        )
         result.location.config.invalidate(location)
         if (result.location.config.list(location) !== undefined || sync.has(`location.config:${locationKey(location)}`))
           refresh(() => result.location.config.sync(location))

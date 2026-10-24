@@ -4282,7 +4282,8 @@ their place when the row cannot hold both; a very short row cuts it at its end, 
 - **Words.** With automatic compaction on, a muted `N% left before auto-compaction`, also while repeated failures have
   paused it. With it off, `Context almost full (N% left) · run /compact` in the warning or error feedback color.
 - **When it hides.** It is hidden while a revert is staged (`/undo`) and drawn again when the revert is cleared. The
-  report is forgotten when the session is deleted, another model is selected, a revert is
+  report is forgotten when the session is deleted, another model is selected, the configuration changes, the
+  session moves to another location, a revert is
   committed or the event stream reconnects, and the line stays hidden until the next measured response. It is hidden
   too while a narrow footer hides its details for the interrupt hint, and drawn in shell mode as in normal mode.
 - **Plugins.** `context.data.session.context(sessionID)` returns the latest report of a loaded session, or `undefined`.

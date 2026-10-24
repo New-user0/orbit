@@ -3880,6 +3880,30 @@ describe("context report", () => {
       },
     },
     {
+      name: "the configuration changes",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        emitEvent(setup.events, {
+          id: "evt_context_config",
+          created: 3,
+          type: "config.updated",
+          data: {},
+        })
+      },
+    },
+    {
+      name: "the session moves to another location",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        emitEvent(setup.events, {
+          id: "evt_context_moved",
+          created: 3,
+          type: "session.moved",
+          durable: durable(sessionID, 3),
+          data: { sessionID, location: { directory: `${directory}-moved` }, projectID: "proj_test", subpath: "" },
+        })
+        await wait(() => setup.data.session.get(sessionID)?.location.directory === `${directory}-moved`)
+      },
+    },
+    {
       name: "the event stream reconnects",
       run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
         setup.events.disconnect()
