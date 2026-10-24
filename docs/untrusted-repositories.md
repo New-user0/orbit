@@ -1979,7 +1979,12 @@ runs" is a permission.
   ran) and `packages/server/test/permission-revise.test.ts` (a real `orb serve`, an outside marker that the added keys
   name, and the two typed 400 rows). Once such a call has run, its input no longer says what the file holds, so ACP
   draws a completed Edit's or Write's diff from the diff the tool recorded (`metadata.files`), live and on session load,
-  and draws none when there is none (class 8; rows in `packages/cli/test/acp/translate.test.ts`).
+  and draws none when there is none (class 8; rows in `packages/cli/test/acp/translate.test.ts`). The terminal UI and
+  Mini draw a completed Write the same way (`writtenFile` in `packages/tui/src/util/tool-display.ts`): a new file's text
+  is the added lines of the recorded diff, a file that was there shows that diff, and a call that recorded no diff
+  shows no text (the terminal UI names its file, Mini says it completed); the model's `content` is never drawn (rows in
+  `packages/tui/test/cli/tui/write-ran.test.tsx` and `packages/tui/test/mini/scrollback.surface.test.ts`). Their
+  completed Edit already drew the recorded diff.
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

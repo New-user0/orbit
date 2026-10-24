@@ -2351,10 +2351,15 @@ In an ACP client, a completed Edit or Write now shows the diff the tool recorded
 session is loaded, instead of one built from the model's `old_string` and `new_string`. A completed Write shows a diff
 too, and a call that recorded no diff shows none.
 
+In the terminal UI and in Mini, a completed Write is drawn from the diff the tool recorded instead of the model's
+`content`: a new file shows the text that was written, a file that was overwritten shows the diff of the change, and a
+call that recorded no diff shows no text: the terminal UI names the file and Mini says
+the Write completed.
+
 `content` with an `always` or `reject` decision, or on any other question (Patch, NotebookEdit, shell, search, web,
 MCP), is refused with a 400 `InvalidRequestError` whose `field` is `content`, and the question stays pending.
 
-**Affects:** clients and SDK callers that answer approvals; listeners of `permission.replied`; ACP clients.
+**Affects:** clients and SDK callers that answer approvals; listeners of `permission.replied`; ACP clients; the terminal UI and Mini.
 
 **What to do:** Nothing. Send `content` only for a request marked `revisable`, with a `once` decision.
 

@@ -291,8 +291,11 @@ describe("an approval answered with the person's revised content", () => {
           expect(request && revisable(request)).toBe(true)
           const [approved] = files(settled.replied.find((item) => item.requestID === request?.id))
           expect(approved && applyPatch(name === "old.txt" ? "before\n" : "", approved.patch)).toBe("revised\n")
-          // The approved diff names the file the request showed and says whether the write creates it.
-          expect(approved?.file).toBe(files(request?.metadata)[0]?.file)
+          // The approved diff names the file and the place the request showed, and says whether the write creates it.
+          const [shown] = files(request?.metadata)
+          expect(path.basename(shown?.place ?? "")).toBe(name)
+          expect(approved?.place).toBe(shown?.place)
+          expect(approved?.file).toBe(shown?.file)
           expect(approved?.status).toBe(name === "old.txt" ? "modified" : "added")
         }
       }),
