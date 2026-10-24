@@ -420,6 +420,35 @@ describe("memory written before v2", () => {
     }),
   )
 
+  // Class 4: the header comes out only of a MEMORY.md whose real place is in the folder, so a MEMORY.md that links to a
+  // file outside it is not written through, whatever that file starts with. A plain index with the header, in a second
+  // folder in the same run, is the control.
+  if (canLinkFile)
+    it.live("leaves a file that MEMORY.md links to outside the folder as it is, header and all", () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const control = yield* layout
+        const outside = path.join(l.root, "outside", "notes.md")
+        const marker = `${OLD_HEADER}OUTSIDE-MARKER\n`
+        yield* write(outside, marker)
+        yield* Effect.promise(async () => {
+          await fs.mkdir(l.memory, { recursive: true })
+          await fs.symlink(outside, path.join(l.memory, "MEMORY.md"))
+        })
+        yield* write(path.join(control.memory, "MEMORY.md"), `${OLD_HEADER}- [a](a.md): kept\n`)
+        yield* Effect.forEach([l, control], (each) =>
+          Effect.gen(function* () {
+            yield* sessions(each)
+            yield* readInitial(yield* load(first, { guide: false }))
+          }).pipe(provide(each)),
+        )
+        expect(yield* Effect.promise(() => fs.readFile(outside, "utf8"))).toBe(marker)
+        expect(yield* Effect.promise(() => fs.readFile(path.join(control.memory, "MEMORY.md"), "utf8"))).toBe(
+          "# Project memory\n\n- [a](a.md): kept\n",
+        )
+      }),
+    )
+
   // A repository with no remote is named by its path until it is trusted and by its first commit afterwards; notes
   // saved under the path-named folder move over and the index lists each moved note that it did not list already.
   const canonical = AbsolutePath.make(path.resolve("/orbit-memory-test/main"))

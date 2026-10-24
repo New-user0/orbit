@@ -327,7 +327,9 @@ describe("the memory folder of the project", () => {
       timeout,
     )
 
-  // The carve-out is for the file tools, as the reference's is: a shell command that names the folder is asked about.
+  // The carve-out is for the file tools: a shell command that names the folder is asked about. The reference's shell
+  // path check lets the memory folder through as well, but it still asks about any command that is not read-only. Orbit's
+  // default agent allows every command, so the folder question is all a command meets, and the carve-out leaves it be.
   it.live(
     "asks about a shell command in the memory folder",
     () =>
@@ -437,6 +439,38 @@ describe("the memory folder of the project", () => {
   )
 })
 
+// An asker may name other spellings of a resource (`aliases`). A deny of the person's for one of them decides a memory
+// file as it decides any other place, so a spelling the deny does not name cannot carry the call past it (class 8).
+describe("a spelling an asker gives for a memory file", () => {
+  it.live(
+    "denies a memory file when the person's deny names a spelling the asker gives for it",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const out = yield* Effect.gen(function* () {
+          const secret = path.join(l.project, "secret.md")
+          yield* seed(l, [{ action: "Edit", resource: secret, effect: "deny" }])
+          const permission = yield* Permission.Service
+          const resource = path.join(l.memory, "a.md")
+          const ask = (aliased: boolean) =>
+            permission
+              .ask({
+                id: Permission.ID.create(),
+                action: "Edit",
+                resources: [resource],
+                ...(aliased ? { aliases: { [resource]: [secret] } } : {}),
+                sessionID: SessionSchema.ID.make(main),
+                agent: probe,
+              })
+              .pipe(Effect.map((answer) => answer.effect))
+          return { plain: yield* ask(false), aliased: yield* ask(true) }
+        }).pipe(provide(l))
+        expect(out).toEqual({ plain: "allow", aliased: "deny" })
+      }),
+    timeout,
+  )
+})
+
 // Class 4: the carve-out is written for the name a call gives, so a name is not enough. A link inside the folder can
 // lead anywhere, and the real place is what is decided: never an allow for a file behind the link, existing or new.
 describe("a link in the memory folder", () => {
@@ -519,6 +553,30 @@ describe("a link in the memory folder", () => {
         }).pipe(provide(l, { data: linked }))
         expect(out.control).toEqual(allowEdit)
         expect(out.spelled.effect).toBe("deny")
+      }),
+    timeout,
+  )
+
+  // Class 3, the other way round: a deny the person wrote for the linked data folder decides a write that names the real
+  // folder, since both spellings are one folder.
+  it.live(
+    "denies a write by the real path when the person's deny names the linked data folder",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const linked = path.join(l.root, "data-link")
+        yield* Effect.promise(() => fs.symlink(l.data, linked, linkType))
+        yield* Effect.promise(() => fs.mkdir(l.memory, { recursive: true }))
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l, [
+            { action: "Edit", resource: path.join(linked, "memory", Project.ID.global, "private", "*"), effect: "deny" },
+          ])
+          return {
+            real: yield* decide(path.join(l.memory, "private", "a.md")),
+            control: yield* decide(path.join(l.memory, "a.md")),
+          }
+        }).pipe(provide(l, { data: linked }))
+        expect(out).toEqual({ real: { effect: "deny", stage: "Edit" }, control: allowEdit })
       }),
     timeout,
   )
@@ -607,6 +665,32 @@ describe("memory.directory", () => {
         expect(out.spelled).toEqual(allowEdit)
         expect(out.real).toEqual(allowEdit)
         expect(out.through.effect).not.toBe("allow")
+      }),
+    timeout,
+  )
+
+  // Class 3: a folder inside the project is named relative to the session folder by a file tool and by its absolute
+  // path in the person's deny, and the deny decides by either spelling.
+  it.live(
+    "denies a relative write when the person's deny names the configured folder by its absolute path",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const notes = path.join(l.project, "notes")
+        yield* Effect.promise(() => fs.mkdir(notes, { recursive: true }))
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l, [{ action: "Edit", resource: path.join(notes, "private", "*"), effect: "deny" }])
+          return {
+            relative: yield* decide(path.join("notes", "private", "a.md")),
+            absolute: yield* decide(path.join(notes, "private", "a.md")),
+            control: yield* decide(path.join("notes", "a.md")),
+          }
+        }).pipe(provide(l, {}, [configured("user", { directory: notes })]))
+        expect(out).toEqual({
+          relative: { effect: "deny", stage: "Edit" },
+          absolute: { effect: "deny", stage: "Edit" },
+          control: allowEdit,
+        })
       }),
     timeout,
   )
