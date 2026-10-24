@@ -808,17 +808,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   and over a mode's deny, which do not reach the folder, and as elsewhere a later allow of the person's lifts it (class
   8). A shell command is not covered: the folder question that `ShellGuard.prepare` asks is marked `shell`, and neither
   the carve-out nor Orbit's own allow for the folder decides it, so the default agent's `external_directory * ask` still
-  asks (class 8). The guide goes only to a main thread whose base prompt is Orbit's (class 12). The index reader
+  asks (class 8). This is stricter than the reference, whose shell path check lets the memory folder through but which
+  still asks about a command that is not read-only: the default agent here allows every command, so the folder question
+  is the only gate a command meets. The guide goes only to a main thread whose base prompt is Orbit's (class 12). The index reader
   (`MemoryInstructions`, `packages/core/src/memory/instructions.ts`) loads `MEMORY.md` only when its real path is in the
   real folder, takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
   25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) lists only files whose real
   path is in the folder's, and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
   asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
   the five places beside the folder, four link targets with a new and an existing file, the data folder and the
-  configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a mode's deny, the
+  configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a deny that names the
+  other spelling of the folder (linked or real data folder, absolute or relative configured folder, an asker's
+  aliases), a mode's deny, the
   built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation, scopes, the switch order,
-  front matter with a marker file, the scan's links), `test/memory-instructions.test.ts` (the index link to a marker, the
-  caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
+  front matter with a marker file, the scan's links), `test/memory-instructions.test.ts` (the index link to a marker, which
+  neither the reader, the carry-over nor the header rewrite goes through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 
