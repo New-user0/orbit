@@ -931,6 +931,58 @@ describe("a local MCP server waits for the project folder to be trusted", () => 
       ),
     )
   })
+
+  // A grant can land while a server is being placed: the place read the trust before the grant, and the server joins
+  // the waiting ones only after the grant's update has looked for them. The update still starts it. Seen on a loaded
+  // Windows runner, where the server whose place straddled the second of two quick grants never started.
+  test("a grant that lands while a server's working folder is being decided still starts it", async () => {
+    const spawns: Array<ChildProcess.Command> = []
+    const state = { folder: false }
+    const placing = Effect.runSync(Deferred.make<void>())
+    const release = Effect.runSync(Deferred.make<void>())
+    const updates = Effect.runSync(PubSub.unbounded<unknown>())
+    const config = new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: os.tmpdir() })
+    const entries = [
+      new Document({ type: "document", info: new Info({ mcp: new ConfigMCP.Info({ servers: { resources: config } }) }) }),
+    ]
+    // The first decision reads the folder as not trusted and answers only once the grant below has been announced.
+    const first = { pending: true }
+    const folder = (directory: AbsolutePath) =>
+      Effect.gen(function* () {
+        const trusted = state.folder
+        if (first.pending) {
+          first.pending = false
+          yield* Deferred.succeed(placing, undefined)
+          yield* Deferred.await(release)
+        }
+        return { directory, trusted, persistent: true }
+      })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        yield* Deferred.await(placing)
+        state.folder = true
+        yield* PubSub.publish(updates, {})
+        // Long enough for the update to look for waiting servers before the stale decision comes back.
+        yield* Effect.promise(() => Bun.sleep(300))
+        yield* Deferred.succeed(release, undefined)
+        yield* Effect.gen(function* () {
+          const status = (yield* service.servers()).find((server) => server.name === "resources")?.status
+          if (status?.status !== "connected") return yield* Effect.fail(status)
+        }).pipe(Effect.retry({ times: 300, schedule: Schedule.spaced("10 millis") }))
+        expect(spawns).toHaveLength(1)
+      }).pipe(
+        Effect.provide(
+          resourceMcpLayer(config, undefined, undefined, {
+            entries: () => Effect.succeed(entries),
+            environment: recordingEnvironmentLayer(spawns),
+            trust: Layer.mock(ProjectTrust.Service, { trusted: () => Effect.succeed(true), folder }),
+            subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+          }),
+        ),
+      ),
+    )
+  })
 })
 test("reports a local MCP server as failed when the location has no execution plane", async () => {
   const config = new ConfigMCP.Local({ type: "local", command: ["example-mcp"] })

@@ -691,16 +691,18 @@ export const layer = (options?: Options) =>
         ),
       )
       // A trust grant starts the servers that waited for it. A revoke leaves running servers to the next reload.
+      // Each server is asked under its own lock, not only the ones waiting when the grant lands: a server that is being
+      // placed then read the trust before the grant and joins `waiting` only after it, and would wait until the next one.
       const resumeTrusted = Effect.fnUntraced(function* () {
         yield* Effect.forEach(
-          Array.from(waiting),
+          Array.from(entries.keys()),
           (name) =>
             Effect.gen(function* () {
               const entry = entries.get(name)
               if (!entry || !waiting.has(name) || (yield* place(entry.config)).config === undefined) return
               yield* startServer(name, entry)
             }).pipe(locks.withLock(name)),
-          { discard: true },
+          { concurrency: "unbounded", discard: true },
         )
       })
       fork(
