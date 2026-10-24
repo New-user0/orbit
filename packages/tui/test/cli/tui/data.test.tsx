@@ -3922,6 +3922,23 @@ describe("context report", () => {
     expect(frame).not.toContain("Context almost full")
   })
 
+  test("keeps the report when another location's configuration changes", async () => {
+    await using setup = await renderFooter()
+    setup.emit(report())
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    // emitEvent stamps the default location; this event belongs to another one.
+    setup.events.emit({
+      id: "evt_context_other_config",
+      created: 3,
+      type: "config.updated",
+      location: { directory: `${directory}-elsewhere` },
+      data: {},
+    })
+
+    expect(await setup.settle()).toContain(full(3))
+  })
+
   test("hides the line while a revert is staged, draws it when the revert is cleared and forgets it when committed", async () => {
     await using setup = await renderFooter()
     setup.emit(report())
