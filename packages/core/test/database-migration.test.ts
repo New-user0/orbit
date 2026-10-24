@@ -21,7 +21,8 @@ import executionClaimsMigration from "@orbit/core/database/migration/20260811161
 import sessionInboxMigration from "@orbit/core/database/migration/20260812181746_session_inbox"
 import sessionViewedStateMigration from "@orbit/core/database/migration/20260819222447_session_viewed_state"
 import sessionRetentionMigration from "@orbit/core/database/migration/20261024013745_session_retention"
-import { SessionStatsArchiveTable } from "@orbit/core/session/sql"
+import sessionRemovedMigration from "@orbit/core/database/migration/20261024071601_session_removed"
+import { SessionRemovedTable, SessionStatsArchiveTable } from "@orbit/core/session/sql"
 import { getTableConfig } from "drizzle-orm/sqlite-core"
 import { Global } from "@orbit/util/global"
 
@@ -252,6 +253,30 @@ describe("DatabaseMigration", () => {
         expect(journal).toHaveLength(1)
         expect(journal[0]!.time).toBeGreaterThanOrEqual(before)
         expect(journal[0]!.time).toBeLessThanOrEqual(Date.now())
+      }),
+    )
+  })
+
+  // An existing database gets the list of the sessions it removed, whose folders retention may sweep; its columns are
+  // the ones the Drizzle definition declares.
+  test("adds the list of removed sessions to an existing database", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY)`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionRemovedMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionRemovedMigration])
+
+        const columns = yield* db.all<{ name: string; pk: number }>(
+          sql`SELECT name, pk FROM pragma_table_info('session_removed')`,
+        )
+        expect(columns.map((column) => column.name).toSorted()).toEqual(
+          Object.values(getTableConfig(SessionRemovedTable).columns)
+            .map((column) => column.name)
+            .toSorted(),
+        )
+        expect(columns.find((column) => column.name === "id")?.pk).toBe(1)
       }),
     )
   })
