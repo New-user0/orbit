@@ -360,6 +360,46 @@ describe("a Write into team memory", () => {
     }),
   )
 
+  // A team folder that leads onto the whole project, or out of it, does not make the place it leads to team memory: a
+  // repository must not get every write of the project, or of a folder of the person's, refused. A write by the team
+  // folder's own name is still refused in the same run, as the control.
+  it.live("scans no write by another name when the team folder leads onto the project or out of it", () =>
+    Effect.gen(function* () {
+      const rows = yield* Effect.forEach(["project", "outside"] as const, (target) =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          const place = target === "project" ? path.join(l.project, "src") : l.outside
+          yield* Effect.promise(async () => {
+            await fs.rm(l.team, { recursive: true })
+            await fs.mkdir(place, { recursive: true })
+            await fs.symlink(target === "project" ? l.project : l.outside, l.team, linkType)
+          })
+          return yield* withTools(l, record(), (registry) =>
+            Effect.gen(function* () {
+              const elsewhere = yield* executeTool(
+                registry,
+                call("Write", { file_path: path.join(place, "a.md"), content: `key ${pat}\n` }, "e1"),
+              )
+              const named = yield* executeTool(
+                registry,
+                call("Write", { file_path: ".orbit/team-memory/b.md", content: `key ${pat}\n` }, "e2"),
+              )
+              return { target, elsewhere, named, written: yield* read(path.join(place, "a.md")) }
+            }),
+          )
+        }),
+      )
+      for (const row of rows) {
+        expect({ target: row.target, status: row.elsewhere.status, written: row.written }).toEqual({
+          target: row.target,
+          status: "completed",
+          written: `key ${pat}\n`,
+        })
+        expectRefused(row.named, "GitHub PAT", pat)
+      }
+    }),
+  )
+
   // The reference's guard follows the path alone. Orbit's does too: an untrusted project, where nothing else of team
   // memory works, still keeps a secret out of the folder that will be committed. The trusted run is the control.
   it.live("scans whether or not the project is trusted", () =>
