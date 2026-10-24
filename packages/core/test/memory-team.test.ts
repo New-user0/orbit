@@ -572,6 +572,34 @@ describe("a Patch into team memory", () => {
       expect(yield* read(path.join(l.team, "clean.md"))).toBe("clean\n")
     }),
   )
+
+  // A move's added lines are scanned against its destination too, before its source is asked about: a file outside the
+  // project that a patch moves into the team folder, adding a key on the way, is refused with no question about the
+  // outside folder. The same move without the key is the control, which asks about it and lands.
+  it.live("refuses a key that a move into the team folder adds before it asks about the file it moves", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const source = path.join(l.outside, "carried.md")
+      yield* Effect.promise(() => fs.writeFile(source, "keep\n"))
+      const log = record()
+      const patch = (line: string) =>
+        `*** Begin Patch\n*** Update File: ${source}\n*** Move to: .orbit/team-memory/carried.md\n@@\n-keep\n+${line}\n*** End Patch`
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const refused = yield* executeTool(registry, call("Patch", { patchText: patch(`key ${pat}`) }, "m1"))
+          const askedAfterRefusal = [...log.asked]
+          const clean = yield* executeTool(registry, call("Patch", { patchText: patch("kept") }, "m2"))
+          return { refused, askedAfterRefusal, clean }
+        }),
+      )
+      expectRefused(out.refused, "GitHub PAT", pat)
+      expect(out.askedAfterRefusal).toEqual([])
+      expect(out.clean.status).toBe("completed")
+      expect(log.asked).toContain("external_directory")
+      expect(yield* read(path.join(l.team, "carried.md"))).toBe("kept\n")
+      expect(yield* read(source)).toBeUndefined()
+    }),
+  )
 })
 
 describe("a Patch that takes a key out of team memory", () => {
@@ -583,7 +611,8 @@ describe("a Patch that takes a key out of team memory", () => {
       const l = yield* layout
       const file = path.join(l.team, "keys.md")
       yield* Effect.promise(() => fs.writeFile(file, `first\n${pat}\nold ${cloud}\nlast\n`))
-      const patch = (body: string) => `*** Begin Patch\n*** Update File: .orbit/team-memory/keys.md\n${body}\n*** End Patch`
+      const patch = (body: string) =>
+        `*** Begin Patch\n*** Update File: .orbit/team-memory/keys.md\n${body}\n*** End Patch`
       const out = yield* withTools(l, record(), (registry) =>
         Effect.gen(function* () {
           const removed = yield* executeTool(
