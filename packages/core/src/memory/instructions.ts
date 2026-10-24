@@ -238,7 +238,7 @@ Each memory is one of four kinds.
 - How to use: follow it, so they never have to say it twice.
 - Shape: the rule, then a line "Why:" with the reason they gave, then a line "How to apply:" with when it applies.
 - Examples:
-  - person: "Please stop ending each reply with a recap, I read the diff myself." → save a \`feedback\` memory: no closing recap after a change. Why: the person reads the diff. How to apply: the last message of every finished change.
+  - person: "Don't call the new module \`helpers\`; we name a file after the one job it does." → save a \`feedback\` memory: name a new file after its job, never a catch-all such as \`helpers\` or \`misc\`. Why: the team finds code by its file names. How to apply: every file or module you create.
   - person: "Good call putting the schema change in its own commit." → save a \`feedback\` memory: a schema change gets a commit of its own. Why: it can be reviewed and reverted alone. How to apply: any change that alters the stored data's shape.
 
 ### \`project\`
@@ -261,7 +261,7 @@ Each memory is one of four kinds.
 ## What not to save
 
 - Anything the code, the project's files or the version history already tell: structure, conventions, file locations, who changed what.
-- How a bug was fixed: the fix is in the code and the commit message says why.
+- The steps of a bug you fixed: the change records them, and its commit message gives the reason.
 - Anything already in the instruction files.
 - The state of the task at hand: what you are doing now and what is left belongs to this conversation only.
 
