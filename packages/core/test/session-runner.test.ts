@@ -3569,6 +3569,32 @@ describe("SessionRunnerLLM", () => {
     expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "completed" })
   })
 
+  scenario("resends history as text without the assistant's reasoning after payload too large", function* (s) {
+    yield* s.session.prompt({ sessionID, text: `Request 0: ${"x".repeat(40_000)}`, resume: false })
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "stop" }, usage: { inputTokens: 10, nonCachedInputTokens: 10, outputTokens: 4 } },
+        LLMEvent.reasoningStart({ id: "reasoning-0" }),
+        LLMEvent.reasoningDelta({ id: "reasoning-0", text: "Private reasoning" }),
+        LLMEvent.reasoningEnd({ id: "reasoning-0" }),
+        LLMEvent.textStart({ id: "answer-0" }),
+        LLMEvent.textDelta({ id: "answer-0", text: "Answer 0" }),
+        LLMEvent.textEnd({ id: "answer-0" }),
+      ),
+    )
+    yield* s.resume
+    s.currentModel = testModel("smaller-history", { context: 9_000, output: 1_000 })
+    s.requests.length = 0
+    yield* s.llm.push(Stream.fail(payloadTooLarge()), TestLLM.text("## Objective\n- Recovered", "summary"))
+    yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    // The first send carries the reasoning as a part of its own; the transcript text leaves it out.
+    expect(s.requests[0]?.messages.some((message) => message.content.some((part) => part.type === "reasoning"))).toBeTrue()
+    expect(userTexts(s.requests[1])[0]).toContain("[Assistant]: Answer 0")
+    expect(userTexts(s.requests[1])[0]).not.toContain("Private reasoning")
+  })
+
   scenario("shrinks after payload too large on a compaction already sent as text", function* (s) {
     const service = yield* SessionCompaction.Service
     yield* service.transform((editor) => editor.configure({ buffer: 3_000 }))
