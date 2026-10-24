@@ -477,6 +477,16 @@ export type SessionRevertStageOperation<E = never> = (
   input: SessionRevertStageInput,
 ) => Effect.Effect<SessionRevertStageOutput, E>
 
+export type SessionRevertFilesInput = {
+  readonly sessionID: Session.ID
+  readonly messageID: SessionMessage.ID
+  readonly dryRun?: boolean | undefined
+}
+export type SessionRevertFilesOutput = Session.RewindFiles
+export type SessionRevertFilesOperation<E = never> = (
+  input: SessionRevertFilesInput,
+) => Effect.Effect<SessionRevertFilesOutput, E>
+
 export type SessionRevertClearInput = { readonly sessionID: Session.ID }
 export type SessionRevertClearOutput = void
 export type SessionRevertClearOperation<E = never> = (
@@ -498,6 +508,7 @@ export type SessionDiffInput = {
   readonly from?: SessionMessage.ID | undefined
   readonly to?: SessionMessage.ID | undefined
   readonly context?: number | undefined
+  readonly scope?: "turn" | "prompt" | undefined
 }
 export type SessionDiffOutput = ReadonlyArray<FileDiff.Info>
 export type SessionDiffOperation<E = never> = (input: SessionDiffInput) => Effect.Effect<SessionDiffOutput, E>
@@ -1701,6 +1712,7 @@ export interface SessionApi<E = never> {
   readonly wait: SessionWaitOperation<E>
   readonly revert: {
     readonly stage: SessionRevertStageOperation<E>
+    readonly files: SessionRevertFilesOperation<E>
     readonly clear: SessionRevertClearOperation<E>
     readonly commit: SessionRevertCommitOperation<E>
   }

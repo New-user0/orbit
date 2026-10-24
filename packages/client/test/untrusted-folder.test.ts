@@ -27,6 +27,7 @@ test.each([
   ["session.synthetic", () => client.session.synthetic({ sessionID, text: "hello" })],
   ["session.shell", () => client.session.shell({ sessionID, command: "ls" })],
   ["session.compact", () => client.session.compact({ sessionID })],
+  ["session.revert.files", () => client.session.revert.files({ sessionID, messageID: "msg_prompt" })],
   [
     "session.import",
     // The server refuses before it reads the session, so an empty record stands in for one.

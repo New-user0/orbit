@@ -19,6 +19,7 @@ import {
   InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
+  RewindFilesError,
   ServiceUnavailableError,
   SessionBusyError,
   SkillNotFoundError,
@@ -508,6 +509,35 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 Effect.catchTag("Session.BusyError", busySession),
                 Effect.catchTag("Snapshot.Error", failedSnapshot("stage session revert", ctx.params.sessionID)),
               ),
+          }
+        }),
+      )
+      .handle(
+        "session.revert.files",
+        Effect.fn(function* (ctx) {
+          yield* Effect.log("session.revert.files", {
+            sessionID: ctx.params.sessionID,
+            messageID: ctx.payload.messageID,
+            dryRun: ctx.payload.dryRun,
+          })
+          // The busy and trust checks live in core, so an embedded host meets the same refusals (class 12).
+          return {
+            data: yield* session.revert.files({ ...ctx.params, ...ctx.payload }).pipe(
+              Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("Session.MessageNotFoundError", missingMessage),
+              Effect.catchTag("Session.BusyError", busySession),
+              Effect.catchTag("WorkspaceTrust.UntrustedError", (error) => Effect.fail(untrustedFolder(error))),
+              Effect.catchTag(
+                "Session.RewindError",
+                (error) =>
+                  new RewindFilesError({
+                    sessionID: error.sessionID,
+                    messageID: error.messageID,
+                    reason: error.reason,
+                    message: error.message,
+                  }),
+              ),
+            ),
           }
         }),
       )

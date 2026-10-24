@@ -29,6 +29,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
+  RewindFilesError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -553,6 +554,28 @@ export const makeSessionGroup = <
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.revert.files", "/api/session/:sessionID/revert/files", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          messageID: SessionMessage.ID.annotate({ description: "The prompt whose checkpoint the files go back to." }),
+          dryRun: Schema.Boolean.pipe(Schema.optional).annotate({
+            description: "Report what a rewind would change without changing it.",
+          }),
+        }),
+        success: Schema.Struct({ data: Session.RewindFiles }),
+        error: [MessageNotFoundError, SessionNotFoundError, SessionBusyError, RewindFilesError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.revert.files",
+            summary: "Rewind session files",
+            description:
+              "Put the files that the session's own file tools (Edit, Write, Patch, NotebookEdit) changed back as they were when a prompt's work began, leaving shell edits, other edits and the conversation as they are. Takes effect at once and cannot be undone. A dry run lists the files that would change with their line totals, and answers a rewind that cannot happen with `canRewind: false`; a real run refuses one with RewindFilesError.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.delete("session.revert.clear", "/api/session/:sessionID/revert", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,
@@ -597,6 +620,10 @@ export const makeSessionGroup = <
           }),
           context: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional).annotate({
             description: "Unchanged lines around each hunk. Omit for full-file patches.",
+          }),
+          scope: Schema.Literals(["turn", "prompt"]).pipe(Schema.optional).annotate({
+            description:
+              "`turn` (the default) diffs whole turns. `prompt` diffs from `from` to the next user message and keeps only what the session's file tools changed, a steered prompt's own edits included; it takes no `to`.",
           }),
         }),
         success: Schema.Struct({ data: Schema.Array(FileDiff.Info) }),

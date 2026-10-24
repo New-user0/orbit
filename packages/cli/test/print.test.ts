@@ -567,6 +567,7 @@ const printedRunFlags: ReadonlyArray<readonly [string, ...string[]]> = [
   ["--max-cost", "1"],
   ["--max-tokens", "100"],
   ["--fallback-model", "a/b"],
+  ["--rewind-files", "msg_x"],
 ]
 
 test("a flag of a printed run without -p is a usage error", async () => {

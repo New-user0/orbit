@@ -68,6 +68,8 @@ import type {
   SessionWaitOutput,
   SessionRevertStageInput,
   SessionRevertStageOutput,
+  SessionRevertFilesInput,
+  SessionRevertFilesOutput,
   SessionRevertClearInput,
   SessionRevertClearOutput,
   SessionRevertCommitInput,
@@ -926,6 +928,18 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ).then((value) => value.data),
+        files: (input: SessionRevertFilesInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionRevertFilesOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/revert/files`,
+              body: { messageID: input["messageID"], dryRun: input["dryRun"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401, 403, 404, 409],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
         clear: (input: SessionRevertClearInput, requestOptions?: RequestOptions) =>
           request<SessionRevertClearOutput>(
             {
@@ -965,7 +979,7 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/diff`,
-            query: { from: input["from"], to: input["to"], context: input["context"] },
+            query: { from: input["from"], to: input["to"], context: input["context"], scope: input["scope"] },
             successStatus: 200,
             declaredStatuses: [400, 401, 404, 500],
             empty: false,
