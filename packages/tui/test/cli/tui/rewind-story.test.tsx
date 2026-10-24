@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
-import type { Context } from "@orbit/plugin/tui/context"
+import type { Context, Page } from "@orbit/plugin/tui/context"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
 import { ThemeProvider, useThemes } from "../../../src/context/theme"
-import { rewindStory } from "../../../src/feature-plugins/system/storybook/rewind"
+import Storybook from "../../../src/feature-plugins/system/storybook"
 import { createDialogApi } from "../../../src/plugin/api"
 import { DialogProvider, useDialog } from "../../../src/ui/dialog"
 import { ToastProvider } from "../../../src/ui/toast"
@@ -16,19 +16,32 @@ import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 // clients-ux-5 part 2: the rewind picker's story draws the real picker from fixtures, with every request answered and
 // every option acted on inside the story, so exploring it changes nothing. Its fixtures cover a session with edits, one
-// with nothing to rewind, one whose code cannot be rewound, and hostile names. It is drawn as the storybook draws it,
-// with the parts of the plugin context it uses.
+// with nothing to rewind, one whose code cannot be rewound, and hostile names. It is drawn as `ORBIT_STORY=rewind`
+// draws it: the storybook plugin's route, asked for the story with the id `rewind`, with the parts of the plugin
+// context the stories use. (The storybook draws its index for an id it does not know.)
 async function render(width: number) {
   function Story() {
     const themes = useThemes()
+    const pages: Page[] = []
     const context = {
       get theme() {
         return themes.currentTokens()
       },
       keymap: { layer: Keymap.createLayer },
-      ui: { dialog: createDialogApi(useDialog(), (draw) => draw()), router: { navigate: () => {} } },
+      ui: {
+        dialog: createDialogApi(useDialog(), (draw) => draw()),
+        router: {
+          navigate: () => {},
+          register: (page: Page) => {
+            pages.push(page)
+            return () => {}
+          },
+        },
+        slot: () => () => {},
+      },
     } as unknown as Context
-    return rewindStory.render(context)
+    void Storybook.setup(context)
+    return pages.find((page) => page.name === "storybook")?.render({ data: { story: "rewind" } })
   }
   const app = await testRender(
     () => (
@@ -56,7 +69,6 @@ async function render(width: number) {
 test.each([64, 120])("the story draws the real picker for each fixture and resets, at %i columns", async (width) => {
   const app = await render(width)
   try {
-    expect(rewindStory.id).toBe("rewind")
     const first = await app.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
     for (const control of ["ctrl+g", "ctrl+r"]) expect(first).toContain(control)
 
