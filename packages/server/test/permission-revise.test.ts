@@ -1,14 +1,15 @@
 // clients-ux-15 part 1, the route: `POST /api/session/:sessionID/permission/:requestID/reply` takes the person's revised
 // content of an Edit or Write proposal. The reply names no file: the server writes to the place the request resolved, so
 // a key a client adds to the payload cannot move the write (class 8). A revision the server cannot take is refused with a
-// typed 400 and leaves the question pending, so every client can say why (classes 7 and 13). Runs a real `orb serve` with
-// a scripted model.
+// typed 400 and leaves the question pending, so every client can say why (classes 7 and 13). Runs the server that
+// `orb serve` starts, in this process, with a scripted model.
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { Orbit } from "@orbit/client"
+import { Effect, Exit, Scope } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { isolatedEnv } from "../../cli/test/fixture/environment"
+import { startServer } from "./fixture/server"
 
 // The scripted model: a prompt `CALL {"name":…,"arguments":…}` makes it call that tool once, and a tool result ends the
 // step with a line of text.
@@ -54,7 +55,8 @@ const llm = Bun.serve({
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-revise-")))
 const workspace = path.join(root, "workspace")
 const outside = path.join(root, "outside")
-const server: { process?: ReturnType<typeof Bun.spawn>; url?: string } = {}
+const server: { url?: string } = {}
+const scope = Scope.makeUnsafe()
 const authorization = `Basic ${btoa("orbit:secret")}`
 
 beforeAll(async () => {
@@ -87,29 +89,11 @@ beforeAll(async () => {
       },
     }),
   )
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", "serve", "--port", "0"], {
-    cwd: path.join(import.meta.dir, "..", "..", "cli"),
-    env: isolatedEnv(root, { ORBIT_PASSWORD: "secret", ORBIT_CONFIG: undefined, ORBIT_CONFIG_CONTENT: undefined }),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  server.process = child
-  const reader = child.stdout.getReader()
-  const decoder = new TextDecoder()
-  let output = ""
-  while (!server.url) {
-    const chunk = await reader.read()
-    if (chunk.done) throw new Error(`orb serve exited: ${output}`)
-    output += decoder.decode(chunk.value)
-    server.url = /server listening on (\S+)/.exec(output)?.[1]
-  }
-  reader.releaseLock()
+  server.url = (await Effect.runPromise(startServer(path.join(root, "config")).pipe(Scope.provide(scope)))).base
 }, 60_000)
 
 afterAll(async () => {
-  server.process?.kill()
-  await server.process?.exited
+  await Effect.runPromise(Scope.close(scope, Exit.void))
   await llm.stop(true)
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
@@ -136,6 +120,21 @@ test("a once reply with revised content writes it where the request resolved, wh
   expect(await until(() => read("a.txt"))).toBe("revised\n")
   expect(await fs.readFile(outsideFile, "utf8")).toBe("marker\n")
   expect(await fs.readdir(outside)).toEqual(["marker.txt"])
+}, 60_000)
+
+test("a once reply with revised content to an Edit writes the person's version, not the replacement", async () => {
+  // The session writes the file first, so the Edit that follows edits a file this session knows.
+  const session = await start("Write", { file_path: "e.txt", content: "alpha\nbeta\n" })
+  expect((await reply(session, (await pending(session, "Edit")).id, { decision: "once" })).status).toBe(204)
+  expect(await until(() => read("e.txt"))).toBe("alpha\nbeta\n")
+  await prompt(session, "Edit", { file_path: "e.txt", old_string: "beta", new_string: "BETA" })
+  // The Write's question is gone once its reply is taken, so the next Edit question is the Edit tool's.
+  const request = await pending(session, "Edit")
+  expect(request.revisable).toBe(true)
+  expect((await reply(session, request.id, { decision: "once", content: "alpha\nmine\n" })).status).toBe(204)
+  expect(await until(async () => ((await read("e.txt")) === "alpha\nbeta\n" ? undefined : read("e.txt")))).toBe(
+    "alpha\nmine\n",
+  )
 }, 60_000)
 
 test("revised content with an always reply is a typed 400, and the question stays for a plain reply", async () => {
@@ -175,10 +174,13 @@ function client() {
 }
 
 async function start(name: string, args: Record<string, unknown>) {
-  const orbit = client()
-  const session = await orbit.session.create({ location: { directory: workspace } })
-  await orbit.session.prompt({ sessionID: session.id, text: `CALL ${JSON.stringify({ name, arguments: args })}` })
+  const session = await client().session.create({ location: { directory: workspace } })
+  await prompt(session.id, name, args)
   return session.id
+}
+
+function prompt(sessionID: string, name: string, args: Record<string, unknown>) {
+  return client().session.prompt({ sessionID, text: `CALL ${JSON.stringify({ name, arguments: args })}` })
 }
 
 type Request = { id: string; action: string; revisable?: boolean }
