@@ -2518,6 +2518,38 @@ describe("ShellTool", () => {
     ),
   )
 
+  // shell-safety-6: the head that stands for output that did not fit starts at its first line that is not blank and has no
+  // trailing space. Output that fits keeps both, which is the control.
+  it.live(
+    "trims the blank lines and trailing space of a head that did not fit",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          const command = isWindows ? '[Console]::Out.Write("`n `n`nabc   def")' : "printf '\\n \\n\\nabc   def'"
+          const head = (maxBytes: number) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() =>
+                Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ tool_output: { max_bytes: maxBytes } })),
+              )
+              const settled = yield* withSession(tmp.path, (registry) =>
+                executeTool(registry, call({ command }, `call-trim-${maxBytes}`)),
+              )
+              const content = settled.content?.[0]
+              if (!content || content.type !== "text") throw new Error("Expected text content")
+              return content.text
+            })
+          return Effect.gen(function* () {
+            expect(yield* head(9)).toBe("abc")
+            expect(yield* head(100)).toBe("\n \n\nabc   def")
+          })
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
   // shell-safety-6: output past the head limit keeps its head, not its tail.
   it.live(
     "keeps the head of output that overflows",
