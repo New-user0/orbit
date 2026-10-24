@@ -3252,7 +3252,10 @@ with the changed lines, numbered as `Read` numbers them, with eight unchanged li
 8,192 characters in all. The reported change then counts as read, so the edit tools do not refuse the file as changed
 on disk. Before, the model learned of such a change only when an edit was refused. A change counts as read only once
 its reminder is stored: when the check runs out of time, is stopped, or a compaction ends while it runs, no file counts
-as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step.
+as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step. A file
+that is slow to check or read is left for a later step on its own, and the other files are reported at once; the
+changed lines of small changes are worked out before those of large rewrites, so a formatter rewriting many large files
+does not hold up a one-line change.
 
 Only what the session itself wrote is watched: a file it only read is not reported, and reading a file after writing it
 ends the watch. A touch, a change of line endings or of the final line break alone, a notebook, an image, a file with a
@@ -3268,7 +3271,9 @@ After a restart, the first step of each main session rebuilds what it saw from i
 a whole `Read`, a `Write` (whether or not the call succeeded), and an `Edit` or `Patch` that succeeded, whose files are
 read from disk as they are then. A later `Patch` that deletes or moves a file away, or a later `NotebookEdit`, drops
 what earlier calls showed of that file, so the session's own patch is never reported as someone else's change. Changes
-made while Orbit was not running are then reported, and a file known this way can be edited without a new read. Only
+made while Orbit was not running are then reported, and a file known this way can be edited without a new read. A file
+from history that is slow to check or read is left out of the rebuild, and a rebuild that does not finish within the
+step's time limit is not tried again until Orbit restarts. Only
 files inside the project that `Read` would open without a question are rebuilt, at most the 100 named most recently: a
 file under an ask rule, such as the built-in one for `.env` files, is left out. A subagent is never rebuilt: a
 continued or resumed one starts with nothing watched, so it must read a file again before it edits it. A file tracked for freshness is now dropped once a
