@@ -127,6 +127,9 @@ test("a once reply with revised content to an Edit writes the person's version, 
   const session = await start("Write", { file_path: "e.txt", content: "alpha\nbeta\n" })
   expect((await reply(session, (await pending(session, "Edit")).id, { decision: "once" })).status).toBe(204)
   expect(await until(() => read("e.txt"))).toBe("alpha\nbeta\n")
+  // The Edit is prompted only once the Write's run is over: a prompt sent while it still runs reaches the model wrapped
+  // as a message sent mid-task, which the scripted model does not read as a call.
+  await until(async () => ((await client().session.active())[session] ? undefined : true))
   await prompt(session, "Edit", { file_path: "e.txt", old_string: "beta", new_string: "BETA" })
   // The Write's question is gone once its reply is taken, so the next Edit question is the Edit tool's.
   const request = await pending(session, "Edit")
