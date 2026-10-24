@@ -65,8 +65,8 @@ export interface Interface extends State.Transformable<Editor> {
   /**
    * Restore selected project-relative paths from their associated trees. A path
    * absent from its selected tree is removed; paths outside the map are untouched.
-   * A path whose folder no longer leads where its name says, or that is now a link
-   * or a folder, is skipped and logged. A file that fails to go back is logged, the
+   * A path whose folder no longer leads where its name says, that has a file where
+   * one of its folders was, or that is now a link or a folder, is skipped and logged. A file that fails to go back is logged, the
    * others still go back, and the restore then fails.
    */
   readonly restore: (input: RestoreInput) => Effect.Effect<void, Error>
@@ -255,8 +255,19 @@ const layer = Layer.effect(
       // A folder's real place cannot lie below its own name, so "inside" here means "the same folder", with case
       // compared as the system compares it.
       if (!FSUtil.contains(parent, yield* trust.leads(parent))) return false
-      const found = yield* Effect.promise(() => lstat(absolute).catch(() => undefined))
-      return !found?.isSymbolicLink() && !found?.isDirectory()
+      // Every folder on the way that exists must still be a folder: git makes a missing folder by removing a file that
+      // stands at its name, and that file is the person's own.
+      const folders = path
+        .relative(worktree, parent)
+        .split(path.sep)
+        .filter(Boolean)
+        .map((_, index, parts) => path.join(worktree, ...parts.slice(0, index + 1)))
+      const found = yield* Effect.promise(() =>
+        Promise.all([...folders, absolute].map((item) => lstat(item).catch(() => undefined))),
+      )
+      if (found.slice(0, -1).some((info) => info && !info.isDirectory())) return false
+      const leaf = found.at(-1)
+      return !leaf?.isSymbolicLink() && !leaf?.isDirectory()
     })
 
     // A path that may not be written is skipped with one log line, and the others still go back (class 7).

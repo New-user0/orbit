@@ -251,6 +251,32 @@ describe("Snapshot.restore through a link made after the checkpoint", () => {
     ),
   )
 
+  // Git makes a missing folder by removing a file that stands at its name. Where the checkpoint had the folder `sub` and
+  // the person has since put a file of their own there, the restore leaves that file, and the dry run does not list it.
+  it.live("does not remove a file that now stands where the checkpoint had a folder", () =>
+    withProject((fixture) =>
+      Effect.gen(function* () {
+        const snapshot = yield* Snapshot.Service
+        const tree = yield* capture
+        yield* Effect.promise(async () => {
+          await fs.rm(path.join(fixture.project, "sub"), { recursive: true })
+          await fs.writeFile(path.join(fixture.project, "sub"), "mine\n")
+          await fs.writeFile(path.join(fixture.project, "safe.txt"), "safe two\n")
+        })
+        const restorable = yield* snapshot.restorable([RelativePath.make("sub/keep.txt"), RelativePath.make("safe.txt")])
+        yield* restore([
+          ["sub/keep.txt", tree],
+          ["safe.txt", tree],
+        ])
+        expect({
+          restorable,
+          mine: yield* text(path.join(fixture.project, "sub")),
+          safe: yield* text(path.join(fixture.project, "safe.txt")),
+        }).toEqual({ restorable: [RelativePath.make("safe.txt")], mine: "mine\n", safe: "safe one\n" })
+      }),
+    ),
+  )
+
   // A file that git cannot put back (here its checkpoint is a tree the repository does not hold) costs only itself: the
   // control after it still goes back, and the restore then fails, so its caller knows it was partial (class 7).
   it.live("restores the other files when one file fails, and then fails", () =>
