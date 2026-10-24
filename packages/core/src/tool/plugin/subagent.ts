@@ -2,6 +2,7 @@ export * as SubagentTool from "./subagent.js"
 
 import { ToolFailure } from "@orbit/ai"
 import type { Context } from "@orbit/plugin/effect/plugin"
+import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Effect, Predicate, Schema } from "effect"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
@@ -52,15 +53,21 @@ export const Output = Schema.Struct({
   status: Schema.Literals(["completed", "running"]),
   output: Schema.String,
 })
-export const description = [
+const descriptionLines = (background: boolean) => [
   "Spawns an agent in a child session to work on the specified task.",
   "The output includes a sessionID you can pass back later to continue that specific conversation with the subagent.",
   "New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
-  "Foreground (default) runs the subagent to completion and returns its final response.",
-  "Background mode (background=true) launches it asynchronously and returns at once; a message reports back when the subagent ends.",
-  "Use background only for independent work that can run while you continue elsewhere.",
+  ...(background
+    ? [
+        "Foreground (default) runs the subagent to completion and returns its final response.",
+        "Background mode (background=true) launches it asynchronously and returns at once; a message reports back when the subagent ends.",
+        "Use background only for independent work that can run while you continue elsewhere.",
+      ]
+    : ["The subagent runs to completion and the call returns its final response."]),
   "Pick the agent from the roster of startable agents that your context carries; each entry says what the agent is for and what it can use.",
-].join("\n")
+]
+
+export const description = descriptionLines(true).join("\n")
 
 /** Admission checks and model resolution shared by every tool that spawns subagents. */
 export const spawner = Effect.fn("SubagentTool.spawner")(function* () {
@@ -170,6 +177,7 @@ export const Plugin = {
     const sessions = yield* Session.Service
     const jobs = yield* Job.Service
     const agents = yield* Agent.Service
+    const config = yield* Config.Service
     const subagents = yield* SubagentJob.make
     const spawn = yield* spawner()
 
@@ -233,7 +241,9 @@ export const Plugin = {
                     ),
                   ))
 
-              const background = input.background === true
+              // With background tasks off a background request runs in the foreground, and nothing moves it later.
+              const tasks = Config.latest(yield* config.entries(), "background_tasks") !== false
+              const background = input.background === true && tasks
               yield* context.progress({ sessionID: child.id, status: "running" })
 
               // Standard prompt admission outside the job: Job.start joining a running child skips
@@ -265,7 +275,7 @@ export const Plugin = {
                 return backgroundResult(child.id)
               }
 
-              const result = yield* jobs.block({ id: child.id, sessionID: context.sessionID }).pipe(
+              const result = yield* SubagentJob.waitFor(jobs, { id: child.id, sessionID: context.sessionID }, tasks).pipe(
                 Effect.onInterrupt(() =>
                   Effect.all([sessions.interrupt(child.id), jobs.cancel(child.id)], {
                     discard: true,
@@ -301,6 +311,22 @@ export const Plugin = {
         }),
       )
       .pipe(Effect.orDie)
+
+    // With background tasks off the model is not offered a background run, nor told about one.
+    const hook = (event: SessionHooks["context"]) =>
+      Effect.gen(function* () {
+        const tool = event.tools[name]
+        if (!tool || Config.latest(yield* config.entries(), "background_tasks") !== false) return
+        const properties =
+          typeof tool.input.properties === "object" && tool.input.properties !== null ? tool.input.properties : {}
+        const { background: _, ...foreground } = properties as Record<string, unknown>
+        tool.description = descriptionLines(false).join("\n")
+        // The inputs are shared shallow copies, so this assigns a new object rather than changing the shared one.
+        tool.input = { ...tool.input, properties: foreground }
+      })
+    yield* ctx.session.hook("context", hook)
+    yield* ctx.session.hook("compaction", hook)
+    yield* ctx.session.hook("generate", hook)
 
     yield* ctx.tool.hook("execute.before", (event) =>
       Effect.sync(() => {
