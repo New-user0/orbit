@@ -97,14 +97,26 @@ async function start(input: {
         location: { directory },
       } as OrbitEvent)
     },
-    execution(type: "session.execution.started" | "session.execution.succeeded", session = sessionID) {
+    execution(
+      type:
+        | "session.execution.started"
+        | "session.execution.succeeded"
+        | "session.execution.failed"
+        | "session.execution.interrupted",
+      session = sessionID,
+    ) {
       seq++
       events.emit({
         id: `evt_execution_${seq}`,
         created: Date.now(),
         type,
         durable: { aggregateID: session, seq, version: 1 },
-        data: { sessionID: session },
+        data:
+          type === "session.execution.failed"
+            ? { sessionID: session, error: { type: "provider", message: "The provider is unavailable" } }
+            : type === "session.execution.interrupted"
+              ? { sessionID: session, reason: "user" }
+              : { sessionID: session },
         location: { directory },
       } as OrbitEvent)
     },
@@ -244,14 +256,17 @@ test("coming back while the recap is being written drops the request", async () 
 })
 
 test("a delay that ends during a turn waits for the turn's end, and asks then only if still blurred", async () => {
-  {
+  // A turn that fails or is interrupted while the person is away ends it as surely as one that succeeds.
+  for (const end of ["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"] as const) {
     await using app = await start({ messages: [user("Fix the build")] })
     app.execution("session.execution.started")
     app.blur()
     await Bun.sleep(400)
     expect(app.requests).toHaveLength(0)
-    app.execution("session.execution.succeeded")
-    expect(await until(() => app.requests.length === 1)).toBe(true)
+    app.execution(end)
+    expect({ end, asked: await until(() => app.requests.length === 1) }).toEqual({ end, asked: true })
+    await Bun.sleep(200)
+    expect(app.requests).toHaveLength(1)
   }
   {
     await using app = await start({ messages: [user("Fix the build")] })

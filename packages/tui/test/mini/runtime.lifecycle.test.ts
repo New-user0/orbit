@@ -348,16 +348,22 @@ describe("away summary in Mini", () => {
   })
 
   test("waits for the turn's end, asks nothing while focus is unknown, and 0 turns it off", async () => {
-    {
+    // A turn that fails or is interrupted while the person is away ends it as surely as one that succeeds.
+    const ends = [
+      { type: "session.execution.succeeded", data: { sessionID: "ses_1" } },
+      { type: "session.execution.failed", data: { sessionID: "ses_1", error: { message: "The provider is unavailable" } } },
+      { type: "session.execution.interrupted", data: { sessionID: "ses_1" } },
+    ] as const
+    for (const end of ends) {
       using harness = await recapHarness()
       harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
       harness.app.renderer.emit("blur")
       await Bun.sleep(400)
       expect(harness.asked).toHaveLength(0)
-      harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+      harness.lifecycle.observe?.(end)
       const deadline = Date.now() + 3000
       while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
-      expect(harness.asked).toHaveLength(1)
+      expect({ end: end.type, asked: harness.asked.length }).toEqual({ end: end.type, asked: 1 })
     }
     {
       using harness = await recapHarness()
