@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { delivered, finished, harness, sessionID, succeeded } from "../fixture/stream-harness"
 
 // clients-ux-37: what the stream driver does with labels and suggestions while new input arrives or a request fails,
@@ -54,6 +54,24 @@ async function finish(h: ReturnType<typeof harness>) {
   h.idle()
   await h.settle()
 }
+
+// The driver's warnings go to standard error; this keeps what it writes there while `run` runs.
+async function warnings(run: () => Promise<void>) {
+  const written: string[] = []
+  const write = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    written.push(String(chunk))
+    return true
+  })
+  try {
+    await run()
+  } finally {
+    write.mockRestore()
+  }
+  return written.join("")
+}
+
+// What the client's request rejects with once the driver aborted it.
+const abortError = (what: string) => Object.assign(new Error(`${what} request aborted`), { name: "AbortError" })
 
 test("a suggestion answered after a new user line was read is not written, and the next result's is", async () => {
   const h = harness({ suggestions: true })
@@ -135,17 +153,21 @@ const batch = (messageID: string, callID: string): Array<Record<string, unknown>
   },
 ]
 
-test("a label or suggestion request that fails writes no line, and the run goes on to its result", async () => {
+test("a label or suggestion request that fails writes no line but a warning, and the run goes on to its result", async () => {
   const h = harness({ labels: true, suggestions: true })
-  await period(h, "one", "succeeded", async () => {
-    batch("msg_a", "call_1").forEach((event) => h.emit(event))
-    await waitFor(() => h.state.labels.length === 1)
-    h.state.labels[0].fail(new Error("label request failed"))
+  const warned = await warnings(async () => {
+    await period(h, "one", "succeeded", async () => {
+      batch("msg_a", "call_1").forEach((event) => h.emit(event))
+      await waitFor(() => h.state.labels.length === 1)
+      h.state.labels[0].fail(new Error("label request failed"))
+    })
+    await waitFor(() => h.state.suggestions.length === 1)
+    h.state.suggestions[0].fail(new Error("suggestion request failed"))
+    await finish(h)
   })
-  await waitFor(() => h.state.suggestions.length === 1)
-  h.state.suggestions[0].fail(new Error("suggestion request failed"))
-  await finish(h)
 
+  expect(warned).toContain("label request failed")
+  expect(warned).toContain("suggestion request failed")
   expect(h.state.labels[0].input).toEqual({ sessionID, messageID: "msg_a", toolCallIDs: ["call_1"] })
   const written = h.lines.filter((line) => line.type === "tool_label" || line.type === "prompt_suggestion")
   expect(written).toEqual([])
@@ -242,4 +264,28 @@ test("an interrupted period drops the label it asked for, and the next period's 
   await finish(h)
 
   expect(labels(h).map((line) => line.label)).toEqual(["Read notes"])
+})
+
+test("a label request an interruption aborted and a suggestion an interrupt line aborted write no warning when they reject", async () => {
+  const h = harness({ labels: true, suggestions: true })
+  const warned = await warnings(async () => {
+    await period(h, "one", "interrupted", async () => {
+      batch("msg_a", "call_1").forEach((event) => h.emit(event))
+      await waitFor(() => h.state.labels.length === 1)
+      void waitFor(() => h.state.labels[0].signal?.aborted === true).then(() =>
+        h.state.labels[0].fail(abortError("label")),
+      )
+    })
+    await period(h, "two", "succeeded")
+    await waitFor(() => h.state.suggestions.length === 1)
+    h.send({ type: "interrupt" })
+    await waitFor(() => h.state.interrupts === 1)
+    expect(h.state.suggestions[0].signal?.aborted).toBe(true)
+    h.state.suggestions[0].fail(abortError("suggestion"))
+    await finish(h)
+  })
+
+  expect(h.state.labels[0].signal?.aborted).toBe(true)
+  expect(warned).not.toContain("request aborted")
+  expect(h.lines.filter((line) => line.type === "tool_label" || line.type === "prompt_suggestion")).toEqual([])
 })
