@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Fiber, Option, Schema, Stream } from "effect"
+import { DateTime, Effect, Fiber, Logger, Option, Schema, Stream } from "effect"
 import { asc, eq, sql } from "drizzle-orm"
 import { Database } from "@orbit/core/database/database"
 import { Agent } from "@orbit/core/agent"
@@ -799,13 +799,23 @@ describe("SessionProjector tool overrides", () => {
         name: `msg_overridden-${id}-1a2b3c4d.txt`,
         format: 1 as const,
       })
+      // Each event that names no completed result logs one line naming its call (class 7).
+      const refused: unknown[] = []
+      const logger = Logger.make((entry) => {
+        const [message, fields] = Array.isArray(entry.message) ? entry.message : [entry.message]
+        if (message === "a tool override names no completed result, so nothing changes")
+          refused.push((fields as { readonly id?: unknown } | undefined)?.id)
+      })
       for (const id of ["call_done", "call_failed", "call_missing"])
-        yield* bus.publish(SessionEvent.Tool.Overridden, {
-          sessionID,
-          assistantMessageID: messageID,
-          id,
-          override: override(id),
-        })
+        yield* bus
+          .publish(SessionEvent.Tool.Overridden, {
+            sessionID,
+            assistantMessageID: messageID,
+            id,
+            override: override(id),
+          })
+          .pipe(Effect.provide(Logger.layer([logger])))
+      expect(refused).toEqual(["call_failed", "call_missing"])
 
       const row = yield* db
         .select()

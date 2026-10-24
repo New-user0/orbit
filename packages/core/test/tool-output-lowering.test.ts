@@ -458,6 +458,38 @@ describe("an override from the message budget", () => {
     expect(lowered).toEqual(results([decoded([failed({})])]))
   })
 
+  // Lowering runs several times a step over the whole history, so each override that does not apply is reported once,
+  // by its call, and a valid one is not reported at all (class 7).
+  test("reports each override that does not apply once however often its history is lowered", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    const image = { type: "file" as const, uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png" }
+    const history = [
+      decoded(
+        [
+          completed([text("m".repeat(45_000))], { id: "call_report_malformed", override: "../../.ssh/id_rsa" }),
+          completed([text("i".repeat(45_000)), image], { id: "call_report_file", override: override() }),
+          {
+            id: "call_report_failed",
+            state: { status: "error", input: {}, error: { type: "tool.execution", message: "failed" } },
+            override: override(),
+          },
+          completed([text("v".repeat(45_000))], { id: "call_report_valid", override: override() }),
+        ],
+        "msg_report",
+      ),
+    ]
+    try {
+      Array.from({ length: 3 }, () => results(history))
+      expect(
+        warn.mock.calls
+          .filter((call) => String(call[0]).includes("override does not apply"))
+          .map((call) => (call[1] as { readonly id?: string } | undefined)?.id),
+      ).toEqual(["call_report_malformed", "call_report_file", "call_report_failed"])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   // An assistant message always sits between two steps' results, so no adapter can merge two groups into one message.
   test("keeps the results of two assistant messages apart", () => {
     const messages = toLLMMessages(
