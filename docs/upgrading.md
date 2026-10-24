@@ -3338,11 +3338,11 @@ with the changed lines, numbered as `Read` numbers them, with eight unchanged li
 on disk. Before, the model learned of such a change only when an edit was refused. A change counts as read only once
 its reminder is stored: when the check runs out of time, is stopped, or a compaction ends while it runs, no file counts
 as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step. Each
-step checks the files within a short time budget, and one file within half of it, so a file that is slow to check
-or read, or never answers, costs only its own share and the other files are reported. When a step has no time for
-every file, the files the session wrote most recently are checked first, and the next step goes on with the files not
-yet checked, so every file is checked within a few steps; a change to a file whose check ran out of time is reported
-once a later check finishes in time. The
+step starts checking the files within a short time budget, and gives each file half of it, so a file that is slow to
+check or read, or never answers, costs only its own share and the other files are reported. A check that is still
+running when the budget ends keeps the rest of its share. When a step has no time for every file, the files the
+session wrote most recently are checked first, and the next step goes on with the files not yet checked; a change to a
+file whose check ran out of its share is reported once a later check finishes in time. The
 changed lines of small changes are worked out before those of large rewrites, so a formatter rewriting many large files
 does not hold up a one-line change.
 

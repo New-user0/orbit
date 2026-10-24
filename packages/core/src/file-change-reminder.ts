@@ -35,14 +35,15 @@ import { ReadToolFileSystem } from "./tool/read-filesystem.js"
  * past its deadline, is interrupted or fails leaves the ledger as it was, so no change counts as seen unless its row was
  * posted, and the edit tools still refuse a changed file as stale.
  *
- * A slow file costs only its own share. The files are checked and read within `FILE_BUDGET_MS`, eight at a time, each
- * within half of it; a file whose check runs out of time is kept as it is. The ledger keeps a scan per session
+ * A slow file costs only its own share. The files are checked eight at a time, a new one starting only while the
+ * step's `FILE_BUDGET_MS` lasts, and each check, once started, has half of that budget to finish, even past the end of
+ * the budget; a file whose check runs out of its share is kept as it is. So every check that starts either finishes or
+ * uses its whole share, and none is cut short because the step's budget ran out. The ledger keeps a scan per session
  * (`FileLedger.toCheck`): a file whose check started counts as checked in it, and the files not yet checked come first,
- * the most recently used first. So each step goes on where the last one stopped, the newest file is checked at the first
- * step, and a file the step's budget never reached goes first at the next. When a step's budget covers k of n watched
- * files, every one of them is checked within about n / k steps while the session writes no new file. The comparisons
- * run after that, smallest first, within the reference's `DIFF_TIMEOUT_MS` all together. The producer's own deadline is
- * longer than all of it, so it is not what ends a collection whose files keep to their budgets.
+ * the most recently used first. So each step goes on where the last one stopped, the newest file is checked at the
+ * first step, and a file whose check was still running when the budget ran out was still checked. The comparisons run
+ * after that, smallest first, within the reference's `DIFF_TIMEOUT_MS` all together. The producer's own deadline is
+ * longer than all of it, so it is not what ends a collection whose files keep to their shares.
  *
  * The path and the changed lines come from the disk, so they travel only in `data`; the harness text names neither.
  */
@@ -52,7 +53,7 @@ const KIND = "file-change"
 const CONTEXT_LINES = 8
 /** The longest snippet, in characters; a longer one is cut at a line break and says how many lines it left out. */
 const MAX_SNIPPET = 8_192
-/** How long the checks and reads of the files may take, and those of the rebuild; a file not done by then waits. */
+/** How long new checks and reads of the files may start, and those of the rebuild; a file not started by then waits. */
 const FILE_BUDGET_MS = 750
 /** How many files are checked at once. */
 const CONCURRENCY = 8
@@ -73,8 +74,8 @@ export interface Services {
   readonly trust: ProjectTrust.Interface
   readonly environment: Environment.Interface
   /**
-   * The budget, in milliseconds, for the files' checks and reads and for the rebuild's (`FILE_BUDGET_MS` when not
-   * given); one file's share is half of it, and the producer's deadline follows it. Production gives none. A test that
+   * The budget, in milliseconds, within which the files' checks and reads start, and the rebuild's (`FILE_BUDGET_MS`
+   * when not given); one file's share is half of it, and the producer's deadline follows it. Production gives none. A test that
    * counts which of many files are read gives more, so a loaded machine does not leave some out, and one that starves
    * the files gives less.
    */
@@ -83,8 +84,9 @@ export interface Services {
 
 export const durable = (services: Services): Durable => ({
   name: KIND,
-  // The rebuild's budget, the checks' budget and the comparisons' time, with room to spare.
-  timeout: Duration.millis(2 * (services.budget ?? FILE_BUDGET_MS) + DIFF_TIMEOUT_MS + 500),
+  // The rebuild and the checks, each its budget and one last share past it, then the comparisons' time, with room to
+  // spare.
+  timeout: Duration.millis(3 * (services.budget ?? FILE_BUDGET_MS) + DIFF_TIMEOUT_MS + 500),
   run: (input) =>
     Effect.gen(function* () {
       // Claimed before the work, so a rebuild that runs past the producer's deadline costs one step, not every step. A
@@ -122,8 +124,8 @@ export const durable = (services: Services): Durable => ({
           ),
         { concurrency: CONCURRENCY },
       )
-      // Each file whose check started had its turn in this scan. That marks nothing as seen: a change counts as seen only
-      // through its entry's commit.
+      // Each file whose check started had its turn in this scan, whatever it found: the check finished or used its whole
+      // share. That marks nothing as seen: a change counts as seen only through its entry's commit.
       yield* services.ledger.checked(
         input.session.id,
         checked.flatMap((result) => (result.found === undefined ? [] : [result.path])),
@@ -140,9 +142,10 @@ export const durable = (services: Services): Durable => ({
 })
 
 /**
- * What `effect` found for one file within its own `share` of the time and before `deadline`, or nothing when it ran out
- * of time, so a slow file costs only its share and the others go on. Undefined when `deadline` had passed before it
- * started.
+ * What `effect` found for one file within its own `share` of the time, or nothing when it ran out of its share, so a
+ * slow file costs only its share and the others go on. Undefined when `deadline` had passed before it started. A check
+ * that started before `deadline` keeps its whole share past it, so no file counts as checked whose check the step's
+ * budget cut short.
  */
 const inTime = <A>(
   input: Input,
@@ -151,10 +154,9 @@ const inTime = <A>(
   effect: Effect.Effect<ReadonlyArray<A>>,
 ): Effect.Effect<ReadonlyArray<A> | undefined> =>
   Effect.suspend(() => {
-    const left = deadline - Date.now()
-    if (left <= 0) return Effect.succeed(undefined)
+    if (deadline <= Date.now()) return Effect.succeed(undefined)
     return effect.pipe(
-      Effect.timeoutOption(Math.min(share, left)),
+      Effect.timeoutOption(share),
       Effect.flatMap((found) =>
         Option.isSome(found)
           ? Effect.succeed(found.value)
@@ -326,9 +328,9 @@ const shown = (text: string) =>
  * `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop the rest. A record that is already there
  * wins over one from history.
  *
- * The names are resolved within the first half of `FILE_BUDGET_MS` and the files read within the rest, each file within
- * half of it, the newest first in both, so a slow file costs only its share and a rebuild that runs out of time leaves
- * out the oldest files, as the ledger would drop them first. The session is claimed before the rebuild starts, so one
+ * The names start resolving within the first half of `FILE_BUDGET_MS` and the files start being read within the rest,
+ * each file within half of it, the newest first in both, so a slow file costs only its share and a rebuild that runs out
+ * of time leaves out the oldest files, as the ledger would drop them first. The session is claimed before the rebuild starts, so one
  * that runs past the producer's deadline is not tried again in this process.
  */
 const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {

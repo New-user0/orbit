@@ -735,8 +735,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   run after the rows are posted and only while the record is the one it checked (`FileLedger.settle`), so a deadline,
   an interruption, a failed read, a refusal or a compaction meanwhile leaves every stale refusal in place (class 7;
   the "collection that ends early" rows). A file that is slow to check or read, in the re-read or in the rebuild, is
-  left out on its own within a budget below the producer's deadline, each file within half of it, and the comparisons
-  run smallest first, so one slow or hung file costs only its share. When the budget covers only part of the files, the
+  left out on its own: files start within a budget, each with half of it to finish (past the budget's end if need be,
+  so no check is counted that the budget cut short), all below the producer's deadline, and the comparisons run
+  smallest first, so one slow or hung file costs only its share. When the budget covers only part of the files, the
   re-read takes the newest first and goes on at the next step where the last one stopped (a scan the ledger keeps per
   session), and the rebuild works from the newest call back, so it leaves out the oldest (class 7; the same rows and
   the "budget smaller than one pass over the files" rows). Proof: the "re-read gate" and "rebuild after a restart" rows of

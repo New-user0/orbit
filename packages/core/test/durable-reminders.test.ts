@@ -2359,6 +2359,21 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
         }),
     },
     {
+      // Review fix loop 8. Each slot starts a fifth check at about 640 ms, with less time left in the budget than the check
+      // takes: f67 to f60 at the first step and f27 to f20 at the second. Were those checks cut at the end of the budget
+      // and still counted as checked, every scan would cut the same files and f63 and f24 would never be reported; f68,
+      // checked well within the budget, is the control.
+      name: "a check still running when the budget ends finishes, so the files then in flight are reported",
+      written: 100,
+      changed: [24, 63, 68],
+      check: (c) =>
+        Effect.gen(function* () {
+          const reported = yield* c.steps(at(c, [24, 63, 68]))
+          expect(reported.get("f68.txt")).toBe(0)
+          expect(Array.from(reported.keys()).toSorted()).toEqual(at(c, [24, 63, 68]).toSorted())
+        }),
+    },
+    {
       // After a restart: the history edits 100 files, more than the rebuild's budget can resolve and read.
       name: "a rebuild that runs out of time keeps the newest files and leaves out the oldest",
       written: 0,
