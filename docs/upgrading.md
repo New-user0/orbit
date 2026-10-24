@@ -3434,7 +3434,7 @@ size before the cut, its path and a preview of the head, which starts at its fir
 after the output follow the block. A command whose exit code reads as a failure is never saved: its text is cut to its
 first and last 5,000 characters. The shell declares a 30,000-character result limit, so a head raised past that by `max_bytes` is saved by
 the step like any other result. A background command's completion message and the result of a command you run with
-`!` carry the head too, and a completion message names the output file when the output did not fit. An output file
+`!` carry the head too, and both name the output file when the output did not fit. An output file
 that cannot be read is named in the result instead of giving an empty one, and a link planted at its path is not
 followed.
 
@@ -3450,8 +3450,9 @@ take all of it; the seven-day cleaning removes it later.
 A new setting, `"background_tasks": false`, keeps work in the foreground. The shell tool (Bash or PowerShell) no longer
 offers `run_in_background` and the Agent tool no longer offers `background`; a call that passes either runs in the
 foreground. A shell command still running at its timeout is stopped instead of moving to the background, moving
-running work to the background leaves shell commands where they are, and the tool descriptions drop the background
-guidance. A project's or local value applies only once the folder is trusted.
+running work to the background leaves shell commands and the subagents of the Agent and Workflow tools where they
+are, and the tool descriptions drop the background guidance. A command defined to run as a subagent still runs in the
+background. A project's or local value applies only once the folder is trusted.
 
 **Affects:** people who want every command and subagent to finish before the model goes on.
 
@@ -3459,10 +3460,11 @@ guidance. A project's or local value applies only once the folder is trusted.
 
 ### A background command is stopped at 5 GB of output, and a subagent's commands end with it
 
-A shell command that has left the foreground is killed once its output file passes 5 GB, checked every five seconds;
-its completion message starts with a line saying so. When the run that an Agent call started ends, whether it finished
-or failed, in the foreground or the background, every shell command the subagent still has running is killed and
-reports nothing to it, and a waiting notice of one of them is withdrawn.
+A shell command that has left the foreground is killed at once (no grace period) once its output file passes 5 GB,
+checked every five seconds; its completion message starts with a line saying so. When the run that an Agent call
+started ends, whether it finished or failed, in the foreground or the background, and also when a background subagent
+resumed after a restart ends, every shell command the subagent still has running is killed and reports nothing to it,
+and every shell notice still waiting for the subagent is withdrawn (a command you ran there with `!` excepted).
 
 **Affects:** people who start long background commands, and subagents that leave servers or watchers running.
 
