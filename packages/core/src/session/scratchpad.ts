@@ -13,16 +13,11 @@ import { Database } from "../database/database.js"
 import { Instructions } from "../instructions/index.js"
 import { SessionAffinity } from "./affinity.js"
 import { SessionEvent } from "./event.js"
+import { SessionFolder } from "./folder.js"
 import type { SessionSchema } from "./schema.js"
 import { SessionTable } from "./sql.js"
 
 type Lineage = Pick<SessionSchema.Info, "id" | "parentID" | "fork">
-
-// A client chooses the ID of a session it creates, and the ID of the parent or the fork source it names, and the ID
-// becomes the name of a folder here (class 5). So it names one only when it is `ses_` and plain letters, digits and
-// underscores. That leaves out every separator, `..`, drive colon and trailing dot or space, and no Windows device name
-// starts with `ses_`. A generated ID is `ses_` and 26 letters and digits.
-const KEY = /^ses_[A-Za-z0-9_]{1,96}$/
 
 /**
  * The name of the scratchpad folder that a session uses (`SessionAffinity`). It goes back one level only: a subagent
@@ -32,7 +27,7 @@ const KEY = /^ses_[A-Za-z0-9_]{1,96}$/
  */
 export const key = (session: Lineage): string | undefined => {
   const affinity = SessionAffinity.get(session)
-  return KEY.test(affinity) ? affinity : undefined
+  return SessionFolder.KEY.test(affinity) ? affinity : undefined
 }
 
 export interface Interface {
@@ -90,7 +85,7 @@ const layer = Layer.effect(
     // link, never what it points to. A fork that is still there keeps using the folder of the session it came from, so
     // the folder stays until no session is left that uses it.
     const remove = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      if (!KEY.test(sessionID)) return
+      if (!SessionFolder.KEY.test(sessionID)) return
       const used = yield* db
         .select({ id: SessionTable.id })
         .from(SessionTable)

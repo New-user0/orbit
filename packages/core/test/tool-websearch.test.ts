@@ -15,9 +15,6 @@ import { WebSearchTool } from "@orbit/core/tool/plugin/websearch"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Image } from "@orbit/core/image"
 import { ToolOutput } from "@orbit/core/tool-output"
-import { FSUtil } from "@orbit/util/fs-util"
-import { Global } from "@orbit/util/global"
-import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
@@ -336,7 +333,8 @@ describe("WebSearchTool registration", () => {
       expect(WebSearchTool.SOURCES_REMINDER).toContain('"Sources:"')
       expect(definition?.description).toContain('"Sources:"')
 
-      // The session runner keeps the head of an oversized result, so the reminder must survive that bound.
+      // An oversized result reaches the model as the head of its text in the saved-result wrapper, so the reminder must
+      // lead it.
       fixture.results = Array.from({ length: 30 }, (_, i) => ({
         url: `https://example.com/${i}`,
         title: `Result ${i}`,
@@ -348,24 +346,9 @@ describe("WebSearchTool registration", () => {
         ...toolIdentity,
         call: { type: "tool-call", id: "call-large", name: "WebSearch", input: { query: "effect" } },
       })
-      const bounded = yield* Effect.acquireUseRelease(
-        Effect.promise(() => tmpdir()),
-        (tmp) =>
-          Effect.gen(function* () {
-            const output = yield* ToolOutput.Service
-            yield* output.transform((editor) => editor.configure({ maxLines: 50 }))
-            return yield* output.truncate({ content: large.content as Tool.Content[] })
-          }).pipe(
-            Effect.provide(
-              AppNodeBuilder.build(LayerNode.group([ToolOutput.node, FSUtil.node]), [
-                Global.node.replace(Global.layerWith({ data: tmp.path })),
-              ]),
-            ),
-          ),
-        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-      )
-      expect(bounded.metadata).toMatchObject({ truncated: true })
-      expect(JSON.stringify(bounded.content)).toContain("A reply that relies on these results")
+      const head = ToolOutput.preview((large.content?.[0] as { text: string }).text)
+      expect(head.more).toBe(true)
+      expect(head.text).toContain("A reply that relies on these results")
     }),
   )
 

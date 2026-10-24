@@ -143,7 +143,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description: "Shell command timeouts",
   }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
-    description: "Tool output truncation thresholds",
+    description: "When a tool result is saved to a file, and how much of a shell command's output its result keeps",
   }),
   tool_execution: ConfigToolExecution.Info.pipe(optional).annotate({
     description: "How the tool calls of one step are scheduled",

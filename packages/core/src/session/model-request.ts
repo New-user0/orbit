@@ -139,6 +139,8 @@ export const baseTranscript = (input: {
   readonly insertions?: ReadonlyArray<LoweredInsertion>
   /** The minimal instances keep a prompt's queued-input note and drop its agent hints and editor note. */
   readonly minimal?: boolean
+  /** `<data>/tool-output`, so a saved result reaches the model as its wrapper; without it the result goes as stored. */
+  readonly toolOutput?: string
 }) => {
   const providerMetadataKey = input.model.model.route.providerMetadataKey ?? input.model.model.provider
   return {
@@ -155,6 +157,7 @@ export const baseTranscript = (input: {
       .map(SystemPart.make),
     messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey, input.insertions, {
       minimal: input.minimal,
+      toolOutput: input.toolOutput,
     }),
   }
 }

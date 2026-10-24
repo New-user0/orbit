@@ -836,7 +836,8 @@ describe("Permission for a place a link leads out to", () => {
         resource(global.config),
         resource(global.tmp),
         resource(path.join(global.data, "shell", "shl_1")),
-        resource(path.join(global.data, "tool-output")),
+        // The tool-output allow covers the asking session's own folder only (tool-runtime-8).
+        resource(path.join(global.data, "tool-output", "ses_test")),
       ],
       config: resource(global.config),
     }
