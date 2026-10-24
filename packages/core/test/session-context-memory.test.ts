@@ -49,6 +49,7 @@ import { stubSnapshot } from "./lib/tool"
 const directory = AbsolutePath.make(FSUtil.resolve("/repo"))
 const GUIDE = "core/memory-guide"
 const INDEX = "core/memory-index"
+const TEAM_INDEX = "core/team-memory-index"
 const ids = {
   main: SessionSchema.ID.make("ses_mem_ctx_main"),
   sub: SessionSchema.ID.make("ses_mem_ctx_sub"),
@@ -210,9 +211,13 @@ describe("memory in a session's baseline", () => {
       const main = yield* sources(ids.main)
       expect(main.keys.indexOf(GUIDE)).toBe(main.keys.indexOf("core/instructions") + 1)
       expect(main.keys.indexOf(INDEX)).toBe(main.keys.indexOf(GUIDE) + 1)
-      expect(main.keys.indexOf("core/date")).toBe(main.keys.indexOf(INDEX) + 1)
+      // The team index follows the private one, as the reference loads the team MEMORY.md after the private one
+      // (context-memory-11); with team memory off it holds no value.
+      expect(main.keys.indexOf(TEAM_INDEX)).toBe(main.keys.indexOf(INDEX) + 1)
+      expect(main.keys.indexOf("core/date")).toBe(main.keys.indexOf(TEAM_INDEX) + 1)
       expect(main.present).toContain(GUIDE)
       expect(main.present).toContain(INDEX)
+      expect(main.present).not.toContain(TEAM_INDEX)
     }),
   )
 
