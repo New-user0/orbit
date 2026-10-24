@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Option } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { LinkShare } from "@orbit/util/link-share"
 import { envelope } from "@orbit/util/reminder-text"
 import type { Document, Entry } from "@orbit/schema/config"
 import { Config } from "../config.js"
@@ -268,11 +269,18 @@ const layer = Layer.effect(
       folder,
       real,
       enabled: () => config.entries().pipe(Effect.map((current) => enabled(process.env, current))),
+      // A path whose links lead to a share is answered before it is resolved, which would connect to the host (class 6).
       locate: (file) =>
-        fs.realPath(file).pipe(
-          Effect.map(FSUtil.normalizePath),
-          Effect.map((found) => (FSUtil.contains(real, found) ? found : undefined)),
-          Effect.orElseSucceed(() => undefined),
+        LinkShare.blocked(fs, file).pipe(
+          Effect.flatMap((stop) =>
+            stop
+              ? Effect.succeed(undefined)
+              : fs.realPath(file).pipe(
+                  Effect.map(FSUtil.normalizePath),
+                  Effect.map((found) => (FSUtil.contains(real, found) ? found : undefined)),
+                  Effect.orElseSucceed(() => undefined),
+                ),
+          ),
         ),
     })
   }),

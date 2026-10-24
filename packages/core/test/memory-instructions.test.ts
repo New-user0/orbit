@@ -11,6 +11,7 @@ import { Effect, Layer, Schema } from "effect"
 import { $ } from "bun"
 import { Hash } from "@orbit/util/hash"
 import { Document, Info, type Entry, type Scope } from "@orbit/schema/config"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Bus } from "@orbit/core/bus"
@@ -26,6 +27,7 @@ import { SessionEvent } from "@orbit/core/session/event"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { repository } from "./fixture/git"
+import { recordedFileSystem } from "./fixture/recorded-fs"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
@@ -77,6 +79,7 @@ const provide = (
     },
     vcs: undefined,
   },
+  files?: Layer.Layer<FSUtil.Service>,
 ) =>
   Effect.provide(
     AppNodeBuilder.build(
@@ -85,6 +88,7 @@ const provide = (
         Global.node.replace(Global.layerWith({ data: l.data, config: path.join(l.root, "config") })),
         Config.node.replace(Config.testLayer(entries)),
         Location.node.replace(Layer.succeed(Location.Service, Location.Service.of(bound))),
+        ...(files === undefined ? [] : [FSUtil.node.replace(files)]),
       ],
     ),
   )
@@ -213,6 +217,39 @@ describe("the memory index source", () => {
           yield* sessions(l)
           return yield* readInitial(yield* load(first, { guide: false }))
         }).pipe(provide(l))
+        expect(plain.text).toContain("CONTROL-INDEX")
+      }),
+    )
+
+  // Class 6: resolving a link to a share connects to the host it names, which a repository can choose when it fills the
+  // folder memory.directory names. The recorded file system is the oracle: no call but a readLink may name MEMORY.md,
+  // at the Location's start (the header rewrite) or at the session's first read. The plain index is the control.
+  if (process.platform === "win32" && canLinkFile)
+    it.live("does not resolve a MEMORY.md that is a link to a share", () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const index = path.join(l.memory, "MEMORY.md")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(l.memory, { recursive: true })
+          await fs.symlink("\\\\203.0.113.171\\share\\MEMORY.md", index, "file")
+        })
+        const recorded = recordedFileSystem()
+        const started = Date.now()
+        const linked = yield* Effect.gen(function* () {
+          yield* sessions(l)
+          return yield* readInitial(yield* load(first, { guide: false }))
+        }).pipe(provide(l, [], undefined, recorded.layer))
+        expect(Date.now() - started).toBeLessThan(15_000)
+        const named = recorded.calls.filter((call) => call.toLowerCase().endsWith(` ${index.toLowerCase()}`))
+        expect(named.length).toBeGreaterThan(0)
+        expect(named.filter((call) => !call.startsWith("readLink "))).toEqual([])
+        expect(Object.keys(linked.values)).not.toContain(INDEX)
+        yield* Effect.promise(() => fs.rm(index))
+        yield* write(index, "CONTROL-INDEX")
+        const plain = yield* Effect.gen(function* () {
+          yield* sessions(l)
+          return yield* readInitial(yield* load(first, { guide: false }))
+        }).pipe(provide(l, [], undefined, recordedFileSystem().layer))
         expect(plain.text).toContain("CONTROL-INDEX")
       }),
     )
@@ -511,6 +548,46 @@ describe("memory written before v2", () => {
         )
         expect(yield* exists(path.join(target, "before-trust.md"))).toBe(true)
         expect(yield* Effect.promise(() => fs.readFile(outside, "utf8"))).toBe("OUTSIDE-MARKER\n")
+      }),
+    )
+
+  // Class 4: a MEMORY.md that links to a file that is not there reads as missing, and a write through it would create
+  // the file it names, outside the folder. The second project, with no MEMORY.md at all, is the control: its index is
+  // made with the moved note's line.
+  if (canLinkFile)
+    it.live("creates nothing through a MEMORY.md that is a link to a file that is not there", () =>
+      Effect.gen(function* () {
+        const run = (l: Layout, id: string) =>
+          Effect.gen(function* () {
+            yield* sessions(l)
+            yield* readInitial(yield* load(first, { guide: false }))
+          }).pipe(
+            provide(l, [], {
+              directory: canonical,
+              project: { id: Project.ID.make(id), directory: canonical, canonical },
+              vcs: undefined,
+            }),
+          )
+        const linked = yield* layout
+        const target = path.join(linked.data, "memory", "c".repeat(40))
+        const outside = path.join(linked.root, "outside", "made.md")
+        yield* write(path.join(linked.data, "memory", pathID(canonical), "before-trust.md"), "# Saved before trust\n")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(target, { recursive: true })
+          await fs.mkdir(path.dirname(outside), { recursive: true })
+          await fs.symlink(outside, path.join(target, "MEMORY.md"))
+        })
+        yield* run(linked, "c".repeat(40))
+        expect(yield* exists(path.join(target, "before-trust.md"))).toBe(true)
+        expect(yield* exists(outside)).toBe(false)
+
+        const control = yield* layout
+        const made = path.join(control.data, "memory", "d".repeat(40))
+        yield* write(path.join(control.data, "memory", pathID(canonical), "before-trust.md"), "# Saved before trust\n")
+        yield* run(control, "d".repeat(40))
+        expect(yield* Effect.promise(() => fs.readFile(path.join(made, "MEMORY.md"), "utf8"))).toContain(
+          "(before-trust.md)",
+        )
       }),
     )
 })

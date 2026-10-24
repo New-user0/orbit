@@ -194,10 +194,10 @@ const carryOver = (fs: FSUtil.Interface, global: Global.Interface, location: Loc
     const files = moved.flat()
     if (files.length === 0) return
     const index = path.join(target, MemoryStore.ENTRYPOINT)
-    // The index is written where it really is, and only when that is in the folder: a link named MEMORY.md is left alone.
-    const real = (yield* fs.existsSafe(index)) ? yield* fs.realPath(index) : index
-    if (!FSUtil.contains(yield* fs.realPath(target), real) && real !== index) return
-    const current = (yield* fs.readFileStringSafe(real)) ?? ""
+    // A MEMORY.md that is a link of any kind is left alone, one that leads nowhere included: a write through it would
+    // change or create whatever it names, wherever that is (class 4). The link is read, never followed.
+    if (yield* Effect.isSuccess(fs.readLink(index))) return
+    const current = (yield* fs.readFileStringSafe(index)) ?? ""
     const lines = yield* Effect.forEach(
       files.filter((file) => !current.includes(`](${file})`)),
       (file) =>
@@ -207,7 +207,7 @@ const carryOver = (fs: FSUtil.Interface, global: Global.Interface, location: Loc
     )
     if (lines.length === 0) return
     const separator = current === "" || current.endsWith("\n") ? "" : "\n"
-    yield* fs.writeWithDirs(real, `${current}${separator}${lines.join("\n")}\n`)
+    yield* fs.writeWithDirs(index, `${current}${separator}${lines.join("\n")}\n`)
   }).pipe(Effect.catchCause((cause) => Effect.logWarning("memory notes from before trust not moved", { cause })))
 
 function summary(text: string) {
