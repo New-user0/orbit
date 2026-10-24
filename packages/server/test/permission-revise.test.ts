@@ -117,6 +117,8 @@ afterAll(async () => {
 test("a once reply with revised content writes it where the request resolved, whatever keys the client adds", async () => {
   const session = await start("Write", { file_path: "a.txt", content: "proposed\n" })
   const request = await pending(session, "Edit")
+  // The question a client lists says it takes the person's own version.
+  expect(request.revisable).toBe(true)
   const outsideFile = path.join(outside, "marker.txt")
   const answer = await reply(session, request.id, {
     decision: "once",
@@ -141,7 +143,11 @@ test("revised content with an always reply is a typed 400, and the question stay
   const request = await pending(session, "Edit")
   const refused = await reply(session, request.id, { decision: "always", content: "revised\n" })
   expect(refused.status).toBe(400)
-  expect(await refused.text()).toContain("InvalidRequestError")
+  expect(await refused.json()).toMatchObject({
+    _tag: "InvalidRequestError",
+    field: "content",
+    message: "Revised content can only be given with a once reply",
+  })
   expect((await list(session)).map((item) => item.id)).toContain(request.id)
   expect((await reply(session, request.id, { decision: "once" })).status).toBe(204)
   expect(await until(() => read("b.txt"))).toBe("proposed\n")
@@ -154,7 +160,12 @@ test("revised content on a question that is not an Edit or Write is a typed 400,
   expect(request.action).not.toBe("Edit")
   const refused = await reply(session, request.id, { decision: "once", content: "revised\n" })
   expect(refused.status).toBe(400)
-  expect(await refused.text()).toContain("InvalidRequestError")
+  expect(await refused.json()).toMatchObject({
+    _tag: "InvalidRequestError",
+    field: "content",
+    message: "This question does not take revised content: only an Edit or Write approval does",
+  })
+  expect(request.revisable).toBeUndefined()
   expect((await list(session)).map((item) => item.id)).toContain(request.id)
   expect((await reply(session, request.id, { decision: "once" })).status).toBe(204)
 }, 60_000)
@@ -170,7 +181,7 @@ async function start(name: string, args: Record<string, unknown>) {
   return session.id
 }
 
-type Request = { id: string; action: string }
+type Request = { id: string; action: string; revisable?: boolean }
 
 async function list(sessionID: string): Promise<Request[]> {
   const response = await fetch(`${server.url}/api/session/${sessionID}/permission`, { headers: { authorization } })

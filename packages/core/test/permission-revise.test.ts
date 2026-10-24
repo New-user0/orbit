@@ -77,8 +77,8 @@ type Replied = { readonly requestID: string; readonly reply: string; readonly fi
 type Settled = {
   readonly asked: ReadonlyArray<Permission.Request>
   readonly replied: ReadonlyArray<Replied>
-  // Each reply attempt and whether the server took it.
-  readonly attempts: ReadonlyArray<{ readonly answer: Answer; readonly accepted: boolean }>
+  // Each reply attempt, whether the server took it, and the error it refused it with.
+  readonly attempts: ReadonlyArray<{ readonly answer: Answer; readonly accepted: boolean; readonly error?: unknown }>
   readonly exit: Exit.Exit<unknown, unknown>
 }
 
@@ -108,7 +108,7 @@ const settle = (
       .execute({ sessionID, ...identity, call: { type: "tool-call", id: `call-${name}`, name, input } })
       .pipe(Effect.forkScoped)
     const asked: Permission.Request[] = []
-    const attempts: { answer: Answer; accepted: boolean }[] = []
+    const attempts: { answer: Answer; accepted: boolean; error?: unknown }[] = []
     const counts = new Map<string, number>()
     const drive = (): Effect.Effect<Exit.Exit<unknown, unknown>> =>
       Effect.gen(function* () {
@@ -127,7 +127,11 @@ const settle = (
         const exit = yield* permission
           .reply({ requestID: request.id, ...chosen } as Permission.ReplyInput)
           .pipe(Effect.exit)
-        attempts.push({ answer: chosen, accepted: Exit.isSuccess(exit) })
+        attempts.push({
+          answer: chosen,
+          accepted: Exit.isSuccess(exit),
+          error: Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined,
+        })
         return yield* drive()
       })
     const exit = yield* drive()
@@ -197,7 +201,8 @@ const seed = (directory: string) =>
 
 const editRequest = (settled: Settled) => settled.asked.find((request) => request.action === "Edit")
 const files = (value: unknown) =>
-  (value as { files?: ReadonlyArray<{ file: string; patch: string; place?: string }> } | undefined)?.files ?? []
+  (value as { files?: ReadonlyArray<{ file: string; patch: string; status: string; place?: string }> } | undefined)
+    ?.files ?? []
 const text = (exit: Exit.Exit<unknown, unknown>) =>
   Exit.isSuccess(exit) ? JSON.stringify((exit.value as { content?: unknown }).content ?? "") : ""
 const declined = (exit: Exit.Exit<unknown, unknown>) =>
@@ -236,6 +241,7 @@ describe("an approval answered with the person's revised content", () => {
         expect(reply?.reply).toBe("once")
         const [approved] = files(reply)
         expect(approved?.place).toBe(files(request?.metadata)[0]?.place)
+        expect(approved?.file).toBe(files(request?.metadata)[0]?.file)
         expect(approved && applyPatch("alpha\nbeta\n", approved.patch)).toBe("alpha\nREVISED\n")
         // What ran is what was approved: the tool's own record of the change ends at the same text.
         const [ran] = files(
@@ -263,6 +269,9 @@ describe("an approval answered with the person's revised content", () => {
           expect(request && revisable(request)).toBe(true)
           const [approved] = files(settled.replied.find((item) => item.requestID === request?.id))
           expect(approved && applyPatch(name === "old.txt" ? "before\n" : "", approved.patch)).toBe("revised\n")
+          // The approved diff names the file the request showed and says whether the write creates it.
+          expect(approved?.file).toBe(files(request?.metadata)[0]?.file)
+          expect(approved?.status).toBe(name === "old.txt" ? "modified" : "added")
         }
       }),
     ),
@@ -310,9 +319,14 @@ describe("an approval answered with the person's revised content", () => {
             { file_path: "a.txt", old_string: "beta", new_string: "BETA" },
             (request, attempt) => (request.action === "Edit" ? answers[attempt]! : { reply: "once" }),
           )
-          expect(
-            settled.attempts.filter((item) => item.answer.content !== undefined).map((item) => item.accepted),
-          ).toEqual([false, false])
+          const refused = settled.attempts.filter((item) => item.answer.content !== undefined)
+          expect(refused.map((item) => item.accepted)).toEqual([false, false])
+          // Each refusal is the typed error a client is told, and its message says why (class 13).
+          expect(refused.map((item) => item.error instanceof Permission.RevisionError)).toEqual([true, true])
+          expect(refused.map((item) => (item.error as Error).message)).toEqual([
+            "Revised content can only be given with a once reply",
+            "Revised content can only be given with a once reply",
+          ])
           // The refused replies changed nothing: the question was still there for the plain reply, which ran the proposal.
           expect(Exit.isSuccess(settled.exit)).toBe(true)
           expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("alpha\nBETA\n")
@@ -359,7 +373,10 @@ describe("an approval answered with the person's revised content", () => {
           )
           const request = editRequest(settled)
           expect(request && revisable(request)).toBeFalsy()
-          expect(settled.attempts.find((item) => item.answer.content !== undefined)?.accepted).toBe(false)
+          const refused = settled.attempts.find((item) => item.answer.content !== undefined)
+          expect(refused?.accepted).toBe(false)
+          expect(refused?.error).toBeInstanceOf(Permission.RevisionError)
+          expect((refused?.error as Error | undefined)?.message).toMatch(/only an Edit or Write approval/)
           expect(Exit.isSuccess(settled.exit)).toBe(true)
           expect(yield* Effect.promise(() => fs.readFile(path.join(directory, target), "utf8"))).not.toContain(
             "REVISED",
@@ -387,6 +404,35 @@ describe("an approval answered with the person's revised content", () => {
         const bytes = yield* Effect.promise(() => fs.readFile(file))
         expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
         expect(bytes.subarray(3).toString("utf8")).toBe("alpha\nREVISED\n")
+      }),
+    ),
+  )
+
+  // An editor may save the person's version with the file's byte order mark. The mark is not part of the text: the
+  // approved diff and the reject test compare the text alone, and the file keeps one mark.
+  it.live("a revised content given with a byte order mark is the same text", () =>
+    withProject((directory) =>
+      Effect.gen(function* () {
+        const file = path.join(directory, "bom.txt")
+        const input = { file_path: "bom.txt", old_string: "beta", new_string: "BETA" }
+        yield* Effect.promise(() => fs.writeFile(file, "﻿alpha\nbeta\n"))
+        const revised = yield* settle(directory, "Edit", input, () => ({
+          reply: "once",
+          content: "﻿alpha\nREVISED\n",
+        }))
+        expect(Exit.isSuccess(revised.exit)).toBe(true)
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("﻿alpha\nREVISED\n")
+        const request = editRequest(revised)
+        const [approved] = files(revised.replied.find((item) => item.requestID === request?.id))
+        expect(approved && applyPatch("alpha\nbeta\n", approved.patch)).toBe("alpha\nREVISED\n")
+
+        yield* Effect.promise(() => fs.writeFile(file, "﻿alpha\nbeta\n"))
+        const unchanged = yield* settle(directory, "Edit", input, () => ({
+          reply: "once",
+          content: "﻿alpha\nbeta\n",
+        }))
+        expect(declined(unchanged.exit)).toBe(true)
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("﻿alpha\nbeta\n")
       }),
     ),
   )
@@ -442,6 +488,39 @@ describe("a Patch request's diff applies to the file it names", () => {
           Exit.isSuccess(settled.exit) ? (settled.exit.value as { metadata?: unknown }).metadata : undefined,
         )
         expect(ran && applyPatch(before, ran.patch)).toBe(after)
+      }),
+    ),
+  )
+
+  // A move onto an existing file shows that file's text as replaced; that entry's patch must apply to it too.
+  it.live("when a move replaces a file whose lines share their indentation", () =>
+    withProject((directory) =>
+      Effect.gen(function* () {
+        const replaced = "    old()\n    gone()\n"
+        yield* Effect.promise(() =>
+          Promise.all([
+            fs.writeFile(path.join(directory, "from.ts"), "    one()\n    two()\n"),
+            fs.writeFile(path.join(directory, "to.ts"), replaced),
+          ]),
+        )
+        const settled = yield* settle(
+          directory,
+          "Patch",
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: from.ts\n*** Move to: to.ts\n@@\n     one()\n-    two()\n+    three()\n*** End Patch",
+          },
+          () => ({ reply: "once" }),
+        )
+        expect(Exit.isSuccess(settled.exit)).toBe(true)
+        const after = yield* Effect.promise(() => fs.readFile(path.join(directory, "to.ts"), "utf8"))
+        expect(after).toBe("    one()\n    three()\n")
+        const entry = (value: unknown) =>
+          files(value).find((item) => !("from" in item) && applyPatch(replaced, item.patch) === after)
+        expect(entry(editRequest(settled)?.metadata)).toBeDefined()
+        expect(
+          entry(Exit.isSuccess(settled.exit) ? (settled.exit.value as { metadata?: unknown }).metadata : undefined),
+        ).toBeDefined()
       }),
     ),
   )
