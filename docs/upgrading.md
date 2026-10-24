@@ -3018,6 +3018,16 @@ folder"). A Write recorded before this upgrade did not name its file in its resu
 given; a Patch move recorded before the upgrade names only its destination, so undoing it does not bring the source
 back.
 
+An undo to a prompt from before such a move used to fail (the server answered 500) whenever a step in another folder had
+changed a file, because it asked this folder's git for a snapshot that only the other folder's snapshot repository
+holds. It now puts back what the file tools changed here, from this folder's own snapshots, and leaves the other folder
+as it is; the code-only rewind and its dry run answer that such a prompt has no checkpoint, as before
+(`session-revert.test.ts`, "Session.revert across a folder switch"). Two related changes keep this true later on:
+committing an undo (by sending the next prompt) now keeps the record of each move among the messages it removes, so
+the transcript still shows that the session moved, and moving a session that has an undo staged commits that undo
+first, as a prompt does, so a redo is no longer offered in the new folder ("commits a staged undo when the session
+moves, so a redo there touches nothing").
+
 A restore now skips, with a log line, a file whose folder became a link after the snapshot (a junction, a dangling link
 or a link to a share), a file whose own name is now a link or a folder, and a file one of whose folders is now a file
 of yours; the other files still go back. Before, git wrote through the link, removed a junction's target files on

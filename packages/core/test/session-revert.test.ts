@@ -583,6 +583,311 @@ describe("Session.revert names from another folder", () => {
   )
 })
 
+// A step's trees live in the snapshot repository of the folder it ran in, and its paths are that folder's files. Each
+// row is a history whose folder changed after the prompt that an undo, a rewind and a dry run go back to. The rewind and
+// the dry run find no checkpoint there. The undo puts back only what a file tool changed in the folder the session is
+// in now, from that folder's own trees, and leaves the shell edit and the other folder; a redo then brings it all back.
+const switches = [
+  {
+    name: "to a prompt before EnterWorktree, from the worktree",
+    build: (root: string) =>
+      Effect.gen(function* () {
+        const checkout = path.join(root, "checkout")
+        const tree = path.join(root, "tree")
+        yield* repository(checkout, { "x.txt": "base\n" })
+        // A file the worktree does not get, so no tree of the checkout's is also one of the worktree's.
+        yield* Effect.promise(() => Bun.write(path.join(checkout, "draft.txt"), "draft\n"))
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(checkout) } })
+        const target = yield* promptNow(created.id, "Write z, then work in a worktree")
+        yield* recordStep(
+          created.id,
+          [
+            { name: "Write", files: ["z.txt"] },
+            { name: "EnterWorktree", input: {} },
+          ],
+          async () => {
+            await Bun.write(path.join(checkout, "z.txt"), "tool edit\n")
+            await $`git worktree add -q -b spike ${tree}`.cwd(checkout).quiet()
+          },
+        )
+        yield* moveTo(created, tree)
+        yield* promptNow(created.id, "Go on")
+        yield* recordStep(created.id, [{ name: "Write", files: ["y.txt"] }], async () => {
+          await Bun.write(path.join(tree, "x.txt"), "shell edit\n")
+          await Bun.write(path.join(tree, "y.txt"), "written\n")
+        })
+        return {
+          sessionID: created.id,
+          target: target.id,
+          files: () =>
+            Effect.all({
+              checkout: text(path.join(checkout, "z.txt")),
+              shell: text(path.join(tree, "x.txt")),
+              written: text(path.join(tree, "y.txt")),
+            }),
+          undone: { checkout: "tool edit\n", shell: "shell edit\n", written: undefined },
+        }
+      }),
+  },
+  {
+    name: "to a prompt before EnterWorktree, after ExitWorktree brought the session back",
+    build: (root: string) =>
+      Effect.gen(function* () {
+        const checkout = path.join(root, "checkout")
+        const tree = path.join(root, "tree")
+        yield* repository(checkout, { "x.txt": "base\n", "z.txt": "base\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(checkout) } })
+        const target = yield* promptNow(created.id, "Edit z, then work in a worktree")
+        yield* recordStep(
+          created.id,
+          [
+            { name: "Write", files: ["z.txt"] },
+            { name: "EnterWorktree", input: {} },
+          ],
+          async () => {
+            await Bun.write(path.join(checkout, "z.txt"), "tool edit\n")
+            await $`git worktree add -q -b spike ${tree}`.cwd(checkout).quiet()
+          },
+        )
+        yield* moveTo(created, tree)
+        yield* promptNow(created.id, "Edit x there, then come back")
+        yield* recordStep(
+          created.id,
+          [
+            { name: "Write", files: ["x.txt"] },
+            { name: "ExitWorktree", input: {} },
+          ],
+          () => Bun.write(path.join(tree, "x.txt"), "tool edit\n"),
+        )
+        yield* moveTo(created, checkout)
+        yield* promptNow(created.id, "Go on")
+        yield* recordStep(created.id, [], () => Bun.write(path.join(checkout, "x.txt"), "shell edit\n"))
+        return {
+          sessionID: created.id,
+          target: target.id,
+          files: () =>
+            Effect.all({
+              tool: text(path.join(checkout, "z.txt")),
+              shell: text(path.join(checkout, "x.txt")),
+              tree: text(path.join(tree, "x.txt")),
+            }),
+          undone: { tool: "base\n", shell: "shell edit\n", tree: "tool edit\n" },
+        }
+      }),
+  },
+  {
+    name: "to a prompt before a session move to another repository",
+    build: (root: string) =>
+      Effect.gen(function* () {
+        const first = path.join(root, "first")
+        const second = path.join(root, "second")
+        yield* repository(first, { "x.txt": "base\n" })
+        // Different content, so no tree of one repository is also one of the other's.
+        yield* repository(second, { "x.txt": "base\n", "second.txt": "second\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(first) } })
+        const target = yield* promptNow(created.id, "Write a")
+        yield* recordStep(created.id, [{ name: "Write", files: ["a.txt"] }], () =>
+          Bun.write(path.join(first, "a.txt"), "written\n"),
+        )
+        yield* moveTo(created, second)
+        yield* promptNow(created.id, "Go on")
+        yield* recordStep(created.id, [{ name: "Write", files: ["y.txt"] }], async () => {
+          await Bun.write(path.join(second, "x.txt"), "shell edit\n")
+          await Bun.write(path.join(second, "y.txt"), "written\n")
+        })
+        return {
+          sessionID: created.id,
+          target: target.id,
+          files: () =>
+            Effect.all({
+              first: text(path.join(first, "a.txt")),
+              shell: text(path.join(second, "x.txt")),
+              written: text(path.join(second, "y.txt")),
+            }),
+          undone: { first: "written\n", shell: "shell edit\n", written: undefined },
+        }
+      }),
+  },
+  {
+    // The control: back in the first folder, its own trees and names count again, on both sides of the trip.
+    name: "to a prompt before a move to another repository and back",
+    build: (root: string) =>
+      Effect.gen(function* () {
+        const first = path.join(root, "first")
+        const second = path.join(root, "second")
+        yield* repository(first, { "x.txt": "base\n" })
+        // Different content, so no tree of one repository is also one of the other's.
+        yield* repository(second, { "x.txt": "base\n", "second.txt": "second\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(first) } })
+        const target = yield* promptNow(created.id, "Write a")
+        yield* recordStep(created.id, [{ name: "Write", files: ["a.txt"] }], () =>
+          Bun.write(path.join(first, "a.txt"), "written\n"),
+        )
+        yield* moveTo(created, second)
+        yield* promptNow(created.id, "Write y there")
+        yield* recordStep(created.id, [{ name: "Write", files: ["y.txt"] }], () =>
+          Bun.write(path.join(second, "y.txt"), "written\n"),
+        )
+        yield* moveTo(created, first)
+        const back = yield* promptNow(created.id, "Write b")
+        yield* recordStep(created.id, [{ name: "Write", files: ["b.txt"] }], async () => {
+          await Bun.write(path.join(first, "x.txt"), "shell edit\n")
+          await Bun.write(path.join(first, "b.txt"), "written\n")
+        })
+        const files = () =>
+          Effect.all({
+            a: text(path.join(first, "a.txt")),
+            b: text(path.join(first, "b.txt")),
+            shell: text(path.join(first, "x.txt")),
+            second: text(path.join(second, "y.txt")),
+          })
+        return {
+          sessionID: created.id,
+          target: target.id,
+          files,
+          undone: { a: undefined, b: undefined, shell: "shell edit\n", second: "written\n" },
+          // A prompt after the trip back has a checkpoint in this folder, so a rewind to it works.
+          control: {
+            messageID: back.id,
+            dry: ["b.txt"],
+            files: { a: "written\n", b: undefined, shell: "shell edit\n", second: "written\n" },
+          },
+        }
+      }),
+  },
+  {
+    // Committing an undo drops the messages after its prompt, but not the record of the move among them: the steps
+    // before it still ran in the checkout, whose trees the worktree's git does not hold.
+    name: "to a prompt before EnterWorktree, after an undo to a later prompt was committed in the worktree",
+    build: (root: string) =>
+      Effect.gen(function* () {
+        const checkout = path.join(root, "checkout")
+        const tree = path.join(root, "tree")
+        yield* repository(checkout, { "x.txt": "base\n" })
+        yield* Effect.promise(() => Bun.write(path.join(checkout, "draft.txt"), "draft\n"))
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(checkout) } })
+        const target = yield* promptNow(created.id, "Write a")
+        yield* recordStep(created.id, [{ name: "Write", files: ["a.txt"] }], () =>
+          Bun.write(path.join(checkout, "a.txt"), "written\n"),
+        )
+        const entered = yield* promptNow(created.id, "Work in a worktree")
+        yield* recordStep(created.id, [{ name: "EnterWorktree", input: {} }], () =>
+          $`git worktree add -q -b spike ${tree}`.cwd(checkout).quiet(),
+        )
+        yield* moveTo(created, tree)
+        yield* promptNow(created.id, "Write y")
+        yield* recordStep(created.id, [{ name: "Write", files: ["y.txt"] }], () =>
+          Bun.write(path.join(tree, "y.txt"), "written\n"),
+        )
+        yield* session.revert.stage({ sessionID: created.id, messageID: entered.id })
+        // The next prompt commits the undo.
+        yield* promptNow(created.id, "Write w")
+        yield* recordStep(created.id, [{ name: "Write", files: ["w.txt"] }], async () => {
+          await Bun.write(path.join(tree, "x.txt"), "shell edit\n")
+          await Bun.write(path.join(tree, "w.txt"), "written\n")
+        })
+        return {
+          sessionID: created.id,
+          target: target.id,
+          files: () =>
+            Effect.all({
+              checkout: text(path.join(checkout, "a.txt")),
+              shell: text(path.join(tree, "x.txt")),
+              written: text(path.join(tree, "w.txt")),
+              committed: text(path.join(tree, "y.txt")),
+            }),
+          undone: { checkout: "written\n", shell: "shell edit\n", written: undefined, committed: undefined },
+        }
+      }),
+  },
+]
+
+describe("Session.revert across a folder switch", () => {
+  for (const row of switches)
+    it.live(
+      `undoes, rewinds and dry-runs ${row.name}`,
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          const history = yield* row.build(tmp.path)
+          const session = yield* Session.Service
+          const before = yield* history.files()
+
+          const dry = yield* session.revert.files({
+            sessionID: history.sessionID,
+            messageID: history.target,
+            dryRun: true,
+          })
+          const rewound = yield* session.revert
+            .files({ sessionID: history.sessionID, messageID: history.target })
+            .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }))
+          expect({ dry: dry.canRewind, rewound, files: yield* history.files() }).toMatchObject({
+            dry: false,
+            rewound: { _tag: "Session.RewindError", reason: "no-checkpoint" },
+            files: before,
+          })
+
+          yield* session.revert.stage({ sessionID: history.sessionID, messageID: history.target })
+          expect(yield* history.files()).toEqual(history.undone)
+          yield* session.revert.clear(history.sessionID)
+          expect(yield* history.files()).toEqual(before)
+
+          if (!("control" in history)) return
+          const control = yield* session.revert.files({
+            sessionID: history.sessionID,
+            messageID: history.control.messageID,
+            dryRun: true,
+          })
+          expect(control.filesChanged?.map((file) => path.basename(file))).toEqual(history.control.dry)
+          yield* session.revert.files({ sessionID: history.sessionID, messageID: history.control.messageID })
+          expect(yield* history.files()).toEqual(history.control.files)
+        }),
+      { timeout: 30_000 },
+    )
+
+  // A move commits a staged undo, as a prompt does: the undo's tree and paths belong to the folder the session leaves,
+  // so a redo from the destination would hand its git another repository's tree. The undo stays, and the redo after the
+  // move has nothing to bring back.
+  it.live(
+    "commits a staged undo when the session moves, so a redo there touches nothing",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const first = path.join(tmp.path, "first")
+        const second = path.join(tmp.path, "second")
+        yield* repository(first, { "x.txt": "base\n" })
+        yield* repository(second, { "x.txt": "base\n", "second.txt": "second\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(first) } })
+        const prompt = yield* promptNow(created.id, "Write a")
+        yield* recordStep(created.id, [{ name: "Write", files: ["a.txt"] }], () =>
+          Promise.all([
+            Bun.write(path.join(first, "a.txt"), "written\n"),
+            Bun.write(path.join(second, "a.txt"), "second\n"),
+          ]),
+        )
+        yield* session.revert.stage({ sessionID: created.id, messageID: prompt.id })
+        yield* session.move({ sessionID: created.id, directory: AbsolutePath.make(second) })
+        // What the queued move becomes once the runner applies it.
+        yield* moveTo(created, second)
+        yield* session.revert.clear(created.id)
+        expect({
+          revert: (yield* session.get(created.id)).revert,
+          prompts: (yield* session.messages({ sessionID: created.id })).filter((message) => message.type === "user")
+            .length,
+          first: yield* text(path.join(first, "a.txt")),
+          second: yield* text(path.join(second, "a.txt")),
+        }).toEqual({ revert: undefined, prompts: 0, first: undefined, second: "second\n" })
+      }),
+    { timeout: 30_000 },
+  )
+})
+
 const text = (file: string) =>
   Effect.promise(async () => ((await Bun.file(file).exists()) ? Bun.file(file).text() : undefined))
 

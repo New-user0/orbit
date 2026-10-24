@@ -1,7 +1,7 @@
 export * as SessionRevert from "./revert.js"
 
 import path from "path"
-import { and, asc, eq, gt, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import { Effect, Option, Schema } from "effect"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { Database } from "../database/database.js"
@@ -100,7 +100,8 @@ export const files = Effect.fn("SessionRevert.files")(function* (input: {
     }
     const refuse = (reason: RewindError["reason"]) => {
       const error = new RewindError({ sessionID: input.session.id, messageID: input.messageID, reason })
-      if (input.dryRun) return Effect.succeed({ canRewind: false, error: error.message } satisfies SessionSchema.RewindFiles)
+      if (input.dryRun)
+        return Effect.succeed({ canRewind: false, error: error.message } satisfies SessionSchema.RewindFiles)
       return Effect.fail(error)
     }
     const rows = yield* database.db
@@ -171,6 +172,9 @@ export const commit = Effect.fn("SessionRevert.commit")(function* (bus: Bus.Inte
   })
 })
 
+// For each path a step after the boundary changed, the start tree of the first such step. Only the steps that ran in
+// the current folder count: another folder's tree lives in that folder's snapshot repository, which git here cannot
+// read, and its paths are that folder's files (class 3).
 const plan = Effect.fn("SessionRevert.plan")(function* (db: Database.Interface["db"], input: BoundaryInput) {
   const boundary = yield* db
     .select({ seq: SessionMessageTable.seq })
@@ -179,22 +183,9 @@ const plan = Effect.fn("SessionRevert.plan")(function* (db: Database.Interface["
     .get()
     .pipe(Effect.orDie)
   if (!boundary) return yield* new MessageNotFoundError(input)
-  const rows = yield* db
-    .select()
-    .from(SessionMessageTable)
-    .where(
-      and(
-        eq(SessionMessageTable.session_id, input.sessionID),
-        eq(SessionMessageTable.type, "assistant"),
-        gt(SessionMessageTable.seq, boundary.seq),
-      ),
-    )
-    .orderBy(asc(SessionMessageTable.seq))
-    .all()
-    .pipe(Effect.orDie)
   const decode = Schema.decodeUnknownEffect(SessionMessage.Info)
   const files = new Map<RelativePath, Snapshot.ID>()
-  for (const row of rows) {
+  for (const row of (yield* stepsHere(db, input.sessionID)).filter((row) => row.seq > boundary.seq)) {
     const message = yield* decode({ ...row.data, id: row.id, type: row.type }).pipe(Effect.orDie)
     if (message.type !== "assistant" || !message.snapshot?.start) continue
     for (const file of message.snapshot.files ?? [])
@@ -216,9 +207,7 @@ const toolEdits = Effect.fnUntraced(function* (
     snapshot.files({ from: tree, to: original }).pipe(Effect.map((changed) => [tree, new Set(changed)] as const)),
   )
   const differs = new Map(trees)
-  return new Map(
-    Array.from(planned).filter(([file, tree]) => names.has(file) && differs.get(tree)?.has(file)),
-  )
+  return new Map(Array.from(planned).filter(([file, tree]) => names.has(file) && differs.get(tree)?.has(file)))
 })
 
 /**
@@ -287,36 +276,8 @@ export const toolNames = Effect.fnUntraced(function* (
   const location = yield* Location.Service
   const snapshot = yield* Snapshot.Service
   const prefix = path.relative(yield* snapshot.root(), location.directory).replaceAll("\\", "/")
-  const rows = yield* db
-    .select({ type: SessionMessageTable.type, seq: SessionMessageTable.seq, data: SessionMessageTable.data })
-    .from(SessionMessageTable)
-    .where(
-      and(
-        eq(SessionMessageTable.session_id, sessionID),
-        inArray(SessionMessageTable.type, ["assistant", "location-switched"]),
-      ),
-    )
-    .orderBy(asc(SessionMessageTable.seq))
-    .all()
-    .pipe(Effect.orDie)
-  const moves = rows
-    .filter((row) => row.type === "location-switched")
-    .map((row) => ({ seq: row.seq, move: Option.getOrUndefined(decodeSwitch(row.data)) }))
-  // The folder a step ran in: where the last move before it went or, before the first move, where that move left. A
-  // malformed move, or one recorded without where it left, leaves its steps without a folder, so they name nothing.
-  const ranIn = (seq: number) => {
-    const before = moves.findLast((row) => row.seq < seq)
-    if (before) return before.move?.location.directory
-    if (moves.length === 0) return location.directory
-    return moves[0]?.move?.previous?.location.directory
-  }
-  const names = rows
-    .filter(
-      (row) =>
-        row.type === "assistant" &&
-        (!range || (row.seq > range.after && (range.before === undefined || row.seq < range.before))) &&
-        ranIn(row.seq) === location.directory,
-    )
+  const names = (yield* stepsHere(db, sessionID))
+    .filter((row) => !range || (row.seq > range.after && (range.before === undefined || row.seq < range.before)))
     .flatMap((row) => Option.toArray(decodeContent(row.data)).flatMap((message) => message.content))
     .flatMap((part) => Option.toArray(decodeCall(part)))
     .filter((call) => fileTools.has(ToolNames.canonical(call.name)))
@@ -335,6 +296,42 @@ export const toolNames = Effect.fnUntraced(function* (
     })
     .flatMap((name) => worktreeName(prefix, name) ?? [])
   return new Set(names)
+})
+
+/**
+ * The session's steps that ran in the current Location's folder, in order. A step ran where the last move before it
+ * went or, before the first move, where that move left. A malformed move, or one recorded without where it left, leaves
+ * its steps without a folder, so they count nowhere.
+ */
+const stepsHere = Effect.fnUntraced(function* (db: Database.Interface["db"], sessionID: SessionSchema.ID) {
+  const location = yield* Location.Service
+  const rows = yield* db
+    .select({
+      id: SessionMessageTable.id,
+      type: SessionMessageTable.type,
+      seq: SessionMessageTable.seq,
+      data: SessionMessageTable.data,
+    })
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        inArray(SessionMessageTable.type, ["assistant", "location-switched"]),
+      ),
+    )
+    .orderBy(asc(SessionMessageTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  const moves = rows
+    .filter((row) => row.type === "location-switched")
+    .map((row) => ({ seq: row.seq, move: Option.getOrUndefined(decodeSwitch(row.data)) }))
+  const ranIn = (seq: number) => {
+    const before = moves.findLast((row) => row.seq < seq)
+    if (before) return before.move?.location.directory
+    if (moves.length === 0) return location.directory
+    return moves[0]?.move?.previous?.location.directory
+  }
+  return rows.filter((row) => row.type === "assistant" && ranIn(row.seq) === location.directory)
 })
 
 function worktreeName(prefix: string, name: string) {
