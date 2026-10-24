@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { isolatedEnv } from "../fixture/environment"
+import { startSlot } from "../fixture/start-gate"
 
 // Every row has its own folder, its own scripted model on port 0 and its own `orb acp` child, so the rows run at the
 // same time, as many as `--max-concurrency` allows (packages/cli/package.json). The file is one unit to `--parallel`,
@@ -1198,22 +1199,23 @@ async function approval(
     }
   })()
   let next = 1
-  const request = (method: string, params: unknown) =>
+  const request = (method: string, params: unknown, ms = 60_000) =>
     new Promise<any>((resolve, reject) => {
       const id = next++
-      const timer = setTimeout(() => reject(new Error(`timed out waiting for ${method}`)), 60_000)
+      const timer = setTimeout(() => reject(new Error(`timed out waiting for ${method}`)), ms)
       pending.set(id, (value) => {
         clearTimeout(timer)
         resolve(value)
       })
       void write({ jsonrpc: "2.0", id, method, params })
     })
+  let passed = false
   try {
-    await request("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: {},
-      clientInfo: { name: "test", version: "0" },
-    })
+    // The start gate (fixture/start-gate.ts) admits a few children at a time, and the deadline of the first answer starts
+    // at admission, so a busy runner delays a row without failing it.
+    await startSlot(() =>
+      request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "test", version: "0" } }),
+    )
     const session = await request("session/new", { cwd: workspace, mcpServers: [] })
     // trust-first: no session opens in a folder that is not trusted, so the call that an untrusted row describes never
     // runs: the refusal is typed and names the folder, and the model is asked nothing. The trusted rows show the
@@ -1222,11 +1224,15 @@ async function approval(
       expect(session.result).toBeUndefined()
       expect(session.error?.data).toMatchObject({ type: "untrusted_folder" })
       expect(bodies).toEqual([])
+      passed = true
       return
     }
     await request("session/prompt", { sessionId: session.result.sessionId, prompt: [{ type: "text", text: "go" }] })
     await check({ root, workspace, permissions, updates, bodies })
+    passed = true
   } finally {
+    // A failed row kills its child at once: a child that outlives the row keeps the folder open and fails the removal below.
+    if (!passed) child.kill("SIGKILL")
     child.stdin.end()
     const exited = await Promise.race([child.exited, Bun.sleep(5_000).then(() => undefined)])
     if (exited === undefined) child.kill("SIGKILL")
