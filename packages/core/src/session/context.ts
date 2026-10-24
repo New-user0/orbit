@@ -272,7 +272,7 @@ const layer = Layer.effect(
         selection.instructions,
         SessionProviderContext.provenance(model) ?? "local",
       )
-      const unreasoned = model.ref.variant
+      const unreasoned = model.ref.variant && model.ref.variant !== "default"
         ? yield* leastReasoning(selection.session, yield* catalog.get(model.ref.providerID, model.ref.id))
         : undefined
       return {

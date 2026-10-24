@@ -176,6 +176,7 @@ const setup = (config?: {
   readonly pinned?: boolean
   readonly pinnedMissing?: boolean
   readonly variant?: string
+  readonly model?: string
   readonly activation?: Effect.Effect<void>
 }) =>
   Effect.gen(function* () {
@@ -209,7 +210,7 @@ const setup = (config?: {
         title: "Side query",
         version: "test",
         agent: Agent.ID.make("build"),
-        model: { providerID: "test", id: "side-primary", ...(config?.variant ? { variant: config.variant } : {}) },
+        model: { providerID: "test", id: config?.model ?? "side-primary", ...(config?.variant ? { variant: config.variant } : {}) },
       })
       .run()
       .pipe(Effect.orDie)
@@ -584,9 +585,9 @@ it.effect("text() reports a tool-call answer and a blank answer as InvalidOutput
   }),
 )
 
-const loadSelected = (variant: string) =>
+const loadSelected = (variant?: string, model?: string) =>
   Effect.gen(function* () {
-    const { store } = yield* setup({ variant })
+    const { store } = yield* setup({ ...(variant ? { variant } : {}), ...(model ? { model } : {}) })
     const context = yield* SessionContext.Service
     const session = yield* store.get(sessionID)
     if (!session) return yield* Effect.die("Missing fixture session")
@@ -603,5 +604,21 @@ it.effect("load sets the model without its reasoning variant when the session se
     const loaded = yield* loadSelected("high")
     expect(String(loaded.model.ref.variant)).toBe("high")
     expect(String(loaded.unreasoned?.ref.variant)).toBe("none")
+  }),
+)
+
+it.effect("load leaves the unreasoned model unset when the session selected no variant", () =>
+  Effect.gen(function* () {
+    const loaded = yield* loadSelected()
+    expect(String(loaded.model.ref.variant)).toBe("default")
+    expect(loaded.unreasoned).toBeUndefined()
+  }),
+)
+
+it.effect("load leaves the unreasoned model unset when the catalog does not list the session model", () =>
+  Effect.gen(function* () {
+    const loaded = yield* loadSelected("high", "side-small")
+    expect(String(loaded.model.ref.variant)).toBe("high")
+    expect(loaded.unreasoned).toBeUndefined()
   }),
 )

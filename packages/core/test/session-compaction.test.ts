@@ -847,6 +847,8 @@ it.effect("a summary request for an unknown window is sent whole, with nothing s
     const sent = JSON.stringify(requests[0]?.messages)
     expect(sent).toContain("marker-0 ")
     expect(sent).toContain("marker-8 ")
+    // Nothing is known to size the output against, so it keeps the model's own limit.
+    expect(requests[0]?.generation?.maxTokens).toBe(8_192)
   }),
 )
 
@@ -1812,5 +1814,66 @@ it.effect("the fallback is built on the model without the session's reasoning va
     expect(run.outcome).toEqual({ status: "completed" })
     expect(run.sent[0]?.model.defaults?.providerOptions).toEqual({ openai: { reasoningEffort: "high" } })
     expect(run.sent[1]?.model.defaults?.providerOptions).toBeUndefined()
+  }),
+)
+
+it.effect("a summary request keeps the output limit a hook set, and none when a hook removed it", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "compaction", (event) =>
+      Effect.sync(() => {
+        delete event.options.maxTokens
+      }),
+    )
+    const run = yield* scripted("ses_cm2_no_limit", [userText("Do it")], [answer("<handoff>\nT\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent[0]?.generation?.maxTokens).toBeUndefined()
+  }),
+)
+
+it.effect("a summary request leaves a margin for an estimate that runs low", () =>
+  Effect.gen(function* () {
+    // The estimate alone leaves 12,000 tokens of the window; a request that also allows for the estimate running low
+    // leaves less than that, but never less than the 3,000 floor.
+    const run = yield* scripted("ses_cm2_margin", [userText("word ".repeat(129_000)), assistantText("ok"), userText("go on")], [answer("<handoff>\nT\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    const request = run.sent[0]!
+    const maxTokens = request.generation?.maxTokens ?? 0
+    expect(maxTokens).toBeGreaterThan(3_000)
+    expect(SessionCompaction.estimateRequest(request) * 1.1 + maxTokens).toBeLessThanOrEqual(200_000)
+  }),
+)
+
+it.effect("an automatic summary compaction opens its own message", () =>
+  Effect.gen(function* () {
+    requests = []
+    replies = [answer("<handoff>\nT\n</handoff>")]
+    const db = (yield* Database.Service).db
+    const store = yield* SessionStore.Service
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make("ses_cm2_auto_summary"))
+    const context = withTools(32_000)(
+      loaded(session, [userText("word ".repeat(152_000)), assistantText("ok"), userText("go on")]),
+    )
+    const outcome = yield* compaction
+      .compact({ reason: "auto", context })
+      .pipe(Effect.ensuring(Effect.sync(() => (replies = []))))
+    expect(outcome).toEqual({ status: "completed" })
+    const events = yield* db
+      .select({ type: EventTable.type })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, session.id))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    expect(events.map((event) => event.type)).toEqual([
+      Bus.versionedType(SessionEvent.Compaction.Started.type, 1),
+      Bus.versionedType(SessionEvent.UsageRecorded.type, 1),
+      Bus.versionedType(SessionEvent.Compaction.Ended.type, 1),
+    ])
+    expect((yield* store.context(session.id))[0]).toMatchObject({ type: "compaction", reason: "auto", summary: "Summary:\nT" })
   }),
 )
