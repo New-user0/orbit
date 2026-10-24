@@ -140,3 +140,46 @@ test("prompt footer can hide details", async () => {
     app.renderer.destroy()
   }
 })
+
+test("prompt footer offers the agent and command shortcuts when nothing is running", async () => {
+  const color = RGBA.fromInts(200, 200, 200)
+  const context = {
+    location: { directory: "/workspace" },
+    theme: { text: { base: color, muted: color } },
+    keymap: {
+      shortcuts: (id: string) => {
+        if (id === "command.palette.show") return ["ctrl+p"]
+        if (id === "agent.cycle") return ["shift+tab"]
+        return []
+      },
+    },
+    data: {
+      session: {
+        family: () => ["session"],
+        status: () => "idle",
+        get: () => ({ id: "session", location: { directory: "/workspace" } }),
+        cost: () => 0,
+        context: () => undefined,
+        message: { list: () => [] },
+      },
+      shell: { list: () => [] },
+      location: { model: { list: () => [] } },
+    },
+  } as unknown as Context
+  const app = await testRender(
+    () => (
+      <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
+        <PromptFooter context={context} sessionID="session" mode="normal" showDetails={true} />
+      </box>
+    ),
+    { width: 80, height: 1 },
+  )
+
+  try {
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("shift+tab agents")
+    expect(app.captureCharFrame()).toContain("ctrl+p commands")
+  } finally {
+    app.renderer.destroy()
+  }
+})
