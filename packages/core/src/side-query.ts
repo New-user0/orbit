@@ -30,6 +30,8 @@ export type Purpose =
   | "memory.recall"
   | "memory.extract"
   | "session.away_summary"
+  | "session.tool_label"
+  | "session.prompt_suggestion"
 
 export class UnavailableError extends Schema.TaggedError<UnavailableError>()("SideQuery.UnavailableError", {
   message: Schema.String,
