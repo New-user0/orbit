@@ -279,3 +279,28 @@ test("a session with no prompts says there is nothing to rewind", async () => {
   expect(frame).not.toContain(listHeading)
   expect(setup.actions()).toEqual([])
 })
+
+// Class 7: a prompt whose own edits cannot be read (a range across a folder switch answers 400) shows the warning on
+// its row, and the other rows keep their stats.
+test("a prompt whose own edits cannot be read shows the warning on its row only", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) =>
+      request.path.endsWith("/diff") && new URLSearchParams(request.search).get("from") === "msg_0003"
+        ? json({ _tag: "BadRequest", message: "The range crosses a folder switch" }, { status: 400 })
+        : undefined,
+  })
+  await openPicker(setup)
+  const frame = await setup.waitForFrame(
+    (frame) =>
+      frame.includes("No code rewind for this prompt") &&
+      frame.includes("parser.ts +12 -0") &&
+      frame.includes("evil\\x1b[2K"),
+  )
+  expect(linesWith(frame, "No code rewind for this prompt")).toBe(1)
+  expect(frame).not.toContain("2 files +5 -3")
+  expect(frame.indexOf("parser.ts +12 -0")).toBeLessThan(frame.indexOf("No code rewind for this prompt"))
+  expect(frame.indexOf("No code rewind for this prompt")).toBeLessThan(frame.indexOf("evil\\x1b[2K"))
+  expect(setup.actions()).toEqual([])
+})
