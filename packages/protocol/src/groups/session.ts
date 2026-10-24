@@ -1,6 +1,7 @@
 import { SessionMessage } from "@orbit/schema/session-message"
 import { SessionInbox } from "@orbit/schema/session-inbox"
 import { SessionTurn } from "@orbit/schema/session-turn"
+import { SessionAssist } from "@orbit/schema/session-assist"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { Session } from "@orbit/schema/session"
 import { SessionStats } from "@orbit/schema/session-stats"
@@ -791,6 +792,46 @@ export const makeSessionGroup = <
             summary: "Record an away summary",
             description:
               "Ask the small model for a short recap of the session for a person returning to it, at most once per turn of their input. Answers recorded: false when no recap was due, another request is writing one, no small model is available, or the call failed.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.assist.label", "/api/session/:sessionID/assist/label", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          messageID: SessionMessage.ID.annotate({ description: "The assistant message that made the calls." }),
+          toolCallIDs: Schema.NonEmptyArray(Schema.String)
+            .check(Schema.isMaxLength(64))
+            .annotate({ description: "The tool calls of the finished batch, at most 64." }),
+        }),
+        success: Schema.Struct({ data: SessionAssist.Label }).annotate({ identifier: "SessionAssistLabelResponse" }),
+        error: [SessionNotFoundError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.assist.label",
+            summary: "Label a batch of tool calls",
+            description:
+              "Ask the side model for a short label of a finished batch of the session's tool calls. Nothing is stored or sent to the session. The label is model text, so escape it before printing it. The session's folder must be trusted.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.assist.suggestion", "/api/session/:sessionID/assist/suggestion", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionAssist.Suggestion }).annotate({
+          identifier: "SessionAssistSuggestionResponse",
+        }),
+        error: [SessionNotFoundError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.assist.suggestion",
+            summary: "Suggest the next prompt",
+            description:
+              "Ask the session's model, with the session's history, what the person might type next. Nothing is stored or sent to the session; a newer request or a prompt admitted meanwhile cancels it. The suggestion is model text, so escape it before printing it. The session's folder must be trusted.",
           }),
         ),
     )

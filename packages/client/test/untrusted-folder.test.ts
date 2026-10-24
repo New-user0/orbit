@@ -36,6 +36,11 @@ test.each([
   ["session.update", () => client.session.update({ sessionID, title: "" })],
   ["session.generate", () => client.session.generate({ sessionID, prompt: "hello" })],
   ["session.instructions.preview", () => client.session.instructions.preview({ sessionID })],
+  [
+    "session.assist.label",
+    () => client.session.assist.label({ sessionID, messageID: "msg_test", toolCallIDs: ["call_test"] }),
+  ],
+  ["session.assist.suggestion", () => client.session.assist.suggestion({ sessionID })],
   ["shell.create", () => client.shell.create({ location, command: "ls" })],
   [
     "persistentPty.create",
