@@ -14,6 +14,7 @@ const config = (plugins: Info["plugins"] = []) =>
     Config.Service,
     Config.Service.of({
       entries: () => Effect.succeed([new Document({ type: "document", info: new Info({ plugins }) })]),
+      rejected: () => Effect.succeed([]),
       compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
       compat: () => Effect.succeed(Config.defaultCompat),
       changes: () => Stream.never,

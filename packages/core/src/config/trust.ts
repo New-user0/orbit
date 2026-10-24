@@ -273,6 +273,8 @@ export const classification = {
     system_prompt_file: withhold("settings"),
     update: withhold("network"),
     share: withhold("network"),
+    // It decides how long the person's sessions are kept before they are deleted.
+    cleanup_period_days: withhold("settings"),
     enterprise: withhold("network"),
     username: inert,
     permissions: filter(denyRules),
