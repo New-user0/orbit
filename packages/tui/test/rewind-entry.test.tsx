@@ -221,7 +221,10 @@ test("interrupting a prompt whose reply has nothing in it drops the prompt's his
     running: true,
     messages: [...conversation, quick, reply([], false)],
   })
-  await setup.waitForFrame((frame) => frame.includes("Quick question"))
+  // Esc interrupts only once the app knows the session runs, which its interrupt hint shows.
+  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+    maxPasses: 200,
+  })
   setup.mockInput.pressEscape()
   setup.mockInput.pressEscape()
   await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
