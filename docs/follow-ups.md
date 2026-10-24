@@ -76,7 +76,7 @@ Open rows of severity major, any carrier.
 
 Open rows of severity minor, grouped by the plan milestone of the carrier task. `trust-first` is the task that the owner placed between M4 and M5 (it stops anything in a project folder from loading or running before the folder is trusted); it closed its nine rows, which are in "Fixed", so it has no table. Its part 2 closed its rows, which are in "Fixed", and part 3, `trust-first-cleanup`, carries no row. "Sweep" is work no task owns. M4 has no table: M4 closes with this update, and no open row names an M4 task as its carrier.
 
-### M5 (8)
+### M5 (7)
 
 | id | title | class | failure | likelihood | cost | carrier | source | evidence |
 |---|---|---|---|---|---|---|---|---|
