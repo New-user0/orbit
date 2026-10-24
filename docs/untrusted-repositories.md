@@ -957,7 +957,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/acp/trust-first.subprocess.test.ts`, `packages/tui/test/mini/trust-first.shared.test.ts`.
 - Every server route that starts work, reads the folder's instruction files or runs something in a folder
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
-  the destination of `move`, `generate`, `update` when it clears the title for the model to write one,
+  the destination of `move`, `generate`, `assist.label` and `assist.suggestion` (both ask the model about the
+  folder's tool output or history; proof: `packages/server/test/session-assist.test.ts`, on a port and in process),
+  `update` when it clears the title for the model to write one,
   `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
   Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
   class 3), `worktree.create` (the project's folder and the folder it is asked to make the worktree in), `remove` and
@@ -987,7 +989,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   thinking lines of the default format are message content and still open (see Known gaps). The tool lines that
   `renderTool` and `renderToolError` draw in `run.ts` are closed: the title and the description of an inline tool, the
   title of a block, and the failed line go through `progress`, and a block body and the `--verbose` tool output go
-  through `body`. So do the init, result and delta lines (`jsonLine`), the usage line and the summary of auto-rejected
+  through `body`. So do the init, result, delta, `tool_label` and `prompt_suggestion` lines (`jsonLine`; the last two
+  carry model text, pinned by `packages/cli/test/run/stream-assist.test.ts` "label and suggestion text reaches the
+  output with its control and format characters written out (class 9)"), the usage line and the summary of auto-rejected
   requests (`progress`), and the schema text output (`jsonLine`). Proof:
   `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
   "a hostile tool name", "--verbose tool output"),
