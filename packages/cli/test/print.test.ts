@@ -558,6 +558,8 @@ const printedRunFlags: ReadonlyArray<readonly [string, ...string[]]> = [
   ["--title", "x"],
   ["--bare"],
   ["--include-partial-messages"],
+  ["--tool-labels"],
+  ["--prompt-suggestions"],
   ["--verbose"],
   ["--thinking"],
   ["--max-steps", "2"],
