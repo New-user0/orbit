@@ -53,6 +53,11 @@ import { LinkShare } from "@orbit/util/link-share"
 // folder, never reads through a `.git` that is a link or opens a share, bounds every read, and starts git for a folder only
 // once `WorkspaceTrust` trusts it.
 //
+// The readers of the memory folder (`MemoryStore.scan` and the index of `MemoryInstructions`) read no file of the
+// project's: the folder is Orbit's own, or the one `memory.directory` names in the person's own, local, command-line or
+// managed config. Because that can be a folder a repository fills, each reads only a file whose real path is in the
+// folder's real path.
+//
 // A folder that is trusted loads its config as it is now, as the reference does (D8): nothing is recorded at the grant,
 // and nothing that changed since is held back. The readers of a file that carries code, such as the hooks and MCP
 // servers of skill and agent front matter, ask `ProjectTrust.allows(file)` (hooks-21, agents-extensibility-9).
@@ -291,6 +296,9 @@ export const classification = {
     tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
     compaction: withhold("providers"),
+    // `directory` picks a folder that the file tools write in without a question, so a folder that is not trusted
+    // supplies none of `memory` (its reader also ignores the project scope once trusted). Withheld whole, as a permission.
+    memory: withhold("permissions"),
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.
     compatibility: inert,
     skills: withhold("skills"),
