@@ -95,7 +95,11 @@ export function controller(
       while (true) {
         const index = lines.findIndex((line, at) => at >= from && match(line))
         if (index !== -1) return { line: lines[index], next: index + 1 }
-        if (Date.now() > deadline) throw new Error(`No matching line in ${ms} ms. Lines: ${JSON.stringify(lines)}`)
+        if (Date.now() > deadline) {
+          // A child left running keeps the test's folders open, and the file's cleanup would then fail as well.
+          child.kill()
+          throw new Error(`No matching line in ${ms} ms. Lines: ${JSON.stringify(lines)}`)
+        }
         await Promise.race([new Promise<void>((resolve) => waiters.push(resolve)), Bun.sleep(250)])
       }
     },
