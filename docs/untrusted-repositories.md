@@ -866,6 +866,25 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/permission-tool-output.test.ts` (other sessions of a lineage, the flat files of earlier builds, `..`, a sibling
   prefix, a link out, a crafted session ID, Windows letter case) and the `saved tool results` rows of
   `test/session-runner.test.ts`.
+- Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
+  never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
+  the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,
+  written when a session is deleted) that no live session, scratchpad or stored saved-result marker names. Every
+  database on the machine shares those roots, so a folder this database never removed stays at any age. A family whose
+  stats cannot be folded (message data that is not JSON) stays with one log line (class 7). It reads nothing a folder
+  supplies; the period comes from the config of the server's own folder, where an untrusted project's file is not read
+  and the key is withheld (`settings`) from a folder that is not trusted (classes 1 and 8). The door deletes in Orbit's own two folders, worked out once from `Global`: each root is checked with `lstat`
+  and left alone when it is a link, each entry is `lstat`ed and removed at that joined path (a link as a link, dangling
+  or not), and nothing is `stat`ed or resolved before the decision, so a junction to a share is never opened (class 4).
+  A link inside a removed session's folder, at any depth, goes with the folder without being entered, and a link named
+  like a flat `tool_*` file stays. Only a name of the session-folder shape is touched, compared without letter case, and
+  a row whose ID cannot name a folder or whose clock does not decode keeps its family with one log line (classes 5 and
+  7). A config document of any scope (user, home, project, local, the flag file, `ORBIT_CONFIG_CONTENT`, remote and the
+  managed settings files) that does not parse, or one rejected while the period is set, skips the pass, on a reload as on the first load; a value set twice of which one is kept is not a rejection (class 7). A source whose content could not be obtained counts as one that does not parse and skips the pass too: a remote document whose fetch fails, a well-known list that cannot be read, and a file that is there but cannot be read (class 7, error and timeout). A row whose clock is ahead of now, or stored as text, does not put the pass off. Proof:
+  `test/session-retention.test.ts` (the folder, link, case, other-database, decode and fold rows, each with a control,
+  and the table of link spellings in both roots), `test/config/cleanup-period.test.ts` (with its table of scopes) and the
+  `cleanup_period_days` row of `test/config/trust.test.ts`; in `packages/cli`, the bare row of
+  `test/server-process.test.ts`.
 - Shell output files and their saved copies (`Shell.result`, `Shell.offer` and `ToolOutput.adopt`, in
   `packages/core/src/shell.ts` and `packages/core/src/tool-output.ts`): a command writes its output to
   `<data>/shell/<project ID>/<shell ID>.out`, Orbit's own folder and outside every sandbox write root, so it reads nothing

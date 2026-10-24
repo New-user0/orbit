@@ -15,6 +15,16 @@ import { directory } from "./flow/execute"
 
 type Format = "default" | "json" | "stream-json" | "result"
 
+/**
+ * What --bare leaves for the private server in this process's environment: no project config, no instruction files and,
+ * as the reference's bare runs do no housekeeping, no session retention.
+ */
+export const bareEnvironment = {
+  ORBIT_DISABLE_PROJECT_CONFIG: "1",
+  ORBIT_DISABLE_INSTRUCTIONS: "1",
+  ORBIT_DISABLE_RETENTION: "1",
+}
+
 type HeadlessInput = {
   readonly server: Option.Option<string>
   readonly standalone: boolean
@@ -103,10 +113,7 @@ export function headlessInput(input: HeadlessInput) {
     const jsonSchema = output?.schema
     const attempts = output?.attempts
     // The private server inherits this process's environment, which is how --bare reaches it.
-    if (input.bare) {
-      process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
-      process.env.ORBIT_DISABLE_INSTRUCTIONS = "1"
-    }
+    if (input.bare) Object.assign(process.env, bareEnvironment)
     // --settings, --mcp-config and --agents reach the private server through ORBIT_CONFIG_CONTENT_FILE, set here for the
     // same reason.
     const applied = yield* ConfigOverlay.applyNamed({

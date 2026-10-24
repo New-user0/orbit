@@ -15605,6 +15605,10 @@
             "type": "string",
             "enum": ["disable", "notify", "auto"]
           },
+          "cleanup_period_days": {
+            "type": "integer",
+            "minimum": 0
+          },
           "share": {
             "type": "string",
             "enum": ["manual", "auto", "disabled"]

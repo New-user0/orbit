@@ -136,7 +136,7 @@ describe("ToolOutput", () => {
     ),
   )
 
-  it.live("removes flat files of earlier versions after their retention", () =>
+  it.live("removes flat files of earlier versions changed before the cutoff", () =>
     withStore((output, fs, root) =>
       Effect.gen(function* () {
         const directory = path.join(root, ToolOutput.DIRECTORY)
@@ -146,7 +146,7 @@ describe("ToolOutput", () => {
         yield* fs.writeFileString(old, "old")
         yield* fs.writeFileString(recent, "recent")
         yield* fs.utimes(old, new Date(), new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000))
-        yield* output.cleanup()
+        yield* ToolOutput.cleanup(output.root, Date.now() - 7 * 24 * 60 * 60 * 1_000)
         expect(yield* fs.exists(old)).toBe(false)
         expect(yield* fs.exists(recent)).toBe(true)
       }),

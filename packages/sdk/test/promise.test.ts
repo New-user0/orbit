@@ -58,9 +58,7 @@ test("closing cancels active Promise event streams", async () => {
   const orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } , trust: { implicit: true } })
   const events = orbit.events.subscribe()[Symbol.asyncIterator]()
   expect(await events.next()).toMatchObject({ value: { type: "server.connected" }, done: false })
-  // The read rejects as soon as close() aborts the stream, before close() has finished disposing the host. Disposal may
-  // yield to the event loop (Effect yields a fiber every 2048 operations), so the rejection is caught here, not after
-  // close(), or Bun reports it as unhandled.
+  // The stream can reject before close resolves, so the handler goes on first or the runner reports it as unhandled.
   const pending = events.next().catch((error: unknown) => error)
 
   await orbit.close()
