@@ -1439,3 +1439,36 @@ describe("EditTool fidelity", () => {
     ),
   )
 })
+
+// clients-ux-5: a code rewind learns which files the session's file tools changed from the calls it recorded. An Edit
+// that fails after it wrote (here a formatter leaves a folder that Edit cannot read back) still changed the file, so the
+// failed call names it too.
+describe("EditTool records the file it changed, for code rewind", () => {
+  it.live("names the file in a call that failed after writing", () =>
+    withTempDir((tmp) => {
+      const fixture = makeEditFixture()
+      fixture.formatFile = (target) =>
+        Effect.promise(async () => {
+          await fs.rm(target)
+          await fs.mkdir(target)
+          return true
+        })
+      return Effect.promise(() => fs.mkdir(path.join(tmp.path, "src"))).pipe(
+        Effect.andThen(Effect.promise(() => fs.writeFile(path.join(tmp.path, "src", "a.txt"), "one\n"))),
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) =>
+            Effect.gen(function* () {
+              const failure = yield* registry.snapshot().pipe(
+                Effect.flatMap((tools) =>
+                  tools.execute(call({ file_path: "src/a.txt", old_string: "one", new_string: "two" })),
+                ),
+                Effect.flip,
+              )
+              expect(failure.metadata?.files).toEqual([{ file: "src/a.txt" }])
+            }),
+          ),
+        ),
+      )
+    }),
+  )
+})

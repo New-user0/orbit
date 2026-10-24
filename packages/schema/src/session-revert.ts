@@ -1,6 +1,6 @@
 import { Schema, SchemaTransformation } from "effect"
 import { FileDiff } from "./file-diff.js"
-import { optional } from "./schema.js"
+import { NonNegativeInt, optional } from "./schema.js"
 import { SessionMessage } from "./session-message.js"
 import { Snapshot } from "./snapshot.js"
 
@@ -12,6 +12,20 @@ export const Revert = Schema.Struct({
   snapshot: Snapshot.ID.pipe(optional),
   files: Schema.Array(FileDiff.Info).pipe(optional),
 }).annotate({ identifier: "Session.Revert" })
+
+/**
+ * What a code-only rewind to a prompt's checkpoint did, or would do on a dry run. `filesChanged` (absolute paths) and the
+ * line totals come with a dry run that can rewind: `insertions` are the lines the rewind would add back and `deletions`
+ * the lines it would remove. When it cannot rewind, `error` says why in a fixed sentence.
+ */
+export interface RewindFiles extends Schema.Schema.Type<typeof RewindFiles> {}
+export const RewindFiles = Schema.Struct({
+  canRewind: Schema.Boolean,
+  error: Schema.String.pipe(optional),
+  filesChanged: Schema.Array(Schema.String).pipe(optional),
+  insertions: NonNegativeInt.pipe(optional),
+  deletions: NonNegativeInt.pipe(optional),
+}).annotate({ identifier: "Session.RewindFiles" })
 
 const FileDiffV1 = Schema.Struct({
   path: Schema.String,

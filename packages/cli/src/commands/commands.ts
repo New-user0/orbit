@@ -48,6 +48,9 @@ const PermissionParams = {
 
 // What a run that sends one message and prints the answer takes, shared by `orb run` and `orb -p`.
 const HeadlessParams = {
+  // Puts back the files that the named session's file tools changed since a prompt's work began, then exits. Left out of
+  // --help, as the reference leaves its own flag out.
+  rewindFiles: Flag.string("rewind-files").pipe(Flag.withHidden, Flag.optional),
   bare: Flag.boolean("bare").pipe(
     Flag.withDescription(
       "Run on a private server without project config or instruction files (AGENTS.md and the like), for reproducible scripts",
@@ -981,6 +984,7 @@ export const RootValueFlags = {
     "max-cost",
     "max-tokens",
     "fallback-model",
+    "rewind-files",
     "file",
     "title",
     "completions",
