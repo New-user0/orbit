@@ -2236,7 +2236,8 @@ describe("a collection that ends early (class 7)", () => {
   // The review's case without stubs: a formatter rewrites every line of files the agent wrote, each as long as one read
   // returns, while the person changes one line of a small file. The comparisons of the large rewrites take seconds
   // together, so the small file is compared first and reported at once, and every large file is reported once, at this
-  // step or a later one.
+  // step or a later one. How many steps that takes depends on the machine's speed (a GitHub Windows runner compared
+  // six of the eight in three steps), so later steps run until every file is reported, at most eight of them.
   it.live(
     "a large rewrite of many files does not hold up a small change",
     () =>
@@ -2254,10 +2255,14 @@ describe("a collection that ends early (class 7)", () => {
         expect(contentOf(first, ["small.txt"])[0]).toContain("4: PERSON-EDIT")
         expect(status(yield* h.run("Write", { file_path: small, content: "MODEL-OVERWRITE" }))).toBe("completed")
 
-        const later = [...(yield* h.changes()), ...(yield* h.changes())]
+        const later: Row[] = []
+        for (let step = 0; step < 8 && first.length + later.length <= large.length; step++)
+          later.push(...(yield* h.changes()))
+        // Once each: a step after every file was reported finds nothing.
+        later.push(...(yield* h.changes()))
         expect(names([...first, ...later])).toEqual([...large, small].map((file) => path.basename(file)).toSorted())
       }),
-    60_000,
+    120_000,
   )
 })
 
