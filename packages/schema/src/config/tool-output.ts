@@ -4,6 +4,15 @@ import { Schema } from "effect"
 import { optional, PositiveInt } from "../schema.js"
 
 export class Info extends Schema.Class<Info>("Config.ToolOutput")({
-  max_lines: PositiveInt.pipe(optional),
-  max_bytes: PositiveInt.pipe(optional),
+  max_lines: PositiveInt.pipe(optional).annotate({
+    description: "Most lines of a shell command's output that its result keeps. Defaults to 2,000.",
+  }),
+  max_bytes: PositiveInt.pipe(optional).annotate({
+    description:
+      "Most bytes of a shell command's output that its result keeps (default 51,200), and the ceiling for saving tool results when max_result_chars is not set.",
+  }),
+  max_result_chars: PositiveInt.pipe(optional).annotate({
+    description:
+      "Ceiling, in characters, on the size above which a tool result is saved to a file and the model gets a preview with the file's path. A tool may declare a smaller limit; Read never saves. Defaults to max_bytes, else 50,000.",
+  }),
 }) {}

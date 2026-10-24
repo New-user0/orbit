@@ -136,10 +136,11 @@ export const make = Effect.gen(function* () {
       displayName: (name) => input.prepared.describeTool(name)?.displayName,
       started: yield* Clock.currentTimeMillis,
     })
+    const entries = yield* config.entries()
+    const outputLimits = Config.latest(entries, "tool_output")
     const scheduler = ToolScheduler.make<SessionError.Error>({
       maxConcurrency:
-        Config.latest(yield* config.entries(), "tool_execution")?.max_concurrency ??
-        ConfigToolExecution.DEFAULT_MAX_CONCURRENCY,
+        Config.latest(entries, "tool_execution")?.max_concurrency ?? ConfigToolExecution.DEFAULT_MAX_CONCURRENCY,
       onQueued: (id) => publisher.hint(id, { queued: true }),
       onStarted: (id) => publisher.hint(id, {}),
     })
@@ -264,21 +265,39 @@ export const make = Effect.gen(function* () {
                           ),
                         ),
                       ),
+                    ).pipe(
+                      Effect.flatMap((result) =>
+                        result._tag === "Cancelled"
+                          ? publisher.failTool(event.id, result.error).pipe(Effect.asVoid)
+                          : toolOutput
+                              .settle({
+                                sessionID: input.sessionID,
+                                messageID: input.assistantMessageID,
+                                callID: event.id,
+                                tool: event.name,
+                                limit: ToolOutput.threshold(traits.maxResultChars, outputLimits),
+                                result: result.value,
+                              })
+                              .pipe(
+                                Effect.flatMap((outcome) => publisher.toolExecution(event.id, event.name, outcome)),
+                              ),
+                      ),
                     ),
                   ),
-                  Effect.flatMap((result) =>
-                    result._tag === "Cancelled"
-                      ? publisher.failTool(event.id, result.error).pipe(Effect.asVoid)
-                      : toolOutput
-                          .truncate(result.value)
-                          .pipe(Effect.flatMap((outcome) => publisher.toolExecution(event.id, event.name, outcome))),
-                  ),
-                  Effect.catchTag("Tool.Error", (error) =>
-                    (hasCorrection(error) ? scheduler.halt(SKIPPED_AFTER_REJECTION) : Effect.void).pipe(
-                      Effect.andThen(publisher.failTool(event.id, toSessionError(error), error.metadata)),
+                  Effect.catchTag("Tool.Error", (error) => {
+                    // The message reaches the store, every client and the model, so a long one is cut in the middle.
+                    const failure = toSessionError(error)
+                    return (hasCorrection(error) ? scheduler.halt(SKIPPED_AFTER_REJECTION) : Effect.void).pipe(
+                      Effect.andThen(
+                        publisher.failTool(
+                          event.id,
+                          { ...failure, message: ToolOutput.cutError(failure.message) },
+                          error.metadata,
+                        ),
+                      ),
                       Effect.asVoid,
-                    ),
-                  ),
+                    )
+                  }),
                   Effect.ensuring(scheduler.release(entry)),
                 ),
                 { uninterruptible: "inherit" },

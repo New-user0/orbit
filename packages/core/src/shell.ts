@@ -259,7 +259,7 @@ const layer = () =>
           const notice = truncated
             ? `\n\n[showing lines ${total - shown + 1}-${total} of ${total}; full output saved to ${info.file}]`
             : ""
-          return { output: `${text || "(no output)"}${notice}`, truncated }
+          return { output: `${text}${notice}`, truncated }
         }).pipe(Effect.catchTag("Shell.NotFoundError", () => Effect.succeed(undefined)))
         return { info, capture }
       })
