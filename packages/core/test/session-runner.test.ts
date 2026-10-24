@@ -106,7 +106,6 @@ import fs from "fs/promises"
 import path from "path"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
-import { Token } from "@orbit/core/util/token"
 
 const emptyCodeMode = `${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}\n\n`
 type ToolBarrier = {
@@ -140,13 +139,14 @@ const model = testModel("fake-model")
 const defaultSystem = SessionSystemPrompt.make(["Execute"])
 // A window for the compaction tests below: the base prompt, which every request counts, and `tokens` of room beside it.
 // Their windows were 12,000 and 9,000 tokens when the base prompt was 1,048 tokens, so they keep 10,952 and 7,952.
-const withPrompt = (tokens: number) => Token.estimate(defaultSystem) + tokens
 const identity = (providerID: string, id: string) =>
   ["# Your Model", `- Name: ${id}`, `- Provider ID: ${providerID}`, `- Model ID: ${id}`].join("\n")
 const fakeIdentity = identity("fake", "fake-model")
 const replacementIdentity = identity("fake", "replacement")
 const gptIdentity = identity("openai", "gpt-5")
 const replacementModel = testModel("replacement")
+// What the catalog resolves a session that selected the "none" reasoning variant to, so a request can tell it apart.
+const unreasonedModel = testModel("fake-model-none")
 const compactModel = testModel("compact", { context: 4_000, output: 50 })
 // Automatic compaction starts at half this window, which the first request of a scenario stays under.
 const halfWindowModel = testModel("half-window", { context: 6_000, output: 50 })
@@ -245,6 +245,8 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     currentModel: model,
     toolsEnabled: true,
     modelCost: [] as Model.Info["cost"],
+    // What the catalog lists for the session model; unset lists nothing.
+    modelInfo: undefined as Model.Info | undefined,
     compaction,
     modelResolveHook: resolvesModel,
     systemBaseline: "Initial context",
@@ -516,7 +518,12 @@ const makeLayer = (persist: boolean, real = false) =>
       resolve: (session) =>
         state.modelResolveHook.pipe(
           Effect.map(() => {
-            const selected = session.model?.id === "replacement" ? replacementModel : state.currentModel
+            const selected =
+              session.model?.id === "replacement"
+                ? replacementModel
+                : session.model?.variant === "none"
+                  ? unreasonedModel
+                  : state.currentModel
             return SessionRunnerModel.resolved(selected, {
               capabilities: { tools: state.toolsEnabled, input: ["text", "image"], output: ["text"] },
               cost: state.modelCost,
@@ -604,7 +611,7 @@ const makeLayer = (persist: boolean, real = false) =>
       ),
     )
     const promptModels = Layer.mock(Model.Service, {
-      get: () => Effect.undefined,
+      get: () => Effect.sync(() => state.modelInfo),
       all: () => Effect.succeed([]),
       available: () => Effect.succeed([]),
       default: () => Effect.undefined,
@@ -1953,7 +1960,7 @@ describe("SessionRunnerLLM", () => {
     yield* runner.drain({ sessionID, force: false, continuation: moved.continuation })
 
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[2])[0]).toContain("<summary>\n## Objective\n- Entry summary\n</summary>")
+    expect(userTexts(s.requests[2])[0]).toContain("## Objective\n- Entry summary")
     expect(yield* s.inbox).toEqual([])
   })
 
@@ -2828,7 +2835,7 @@ describe("SessionRunnerLLM", () => {
       expect((yield* s.messages).some((message) => message.type === "compaction")).toBe(false)
       yield* active.finish
 
-      expect(userTexts(s.requests[1]).at(-1)).toContain("Summarize only what the user and the assistant said and did")
+      expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
       expect(s.requests).toHaveLength(3)
       expect(userTexts(s.requests[1])).not.toContain("STEER_A")
       expect(userTexts(s.requests[1])).not.toContain("STEER_B")
@@ -2867,7 +2874,7 @@ describe("SessionRunnerLLM", () => {
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("Summarize only what the user and the assistant said and did")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
     expect(s.requests[1].messages.some((message) => message.role === "tool")).toBe(true)
     expect(userTexts(s.requests[2]).slice(-2)).toEqual(["STEER_A", "STEER_B"])
     expect(yield* s.inbox).toEqual([])
@@ -2890,7 +2897,7 @@ describe("SessionRunnerLLM", () => {
     yield* Deferred.succeed(release, undefined)
     yield* Fiber.join(run)
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("Summarize only what the user and the assistant said and did")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
     expect(userTexts(s.requests[2]).slice(-2)).toEqual(["STEER_A", "STEER_B"])
     expect(yield* s.inbox).toEqual([])
   })
@@ -2904,13 +2911,17 @@ describe("SessionRunnerLLM", () => {
       const second = yield* s.admit("STEER_B")
       const compact = yield* s.session.compact({ sessionID })
       if (outcome === "cancelled") yield* s.session.cancelInbox({ sessionID, inboxID: compact.id })
-      if (outcome === "failed") yield* s.llm.push([LLMEvent.providerError({ message: "summary unavailable" })])
+      if (outcome === "failed")
+        yield* s.llm.push(
+          [LLMEvent.providerError({ message: "summary unavailable" })],
+          [LLMEvent.providerError({ message: "summary unavailable" })],
+        )
       yield* s.llm.push(TestLLM.text("Steers complete", "steers"))
       yield* active.finish
 
-      expect(s.requests).toHaveLength(outcome === "cancelled" ? 2 : 3)
+      expect(s.requests).toHaveLength(outcome === "cancelled" ? 2 : 4)
       if (outcome === "failed") {
-        expect(userTexts(s.requests[1]).at(-1)).toContain("Summarize only what the user and the assistant said and did")
+        expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
         expect((yield* s.messages).find((message) => message.id === compact.id)).toMatchObject({
           status: "failed",
           error: { type: "provider.error", message: "summary unavailable" },
@@ -2935,7 +2946,7 @@ describe("SessionRunnerLLM", () => {
     const summary = yield* s.llm.gate
     const compact = yield* s.session.compact({ sessionID })
     yield* summary.started
-    expect(userTexts(s.requests[1]).at(-1)).toContain("Summarize only what the user and the assistant said and did")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
     expect((yield* s.inbox).map((item) => item.id)).toEqual([first.id, second.id])
     yield* s.session.interrupt(sessionID)
     yield* s.session.wait(sessionID)
@@ -2975,7 +2986,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
     expect(s.requests).toHaveLength(3)
     expect(userTexts(s.requests[0])).toEqual(["STEER_A"])
-    expect(userTexts(s.requests[1]).at(-1)).toContain("Summarize only what the user and the assistant said and did")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
     expect(userTexts(s.requests[2]).at(-1)).toBe("STEER_B")
     expect(
       (yield* recordedEventTypes(sessionID)).filter(
@@ -3149,7 +3160,10 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Earlier answer", "text-manual-provider-history"))
     yield* s.runPrompt("Earlier question")
 
-    yield* s.llm.push([LLMEvent.providerError({ message: "summary unavailable" })])
+    yield* s.llm.push(
+      [LLMEvent.providerError({ message: "summary unavailable" })],
+      [LLMEvent.providerError({ message: "summary unavailable" })],
+    )
     const compaction = yield* s.session.compact({ sessionID })
     yield* s.resume
 
@@ -3224,9 +3238,10 @@ describe("SessionRunnerLLM", () => {
         expect(compact.messages.slice(0, normal.messages.length)).toEqual([...normal.messages])
         expect(compact.messages.at(-1)).toMatchObject({
           role: "user",
-          content: [{ type: "text", text: SessionCompaction.buildPrompt(false) }],
+          content: [{ type: "text", text: SessionCompaction.buildPrompt() }],
         })
-        expect(userTexts(compact)).not.toContain("Retained recent request")
+        // Nothing is kept verbatim: an automatic compaction summarizes the request that triggered it as well.
+        expect(userTexts(compact).includes("Retained recent request")).toBe(reason === "auto")
         for (const field of [
           "model",
           "system",
@@ -3262,63 +3277,87 @@ describe("SessionRunnerLLM", () => {
     }
   }
 
-  for (const response of ["tools", "reasoning", "invalid text"] as const) {
+  for (const response of ["tools", "reasoning"] as const) {
     for (const summary of [true, false]) {
-      scenario(
-        `compaction ${summary ? "recovers" : "stops"} after one template reminder for ${response}`,
-        function* (s) {
-          yield* s.llm.push(TestLLM.text("Earlier answer", "summary-history"))
-          yield* s.runPrompt("Earlier question")
-          s.requests.length = 0
-          const invalid =
-            response === "tools"
-              ? TestLLM.tool("call-summary", "echo", { text: "must not execute" })
-              : response === "reasoning"
-                ? TestLLM.stop(
-                    LLMEvent.reasoningDelta({ id: "summary-reasoning", text: "## Objective\n- Not a summary" }),
-                  )
-                : TestLLM.text("Let me search the codebase. I will fill in ## Objective later.", "invalid-summary")
-          yield* s.llm.push(
-            invalid.map((event) =>
-              LLMEvent.is.stepFinish(event)
-                ? { ...event, providerMetadata: { openai: { responseId: "rejected-summary-state" } } }
-                : event,
-            ),
-            summary
-              ? [LLMEvent.textDelta({ id: "summary-recovered", text: "### Active\n- Recovered summary" })]
-              : invalid,
-          )
-          const compact = yield* s.session.compact({ sessionID })
-          yield* s.resume
+      scenario(`compaction ${summary ? "recovers" : "stops"} after one fallback request for ${response}`, function* (s) {
+        yield* s.llm.push(TestLLM.text("Earlier answer", "summary-history"))
+        yield* s.runPrompt("Earlier question")
+        s.requests.length = 0
+        const invalid =
+          response === "tools"
+            ? TestLLM.tool("call-summary", "echo", { text: "must not execute" })
+            : TestLLM.stop(LLMEvent.reasoningDelta({ id: "summary-reasoning", text: "## Objective\n- Not a summary" }))
+        yield* s.llm.push(
+          invalid.map((event) =>
+            LLMEvent.is.stepFinish(event)
+              ? { ...event, providerMetadata: { openai: { responseId: "rejected-summary-state" } } }
+              : event,
+          ),
+          summary ? [LLMEvent.textDelta({ id: "summary-recovered", text: "### Active\n- Recovered summary" })] : invalid,
+        )
+        const compact = yield* s.session.compact({ sessionID })
+        yield* s.resume
 
-          expect(s.requests).toHaveLength(2)
-          expect(s.requests[1].messages.slice(0, -1)).toEqual([...s.requests[0].messages])
-          expect(userTexts(s.requests[1]).at(-1)).toContain("did not fill in the required summary template")
-          expect(s.requests.every((request) => request.toolChoice === undefined)).toBe(true)
-          expect(s.executions).toEqual([])
-          expect(JSON.stringify(yield* s.messages)).not.toContain("rejected-summary-state")
-          expect((yield* s.messages).find((message) => message.id === compact.id)).toMatchObject(
-            summary
-              ? { status: "completed", summary: "### Active\n- Recovered summary" }
-              : {
-                  status: "failed",
-                  error: {
-                    type: "compaction.failed",
-                    message:
-                      response === "invalid text"
-                        ? "Compaction summary did not match the required template"
-                        : "Compaction produced no summary",
-                  },
-                },
-          )
-          if (!summary)
-            expect(
-              (yield* s.context).some((message) => message.type === "user" && message.text === "Earlier question"),
-            ).toBe(true)
-        },
-      )
+        // A reply without text gets one fallback request: the same messages under a one-line system prompt.
+        expect(s.requests).toHaveLength(2)
+        expect(s.requests[1].messages).toEqual([...s.requests[0].messages])
+        expect(s.requests[1].system).toHaveLength(1)
+        expect(s.requests.every((request) => request.toolChoice === undefined)).toBe(true)
+        expect(s.executions).toEqual([])
+        expect(JSON.stringify(yield* s.messages)).not.toContain("rejected-summary-state")
+        expect((yield* s.messages).find((message) => message.id === compact.id)).toMatchObject(
+          summary
+            ? { status: "completed", summary: "### Active\n- Recovered summary" }
+            : { status: "failed", error: { type: "compaction.failed", message: "Compaction produced no summary" } },
+        )
+        if (!summary)
+          expect(
+            (yield* s.context).some((message) => message.type === "user" && message.text === "Earlier question"),
+          ).toBe(true)
+      })
     }
   }
+
+  scenario("a manual compaction falls back on the session model without its reasoning variant", function* (s) {
+    s.modelInfo = Model.Info.make({
+      ...Model.Info.default(Provider.ID.make(s.currentModel.provider), Model.ID.make(s.currentModel.id)),
+      variants: [{ id: Model.VariantID.make("high") }, { id: Model.VariantID.make("none") }],
+    })
+    yield* s.bus.publish(SessionEvent.ModelSelected, {
+      sessionID,
+      model: {
+        id: ID.make(s.currentModel.id),
+        providerID: Provider.ID.make(s.currentModel.provider),
+        variant: Model.VariantID.make("high"),
+      },
+    })
+    yield* s.llm.push(TestLLM.text("Earlier answer", "unreasoned-history"))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(
+      TestLLM.stop(LLMEvent.reasoningDelta({ id: "unreasoned-thinking", text: "Not a summary" })),
+      [LLMEvent.textDelta({ id: "unreasoned-summary", text: "### Active\n- Recovered summary" })],
+    )
+    yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    expect(s.requests.map((request) => String(request.model.id))).toEqual(["fake-model", "fake-model-none"])
+  })
+
+  scenario("compaction accepts any text as the summary, with no fallback request", function* (s) {
+    yield* s.llm.push(TestLLM.text("Earlier answer", "summary-history"))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(TestLLM.text("Let me search the codebase. I will fill in ## Objective later.", "invalid-summary"))
+    const compact = yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(1)
+    expect((yield* s.messages).find((message) => message.id === compact.id)).toMatchObject({
+      status: "completed",
+      summary: "Let me search the codebase. I will fill in ## Objective later.",
+    })
+  })
 
   scenario("restarts compaction drafts after transient failures and unsuccessful finishes", function* (s) {
     yield* s.llm.push(TestLLM.text("Earlier answer", "text-manual-failure-history"))
@@ -3366,7 +3405,7 @@ describe("SessionRunnerLLM", () => {
     expect((yield* s.session.get(sessionID))?.tokens.input).toBe(50)
   })
 
-  scenario("bounds compaction network retries across a template correction", function* (s) {
+  scenario("bounds compaction network retries across the fallback request", function* (s) {
     yield* s.llm.push(TestLLM.text("Earlier answer", "history"))
     yield* s.runPrompt("Earlier question")
     s.requests.length = 0
@@ -3379,11 +3418,11 @@ describe("SessionRunnerLLM", () => {
         event.decision = { retry: true, delay: 0 }
       }),
     )
-    yield* s.llm.push(Stream.fail(providerUnavailable()), TestLLM.text("Not a summary", "invalid"))
     yield* s.llm.always(Stream.fail(providerUnavailable()))
     const compaction = yield* s.session.compact({ sessionID })
     yield* s.resume
 
+    // One policy serves the first request and the fallback, so the fallback finds the retries used up.
     expect(attempts).toEqual(RETRY_ATTEMPTS)
     expect(s.requests).toHaveLength(RETRY_ATTEMPTS.length + 2)
     expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
@@ -3452,10 +3491,29 @@ describe("SessionRunnerLLM", () => {
             : incompleteStream(),
         ),
       )
+      yield* s.llm.always(
+        Stream.fail(
+          header
+            ? new AIError({
+                reason: new TransportError({
+                  message: "Connection closed",
+                  transport: "http",
+                  operation: "read",
+                  http: new HttpContext({
+                    url: "https://example.com",
+                    status: 200,
+                    headers: { "x-should-retry": "false" },
+                  }),
+                }),
+              })
+            : incompleteStream(),
+        ),
+      )
       const compaction = yield* s.session.compact({ sessionID })
       yield* s.resume
 
-      expect(s.requests).toHaveLength(1)
+      // Neither request is resent, but the first one's failure still gets the fallback.
+      expect(s.requests).toHaveLength(2)
       expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
         status: "failed",
         error: { type: header ? "provider.transport" : "provider.invalid-output" },
@@ -3463,30 +3521,48 @@ describe("SessionRunnerLLM", () => {
     })
   }
 
-  for (const response of ["length", "content-filter"] as const) {
-    scenario(`rejects compaction ${response} without retrying or committing its draft`, function* (s) {
-      yield* s.llm.push(TestLLM.text("Earlier answer", "history"))
-      yield* s.runPrompt("Earlier question")
-      s.requests.length = 0
-      yield* s.llm.push(
-        TestLLM.complete(
-          { reason: { normalized: response } },
-          LLMEvent.textDelta({ id: "truncated", text: "## Objective\n- Incomplete summary" }),
-        ),
-      )
-      const compaction = yield* s.session.compact({ sessionID })
-      yield* s.resume
+  scenario("accepts a compaction summary that stopped at the output limit", function* (s) {
+    yield* s.llm.push(TestLLM.text("Earlier answer", "history"))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length" } },
+        LLMEvent.textDelta({ id: "truncated", text: "## Objective\n- Incomplete summary" }),
+      ),
+    )
+    const compaction = yield* s.session.compact({ sessionID })
+    yield* s.resume
 
-      expect(s.requests).toHaveLength(1)
-      expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "failed" })
-      yield* s.llm.push(TestLLM.text("Continued", "continued"))
-      yield* s.runPrompt("Continue")
-      expect(userTexts(s.requests[1])).toContain("Earlier question")
-      expect(JSON.stringify(s.requests[1])).not.toContain("Incomplete summary")
+    expect(s.requests).toHaveLength(1)
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
+      status: "completed",
+      summary: "## Objective\n- Incomplete summary",
     })
-  }
+  })
 
-  scenario("stops after three smaller compaction inputs overflow", function* (s) {
+  scenario("sends the fallback request after a compaction content-filter and keeps the draft out", function* (s) {
+    yield* s.llm.push(TestLLM.text("Earlier answer", "history"))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    const filtered = () =>
+      TestLLM.complete(
+        { reason: { normalized: "content-filter" } },
+        LLMEvent.textDelta({ id: "truncated", text: "## Objective\n- Incomplete summary" }),
+      )
+    yield* s.llm.push(filtered(), filtered())
+    const compaction = yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "failed" })
+    yield* s.llm.push(TestLLM.text("Continued", "continued"))
+    yield* s.runPrompt("Continue")
+    expect(userTexts(s.requests[2])).toContain("Earlier question")
+    expect(JSON.stringify(s.requests[2])).not.toContain("Incomplete summary")
+  })
+
+  scenario("stops after three prompt-too-long retries of a compaction", function* (s) {
     // Large enough that the conversation, not the system prompt, is most of the request.
     const filler = "context ".repeat(1_000)
     yield* s.llm.push(...Array.from({ length: 8 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
@@ -3500,100 +3576,50 @@ describe("SessionRunnerLLM", () => {
       Stream.fail(
         new AIError({ reason: new InvalidRequestError({ message: "Too long", classification: "context-overflow" }) }),
       )
-    yield* s.llm.push(overflow(), overflow(), overflow(), overflow())
+    yield* s.llm.push(...Array.from({ length: 8 }, overflow))
     const compaction = yield* s.session.compact({ sessionID })
     yield* s.resume
 
-    expect(s.requests).toHaveLength(4)
-    expect(userTexts(s.requests[2])[0].length).toBeLessThan(userTexts(s.requests[1])[0].length)
-    expect(userTexts(s.requests[3])[0].length).toBeLessThan(userTexts(s.requests[2])[0].length)
-    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "failed" })
+    // Four tries, each a first request and its fallback; every retry drops the oldest round group.
+    expect(s.requests).toHaveLength(8)
+    const size = (index: number) => JSON.stringify(s.requests[index].messages).length
+    expect(size(2)).toBeLessThan(size(0))
+    expect(size(4)).toBeLessThan(size(2))
+    expect(size(6)).toBeLessThan(size(4))
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
+      status: "failed",
+      error: { type: "compaction.failed", message: expect.stringContaining("Go back a few messages") },
+    })
     yield* s.llm.push(TestLLM.text("Continued", "continued"))
     yield* s.runPrompt("Continue")
-    expect(userTexts(s.requests[4])).toContain(`Request 0: ${filler}`)
+    expect(userTexts(s.requests[8])).toContain(`Request 0: ${filler}`)
   })
 
-  scenario("resends compaction as text after payload too large, then shrinks later rejections", function* (s) {
+  scenario("sends the fallback without media after a compaction is rejected as too large", function* (s) {
     const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    // Enough large exchanges that each of the three shrinking attempts still keeps one beside the base prompt, which
-    // every attempt counts, and drops fewer than the attempt before.
-    const filler = "context ".repeat(3_000)
     yield* s.session.prompt({
       sessionID,
       text: "Request 0 with an image",
       files: [{ uri: `data:image/png;base64,${image}` }],
       resume: false,
     })
-    yield* s.llm.push(...Array.from({ length: 11 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
-    yield* s.resume
-    yield* Effect.forEach(
-      Array.from({ length: 10 }, (_, index) => index + 1),
-      (index) => s.runPrompt(`Request ${index}: ${filler}`),
-    )
-    s.currentModel = unknownContextModel
-    s.requests.length = 0
-    yield* s.llm.push(...Array.from({ length: 5 }, () => Stream.fail(payloadTooLarge())))
-    const compaction = yield* s.session.compact({ sessionID })
-    yield* s.resume
-
-    // The first rejection resends everything as text, which carries no media; later ones shrink like "too long".
-    expect(s.requests).toHaveLength(5)
-    expect(s.requests[0]?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBeTrue()
-    expect(s.requests[1]?.messages.every((message) => message.role === "user")).toBeTrue()
-    expect(userTexts(s.requests[1])[0]).toContain("[image/png omitted]")
-    expect(userTexts(s.requests[1])[0]).not.toMatch(/older exchanges? omitted/)
-    expect(userTexts(s.requests[2])[0].length).toBeLessThan(userTexts(s.requests[1])[0].length)
-    expect(userTexts(s.requests[3])[0].length).toBeLessThan(userTexts(s.requests[2])[0].length)
-    expect(userTexts(s.requests[4])[0].length).toBeLessThan(userTexts(s.requests[3])[0].length)
-    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "failed" })
-  })
-
-  scenario("resends whole history as text after payload too large when it cannot be shortened", function* (s) {
-    const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    yield* s.session.prompt({
-      sessionID,
-      text: `Request 0: ${"x".repeat(40_000)}`,
-      files: [{ uri: `data:image/png;base64,${image}` }],
-      resume: false,
-    })
     yield* s.llm.push(TestLLM.text("Answer 0", "answer-0"))
     yield* s.resume
-    s.currentModel = testModel("smaller-history", { context: 9_000, output: 1_000 })
     s.requests.length = 0
     yield* s.llm.push(Stream.fail(payloadTooLarge()), TestLLM.text("## Objective\n- Recovered", "summary"))
     const compaction = yield* s.session.compact({ sessionID })
     yield* s.resume
 
-    // Even the latest exchange is over the estimated limit, so the first send is unchanged and the second keeps it all.
     expect(s.requests).toHaveLength(2)
     expect(s.requests[0]?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBeTrue()
-    expect(s.requests[1]?.messages.every((message) => message.role === "user")).toBeTrue()
-    expect(userTexts(s.requests[1])[0]).toContain("[image/png omitted]")
-    expect(userTexts(s.requests[1])[0]).toContain(`Request 0: ${"x".repeat(40_000)}`)
+    expect(s.requests[1]?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBeFalse()
+    expect(JSON.stringify(s.requests[1]?.messages)).toContain("[image]")
     expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "completed" })
   })
 
-  scenario("shrinks after payload too large on a compaction already sent as text", function* (s) {
-    s.currentModel = testModel("large-history", { context: 1_000_000, output: 32_000 })
-    yield* s.llm.push(...Array.from({ length: 6 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
-    yield* Effect.forEach(
-      Array.from({ length: 6 }, (_, index) => index),
-      (index) => s.runPrompt(`Request ${index}: ${"x".repeat(8_000)}`),
-    )
-    s.currentModel = testModel("smaller-history", { context: withPrompt(10_952), output: 1_000 })
-    s.requests.length = 0
-    yield* s.llm.push(Stream.fail(payloadTooLarge()), TestLLM.text("## Objective\n- Recovered", "summary"))
-    const compaction = yield* s.session.compact({ sessionID })
-    yield* s.resume
 
-    // The first send was already text, so there is no media left to drop; the rejection counts like "too long".
-    expect(s.requests).toHaveLength(2)
-    expect(s.requests[0]?.messages.every((message) => message.role === "user")).toBeTrue()
-    expect(userTexts(s.requests[1])[0].length).toBeLessThan(userTexts(s.requests[0])[0].length)
-    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "completed" })
-  })
 
-  scenario("aims the first overflow compaction below the rejected context", function* (s) {
+  scenario("sends the whole history to the compaction that follows an overflow", function* (s) {
     const filler = "context ".repeat(1_000)
     yield* s.llm.push(...Array.from({ length: 4 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
     yield* Effect.forEach(
@@ -3609,14 +3635,13 @@ describe("SessionRunnerLLM", () => {
     )
     yield* s.runPrompt("Continue")
 
-    // The history fits the model's window by estimate, but the provider just rejected it, so older exchanges go.
+    // The summary request is sent as it is; only a rejection of it shortens the history.
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1])[0]).toContain("older exchanges omitted")
-    expect(userTexts(s.requests[1])[0]).not.toContain("Request 0:")
-    expect(userTexts(s.requests[1])[0]).toContain("Request 3:")
+    expect(userTexts(s.requests[1])).toContain(`Request 0: ${filler}`)
+    expect(userTexts(s.requests[1])).toContain(`Request 3: ${filler}`)
   })
 
-  scenario("serializes history and omits media after a summary input overflow", function* (s) {
+  scenario("sends the fallback without media after a summary input overflow", function* (s) {
     const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
     yield* s.session.prompt({
       sessionID,
@@ -3624,20 +3649,7 @@ describe("SessionRunnerLLM", () => {
       files: [{ uri: `data:image/png;base64,${image}` }],
       resume: false,
     })
-    yield* s.llm.push(
-      TestLLM.stop(
-        LLMEvent.toolCall({ id: "hosted", name: "web_search", input: { query: "earlier" }, providerExecuted: true }),
-        LLMEvent.toolResult({
-          id: "hosted",
-          name: "web_search",
-          result: { type: "text", value: "x".repeat(5_000) },
-          providerExecuted: true,
-        }),
-        LLMEvent.textStart({ id: "history" }),
-        LLMEvent.textDelta({ id: "history", text: "Earlier answer" }),
-        LLMEvent.textEnd({ id: "history" }),
-      ),
-    )
+    yield* s.llm.push(TestLLM.text("Earlier answer", "history"))
     yield* s.resume
     s.requests.length = 0
     yield* s.llm.push(
@@ -3647,41 +3659,15 @@ describe("SessionRunnerLLM", () => {
     const compaction = yield* s.session.compact({ sessionID })
     yield* s.resume
 
+    // The first request is rejected, so the fallback runs: same history, media as text, one system part.
     expect(s.requests).toHaveLength(2)
     expect(s.requests[0]?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBeTrue()
-    expect(s.requests[1]?.messages.every((message) => message.role === "user")).toBeTrue()
-    expect(userTexts(s.requests[1])[0]).toContain("[image/png omitted]")
-    expect(userTexts(s.requests[1])[0]).toContain("[Tool result]:")
-    expect(userTexts(s.requests[1])[0]).toContain(`${"x".repeat(1_250)}\n[truncated]`)
-    expect(userTexts(s.requests[1])[0]).not.toContain("x".repeat(1_251))
-    expect(s.requests[1]?.system).toEqual(s.requests[0]?.system)
-    expect(s.requests[1]?.tools).toEqual(s.requests[0]?.tools)
+    expect(s.requests[1]?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBeFalse()
+    expect(JSON.stringify(s.requests[1]?.messages)).toContain("[image]")
+    expect(s.requests[1]?.system).toHaveLength(1)
     expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "completed" })
   })
 
-  scenario("fits serialized compaction history by omitting oldest exchanges", function* (s) {
-    s.currentModel = testModel("large-history", { context: 1_000_000, output: 32_000 })
-    yield* s.llm.push(...Array.from({ length: 4 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
-    yield* Effect.forEach(
-      Array.from({ length: 4 }, (_, index) => index),
-      (index) => s.runPrompt(`Request ${index}: ${"x".repeat(8_000)}`),
-    )
-    s.currentModel = testModel("smaller-history", { context: withPrompt(7_952), output: 3_000 })
-    s.requests.length = 0
-    yield* s.llm.push(TestLLM.text("## Objective\n- Recovered", "summary"))
-    const compaction = yield* s.session.compact({ sessionID })
-    yield* s.resume
-
-    expect(s.requests).toHaveLength(1)
-    expect(userTexts(s.requests[0])[0]).toContain("older exchanges omitted")
-    expect(userTexts(s.requests[0])[0]).not.toContain("Request 0:")
-    expect(userTexts(s.requests[0])[0]).not.toContain("Request 1:")
-    expect(userTexts(s.requests[0])[0]).toContain("Request 2:")
-    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
-      status: "completed",
-      summary: "## Objective\n- Recovered",
-    })
-  })
 
   scenario("records cancelled manual compaction without surfacing an internal failure", function* (s) {
     yield* s.llm.push(TestLLM.text("Earlier answer", "text-manual-interrupt-history"))
@@ -3756,7 +3742,7 @@ describe("SessionRunnerLLM", () => {
     })
   })
 
-  scenario("automatically compacts into a completed summary and retained recent turn", function* (s) {
+  scenario("automatically compacts into a completed summary with nothing kept verbatim", function* (s) {
     const store = yield* SessionStore.Service
     yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "text-first", 3_950))
     yield* s.runPrompt("Earlier question ".repeat(180))
@@ -3770,17 +3756,19 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Recent exact request ".repeat(180))
 
     expect(s.requests).toHaveLength(2)
-    expect(userTexts(s.requests[0]).at(-1)).toContain("## Objective")
+    expect(userTexts(s.requests[0]).at(-1)).toContain("<handoff>")
+    // The request that triggered the compaction is summarized too, so the checkpoint is all the next step starts with.
+    expect(userTexts(s.requests[0])).toContain("Recent exact request ".repeat(180))
     expect(userTexts(s.requests[1])).toHaveLength(1)
-    expect(userTexts(s.requests[1])[0]).toContain("<summary>\n## Objective\n- Preserve the task\n</summary>")
-    expect(userTexts(s.requests[1])[0]).toContain(`[User]: ${"Recent exact request ".repeat(180)}`)
+    expect(userTexts(s.requests[1])[0]).toContain("## Objective\n- Preserve the task")
+    expect(userTexts(s.requests[1])[0]).toContain("Keep working without checking in with the user")
 
     const context = yield* store.context(sessionID)
     expect(context.map((message) => message.type)).toEqual(["compaction", "assistant"])
     expect(context[0]).toMatchObject({
       type: "compaction",
       summary: "## Objective\n- Preserve the task",
-      recent: `[User]: ${"Recent exact request ".repeat(180)}`,
+      recent: "",
     })
 
     s.requests.length = 0
@@ -3792,13 +3780,12 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Newest exact request ".repeat(180))
 
     expect(s.requests).toHaveLength(2)
-    expect(userTexts(s.requests[0])[0]).toContain("<summary>\n## Objective\n- Preserve the task\n</summary>")
-    expect(userTexts(s.requests[0])[0]).toContain("Recent exact request")
-    expect(userTexts(s.requests[0]).at(-1)).toBe(SessionCompaction.buildPrompt(true))
+    expect(userTexts(s.requests[0])[0]).toContain("## Objective\n- Preserve the task")
+    expect(userTexts(s.requests[0]).at(-1)).toBe(SessionCompaction.buildPrompt())
     expect((yield* store.context(sessionID))[0]).toMatchObject({
       type: "compaction",
       summary: "## Objective\n- Preserve the updated task",
-      recent: `[User]: ${"Newest exact request ".repeat(180)}`,
+      recent: "",
     })
   })
 
@@ -3908,12 +3895,14 @@ describe("SessionRunnerLLM", () => {
     s.requests.length = 0
     yield* s.llm.push(
       [LLMEvent.providerError({ message: "Unsupported parameter: max_output_tokens" })],
+      [LLMEvent.providerError({ message: "Unsupported parameter: max_output_tokens" })],
       TestLLM.text("Answered anyway", "text-after-failed-compaction"),
     )
     yield* s.admit("Recent exact request ".repeat(180))
     expect(yield* Effect.exit(s.resume)).toMatchObject({ _tag: "Success" })
 
-    expect(s.requests).toHaveLength(2)
+    // The summary request, its fallback, and the answer.
+    expect(s.requests).toHaveLength(3)
     expect(s.requests[0]?.generation?.maxTokens).toBe(50)
     expect(yield* s.context).toContainEqual(
       expect.objectContaining({
@@ -3938,8 +3927,8 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Continue")
 
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("## Objective")
-    expect(userTexts(s.requests[2])[0]).toContain("<summary>\n## Objective\n- Recover overflow\n</summary>")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("<handoff>")
+    expect(userTexts(s.requests[2])[0]).toContain("## Objective\n- Recover overflow")
     expect(yield* s.context).toMatchObject([
       { type: "compaction", summary: "## Objective\n- Recover overflow" },
       { type: "assistant", finish: "stop" },
@@ -4003,7 +3992,7 @@ describe("SessionRunnerLLM", () => {
       "Initial context",
     ])
     expect(systemTexts(s.requests[2])).toContain("Changed during compaction")
-    expect(userTexts(s.requests[2])[0]).toContain("<summary>\n## Objective\n- Overflow summary\n</summary>")
+    expect(userTexts(s.requests[2])[0]).toContain("## Objective\n- Overflow summary")
     expect(userTexts(s.requests[2]).join("\n")).not.toContain("Queued during compaction")
     expect(userTexts(s.requests[2]).join("\n")).not.toContain("Steered during compaction")
     expect((yield* s.inbox).map((item) => item.id)).toEqual([queued.id, steered.id])
@@ -4187,7 +4176,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Recent request ".repeat(400))
 
     expect(s.requests).toHaveLength(2)
-    expect(userTexts(s.requests[0]).at(-1)).toContain("## Objective")
+    expect(userTexts(s.requests[0]).at(-1)).toContain("<handoff>")
     // The summary may use the whole 20k reserve of a 200k window.
     expect(s.requests[0]?.generation?.maxTokens).toBe(20_000)
     expect(s.requests[1]?.generation?.maxTokens).toBe(32_000)
@@ -4206,7 +4195,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Recent request ".repeat(400))
 
     expect(s.requests).toHaveLength(2)
-    expect(userTexts(s.requests[0]).at(-1)).toContain("## Objective")
+    expect(userTexts(s.requests[0]).at(-1)).toContain("<handoff>")
     expect(s.requests[0]?.generation?.maxTokens).toBe(16_000)
     expect(s.requests[1]?.generation?.maxTokens).toBe(16_000)
   })
@@ -4216,11 +4205,12 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(
       [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
       [LLMEvent.providerError({ message: "summary unavailable" })],
+      [LLMEvent.providerError({ message: "summary unavailable" })],
     )
     yield* s.admit("Continue")
     expect((yield* s.resume.pipe(Effect.flip)).message).toBe("prompt too long")
 
-    expect(s.requests).toHaveLength(2)
+    expect(s.requests).toHaveLength(3)
     const context = yield* s.context
     expect(context).toContainEqual(
       expect.objectContaining({
@@ -6370,12 +6360,16 @@ describe("SessionRunnerLLM", () => {
         s.currentModel = halfWindowModel
         if (row.priced) s.modelCost = [price]
         yield* s.session.prompt({ sessionID, text: "Work", turn: row.turn, resume: false })
-        // The threshold is 3,000, so the first response is due. Both summary replies (the first and the nudge) spend
-        // 1,500 and do not follow the template, which fails the compaction.
+        // The threshold is 3,000, so the first response is due. Both summary replies (the first request and the
+        // fallback) spend 1,500 and hold no text, which fails the compaction.
+        const empty = () =>
+          TestLLM.complete(
+            { reason: { normalized: "stop" }, usage: { nonCachedInputTokens: 1_500, outputTokens: 1 } },
+          )
         yield* s.llm.push(
           toolStep({ nonCachedInputTokens: 3_100, outputTokens: 1 }),
-          TestLLM.textWithUsage("not a summary", "past-limit-1", 1_500),
-          TestLLM.textWithUsage("not a summary", "past-limit-2", 1_500),
+          empty(),
+          empty(),
           TestLLM.text("Past the limit", "past-limit-final"),
         )
 
@@ -10081,8 +10075,8 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
 
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("## Objective")
-    expect(userTexts(s.requests[2])[0]).toContain("<summary>\n## Objective\n- Keep going\n</summary>")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("<handoff>")
+    expect(userTexts(s.requests[2])[0]).toContain("## Objective\n- Keep going")
     const context = yield* s.context
     expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
     expect(context.some((message) => message.type === "compaction")).toBe(true)
@@ -10603,7 +10597,11 @@ describe("context accounting", () => {
       { reason: { normalized: "tool-calls" }, usage: measured(input) },
       LLMEvent.toolCall({ id, name, input: { text: id } }),
     )
-  const summaryFails = () => [LLMEvent.providerError({ message: "summary unavailable" })]
+  // A failed summary is the first request and its fallback, both refused.
+  const summaryFails = () => [
+    [LLMEvent.providerError({ message: "summary unavailable" })],
+    [LLMEvent.providerError({ message: "summary unavailable" })],
+  ]
   const summary = (text: string) => TestLLM.text(`## Objective\n- ${text}`, `summary-${text.length}`)
   const lengthStop = (id: string, text: string) =>
     TestLLM.complete(
@@ -10649,11 +10647,11 @@ describe("context accounting", () => {
   ) =>
     s.llm.push(
       toolWithUsage("c1", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c2", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c3", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c4", 185_000, fourth),
       last,
     )
@@ -10745,13 +10743,14 @@ describe("context accounting", () => {
     yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "failed-first", 185_000))
     yield* s.runPrompt("Earlier question")
     s.requests.length = 0
-    yield* s.llm.push(summaryFails(), TestLLM.text("Answered anyway", "failed-final"))
+    yield* s.llm.push(...summaryFails(), TestLLM.text("Answered anyway", "failed-final"))
     const exit = yield* s.runPrompt("Next question").pipe(Effect.exit)
 
     expect(Exit.isSuccess(exit)).toBe(true)
     expect(yield* compactions(s)).toMatchObject([{ status: "failed", reason: "auto" }])
-    expect(s.requests).toHaveLength(2)
-    expect(userTexts(s.requests[1])).toContain("Earlier question")
+    // The summary request, its fallback, and the answer.
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[2])).toContain("Earlier question")
     expect((yield* s.context).at(-1)).toMatchObject(
       Expected.assistant({ finish: "stop" }, [Expected.text("Answered anyway")]),
     )
@@ -10781,8 +10780,9 @@ describe("context accounting", () => {
       expect(Exit.isSuccess(exit)).toBe(true)
       // The pause is logged once, when the third failure trips it.
       expect(pauseWarnings).toHaveLength(1)
-      // One request per step, plus one summary request for each of steps two to four; step five sends no summary.
-      expect(s.requests).toHaveLength(8)
+      // One request per step, plus a summary request and its fallback for each of steps two to four; step five
+      // sends no summary.
+      expect(s.requests).toHaveLength(11)
       expect(yield* compactions(s)).toMatchObject([
         { status: "failed", reason: "auto" },
         { status: "failed", reason: "auto" },
@@ -10819,8 +10819,8 @@ describe("context accounting", () => {
     yield* Deferred.succeed(held.release, undefined)
     yield* Fiber.join(run)
 
-    expect(s.requests).toHaveLength(8)
-    expect(userTexts(s.requests[7])).toContain("Steered into the turn")
+    expect(s.requests).toHaveLength(11)
+    expect(userTexts(s.requests[10])).toContain("Steered into the turn")
     expect(yield* compactions(s)).toHaveLength(3)
   })
 
@@ -10842,17 +10842,17 @@ describe("context accounting", () => {
   scenario("counts only consecutive failures: a completed compaction clears them", function* (s) {
     yield* s.llm.push(
       toolWithUsage("c1", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c2", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c3", 185_000),
       summary("clears"),
       toolWithUsage("c4", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c5", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c6", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       TestLLM.textWithUsage("Done", "clears-done", 185_000),
     )
     yield* s.runPrompt("Start")
@@ -10870,17 +10870,17 @@ describe("context accounting", () => {
   scenario("clears the failures when a compaction after an overflow completes", function* (s) {
     yield* s.llm.push(
       toolWithUsage("c1", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c2", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
       summary("overflow"),
       toolWithUsage("c3", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c4", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       toolWithUsage("c5", 185_000),
-      summaryFails(),
+      ...summaryFails(),
       TestLLM.textWithUsage("Done", "overflow-done", 185_000),
     )
     yield* s.runPrompt("Start")
@@ -10904,7 +10904,7 @@ describe("context accounting", () => {
 
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("prompt too long")
-    expect(s.requests).toHaveLength(8)
+    expect(s.requests).toHaveLength(11)
     expect(yield* compactions(s)).toHaveLength(3)
   })
 
@@ -10957,7 +10957,7 @@ describe("context accounting", () => {
     yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "failed-retry-first", 30_000))
     yield* s.runPrompt("Earlier question")
     s.requests.length = 0
-    yield* s.llm.push(summaryFails(), Stream.fail(incompleteStream()))
+    yield* s.llm.push(...summaryFails(), Stream.fail(incompleteStream()))
     yield* s.llm.push(TestLLM.text("Recovered", "failed-retry-done"))
     yield* s.admit("Next question")
 
@@ -10968,7 +10968,7 @@ describe("context accounting", () => {
     yield* Fiber.join(run)
 
     expect(yield* compactions(s)).toMatchObject([{ status: "failed", reason: "auto" }])
-    expect(s.requests).toHaveLength(3)
+    expect(s.requests).toHaveLength(4)
   })
 
   scenario("does not compact again when an incomplete stream continues the same request", function* (s) {
@@ -11291,7 +11291,7 @@ describe("context accounting", () => {
   scenario("records a failed automatic compaction before the response it did not prevent", function* (s) {
     yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "order-first", 185_000))
     yield* s.runPrompt("Earlier question")
-    yield* s.llm.push(summaryFails(), TestLLM.text("Answered anyway", "order-final"))
+    yield* s.llm.push(...summaryFails(), TestLLM.text("Answered anyway", "order-final"))
     yield* s.runPrompt("Next question")
 
     const all = yield* s.messages

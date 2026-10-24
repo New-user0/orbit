@@ -206,6 +206,7 @@ const layer = Layer.effect(
                         agent: selected.agent,
                         tools: selected.tools,
                         model,
+                        unreasoned: context.unreasoned(selected.session, model),
                         initial: history.initial,
                         messages: history.messages,
                       },
