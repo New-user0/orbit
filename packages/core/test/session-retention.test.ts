@@ -815,6 +815,34 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
   )
 })
 
+// Class 7: a folder that cannot be removed costs only itself. A folder inside it without write permission keeps its
+// files, which POSIX enforces for a user who is not root (Windows removes it anyway, so the row runs there only).
+describe.skipIf(process.platform === "win32")("SessionRetention.prune: a folder that cannot be removed", () => {
+  it.live("keeps the record of a folder it could not remove and removes the others", () =>
+    scenario((l) =>
+      Effect.gen(function* () {
+        const logged: string[] = []
+        const locked = path.join(l.outputs, "ses_ret_stuck", "inner")
+        yield* folder(locked)
+        yield* folder(path.join(l.outputs, "ses_ret_freed"))
+        yield* removedEarlier("ses_ret_stuck", "ses_ret_freed")
+        yield* Effect.promise(() => fs.chmod(locked, 0o500))
+
+        yield* prune({ days: 30, now: later() }).pipe(
+          logging(logged),
+          Effect.ensuring(Effect.promise(() => fs.chmod(locked, 0o700))),
+        )
+
+        expect(yield* exists(path.join(locked, "keep.txt"))).toBe(true)
+        expect(yield* exists(path.join(l.outputs, "ses_ret_freed"))).toBe(false)
+        expect(logged).toEqual(["session retention could not remove some entries"])
+        // The folder is still there, so its record waits for a later pass; the other one's record goes.
+        expect(yield* records).toEqual(["ses_ret_stuck"])
+      }),
+    ),
+  )
+})
+
 describe("SessionRetention.prune: stats", () => {
   // The reference keeps its usage history in a stats cache when transcripts age out; Orbit folds a family into an archive
   // before removing it, so `orb stats` reads the same before and after. A tool's median duration comes from live rows
