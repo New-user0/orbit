@@ -97,15 +97,27 @@ export const Plugin = {
                 })
                 // Notebooks skip the formatter: reformatting JSON would rewrite every line of the file.
                 yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.notebook_path, original)
-                const result = yield* fileMutation.write({ target, content: after })
-                yield* ledger.recordWrite(context.sessionID, target.absolute, {
-                  ...(yield* FileMutation.readSnapshot(environment.files, target.absolute)),
-                  place: FileAccess.realPlace(target),
-                })
-                return {
-                  files: [fileDiff(result.resource, original.text, after)],
-                  cells: NonNegativeInt.make(next.cells.length),
-                }
+                return yield* Effect.gen(function* () {
+                  const result = yield* fileMutation.write({ target, content: after })
+                  yield* ledger.recordWrite(context.sessionID, target.absolute, {
+                    ...(yield* FileMutation.readSnapshot(environment.files, target.absolute)),
+                    place: FileAccess.realPlace(target),
+                  })
+                  return {
+                    files: [fileDiff(result.resource, original.text, after)],
+                    cells: NonNegativeInt.make(next.cells.length),
+                  }
+                }).pipe(
+                  // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
+                  Effect.mapError(
+                    (error) =>
+                      new ToolFailure({
+                        message: `Unable to edit ${input.notebook_path}`,
+                        error,
+                        metadata: { files: [{ file: target.resource }] },
+                      }),
+                  ),
+                )
               }).pipe(fileMutation.withLock([target.absolute]))
             }).pipe(
               Effect.map((output) => ({
