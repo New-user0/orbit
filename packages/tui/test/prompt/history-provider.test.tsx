@@ -98,6 +98,28 @@ test("keeps an image and a large paste in memory but saves neither", async () =>
   }
 })
 
+// An interrupted prompt that goes back into the input drops the entry it added, so Up does not offer it twice; any
+// other newest entry stays.
+test("forgets the newest entry only when it is the given prompt, in memory and on disk", async () => {
+  await using tmp = await tmpdir()
+  const setup = await renderHistory(tmp.path)
+  try {
+    setup.history.append({ text: "first", files: [], agents: [], pasted: [] })
+    setup.history.append({ text: "interrupted", files: [], agents: [], pasted: [] })
+
+    setup.history.forget("first")
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["first", "interrupted"])
+
+    setup.history.forget("interrupted")
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["first"])
+    expect(setup.history.move(-1, "")?.text).toBe("first")
+    const saved = await savedHistory(tmp.path, (text) => texts(text).join() === "first")
+    expect(texts(saved)).toEqual(["first"])
+  } finally {
+    setup.app.renderer.destroy()
+  }
+})
+
 async function renderHistory(root: string, persisted?: string, historyLimit?: number) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })

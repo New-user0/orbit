@@ -14,6 +14,7 @@ import { assistantFooterStory } from "./assistant-footer"
 import { agentCreateStory } from "./agent-create"
 import { ideStory } from "./ide"
 import { todosStory } from "./todos"
+import { rewindStory } from "./rewind"
 
 /**
  * A story is a full-screen, fixture-driven simulation of a real production component. Stories own
@@ -38,6 +39,7 @@ const stories: Story[] = [
   ideStory,
   todosStory,
   agentCreateStory,
+  rewindStory,
 ]
 
 function Commands(props: { context: Plugin.Context }) {

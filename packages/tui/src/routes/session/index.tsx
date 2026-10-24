@@ -77,7 +77,9 @@ import { useToast } from "../../ui/toast"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
 import { projectedPromptInput } from "../../prompt/codec"
-import { appendPrompt } from "../../prompt/history"
+import { appendPrompt, usePromptHistory } from "../../prompt/history"
+import { useLog } from "../../context/log"
+import { DialogRewind, type RewindDryRun, type RewindOption } from "./dialog-rewind"
 import { deduplicateVisibleImages } from "../../prompt/attachment"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
@@ -172,6 +174,8 @@ export function Session(props: {
   const config = configState.data
   const theme = useTheme()
   const promptRef = usePromptRef()
+  const promptHistory = usePromptHistory()
+  const log = useLog({ component: "session" })
   const session = createMemo(() => data.session.get(route.sessionID))
   const messages = () => data.session.message.list(route.sessionID)
   const messageIndexes = createMemo(() => new Map(messages().map((message, index) => [message.id, index])))
@@ -693,6 +697,89 @@ export function Session(props: {
         footerHints={[{ title: "steer", label: "enter" }]}
       />
     ))
+  // The rewind picker (/rewind, /checkpoint, Esc twice, the message dialog). It sends only this session's ID and a
+  // message ID read from its own message list; the server resolves the folder and decides trust when it acts.
+  const rewindPrompts = () =>
+    messagesBeforeRevert().flatMap((message) =>
+      message.type === "user" && !pendingDeliveries().has(message.id)
+        ? [{ id: message.id, text: message.text, created: message.time.created }]
+        : [],
+    )
+  const rewindStats = (messageID: string) =>
+    client.api.session
+      .diff({ sessionID: route.sessionID, from: messageID, scope: "prompt", context: 0 })
+      .catch((error) => {
+        log.warn("rewind stats failed", { messageID, error: errorMessage(error) })
+        throw error
+      })
+  const rewindDryRun = (messageID: string) =>
+    client.api.session.revert.files({ sessionID: route.sessionID, messageID, dryRun: true }).catch((error) => {
+      log.warn("rewind dry run failed", { messageID, error: errorMessage(error) })
+      return undefined
+    })
+  const refill = (messageID: string) => {
+    const message = data.session.message.get(route.sessionID, messageID)
+    if (message?.type !== "user") return
+    prompt()?.set({ ...projectedPromptInput(message), pasted: [] })
+    return message
+  }
+  const rewind = async (option: RewindOption, messageID: string) => {
+    const sessionID = route.sessionID
+    await client.api.session.interrupt({ sessionID })
+    await client.api.session.wait({ sessionID })
+    if (option === "code") {
+      await client.api.session.revert.files({ sessionID, messageID })
+      return
+    }
+    await client.api.session.revert.stage({
+      sessionID,
+      messageID,
+      files: option === "conversation" ? false : undefined,
+    })
+    refill(messageID)
+  }
+  const openRewind = (preselected?: string, checked?: RewindDryRun) =>
+    dialog.replace(() => (
+      <DialogRewind
+        prompts={rewindPrompts()}
+        stats={rewindStats}
+        dryRun={(messageID) =>
+          checked && messageID === preselected ? Promise.resolve(checked) : rewindDryRun(messageID)
+        }
+        act={rewind}
+        onClose={() => dialog.clear()}
+        preselected={preselected}
+      />
+    ))
+  /** Whether nothing a person would miss follows the prompt: no prompt, and no reply with text or a tool call. */
+  const onlyEmptyAfter = (messageID: string) => {
+    const list = messagesBeforeRevert()
+    const index = list.findIndex((message) => message.id === messageID)
+    return index !== -1 && !list.slice(index + 1).some(meaningful)
+  }
+  // The message dialog's Rewind: a prompt followed only by empty replies, whose code rewind would change no file, goes
+  // straight back into the input; any other opens the picker on its confirm step.
+  const rewindMessage = async (messageID: string) => {
+    if (!onlyEmptyAfter(messageID)) return openRewind(messageID)
+    const checked = await rewindDryRun(messageID)
+    if (checked?.canRewind && checked.filesChanged?.length) return openRewind(messageID, checked)
+    dialog.clear()
+    await rewind("conversation", messageID).catch((error) =>
+      toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }),
+    )
+  }
+  // An interrupt of the newest prompt before its reply held anything puts that prompt back in the input, when nothing
+  // was typed or waits in the inbox. Files are never part of it.
+  const rewindInterrupted = async () => {
+    const sessionID = route.sessionID
+    await client.api.session.wait({ sessionID })
+    if (prompt()?.current.text || pendingUsers().length) return
+    const last = messagesBeforeRevert().findLast((message) => message.type === "user")
+    if (!last || !onlyEmptyAfter(last.id)) return
+    await client.api.session.revert.stage({ sessionID, messageID: last.id, files: false })
+    const message = refill(last.id)
+    if (message) promptHistory.forget(message.text)
+  }
   const unavailable = (feature: string) => {
     toast.show({ message: `${feature} is not implemented for V2 sessions yet`, variant: "error", duration: 5000 })
     dialog.clear()
@@ -937,11 +1024,7 @@ export function Session(props: {
       slash: { name: "timeline" },
       run: () => {
         dialog.replace(() => (
-          <DialogTimeline
-            sessionID={route.sessionID}
-            onMove={jumpToMessage}
-            setPrompt={(value) => promptRef.current?.set(value)}
-          />
+          <DialogTimeline sessionID={route.sessionID} onMove={jumpToMessage} onRewind={rewindMessage} />
         ))
       },
     },
@@ -1025,6 +1108,13 @@ export function Session(props: {
         })().catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
         dialog.clear()
       },
+    },
+    {
+      title: "Rewind",
+      id: "session.rewind",
+      group: "Session",
+      slash: { name: "rewind", aliases: ["checkpoint"] },
+      run: () => openRewind(),
     },
     {
       title: "Redo",
@@ -1391,6 +1481,7 @@ export function Session(props: {
         config,
         mutatePending,
         pendingDelivery: (inboxID) => pendingDeliveries().get(inboxID),
+        rewind: rewindMessage,
       }}
     >
       <box flexDirection="row" flexGrow={1} minHeight={0}>
@@ -1532,6 +1623,14 @@ export function Session(props: {
                       if (!next) return false
                       return mutatePending("steer", next.id)
                     }}
+                    rewind={{
+                      ready: () => pendingUsers().length === 0 && messages().length > 0,
+                      open: () => openRewind(),
+                      interrupted: () =>
+                        void rewindInterrupted().catch((error) =>
+                          toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }),
+                        ),
+                    }}
                     sessionID={route.sessionID}
                   />
                 </Match>
@@ -1542,6 +1641,16 @@ export function Session(props: {
       </box>
     </context.Provider>
   )
+}
+
+/**
+ * Whether a message is one a person would miss after a rewind: a prompt, shell command or skill, or a reply holding
+ * text or a tool call. Notices, switches, idle markers and replies with nothing in them are not.
+ */
+function meaningful(message: SessionMessageInfo) {
+  if (message.type === "user" || message.type === "shell" || message.type === "skill") return true
+  if (message.type !== "assistant") return false
+  return message.content.some((part) => part.type === "tool" || (part.type === "text" && part.text.trim() !== ""))
 }
 
 type SessionRowViewProps = {
@@ -2220,7 +2329,6 @@ function UserMessage(props: { message: SessionMessageUser }) {
   const delivery = createMemo(() => ctx.pendingDelivery(props.message.id))
   const dialog = useDialog()
   const renderer = useRenderer()
-  const promptRef = usePromptRef()
 
   const updatePendingSteer = async (action: "queue" | "cancel") => {
     if (await ctx.mutatePending(action, props.message.id)) dialog.clear()
@@ -2255,11 +2363,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
               return
             }
             dialog.replace(() => (
-              <DialogMessage
-                messageID={props.message.id}
-                sessionID={ctx.sessionID}
-                setPrompt={(value) => promptRef.current?.set(value)}
-              />
+              <DialogMessage messageID={props.message.id} sessionID={ctx.sessionID} onRewind={ctx.rewind} />
             ))
           }}
           paddingLeft={1}
