@@ -808,8 +808,7 @@ sessions, stay where they are; delete them by hand if you no longer need them.
 
 **Affects:** everyone who keeps sessions for longer than 30 days without changing them.
 
-**What to do:** set `cleanup_period_days` to a larger number in your own config to keep sessions longer, or share a
-session you want to keep.
+**What to do:** set `cleanup_period_days` to a larger number in your own config to keep sessions longer.
 
 ## Clients
 

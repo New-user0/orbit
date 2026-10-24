@@ -250,6 +250,7 @@ const layer = Layer.effect(
           WHERE message.session_id IN ${ids}
             AND message.type = 'assistant'
             AND (session.fork_session_id IS NULL OR message.time_created >= session.time_created)
+            AND content.type = 'object'
             AND json_extract(content.value, '$.type') = 'tool'
           ORDER BY message.time_created, message.seq, content.key
         `,
@@ -412,6 +413,7 @@ const layer = Layer.effect(
           FROM ${SessionMessageTable} AS message,
             json_each(CASE WHEN json_valid(message.data) THEN message.data ELSE '{}' END, '$.content') AS content
           WHERE message.type = 'assistant'
+            AND content.type = 'object'
             AND json_extract(content.value, '$.type') = 'tool'
             AND json_extract(content.value, '$.state.metadata.persisted.session') IS NOT NULL
         `,

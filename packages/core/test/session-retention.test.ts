@@ -437,6 +437,44 @@ describe("SessionRetention.prune", () => {
       }),
     ),
   )
+
+  // Class 7: content that is valid JSON but holds no object where a part belongs (a string or number element, or a
+  // scalar in place of the list) is not a tool part. Both the fold and the folder sweep skip it: the idle family that
+  // holds it is folded and removed, and a live session that holds it does not stop the sweep of another family's folder.
+  for (const [name, data] of [
+    ["a string element", '{"content":["abc"]}'],
+    ["a number element", '{"content":[1]}'],
+    ["a scalar in place of the list", '{"content":"abc"}'],
+  ])
+    it.live(`skips message content with ${name}`, () =>
+      scenario((l) =>
+        Effect.gen(function* () {
+          const now = Date.now()
+          yield* row({ id: "ses_ret_oddidle", updated: now })
+          yield* row({ id: "ses_ret_oddlive", updated: later() - DAY })
+          yield* row({ id: "ses_ret_oddcontrol", updated: now })
+          const database = yield* Database.Service
+          yield* database.db
+            .run(
+              sql`INSERT INTO session_message (id, session_id, seq, type, time_created, time_updated, data)
+                VALUES ('msg_ret_oddidle', 'ses_ret_oddidle', 1, 'assistant', ${now}, ${now}, ${data}),
+                       ('msg_ret_oddlive', 'ses_ret_oddlive', 1, 'assistant', ${now}, ${now}, ${data})`,
+            )
+            .pipe(Effect.orDie)
+          yield* folder(path.join(l.outputs, "ses_ret_oddidle"))
+          yield* folder(path.join(l.outputs, "ses_ret_oddcontrol"))
+          yield* folder(path.join(l.outputs, "ses_ret_oddlive"))
+
+          const pass = yield* prune({ days: 30, now: later() })
+
+          expect(pass.removed.toSorted()).toEqual(["ses_ret_oddcontrol", "ses_ret_oddidle"])
+          expect(yield* remaining).toEqual(["ses_ret_oddlive"])
+          expect(yield* exists(path.join(l.outputs, "ses_ret_oddidle"))).toBe(false)
+          expect(yield* exists(path.join(l.outputs, "ses_ret_oddcontrol"))).toBe(false)
+          expect(yield* exists(path.join(l.outputs, "ses_ret_oddlive", "keep.txt"))).toBe(true)
+        }),
+      ),
+    )
 })
 
 describe("SessionRetention.prune: the order of removal", () => {
