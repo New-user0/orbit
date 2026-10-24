@@ -1,0 +1,437 @@
+// context-memory-11: team memory lives in the repository (`.orbit/team-memory/`), and everyone who works in it reads what
+// is written there, so the file tools refuse to write text that looks like a secret into it, as the reference's write
+// and edit validation does: before any permission question and before anything is written, naming the kinds of secret
+// found and never the text itself. Write scans its whole content, Edit only its replacement (an edit that takes a secret
+// out is never refused), and Patch, Orbit's own spelling of both, what it adds. The scan follows the path, not the
+// `memory.team` switch or trust, as the reference's does: it is the one team behaviour of an untrusted project.
+//
+// The secrets are assembled at run time, so that no file of the repository holds a string a scanner takes for a real one.
+// Every refused row has a control in the same run that writes, so no row passes because nothing is written.
+import fs from "fs/promises"
+import path from "path"
+import { describe, expect } from "bun:test"
+import { Effect, Layer } from "effect"
+import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { ConfigWatch } from "@orbit/core/config/watch"
+import type { ConfigDiscovery } from "@orbit/core/config/discovery"
+import { Environment } from "@orbit/core/environment/index"
+import { FileAccess } from "@orbit/core/file-access"
+import { FileLedger } from "@orbit/core/file-ledger"
+import { FileMutation } from "@orbit/core/file-mutation"
+import { Formatter } from "@orbit/core/formatter"
+import { Location } from "@orbit/core/location"
+import { Permission } from "@orbit/core/permission"
+import { AbsolutePath } from "@orbit/core/schema"
+import { Session } from "@orbit/core/session"
+import { Tool } from "@orbit/core/tool"
+import { EditTool } from "@orbit/core/tool/plugin/edit"
+import { PatchTool } from "@orbit/core/tool/plugin/patch"
+import { WriteTool } from "@orbit/core/tool/plugin/write"
+import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { LayerNode } from "@orbit/util/effect/layer-node"
+import { transformEnvironmentFiles } from "./fixture/environment"
+import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
+import { tmpdirScoped } from "./fixture/tmpdir"
+import { testEffect } from "./lib/effect"
+import { permissionLayer } from "./lib/permission"
+import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+
+// One node per tool, each registered against the real registry, as the tool suites register theirs.
+const writeNode = makeLocationNode({
+  name: "test/team-write",
+  layer: Layer.effectDiscard(registerToolPlugin(WriteTool.Plugin)),
+  deps: [
+    FileLedger.node,
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    Environment.node,
+    Formatter.node,
+    Location.node,
+    Permission.node,
+  ],
+})
+const editNode = makeLocationNode({
+  name: "test/team-edit",
+  layer: Layer.effectDiscard(registerToolPlugin(EditTool.Plugin)),
+  deps: [
+    FileLedger.node,
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    Environment.node,
+    Formatter.node,
+    Location.node,
+    Permission.node,
+  ],
+})
+const patchNode = makeLocationNode({
+  name: "test/team-patch",
+  layer: Layer.effectDiscard(registerToolPlugin(PatchTool.Plugin)),
+  deps: [
+    FileLedger.node,
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    Environment.node,
+    Formatter.node,
+    Location.node,
+    Permission.node,
+  ],
+})
+
+const sessionID = Session.ID.make("ses_team_memory_test")
+const linkType = process.platform === "win32" ? "junction" : "dir"
+const it = testEffect(Layer.empty)
+
+// A key in the shape of a source host's personal access token, and one in the shape of a cloud access key.
+const ALNUM = "aB3dE5gH7jK9mN2pQ4rS6tU8vW0xY1zC"
+const fill = (alphabet: string, length: number) =>
+  Array.from({ length }, (_, index) => alphabet[(index * 7 + 3) % alphabet.length]).join("")
+const pat = ["gh", "p_", fill(ALNUM, 36)].join("")
+const cloud = ["AK", "IA", fill("J2K3L4M5N6P7Q2R3", 16)].join("")
+
+const layout = Effect.gen(function* () {
+  const root = (yield* tmpdirScoped()).path
+  const project = path.join(root, "project")
+  const team = path.join(project, ".orbit", "team-memory")
+  const outside = path.join(root, "outside")
+  yield* Effect.promise(() => Promise.all([team, outside].map((folder) => fs.mkdir(folder, { recursive: true }))))
+  return { root, project, team, outside }
+})
+type Layout = Effect.Success<typeof layout>
+
+// What a call asked and wrote: the permission questions in order, and every file the environment wrote.
+const record = () => {
+  const asked: string[] = []
+  const written: string[] = []
+  const permission = permissionLayer({ assert: (input) => Effect.sync(() => asked.push(input.action)) })
+  return { asked, written, permission }
+}
+
+const withTools = <A, E>(
+  l: Layout,
+  log: ReturnType<typeof record>,
+  body: (registry: Tool.Interface) => Effect.Effect<A, E, Tool.Service>,
+  untrusted = false,
+) =>
+  Effect.gen(function* () {
+    return yield* body(yield* Tool.Service)
+  }).pipe(
+    Effect.provide(
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, FileLedger.node, writeNode, editNode, patchNode]),
+        [
+          FileLedger.node.replace(FileLedger.permissiveLayer),
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              write: (target, content) =>
+                Effect.sync(() => log.written.push(target)).pipe(Effect.andThen(files.write(target, content))),
+            })),
+          ),
+          Location.node.replace(
+            Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(l.project) }))),
+          ),
+          Formatter.node.replace(Layer.mock(Formatter.Service, { file: () => Effect.succeed(false) })),
+          Permission.node.replace(log.permission),
+          ...(untrusted ? untrustedProjectNodes : []),
+        ],
+      ),
+    ),
+  )
+
+const call = (name: "Write" | "Edit" | "Patch", input: Record<string, unknown>, id: string) => ({
+  sessionID,
+  ...toolIdentity,
+  call: { type: "tool-call" as const, id, name, input },
+})
+
+const read = (file: string) =>
+  Effect.promise(() =>
+    fs.readFile(file, "utf8").then(
+      (text) => text,
+      () => undefined,
+    ),
+  )
+
+// A refusal of the scan: a tool error that names the kind of secret and team memory, and holds none of the secret.
+const expectRefused = (result: { readonly status: string }, label: string, secret: string) => {
+  expect(result.status).toBe("error")
+  const shown = JSON.stringify(result)
+  expect(shown).toContain(label)
+  expect(shown.toLowerCase()).toContain("team memory")
+  expect(shown).not.toContain(secret)
+}
+
+describe("a Write into team memory", () => {
+  it.live("refuses a fake key in a Write into team memory before any question", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const log = record()
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const refused = yield* executeTool(
+            registry,
+            call("Write", { file_path: ".orbit/team-memory/deploy.md", content: `Deploy with ${pat}\n` }, "w1"),
+          )
+          const askedAfterRefusal = [...log.asked]
+          // The controls: the same text outside the team folder, and clean text inside it, are written.
+          const outside = yield* executeTool(
+            registry,
+            call("Write", { file_path: "notes/deploy.md", content: `Deploy with ${pat}\n` }, "w2"),
+          )
+          const clean = yield* executeTool(
+            registry,
+            call("Write", { file_path: ".orbit/team-memory/testing.md", content: "Tests hit a real database.\n" }, "w3"),
+          )
+          return { refused, askedAfterRefusal, outside, clean }
+        }),
+      )
+      expectRefused(out.refused, "GitHub PAT", pat)
+      expect(out.askedAfterRefusal).toEqual([])
+      expect(yield* read(path.join(l.team, "deploy.md"))).toBeUndefined()
+      expect(log.written.filter((file) => file.endsWith("deploy.md") && file.includes("team-memory"))).toEqual([])
+      expect(out.outside.status).toBe("completed")
+      expect(out.clean.status).toBe("completed")
+      expect(yield* read(path.join(l.team, "testing.md"))).toBe("Tests hit a real database.\n")
+    }),
+  )
+
+  it.live("names every kind of secret it found, once each", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const log = record()
+      const result = yield* withTools(l, log, (registry) =>
+        executeTool(
+          registry,
+          call("Write", { file_path: ".orbit/team-memory/keys.md", content: `${pat}\n${cloud}\n${pat}\n` }, "w1"),
+        ),
+      )
+      expectRefused(result, "GitHub PAT", pat)
+      const shown = JSON.stringify(result)
+      expect(shown).toContain("AWS Access Token")
+      expect(shown).not.toContain(cloud)
+      expect(shown.split("GitHub PAT").length).toBe(2)
+      expect(log.asked).toEqual([])
+    }),
+  )
+
+  // Spellings the file tools accept for one place: each lands in the team folder and is scanned. A sibling whose name
+  // only starts the same, and a `..` back out of the folder, are not in it, and are written.
+  it.live("refuses a fake key by every spelling of the team folder", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const log = record()
+      const spellings = [
+        ".orbit/team-memory/a.md",
+        "./.orbit/x/../team-memory/b.md",
+        path.join(l.team, "c.md"),
+        ...(process.platform === "win32"
+          ? [".ORBIT\\TEAM-MEMORY\\d.md", path.join(l.team, "e.md").replaceAll("\\", "/")]
+          : []),
+      ]
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const refused = yield* Effect.forEach(spellings, (file, index) =>
+            executeTool(registry, call("Write", { file_path: file, content: `key ${pat}\n` }, `s${index}`)),
+          )
+          const sibling = yield* executeTool(
+            registry,
+            call("Write", { file_path: ".orbit/team-memory-evil/f.md", content: `key ${pat}\n` }, "sibling"),
+          )
+          const above = yield* executeTool(
+            registry,
+            call("Write", { file_path: ".orbit/team-memory/../g.md", content: `key ${pat}\n` }, "above"),
+          )
+          return { refused, sibling, above }
+        }),
+      )
+      for (const result of out.refused) expectRefused(result, "GitHub PAT", pat)
+      expect(out.sibling.status).toBe("completed")
+      expect(out.above.status).toBe("completed")
+      expect(yield* Effect.promise(() => fs.readdir(l.team))).toEqual([])
+    }),
+  )
+
+  // Class 3: the stricter answer wins. A link elsewhere in the project that leads into the team folder lands the write
+  // there, so it is scanned by where it really goes.
+  it.live("scans a write through a link elsewhere in the project that leads into the team folder", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      yield* Effect.promise(() => fs.symlink(l.team, path.join(l.project, "notes"), linkType))
+      const log = record()
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const refused = yield* executeTool(
+            registry,
+            call("Write", { file_path: "notes/linked.md", content: `key ${pat}\n` }, "l1"),
+          )
+          const clean = yield* executeTool(
+            registry,
+            call("Write", { file_path: "notes/clean.md", content: "clean\n" }, "l2"),
+          )
+          return { refused, clean }
+        }),
+      )
+      expectRefused(out.refused, "GitHub PAT", pat)
+      expect(yield* read(path.join(l.team, "linked.md"))).toBeUndefined()
+      expect(out.clean.status).toBe("completed")
+      expect(yield* read(path.join(l.team, "clean.md"))).toBe("clean\n")
+    }),
+  )
+
+  // The reference's guard follows the path alone. Orbit's does too: an untrusted project, where nothing else of team
+  // memory works, still keeps a secret out of the folder that will be committed. The trusted run is the control.
+  it.live("scans whether or not the project is trusted", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const untrusted = record()
+      const refused = yield* withTools(
+        l,
+        untrusted,
+        (registry) =>
+          Effect.gen(function* () {
+            return {
+              secret: yield* executeTool(
+                registry,
+                call("Write", { file_path: ".orbit/team-memory/u.md", content: `key ${pat}\n` }, "u1"),
+              ),
+              clean: yield* executeTool(
+                registry,
+                call("Write", { file_path: ".orbit/team-memory/v.md", content: "clean\n" }, "u2"),
+              ),
+            }
+          }),
+        true,
+      )
+      const trusted = yield* withTools(l, record(), (registry) =>
+        executeTool(registry, call("Write", { file_path: ".orbit/team-memory/t.md", content: `key ${pat}\n` }, "t1")),
+      )
+      expectRefused(refused.secret, "GitHub PAT", pat)
+      expect(refused.clean.status).toBe("completed")
+      expectRefused(trusted, "GitHub PAT", pat)
+    }),
+  )
+})
+
+describe("an Edit in team memory", () => {
+  // Only the replacement is scanned: an edit that brings a key in is refused, and one that takes a key out is not, even
+  // though the file around it still holds one.
+  it.live("refuses a key in the replacement and lets an edit take one out", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const file = path.join(l.team, "deploy.md")
+      const original = `# Deploy\nold line\nleft over ${cloud}\nremove ${pat}\n`
+      yield* Effect.promise(() => fs.writeFile(file, original))
+      const log = record()
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const refused = yield* executeTool(
+            registry,
+            call(
+              "Edit",
+              { file_path: ".orbit/team-memory/deploy.md", old_string: "old line", new_string: `token ${pat}` },
+              "e1",
+            ),
+          )
+          const askedAfterRefusal = [...log.asked]
+          const unchanged = yield* read(file)
+          const removed = yield* executeTool(
+            registry,
+            call(
+              "Edit",
+              { file_path: ".orbit/team-memory/deploy.md", old_string: `remove ${pat}`, new_string: "removed" },
+              "e2",
+            ),
+          )
+          return { refused, askedAfterRefusal, unchanged, removed }
+        }),
+      )
+      expectRefused(out.refused, "GitHub PAT", pat)
+      expect(out.askedAfterRefusal).toEqual([])
+      expect(out.unchanged).toBe(original)
+      expect(out.removed.status).toBe("completed")
+      expect(yield* read(file)).toBe(`# Deploy\nold line\nleft over ${cloud}\nremoved\n`)
+    }),
+  )
+})
+
+describe("a Patch into team memory", () => {
+  // Patch writes files as Write and Edit do, so its new text is scanned the same way: an added file's content, an update's
+  // added lines, and the whole of a file it moves into the team folder.
+  it.live("refuses a key in an added file, an added line or a file moved into the team folder", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      yield* Effect.promise(async () => {
+        await fs.writeFile(path.join(l.team, "notes.md"), "first\n")
+        await fs.writeFile(path.join(l.project, "carried.md"), `token ${pat}\nkeep\n`)
+      })
+      const log = record()
+      const patch = (body: string) => `*** Begin Patch\n${body}\n*** End Patch`
+      const out = yield* withTools(l, log, (registry) =>
+        Effect.gen(function* () {
+          const added = yield* executeTool(
+            registry,
+            call("Patch", { patchText: patch(`*** Add File: .orbit/team-memory/new.md\n+key ${pat}`) }, "p1"),
+          )
+          const updated = yield* executeTool(
+            registry,
+            call("Patch", { patchText: patch(`*** Update File: .orbit/team-memory/notes.md\n@@\n-first\n+${pat}`) }, "p2"),
+          )
+          const moved = yield* executeTool(
+            registry,
+            call(
+              "Patch",
+              {
+                patchText: patch("*** Update File: carried.md\n*** Move to: .orbit/team-memory/carried.md\n@@\n-keep\n+kept"),
+              },
+              "p3",
+            ),
+          )
+          const askedAfterRefusals = log.asked.filter((action) => action === "Edit")
+          const clean = yield* executeTool(
+            registry,
+            call("Patch", { patchText: patch("*** Add File: .orbit/team-memory/clean.md\n+clean") }, "p4"),
+          )
+          return { added, updated, moved, askedAfterRefusals, clean }
+        }),
+      )
+      expectRefused(out.added, "GitHub PAT", pat)
+      expectRefused(out.updated, "GitHub PAT", pat)
+      expectRefused(out.moved, "GitHub PAT", pat)
+      expect(out.askedAfterRefusals).toEqual([])
+      expect(yield* read(path.join(l.team, "new.md"))).toBeUndefined()
+      expect(yield* read(path.join(l.team, "notes.md"))).toBe("first\n")
+      expect(yield* read(path.join(l.team, "carried.md"))).toBeUndefined()
+      expect(yield* read(path.join(l.project, "carried.md"))).toBe(`token ${pat}\nkeep\n`)
+      expect(out.clean.status).toBe("completed")
+      expect(yield* read(path.join(l.team, "clean.md"))).toBe("clean\n")
+    }),
+  )
+})
+
+// The config watch of a project's `.orbit` folder sees every file below it. A memory write is not config, so it must not
+// reach the reloaders of agents, commands, instructions and plugin sources.
+describe("the config watch of .orbit", () => {
+  it.live("ignores the team memory folder", () =>
+    Effect.sync(() => {
+      const project = path.resolve("team-watch-project")
+      const root = AbsolutePath.make(path.join(project, ".orbit"))
+      const sources: ConfigDiscovery.Sources = {
+        direct: [],
+        local: [],
+        project: [{ path: root, present: true }],
+        compat: [],
+        compatSettings: [],
+      }
+      const watch = Array.from(ConfigWatch.plan(sources).values()).find(
+        (target) => target.path === root && target.type === "directory",
+      )
+      expect(watch).toBeDefined()
+      expect(watch && "ignore" in watch ? watch.ignore : []).toEqual(
+        expect.arrayContaining(["node_modules", ".git", "team-memory", "**/team-memory/**"]),
+      )
+    }),
+  )
+})

@@ -174,3 +174,38 @@ describe("a Read of a memory file while memory is switched off", () => {
     }),
   )
 })
+
+// context-memory-11: the reference's age note covers every file below its memory folder, and its team folder is one of
+// them, so a Read of a team memory file more than a day old starts with the same note while team memory is on. An old
+// project file in the same run is the control that gets none.
+const team = harness([
+  new Document({
+    type: "document",
+    scope: "user",
+    path: AbsolutePath.make(path.resolve("/config/orbit.json")),
+    info: Schema.decodeUnknownSync(Info)({ memory: { team: true } }),
+  }),
+])
+
+// Writes `name` into the team memory folder of the Location's project, last changed `days` ago, and reads it back.
+const readTeam = (name: string, text: string, days: number) =>
+  Effect.gen(function* () {
+    const location = yield* Location.Service
+    yield* Effect.promise(() =>
+      fs.mkdir(path.join(location.project.directory, ".orbit", "team-memory"), { recursive: true }),
+    )
+    return yield* readAged(path.join(".orbit", "team-memory", name), text, days, false)
+  })
+
+describe("a Read of a team memory file", () => {
+  team.live("starts with a note naming the age of a team memory older than a day", () =>
+    Effect.gen(function* () {
+      const text = yield* readTeam("old-team.md", "OLD-TEAM-BODY\n", 47)
+      const outside = yield* readAged("outside-team.md", "OUTSIDE-BODY\n", 47, false)
+      expect(text.startsWith("<system-reminder>\n")).toBe(true)
+      expect(text.slice(0, text.indexOf("</system-reminder>"))).toContain("47 days")
+      expect(text.indexOf("OLD-TEAM-BODY")).toBeGreaterThan(text.indexOf("</system-reminder>"))
+      expect(outside).not.toContain("<system-reminder>")
+    }),
+  )
+})
