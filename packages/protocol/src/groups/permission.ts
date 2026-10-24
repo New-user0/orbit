@@ -6,7 +6,7 @@ import { Project } from "@orbit/schema/project"
 import { Session } from "@orbit/schema/session"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { PermissionNotFoundError, SessionNotFoundError } from "../errors.js"
+import { InvalidRequestError, PermissionNotFoundError, SessionNotFoundError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const makePermissionGroup = <
@@ -119,9 +119,13 @@ export const makePermissionGroup = <
         payload: Schema.Struct({
           decision: Permission.Reply,
           message: Schema.String.pipe(Schema.optional),
+          content: Schema.String.pipe(Schema.optional).annotate({
+            description:
+              "The person's own version of the whole file, for a request marked revisable, given only with a once reply. The server writes it where the request resolved.",
+          }),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, PermissionNotFoundError],
+        error: [SessionNotFoundError, PermissionNotFoundError, InvalidRequestError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

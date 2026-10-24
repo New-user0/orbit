@@ -2315,6 +2315,23 @@ Orbit now reads `fhx` as `Format-Hex` only under PowerShell 7 and `lp` as `Out-P
 
 **What to do:** Write `Format-Hex` in full under Windows PowerShell 5.1 to keep it read-only.
 
+### An Edit or Write approval can be answered with your own version of the file
+
+A pending Edit or Write question now carries `revisable: true`, and it can be answered once with the whole file as you
+want it: `content` on `POST /api/session/:sessionID/permission/:requestID/reply` (and on the SDK's
+`permission.reply`). The reply names no file: the server diffs your text against the file as the question read it,
+records that diff as `files` on `permission.replied` with the question's place, and the tool writes your text where it
+resolved before asking, after the usual check that the file has not changed since. The file's byte order mark is kept.
+An Edit then tells the model that you modified its proposal before approving it. Text equal to the file as it was read
+is taken as a reject. Before, a `content` field was dropped and the proposal was written.
+
+`content` with an `always` or `reject` decision, or on any other question (Patch, NotebookEdit, shell, search, web,
+MCP), is refused with a 400 `InvalidRequestError` whose `field` is `content`, and the question stays pending.
+
+**Affects:** clients and SDK callers that answer approvals; listeners of `permission.replied`.
+
+**What to do:** Nothing. Send `content` only for a request marked `revisable`, with a `once` decision.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -3975,6 +3992,16 @@ naming the program and the full path of the `bin` folder copy that would work.
 **Affects:** people on a machine without ripgrep, such as a fresh Windows install or a CI image that does not ship it.
 
 **What to do:** Install ripgrep so that it is on PATH, or copy the program into Orbit's `bin` folder.
+
+### A Patch diff keeps its indentation
+
+The Patch tool used to strip the indentation that every line of a hunk shared from the diff on its approval question
+and on its result. A client that applied that diff to the file, as VS Code's Open diff does, found that it did not apply
+and warned that the file had changed. The diff is now the file's own, so it applies to the file the question names.
+
+**Affects:** VS Code users who open the diff of a Patch approval, and clients that show a Patch diff.
+
+**What to do:** Nothing. A client that wants the shared indentation removed for display trims it itself.
 
 ## System prompt
 

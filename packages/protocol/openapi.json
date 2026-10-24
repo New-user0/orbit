@@ -9240,7 +9240,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    }
+                  ]
                 }
               }
             }
@@ -9296,6 +9303,17 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "content": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The person's own version of the whole file, for a request marked revisable, given only with a once reply. The server writes it where the request resolved."
                   }
                 },
                 "required": ["decision"],
@@ -18943,6 +18961,9 @@
           },
           "message": {
             "type": "string"
+          },
+          "revisable": {
+            "type": "boolean"
           }
         },
         "required": ["id", "sessionID", "action", "resources"],

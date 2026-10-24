@@ -1761,6 +1761,7 @@ export type PermissionRequest = {
   metadata?: { [x: string]: JsonValue }
   source?: PermissionSource
   message?: string
+  revisable?: boolean
 }
 
 export type PermissionAsked = {
@@ -1778,6 +1779,7 @@ export type PermissionAsked = {
     metadata?: { [x: string]: any }
     source?: PermissionSource
     message?: string
+    revisable?: boolean
   }
 }
 
@@ -1787,7 +1789,19 @@ export type PermissionReplied = {
   metadata?: { [x: string]: any }
   type: "permission.replied"
   location?: LocationRef
-  data: { sessionID: string; requestID: string; reply: PermissionReply }
+  data: {
+    sessionID: string
+    requestID: string
+    reply: PermissionReply
+    files?: Array<{
+      file: string
+      patch: string
+      additions: number
+      deletions: number
+      status: "added" | "deleted" | "modified"
+      place: string
+    }>
+  }
 }
 
 export type PtyCreated = {
@@ -6815,11 +6829,18 @@ export type PermissionReplyInput = {
   readonly decision: {
     readonly decision: "once" | "always" | "reject"
     readonly message?: string | undefined
+    readonly content?: string | undefined
   }["decision"]
   readonly message?: {
     readonly decision: "once" | "always" | "reject"
     readonly message?: string | undefined
+    readonly content?: string | undefined
   }["message"]
+  readonly content?: {
+    readonly decision: "once" | "always" | "reject"
+    readonly message?: string | undefined
+    readonly content?: string | undefined
+  }["content"]
 }
 
 export type PermissionReplyOutput = void
