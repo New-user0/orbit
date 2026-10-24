@@ -37,6 +37,7 @@ import { SessionTurn } from "@orbit/core/session/turn"
 import { SideQuery } from "@orbit/core/side-query"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Tool } from "@orbit/core/tool"
+import { ToolOutput } from "@orbit/core/tool-output"
 import { Event } from "@orbit/schema/event"
 import { Money } from "@orbit/schema/money"
 import { SessionEvent as SessionEventSchema } from "@orbit/schema/session-event"
@@ -127,6 +128,7 @@ const it = testEffect(
         SessionReminders.node,
         InstructionBuiltIns.node,
         PluginHooks.node,
+        ToolOutput.node,
         llmClient,
       ]),
       [

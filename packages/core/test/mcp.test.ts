@@ -50,7 +50,6 @@ import { State } from "@orbit/core/state"
 import { McpTool } from "@orbit/core/tool/mcp"
 import { McpResourceTools } from "@orbit/core/tool/plugin/mcp-resource"
 import { Tool } from "@orbit/core/tool"
-import { ToolOutput } from "@orbit/core/tool-output"
 import { WellKnown } from "@orbit/core/wellknown"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Global } from "@orbit/util/global"
@@ -1776,15 +1775,8 @@ it.live("discovers and reads MCP resources through Code Mode", () =>
       const large = yield* run(
         'const resource = await tools.orbit.read_mcp_resource({ server: "resources", uri: "docs://readme" }); return resource.contents[0].text',
       )
-      const bounded = yield* ToolOutput.Service.use((output) => output.truncate(large)).pipe(
-        Effect.provide(AppNodeBuilder.build(ToolOutput.node)),
-      )
-      expect(bounded.metadata?.truncated).toBe(true)
-      expect(bounded.content[0]).toMatchObject({ type: "text" })
-      const outputPath = bounded.metadata?.outputPath
-      expect(typeof outputPath).toBe("string")
-      if (typeof outputPath !== "string") throw new Error("Missing full resource output")
-      expect(yield* Effect.promise(() => Bun.file(outputPath).text())).toBe("line\n".repeat(20_000))
+      // The tool returns all 100,000 characters; the step saves them to a file above the threshold (tool-runtime-8).
+      expect(large.content).toEqual([{ type: "text", text: "line\n".repeat(20_000) }])
 
       // An empty contents array means the resource exists without content, not that it is missing.
       server.state.contents = []
@@ -3109,6 +3101,16 @@ describe("MCP tool traits", () => {
     ["neither", {}],
   ] as const)("gives no display name for %s", (_, input) => {
     expect(Object.keys(McpTool.traits(tool(input)))).not.toContain("displayName")
+  })
+
+  // tool-runtime-8: as the reference declares for its MCP tool. The 50,000 ceiling makes it 50,000 unless the person raises
+  // `tool_output.max_result_chars`, and no annotation changes it.
+  test.each([
+    ["no annotations", {}],
+    ["a read-only hint", { annotations: { readOnlyHint: true } }],
+  ] as const)("declares 100,000 characters as the result limit with %s", async (_, input) => {
+    expect(McpTool.traits(tool(input)).maxResultChars).toBe(100_000)
+    expect((await resolved(input)).maxResultChars).toBe(100_000)
   })
 
   test("writes out the control and format characters of a title a server chose", () => {
