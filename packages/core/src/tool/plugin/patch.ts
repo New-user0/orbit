@@ -542,10 +542,14 @@ function trimDiff(diff: string) {
 }
 
 // The lines a chunk adds: its new side less one copy of each line on its old side. A context line is on both sides and
-// drops out; a line the chunk holds more often than the file did before is kept.
-const added = (chunk: Patch.UpdateFileChunk) =>
-  chunk.newLines.filter(
-    (line, index) =>
-      chunk.newLines.slice(0, index + 1).filter((other) => other === line).length >
-      chunk.oldLines.filter((other) => other === line).length,
-  )
+// drops out; a line the chunk holds more often than the file did before is kept. Each old line is counted once and spent
+// as the new side reaches its copy, so the work stays linear in the chunk, which every Patch pays.
+const added = (chunk: Patch.UpdateFileChunk) => {
+  const left = new Map<string, number>()
+  chunk.oldLines.forEach((line) => left.set(line, (left.get(line) ?? 0) + 1))
+  return chunk.newLines.filter((line) => {
+    const remaining = (left.get(line) ?? 0) - 1
+    left.set(line, remaining)
+    return remaining < 0
+  })
+}

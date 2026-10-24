@@ -628,6 +628,31 @@ describe("a Patch that takes a key out of team memory", () => {
       expect(yield* read(file)).toBe(`first\n${pat}\nlast\n`)
     }),
   )
+
+  // Every Patch works out what its hunks add, team memory or not, so that work stays linear in the chunk: an ordinary
+  // project file patched through a chunk of 30,000 context lines lands well inside the bound. Counting each line against
+  // the whole chunk again took over ten seconds at this size.
+  it.live("works out what a large chunk adds in linear time", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const file = path.join(l.project, "large.txt")
+      const lines = Array.from({ length: 30_000 }, (_, index) => `line ${index}`)
+      yield* Effect.promise(() => fs.writeFile(file, `${lines.join("\n")}\n`))
+      const body = [...lines.slice(0, -1).map((line) => ` ${line}`), `-${lines.at(-1)}`, "+changed"].join("\n")
+      const started = performance.now()
+      const out = yield* withTools(l, record(), (registry) =>
+        executeTool(
+          registry,
+          call("Patch", { patchText: `*** Begin Patch\n*** Update File: large.txt\n@@\n${body}\n*** End Patch` }, "l1"),
+        ),
+      )
+      const elapsed = performance.now() - started
+      expect(out.status).toBe("completed")
+      expect(yield* read(file)).toBe(`${[...lines.slice(0, -1), "changed"].join("\n")}\n`)
+      expect(elapsed).toBeLessThan(8_000)
+    }),
+    30_000,
+  )
 })
 
 // The config watch of a project's `.orbit` folder sees every file below it. A memory write is not config, so it must not
