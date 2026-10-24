@@ -89,7 +89,7 @@ Built-ins return complete tool responses. `Tool.Snapshot.execute` is the local e
 
 Before each request the runner applies the message budget (`SessionMessageBudget`) to the newest step's results: when together they pass `tool_output.max_message_chars`, the largest are saved through `ToolOutput.persist` and recorded as `session.tool.overridden`, which sets `override` on the projected tool. Lowering renders an override as the same wrapper. A tool that declares `maxResultChars: Infinity` is left out of the budget too.
 
-Producer capture remains local to producers. Shell stores combined process output in its backing file and returns a bounded tail with the full-output path when truncated.
+Producer capture remains local to producers. Shell stores combined process output in its backing file and returns the head of it (`tool_output.max_bytes`, 30,000 bytes unless set). When the output did not fit, the shell tool offers that file to the step through `Shell.offer` and `ToolOutput.adopt`, never through `metadata.persisted`; settling the call links or copies it into the session's folder and marks the result with `parts: 1`, so the wrapper stands for the head and the notices after it are sent as they are.
 
 ## Current Gaps
 

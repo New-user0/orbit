@@ -592,6 +592,55 @@ export type SessionGenerateOperation<E = never> = (
   input: SessionGenerateInput,
 ) => Effect.Effect<SessionGenerateOutput, E>
 
+export type SessionAssistLabelInput = {
+  readonly sessionID: Session.ID
+  readonly messageID: SessionMessage.ID
+  readonly toolCallIDs: readonly [string, ...Array<string>]
+}
+export type SessionAssistLabelOutput =
+  | { readonly label: string }
+  | {
+      readonly label: null
+      readonly reason: "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
+    }
+export type SessionAssistLabelOperation<E = never> = (
+  input: SessionAssistLabelInput,
+) => Effect.Effect<SessionAssistLabelOutput, E>
+
+export type SessionAssistSuggestionInput = { readonly sessionID: Session.ID }
+export type SessionAssistSuggestionOutput =
+  | { readonly suggestion: string }
+  | {
+      readonly suggestion: null
+      readonly reason:
+        | "subagent"
+        | "early_conversation"
+        | "last_response_error"
+        | "cache_cold"
+        | "pending_permission"
+        | "elicitation_active"
+        | "plan_mode"
+        | "busy"
+        | "aborted"
+        | "unavailable"
+        | "empty"
+        | "done"
+        | "meta_text"
+        | "meta_wrapped"
+        | "error_message"
+        | "prefixed_label"
+        | "too_few_words"
+        | "too_many_words"
+        | "too_long"
+        | "multiple_sentences"
+        | "has_formatting"
+        | "evaluative"
+        | "assistant_voice"
+    }
+export type SessionAssistSuggestionOperation<E = never> = (
+  input: SessionAssistSuggestionInput,
+) => Effect.Effect<SessionAssistSuggestionOutput, E>
+
 export type SessionLogInput = {
   readonly sessionID: Session.ID
   readonly after?: Event.Seq | undefined
@@ -1702,6 +1751,10 @@ export interface SessionApi<E = never> {
     }
   }
   readonly generate: SessionGenerateOperation<E>
+  readonly assist: {
+    readonly label: SessionAssistLabelOperation<E>
+    readonly suggestion: SessionAssistSuggestionOperation<E>
+  }
   readonly log: SessionLogOperation<E>
   readonly interrupt: SessionInterruptOperation<E>
   readonly background: SessionBackgroundOperation<E>

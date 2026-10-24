@@ -45,6 +45,10 @@ export type RunCommandInput = {
   partial?: boolean
   /** With the text format: tool output bodies and a usage line per step. */
   verbose?: boolean
+  /** With stream input: ask for a label after each finished batch of tool calls (`--tool-labels`). */
+  labels?: boolean
+  /** With stream input: ask for a suggestion after each result (`--prompt-suggestions`). */
+  suggestions?: boolean
   /** `--input-format stream-json`: standard input is a stream of JSON inputs, answered with the envelope of lines. */
   stream?: boolean
 }
@@ -207,6 +211,8 @@ async function execute(
       variant,
       thinking: input.thinking ?? false,
       partial: input.partial,
+      labels: input.labels,
+      suggestions: input.suggestions,
       jsonSchema: input.jsonSchema,
       turn,
       auto: input.auto ?? false,
