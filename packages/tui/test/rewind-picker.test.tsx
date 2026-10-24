@@ -165,17 +165,25 @@ test.each(options)("$option acts through its route and closes the picker", async
   expect(linesWith(frame, "Rename the helper")).toBe(row.refilled ? 2 : 1)
 })
 
+// The server answers no dry run while the session runs (409), so choosing a prompt stops the session first; the code
+// options then reflect the files on disk. The rewind itself interrupts and waits again, in case the session started
+// again meanwhile.
 test("a busy session is interrupted and waited for before the rewind acts", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path, running: true })
   await openPicker(setup)
   await selectPrompt(setup, 2)
-  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  expect(confirm).toContain("Rewind to just before this prompt:")
+  expect(confirm).toContain("Code only")
   setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
 
   await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
-  expect(setup.actions()).toEqual([
+  expect(setup.sequence()).toEqual([
+    "interrupt",
+    "wait",
+    "dry run msg_0003",
     "interrupt",
     "wait",
     `stage ${JSON.stringify({ messageID: "msg_0003", files: false })}`,

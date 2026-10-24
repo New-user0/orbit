@@ -86,7 +86,10 @@ export async function rewindApp(input: {
   height?: number
   state: string
   messages?: unknown[]
-  /** The session is running: `/api/session/active` names it. */
+  /**
+   * The session is running: `/api/session/active` names it and, as the real server does, a dry run is refused with 409
+   * until a wait has seen the session stop.
+   */
   running?: boolean
   /** Answers a request before the defaults; `undefined` falls through. A promise holds the answer until it settles. */
   answer?: (request: Recorded) => Response | Promise<Response> | undefined
@@ -94,6 +97,7 @@ export async function rewindApp(input: {
   revert?: string
 }) {
   const requests: Recorded[] = []
+  let running = !!input.running
   const messages = input.messages ?? conversation
   const setup = await createAppFixture({
     width: input.width ?? 120,
@@ -114,7 +118,7 @@ export async function rewindApp(input: {
       if (answered) return answered
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session/active")
-        return json({ data: input.running ? { [sessionID]: { type: "running" } } : {} })
+        return json({ data: running ? { [sessionID]: { type: "running" } } : {} })
       if (url.pathname === base)
         return json({ data: input.revert ? { ...session, revert: { messageID: input.revert } } : session })
       if (url.pathname === `${base}/message`) return json({ data: [...messages].reverse(), cursor: {} })
@@ -124,13 +128,18 @@ export async function rewindApp(input: {
         return json({ data: url.searchParams.get("scope") === "prompt" ? (promptStats[from] ?? []) : [] })
       }
       if (url.pathname === `${base}/revert/files`) {
+        if (body?.dryRun && running)
+          return json({ _tag: "SessionBusyError", sessionID, message: "Session is busy" }, { status: 409 })
         if (body?.dryRun)
           return json({ data: dryRuns[body.messageID] ?? { canRewind: false, error: "No checkpoint." } })
         return json({ data: { canRewind: true } })
       }
       if (url.pathname === `${base}/revert/stage`) return json({ data: { messageID: body?.messageID, files: [] } })
-      if (url.pathname === `${base}/interrupt`) return json({ interrupted: !!input.running })
-      if (url.pathname === `/api/experimental/session/${sessionID}/wait`) return new Response(null, { status: 204 })
+      if (url.pathname === `${base}/interrupt`) return json({ interrupted: running })
+      if (url.pathname === `/api/experimental/session/${sessionID}/wait`) {
+        running = false
+        return new Response(null, { status: 204 })
+      }
       if (url.pathname === "/api/agent")
         return json({ location, data: [{ id: "build", mode: "primary", hidden: false, permissions: [] }] })
       if (url.pathname === "/api/provider") return json({ location, data: [{ id: "provider", name: "Provider" }] })
@@ -142,15 +151,9 @@ export async function rewindApp(input: {
   return Object.assign(setup, {
     requests,
     /** The requests that change something, in order: interrupts, waits, stages and real (not dry) rewinds. */
-    actions: () =>
-      requests.flatMap((request) => {
-        if (request.path.endsWith("/interrupt")) return ["interrupt"]
-        if (request.path.endsWith("/wait")) return ["wait"]
-        if (request.path.endsWith("/revert/stage")) return [`stage ${JSON.stringify(request.body)}`]
-        if (request.path.endsWith("/revert/files") && !request.body?.dryRun)
-          return [`files ${JSON.stringify(request.body)}`]
-        return []
-      }),
+    actions: () => requests.flatMap(step).filter((action) => !action.startsWith("dry run")),
+    /** `actions()` with each dry run in its place, to pin what comes before it. */
+    sequence: () => requests.flatMap(step),
     dryRunsSent: () =>
       requests.flatMap((request) =>
         request.path.endsWith("/revert/files") && request.body?.dryRun ? [request.body.messageID as string] : [],
@@ -162,6 +165,15 @@ export async function rewindApp(input: {
           : [],
       ),
   })
+}
+
+function step(request: Recorded): string[] {
+  if (request.path.endsWith("/interrupt")) return ["interrupt"]
+  if (request.path.endsWith("/wait")) return ["wait"]
+  if (request.path.endsWith("/revert/stage")) return [`stage ${JSON.stringify(request.body)}`]
+  if (request.path.endsWith("/revert/files") && request.body?.dryRun) return [`dry run ${request.body.messageID}`]
+  if (request.path.endsWith("/revert/files")) return [`files ${JSON.stringify(request.body)}`]
+  return []
 }
 
 /** Polls until `predicate` holds, for up to `ms`; the app renders on its own meanwhile. */

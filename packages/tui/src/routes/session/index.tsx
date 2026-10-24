@@ -712,11 +712,21 @@ export function Session(props: {
         log.warn("rewind stats failed", { messageID, error: errorMessage(error) })
         throw error
       })
-  const rewindDryRun = (messageID: string) =>
-    client.api.session.revert.files({ sessionID: route.sessionID, messageID, dryRun: true }).catch((error) => {
-      log.warn("rewind dry run failed", { messageID, error: errorMessage(error) })
-      return undefined
-    })
+  const stopSession = async (sessionID: string) => {
+    await client.api.session.interrupt({ sessionID })
+    await client.api.session.wait({ sessionID })
+  }
+  // The server refuses a dry run while the session runs (409), so a running session is stopped before it is asked;
+  // otherwise a picker opened during a run could never offer the code options.
+  const rewindDryRun = (messageID: string) => {
+    const sessionID = route.sessionID
+    return (data.session.status(sessionID) === "running" ? stopSession(sessionID) : Promise.resolve())
+      .then(() => client.api.session.revert.files({ sessionID, messageID, dryRun: true }))
+      .catch((error) => {
+        log.warn("rewind dry run failed", { messageID, error: errorMessage(error) })
+        return undefined
+      })
+  }
   const refill = (messageID: string) => {
     const message = data.session.message.get(route.sessionID, messageID)
     if (message?.type !== "user") return
@@ -725,8 +735,7 @@ export function Session(props: {
   }
   const rewind = async (option: RewindOption, messageID: string) => {
     const sessionID = route.sessionID
-    await client.api.session.interrupt({ sessionID })
-    await client.api.session.wait({ sessionID })
+    await stopSession(sessionID)
     if (option === "code") {
       await client.api.session.revert.files({ sessionID, messageID })
       return

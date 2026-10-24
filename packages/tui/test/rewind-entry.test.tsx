@@ -270,6 +270,18 @@ test("a click on a prompt opens the message dialog, whose Rewind opens step 2 fo
   expect(setup.actions()).toEqual([])
 })
 
+// On a running session the message dialog's Rewind stops the session before its dry run, which the server would
+// otherwise refuse, so step 2 still offers the code options.
+test("the message dialog's Rewind on a running session stops it first and offers the code options", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path, running: true })
+  await setup.waitForFrame(loaded)
+  await openFromTimeline(setup, "Rename the helper")
+  const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  expect(confirm).toContain("Rewind to just before this prompt:")
+  expect(setup.sequence()).toEqual(["interrupt", "wait", "dry run msg_0003"])
+})
+
 // A prompt at or after the staged revert's boundary is no longer in the conversation: the message dialog's Rewind
 // closes without asking anything.
 test("the message dialog's Rewind on a prompt a staged revert already took back closes without a dry run", async () => {
