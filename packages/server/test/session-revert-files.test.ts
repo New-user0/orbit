@@ -32,12 +32,15 @@ setDefaultTimeout(60_000)
 
 type Status = "added" | "modified" | "deleted"
 type Recorded = { readonly file: string; readonly status: Status; readonly from?: string }
-type ToolCall = { readonly name: string; readonly files: ReadonlyArray<Recorded> }
+// A failed call records the files it wrote before it failed, as Edit, Write, Patch and NotebookEdit do.
+type ToolCall = { readonly name: string; readonly files: ReadonlyArray<Recorded>; readonly failed?: boolean }
 type Step = {
   readonly tools?: ReadonlyArray<ToolCall>
   readonly edit?: () => Promise<unknown>
   // A step that recorded no checkpoint, as a step does while snapshots cannot be taken.
   readonly unrecorded?: boolean
+  // A start checkpoint stored as given instead of a capture, as a damaged or edited database row holds it.
+  readonly start?: string
 }
 type Turn = { readonly prompt: SessionMessage.ID; readonly steps: ReadonlyArray<Step>; readonly idle: boolean }
 type Body = Record<string, unknown> & { readonly data?: unknown; readonly _tag?: string }
@@ -73,7 +76,7 @@ const setup = (trust: { implicit: boolean } = { implicit: true }) =>
                 assistantMessageID,
                 agent: Agent.defaultID,
                 model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
-                snapshot: before,
+                snapshot: step.start === undefined ? before : Snapshot.ID.make(step.start),
                 started: 0,
               })
               const calls = (step.tools ?? []).map((tool, index) => ({ ...tool, id: `call_${index}` }))
@@ -93,24 +96,35 @@ const setup = (trust: { implicit: boolean } = { implicit: true }) =>
                 })
               }
               if (step.edit) yield* Effect.promise(step.edit)
-              for (const call of calls)
-                yield* bus.publish(SessionEvent.Tool.Success, {
-                  sessionID,
-                  assistantMessageID,
-                  id: call.id,
-                  content: [{ type: "text", text: "done" }],
-                  metadata: {
-                    files: call.files.map((file) => ({
-                      file: file.file,
-                      status: file.status,
-                      additions: 0,
-                      deletions: 0,
-                      patch: "",
-                      ...(file.from === undefined ? {} : { from: file.from }),
-                    })),
-                  },
-                  executed: true,
-                })
+              for (const call of calls) {
+                const metadata = {
+                  files: call.files.map((file) => ({
+                    file: file.file,
+                    status: file.status,
+                    additions: 0,
+                    deletions: 0,
+                    patch: "",
+                    ...(file.from === undefined ? {} : { from: file.from }),
+                  })),
+                }
+                yield* call.failed
+                  ? bus.publish(SessionEvent.Tool.Failed, {
+                      sessionID,
+                      assistantMessageID,
+                      id: call.id,
+                      error: { type: "unknown", message: "failed after writing" },
+                      metadata,
+                      executed: true,
+                    })
+                  : bus.publish(SessionEvent.Tool.Success, {
+                      sessionID,
+                      assistantMessageID,
+                      id: call.id,
+                      content: [{ type: "text", text: "done" }],
+                      metadata,
+                      executed: true,
+                    })
+              }
               const after = step.unrecorded ? undefined : yield* snapshot.capture()
               yield* bus.publish(SessionEvent.Step.Ended, {
                 sessionID,
@@ -663,5 +677,91 @@ it.live("answers a checkpoint git cannot read as failed, and keeps the well-form
     expect(real).toMatchObject({ status: 409, body: { _tag: "RewindFilesError", reason: "failed" } })
     expect((real.body as { message: string }).message).toBe((dry.body?.data as { error: string }).error)
     expect(yield* read(path.join(repo, "tracked.txt"))).toBe("two\n")
+  }),
+)
+
+// A file tool that fails after it wrote (a formatter or a read-back that fails) still names the file in its failed call,
+// so the rewind puts that file back too. The shell's edit in the same step is the control that stays.
+it.live("puts back a file that a file tool wrote before its call failed, and leaves the shell's edit", () =>
+  Effect.gen(function* () {
+    const server = yield* setup()
+    const { repo } = yield* repository({ "tracked.txt": "one\n", "shell.txt": "shell one\n" })
+    const at = (file: string) => path.join(repo, file)
+    const session = yield* server.session(repo)
+    const prompt = yield* session.prompt([
+      {
+        tools: [
+          { name: "Edit", failed: true, files: [{ file: "tracked.txt", status: "modified" }] },
+          { name: "Write", failed: true, files: [{ file: "half.txt", status: "added" }] },
+        ],
+        edit: async () => {
+          await Bun.write(at("tracked.txt"), "two\n")
+          await Bun.write(at("half.txt"), "half\n")
+          await Bun.write(at("shell.txt"), "shell two\n")
+        },
+      },
+    ])
+    expect((yield* session.rewind(prompt)).status).toBe(200)
+    expect({
+      tracked: yield* read(at("tracked.txt")),
+      half: yield* read(at("half.txt")),
+      shell: yield* read(at("shell.txt")),
+    }).toEqual({ tracked: "one\n", half: undefined, shell: "shell two\n" })
+  }),
+)
+
+// A stored start checkpoint that is not a tree ID is no checkpoint, whatever wrote it (class 5): the rewind answers
+// `no-checkpoint` before git starts, and `git diff --output=<file>` never writes the marker.
+it.live("answers a stored start checkpoint that is not a tree ID as no checkpoint, before git", () =>
+  Effect.gen(function* () {
+    const server = yield* setup()
+    const { root, repo } = yield* repository({ "tracked.txt": "one\n" })
+    const marker = path.join(root, "forged.marker")
+    const session = yield* server.session(repo)
+    const prompt = yield* session.prompt([
+      {
+        start: `--output=${marker}`,
+        tools: [edited("tracked.txt")],
+        edit: write(path.join(repo, "tracked.txt"), "two\n"),
+      },
+    ])
+    expect(yield* session.rewind(prompt, true)).toEqual({
+      status: 200,
+      body: { data: { canRewind: false, error: expect.any(String) } },
+    })
+    expect(yield* session.rewind(prompt)).toMatchObject({
+      status: 409,
+      body: { _tag: "RewindFilesError", reason: "no-checkpoint" },
+    })
+    expect({
+      tracked: yield* read(path.join(repo, "tracked.txt")),
+      marker: yield* Effect.promise(() => Bun.file(marker).exists()),
+    }).toEqual({ tracked: "two\n", marker: false })
+  }),
+)
+
+// A recorded name is the call's own (class 5): one that leaves the work tree, or an absolute one in either system's
+// spelling, is dropped before it becomes a path for git, so the prompt's diff still answers with the file it changed.
+it.live("diffs a prompt with scope=prompt when a call recorded a name outside the work tree", () =>
+  Effect.gen(function* () {
+    const server = yield* setup()
+    const { repo } = yield* repository({ "tracked.txt": "one\n" })
+    const session = yield* server.session(repo)
+    const prompt = yield* session.prompt([
+      {
+        tools: [
+          created("a.txt"),
+          { name: "Write", files: [{ file: "../outside.txt", status: "added" }] },
+          { name: "Write", files: [{ file: "/abs.txt", status: "added" }] },
+          { name: "Edit", files: [{ file: "C:\\abs.txt", status: "modified" }] },
+        ],
+        edit: write(path.join(repo, "a.txt"), "a\n"),
+      },
+    ])
+    const diff = yield* server.request("GET", `/api/session/${session.sessionID}/diff?from=${prompt}&scope=prompt`)
+    expect({
+      status: diff.status,
+      files: (diff.body?.data as Array<{ file: string }> | undefined)?.map((file) => file.file),
+    }).toEqual({ status: 200, files: ["a.txt"] })
   }),
 )
