@@ -61,7 +61,8 @@ export const make: Effect.Effect<Runner, never, Session.Service | Job.Service | 
 
 /**
  * However a subagent's run ends, the shell commands its child left running end with it and report to no one. Every run of
- * a subagent job carries it: the one an Agent call starts and the one a restart resumes.
+ * a subagent job carries it: the one an Agent call starts and the one a restart resumes. Stopping them never changes how
+ * the run ended: a child whose folder is gone cannot open its Location, and that defect is logged, not reported.
  */
 export const endsShells =
   (sessions: Session.Interface, childSessionID: Recovery["childSessionID"]) =>
@@ -70,7 +71,9 @@ export const endsShells =
       Effect.ensuring(
         sessions
           .abandonShells(childSessionID)
-          .pipe(Effect.catch((error) => Effect.logWarning("a subagent's shell commands were not stopped", { error }))),
+          .pipe(
+            Effect.catchCause((cause) => Effect.logWarning("a subagent's shell commands were not stopped", { cause })),
+          ),
       ),
     )
 

@@ -269,6 +269,31 @@ describe("ShellTool output cap", () => {
     { timeout: 30_000 },
   )
 
+  // The head that stands for output that did not fit starts at its first line that is not blank and keeps no trailing
+  // space, so the wrapper's preview opens on the output itself; the saved copy keeps every byte. Fails when the head is
+  // sent untrimmed: it then starts with the blank lines and ends in the spaces the 30,000-byte cut fell inside.
+  shellIt.live(
+    "starts the saved head at its first line that is not blank",
+    () =>
+      inFolder(undefined, (registry) =>
+        Effect.gen(function* () {
+          const command = isWindows
+            ? "[Console]::Out.Write([string][char]10 + '  ' + [string][char]10 + 'output-start' + ('x' * 29000) + (' ' * 2000) + 'output-' + 'end')"
+            : "printf '\\n  \\n'; printf output-start; head -c 29000 /dev/zero | tr '\\0' 'x'; head -c 2000 /dev/zero | tr '\\0' ' '; printf 'output-''end'"
+          const result = yield* settled(registry, call({ command }))
+          expect(text(result.outcome)).toBe(`output-start${"x".repeat(29_000)}`)
+          expect(result.persisted).toMatchObject({
+            parts: 1,
+            size: 4 + "output-start".length + 31_000 + "output-end".length,
+          })
+          const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
+          expect(saved).toStartWith("\n  \noutput-start")
+          expect(saved).toEndWith(`${" ".repeat(2_000)}output-end`)
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
   // The control for the small case, which passes on the base.
   shellIt.live(
     "sends output that fits whole",
