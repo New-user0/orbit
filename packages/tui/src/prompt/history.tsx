@@ -238,6 +238,17 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         }
         enqueue(() => appendText(historyPath, line))
       },
+      /** Drops the newest entry when it is `text`: an interrupted prompt that went back into the input. */
+      forget(text: string) {
+        if (store.history.at(-1)?.text !== text) return
+        setStore(
+          produce((draft) => {
+            draft.history.pop()
+            draft.index = 0
+          }),
+        )
+        rewrite(store.history)
+      },
     }
   },
 })

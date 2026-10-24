@@ -94,6 +94,11 @@ export type PromptProps = {
   muted?: boolean
   onSubmit?: () => void
   onEmptySubmit?: () => boolean | Promise<boolean>
+  /**
+   * The session's rewind hooks: Esc pressed twice on an empty prompt opens the picker when `ready` holds and the session
+   * is idle, and a double-Esc interrupt of a running session calls `interrupted` once the server has answered it.
+   */
+  rewind?: { ready: () => boolean; open: () => void; interrupted: () => void }
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -118,6 +123,8 @@ export type PromptRef = {
 
 const DRAFT_RETENTION_MIN_CHARS = 20
 const revealedPromptMetadata = new WeakSet<object>()
+// The window in which a second Esc on an idle session opens the rewind picker.
+const REWIND_ESCAPE_MS = 800
 
 function randomIndex(count: number) {
   if (count <= 0) return 0
@@ -510,6 +517,11 @@ export function Prompt(props: PromptProps) {
     ),
   )
 
+  // Esc on an idle session belongs to the rewind picker only on an empty prompt of a session that has something to
+  // rewind. Shell mode, Vim's insert mode and an open completion take Esc before this command sees it.
+  let lastEscape = 0
+  const rewindReady = () => !!props.rewind?.ready() && store.prompt.text === ""
+
   const promptCommands = createMemo(() =>
     [
       {
@@ -597,7 +609,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         palette: undefined,
-        enabled: status() === "running",
+        enabled: status() === "running" || rewindReady(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -607,6 +619,14 @@ export function Prompt(props: PromptProps) {
             return
           }
           if (!props.sessionID) return
+          if (status() !== "running") {
+            // The first Esc on an idle session arms; a second one within the window opens the rewind picker.
+            const now = Date.now()
+            const armed = now - lastEscape <= REWIND_ESCAPE_MS
+            lastEscape = armed ? 0 : now
+            if (armed) props.rewind?.open()
+            return
+          }
 
           setStore("interrupt", store.interrupt + 1)
 
@@ -615,10 +635,12 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void client.api.session.interrupt({
-              sessionID: props.sessionID,
-              resume: true,
-            })
+            void client.api.session
+              .interrupt({
+                sessionID: props.sessionID,
+                resume: true,
+              })
+              .then(() => props.rewind?.interrupted())
             setStore("interrupt", 0)
           }
           dialog.clear()
