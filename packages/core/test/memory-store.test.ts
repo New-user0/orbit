@@ -14,6 +14,7 @@ import { Document, Info, type Scope } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { MemoryStore } from "@orbit/core/memory/store"
 import { AbsolutePath } from "@orbit/core/schema"
+import { recordedFileSystem } from "./fixture/recorded-fs"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -420,6 +421,51 @@ describe("MemoryStore.scan", () => {
       expect(MemoryStore.manifest(headers)).not.toContain("MARKER-OUTSIDE")
     }),
   )
+
+  // Class 6: resolving a link to a share connects to the host it names. The recorded file system is the oracle: no call
+  // but a readLink may name the link. The plain file beside it is the control.
+  if (process.platform === "win32" && canLinkFile)
+    it.live("does not resolve a link in the folder that leads to a share", () =>
+      Effect.gen(function* () {
+        const folder = (yield* tmpdirScoped()).path
+        const far = path.join(folder, "far.md")
+        yield* Effect.promise(async () => {
+          await write(path.join(folder, "kept.md"), typed("control"), 1_000_000)
+          await fs.symlink("\\\\203.0.113.172\\share\\far.md", far, "file")
+        })
+        const recorded = recordedFileSystem()
+        const started = Date.now()
+        const headers = yield* MemoryStore.scan(folder).pipe(Effect.provide(recorded.layer))
+        expect(Date.now() - started).toBeLessThan(15_000)
+        expect(headers.map((item) => item.file)).toEqual(["kept.md"])
+        const named = recorded.calls.filter((call) => call.toLowerCase().endsWith(` ${far.toLowerCase()}`))
+        expect(named.length).toBeGreaterThan(0)
+        expect(named.filter((call) => !call.startsWith("readLink "))).toEqual([])
+      }),
+    )
+
+  // Class 4: the file read is the real path that was checked, so a link changed after the check cannot point the read
+  // elsewhere. The header still names the file as the folder spells it.
+  if (canLinkFile)
+    it.live("reads a linked memory file at the real path it checked", () =>
+      Effect.gen(function* () {
+        const folder = (yield* tmpdirScoped()).path
+        const alias = path.join(folder, "alias.md")
+        yield* Effect.promise(async () => {
+          await write(path.join(folder, "inside", "target.md"), typed("through the alias"), 1_000_000)
+          await fs.symlink(path.join(folder, "inside", "target.md"), alias)
+        })
+        const recorded = recordedFileSystem()
+        const headers = yield* MemoryStore.scan(folder).pipe(Effect.provide(recorded.layer))
+        expect(headers.find((item) => item.file === "alias.md")).toMatchObject({
+          path: alias,
+          description: "through the alias",
+        })
+        expect(recorded.calls.filter((call) => call.startsWith("readFileString "))).not.toContain(
+          `readFileString ${alias}`,
+        )
+      }),
+    )
 
   // A folder that is itself reached through a link is the person's choice of place: its files are listed.
   it.live("lists the files of a memory folder that is itself a link", () =>

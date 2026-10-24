@@ -161,22 +161,29 @@ export interface Header {
  * The memory files below `folder`, newest first and at most `MAX_SCAN_FILES`, each with the description and type of the
  * front matter in its first `FRONT_MATTER_LINES` lines. Every `MEMORY.md` and every file that is not Markdown is left
  * out, and so is a file whose real path is not in the folder's real path, since a link inside the folder can lead
- * anywhere (class 4). A file that cannot be read is left out; a folder that is not there gives none.
+ * anywhere (class 4), and a link that leads to a share, which is left unresolved (class 6). Each file is read at the real
+ * path that was checked. A file that cannot be read is left out; a folder that is not there gives none.
  */
 export const scan = Effect.fn("MemoryStore.scan")(function* (folder: string) {
   const fs = yield* FSUtil.Service
   const root = yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => undefined))
   if (root === undefined) return []
   const listed = yield* walk(fs, folder, [])
+  // One set of link answers for the whole scan, so the parts above the folder are read once.
+  const reads: LinkShare.Reads = new Map()
   const dated = yield* Effect.forEach(
     listed,
-    (parts) =>
+    (item) =>
       Effect.gen(function* () {
-        const file = path.join(folder, ...parts)
+        const file = path.join(folder, ...item.parts)
+        // A link entry is asked about before it is resolved, since resolving a link to a share connects to its host.
+        if (item.link && (yield* LinkShare.blocked(fs, file, reads))) return []
         const real = yield* fs.realPath(file)
         if (!FSUtil.contains(root, real)) return []
         const info = yield* fs.stat(real)
-        return [{ file: parts.join("/"), path: file, mtimeMs: Option.getOrUndefined(info.mtime)?.getTime() ?? 0 }]
+        return [
+          { file: item.parts.join("/"), path: file, real, mtimeMs: Option.getOrUndefined(info.mtime)?.getTime() ?? 0 },
+        ]
       }).pipe(Effect.orElseSucceed(() => [])),
     { concurrency: 16 },
   )
@@ -186,8 +193,9 @@ export const scan = Effect.fn("MemoryStore.scan")(function* (folder: string) {
     .slice(0, MAX_SCAN_FILES)
   const read = yield* Effect.forEach(
     newest,
+    // The read is of the real path that was checked, not of the spelled one, which a link could lead elsewhere.
     (item) =>
-      fs.readFileString(item.path).pipe(
+      fs.readFileString(item.real).pipe(
         Effect.map((text): Header[] => [
           { ...item, ...frontMatter(text.split("\n").slice(0, FRONT_MATTER_LINES).join("\n")) },
         ]),
@@ -208,18 +216,24 @@ export const scan = Effect.fn("MemoryStore.scan")(function* (folder: string) {
 
 // Folders are entered only when they are folders, not links to one, so a link cannot make the walk loop; a link to a
 // file is listed and then judged by its real path.
-const walk = (fs: FSUtil.Interface, folder: string, parts: string[]): Effect.Effect<string[][]> =>
+const walk = (fs: FSUtil.Interface, folder: string, parts: string[]): Effect.Effect<Listed[]> =>
   fs.readDirectoryEntries(path.join(folder, ...parts)).pipe(
     Effect.orElseSucceed(() => []),
     Effect.flatMap((entries) => Effect.forEach(entries, (entry) => entryFiles(fs, folder, parts, entry))),
     Effect.map((lists) => lists.flat()),
   )
 
+type Listed = { readonly parts: string[]; readonly link: boolean }
+
 // A folder is walked; a Markdown file that is not an index is listed, and so is a link named like one.
 const entryFiles = (fs: FSUtil.Interface, folder: string, parts: string[], entry: FSUtil.DirEntry) =>
   entry.type === "directory"
     ? walk(fs, folder, [...parts, entry.name])
-    : Effect.succeed(memoryFile(entry.name) && entry.type !== "other" ? [[...parts, entry.name]] : [])
+    : Effect.succeed(
+        memoryFile(entry.name) && entry.type !== "other"
+          ? [{ parts: [...parts, entry.name], link: entry.type === "symlink" }]
+          : [],
+      )
 
 const memoryFile = (name: string) => name.toLowerCase().endsWith(".md") && name !== ENTRYPOINT
 
