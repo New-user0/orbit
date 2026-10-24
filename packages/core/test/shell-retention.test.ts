@@ -125,7 +125,9 @@ const evictionEnvironment = (completions: Queue.Queue<Effect.Effect<void>>) =>
                 yield* Fiber.join(fiber).pipe(Effect.orDie)
               }),
             )
-            const output = Stream.succeed(Buffer.from(JSON.stringify(command).includes("big") ? "b".repeat(BIG) : "hello"))
+            // The command's arguments carry its text (a command serialises to no fields of its own).
+            const big = command._tag === "StandardCommand" && command.args.includes("big")
+            const output = Stream.succeed(Buffer.from(big ? "b".repeat(BIG) : "hello"))
             return makeHandle({
               pid: ProcessId(1),
               exitCode: Effect.withFiber((fiber) =>

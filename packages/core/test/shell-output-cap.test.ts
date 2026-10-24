@@ -208,12 +208,6 @@ it.live(
   { timeout: 30_000 },
 )
 
-// What shell-safety-6 adds to the service, typed here so this file compiles before it exists. The builder replaces these
-// views with `Shell.nodeWith`, `shell.background` and `result.capped` once they are real.
-type Seam = { nodeWith: (options: { backgroundLimit: number; watchInterval: Duration.Duration }) => typeof Shell.node }
-type Moving = { background: (id: Shell.ID) => Effect.Effect<void, Shell.NotFoundError> }
-const capped = (result: ShellResult.Result) => (result as ShellResult.Result & { capped?: boolean }).capped
-
 // FU-M3-152. Fails on the base, which has neither the seam nor `background`: nothing watches a command that left the
 // foreground. The flood that stays in the foreground is the control: only a moved command is watched.
 it.live(
@@ -222,16 +216,15 @@ it.live(
     withShell(
       (shell, run) =>
         Effect.gen(function* () {
-          const moving = shell as Shell.Interface & Moving
           const moved = yield* run(floodCommand)
           const foreground = yield* run(floodCommand)
           const quiet = yield* run(smallCommand)
-          yield* moving.background(moved.id)
-          yield* moving.background(quiet.id)
+          yield* shell.background(moved.id)
+          yield* shell.background(quiet.id)
 
           const killed = yield* shell.wait(moved.id).pipe(Effect.timeout(Duration.seconds(20)))
           expect(killed.status).toBe("killed")
-          expect(capped(yield* shell.result(moved))).toBe(true)
+          expect((yield* shell.result(moved)).capped).toBe(true)
           expect((yield* Effect.promise(() => fs.stat(moved.file))).size).toBeGreaterThan(256 * 1024)
 
           expect((yield* shell.get(foreground.id)).status).toBe("running")
@@ -239,11 +232,9 @@ it.live(
 
           const finished = yield* shell.wait(quiet.id).pipe(Effect.timeout(Duration.seconds(20)))
           expect(finished.status).toBe("exited")
-          expect(capped(yield* shell.result(quiet))).toBeUndefined()
+          expect((yield* shell.result(quiet)).capped).toBeUndefined()
         }),
-      {
-        node: (Shell as unknown as Seam).nodeWith({ backgroundLimit: 256 * 1024, watchInterval: Duration.millis(50) }),
-      },
+      { node: Shell.nodeWith({ backgroundLimit: 256 * 1024, watchInterval: Duration.millis(50) }) },
     ),
   { timeout: 60_000 },
 )

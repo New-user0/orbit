@@ -3424,6 +3424,61 @@ Nothing of a failure is saved to a file.
 
 **What to do:** Nothing.
 
+### A shell result keeps the start of the output, and the rest is saved
+
+Before, a shell command's result kept the last 50 KiB and at most 2,000 lines of its output, followed by a line that
+named the full-output file. Now it keeps the first 30,000 bytes (`tool_output.max_bytes`, at most 150,000), cut back
+to a whole character, and `max_lines` is no longer read. When the output is longer, the step links the command's output
+file into the session's tool-output folder (or copies it, cut to 64 MB) and the model gets the `<saved-output>` block
+with the file's size before any cut, its path and a preview of the head; the exit, timeout and signal notices follow
+the block. A command whose exit code reads as a failure is never saved: its text is cut to its first and last 5,000
+characters. The shell declares a 30,000-character result limit, so a head raised past that by `max_bytes` is saved by
+the step like any other result. A background command's completion message and the result of a command you run with
+`!` carry the head too, and a completion message names the output file when the output did not fit. An output file
+that cannot be read is named in the result instead of giving an empty one, and a link planted at its path is not
+followed.
+
+A finished command dropped from memory (after 25 newer ones) no longer deletes its output file when a result did not
+take all of it; the seven-day cleaning removes it later.
+
+**Affects:** people and scripts that read shell results, and people who set `tool_output.max_lines` or `max_bytes`.
+
+**What to do:** Nothing. Remove `max_lines` from your config at your convenience; it is still accepted.
+
+### Background tasks can be turned off
+
+A new setting, `"background_tasks": false`, keeps work in the foreground. The shell tool (Bash or PowerShell) no longer
+offers `run_in_background` and the Agent tool no longer offers `background`; a call that passes either runs in the
+foreground. A shell command still running at its timeout is stopped instead of moving to the background, moving
+running work to the background leaves shell commands where they are, and the tool descriptions drop the background
+guidance. A project's or local value applies only once the folder is trusted.
+
+**Affects:** people who want every command and subagent to finish before the model goes on.
+
+**What to do:** Nothing, unless you want it: set `"background_tasks": false` in your own config.
+
+### A background command is stopped at 5 GB of output, and a subagent's commands end with it
+
+A shell command that has left the foreground, by `run_in_background`, at its timeout or when you moved it, is killed
+once its output file passes 5 GB, checked every five seconds; its completion message starts with a line saying so.
+When the run that an Agent call started ends, whether it finished, failed or was stopped, every shell command the
+subagent still has running is killed and reports nothing to it; a waiting notice of one of them is withdrawn. A later
+call that continues the subagent starts a new run.
+
+**Affects:** people who start long background commands, and subagents that leave servers or watchers running.
+
+**What to do:** Nothing. Start a long-lived server from the main session, not from a subagent, if it must outlive the
+subagent's run.
+
+### A shell timeout written as a string is accepted
+
+The shell tool reads `timeout` written as a decimal string, such as `"5000"`, as that number of milliseconds. Any other
+string, such as `"5s"`, is still invalid input, and the tool's schema still asks for an integer.
+
+**Affects:** models that send numbers as strings.
+
+**What to do:** Nothing.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.

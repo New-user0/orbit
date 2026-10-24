@@ -814,6 +814,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/permission-tool-output.test.ts` (other sessions of a lineage, the flat files of earlier builds, `..`, a sibling
   prefix, a link out, a crafted session ID, Windows letter case) and the `saved tool results` rows of
   `test/session-runner.test.ts`.
+- Shell output files and their saved copies (`Shell.result`, `Shell.offer` and `ToolOutput.adopt`, in
+  `packages/core/src/shell.ts` and `packages/core/src/tool-output.ts`): a command writes its output to
+  `<data>/shell/<project ID>/<shell ID>.out`, Orbit's own folder and outside every sandbox write root, so it reads nothing
+  that a folder supplies. The head read opens the file without following a link (`O_NOFOLLOW`; on Windows an `lstat`
+  refuses anything but a regular file first, and the writer and the 64 MB cut open it the same way), so a link planted at
+  its path is reported like a missing file and nothing is read through it (class 4); a file that cannot be read is named in
+  the result, never read as no output (class 7). A foreground result whose output did not fit offers the file to the step
+  of that call, which links it (or copies it, made only where nothing is) into the session's tool-output folder through
+  the same door and checks as saved tool results above: the same ID shapes (class 5), the same `lstat` on
+  `tool-output` and the session's folder (class 4), and a result sent whole with one log line when anything fails
+  (class 7). Its marker carries `parts: 1`, and lowering ignores a `parts` that does not decode or names more parts than
+  the result has (classes 5 and 7) and escapes the parts after the wrapper like any tool text (class 9).
+  `tool_output.max_bytes` and the new `background_tasks` are withheld in an untrusted folder (class 8). Proof:
+  `test/shell-output-cap.test.ts` (a link planted at the output file, on Linux; a vanished file),
+  `test/tool-shell-output-cap.test.ts` (the linked session folder, a message ID that cannot name a file, a hostile call
+  ID, the 64 MB cut, the withheld keys with trusted controls), `test/tool-output-lowering.test.ts` (the `parts` that do
+  not decode, a look-alike after the wrapper).
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 

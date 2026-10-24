@@ -49,7 +49,16 @@ export const make: Effect.Effect<Runner, never, Session.Service | Job.Service | 
               message.type === "assistant" && message.time.completed !== undefined && message.error === undefined,
           )
           return SubagentCompletion.text(assistant)
-        }),
+        }).pipe(
+          // However the run ends, the shell commands it left running end with it and report to no one.
+          Effect.ensuring(
+            sessions
+              .abandonShells(recovery.childSessionID)
+              .pipe(
+                Effect.catch((error) => Effect.logWarning("a subagent's shell commands were not stopped", { error })),
+              ),
+          ),
+        ),
       }),
     background: Effect.fn("SubagentJob.background")(function* (recovery: Recovery) {
       const info = yield* jobs.background(recovery.childSessionID)

@@ -12,6 +12,7 @@ import { SessionMessage } from "./session/message.js"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { Bus } from "./bus.js"
 import { Instance } from "./instance/service.js"
+import { Shell } from "./shell.js"
 import { Database } from "./database/database.js"
 import { SessionProjector } from "./session/projector.js"
 import { SessionMessageTable } from "./session/sql.js"
@@ -224,6 +225,11 @@ export interface Interface {
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) => Effect.Effect<boolean>
+  /**
+   * Kills every shell command the Session still has running in its Location, for the end of the run that started them:
+   * none of them reports back, and a notice of theirs still waiting in the inbox is cancelled.
+   */
+  readonly abandonShells: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly synthetic: (
     input: Parameters<Session.Handle["synthetic"]>[0] & { sessionID: SessionSchema.ID },
   ) => ReturnType<Session.Handle["synthetic"]>
@@ -500,6 +506,23 @@ const layer = Layer.effect(
       resume: (sessionID) => sessions.forSession(sessionID).resume(),
       synthetic: (input) => sessions.forSession(input.sessionID).synthetic(input),
       interrupt: (sessionID, options) => sessions.forSession(sessionID).interrupt(options),
+      abandonShells: Effect.fn("Session.abandonShells")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        const shell = yield* Shell.Service.pipe(instances.provide(session))
+        const abandoned = new Set<string>(yield* shell.abandon(sessionID))
+        if (abandoned.size === 0) return
+        const pending = (yield* result.inbox(sessionID)).filter(
+          (item) =>
+            item.type === "synthetic" &&
+            item.payload.metadata?.source === "shell" &&
+            abandoned.has(String(item.payload.metadata.shellID)),
+        )
+        yield* Effect.forEach(
+          pending,
+          (item) => result.cancelInbox({ sessionID, inboxID: item.id }).pipe(Effect.ignore),
+          { discard: true },
+        )
+      }),
       revert: {
         stage: (input) => sessions.forSession(input.sessionID).revert.stage(input),
         clear: (sessionID) => sessions.forSession(sessionID).revert.clear(),

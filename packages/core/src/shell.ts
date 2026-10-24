@@ -37,6 +37,17 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.No
 const EXITED_LIMIT = 25
 export const RETENTION = Duration.days(7)
 export const DIRECTORY = "shell"
+/** How many bytes from the start of a command's output its result keeps, unless `tool_output.max_bytes` says otherwise. */
+export const HEAD_BYTES = 30_000
+/** The most bytes that `tool_output.max_bytes` can make a result keep. */
+export const HEAD_CEILING = 150_000
+/** The output size at which a command that left the foreground is killed. */
+export const BACKGROUND_LIMIT = 5 * 1024 ** 3
+const WATCH_INTERVAL = Duration.seconds(5)
+
+/** The number of bytes a result reads from the start of the output, from the `tool_output` setting. */
+export const headLimit = (configured: { readonly max_bytes?: number } | undefined) =>
+  Math.min(configured?.max_bytes ?? HEAD_BYTES, HEAD_CEILING)
 
 // Re-exported so callers of the service can name its records without importing the schema module as well.
 export const ID = Shell.ID
@@ -52,13 +63,19 @@ type Active = {
   info: Info
   file: string
   size: number
-  newlines: number
   // Resolves with the terminal Info once the command exits, times out, or is killed. A wait
   // started after termination resolves immediately from the already-completed deferred.
   done: Deferred.Deferred<Info, NotFoundError>
   timeoutFiber?: Fiber.Fiber<void>
   timeout?: (duration: number) => Effect.Effect<void>
   kill?: Effect.Effect<void>
+  // A result read the whole file, so eviction may delete it; every other file stays for the sweep.
+  whole: boolean
+  watched: boolean
+  // Killed by the size watchdog.
+  capped: boolean
+  // Killed because the run that started it ended, so nothing reports it.
+  abandoned: boolean
 }
 
 /**
@@ -80,8 +97,19 @@ export interface Interface {
   // Resolves once the command reaches a terminal status, returning its final Info. Fails with
   // NotFoundError if the command is unknown or is removed before it terminates.
   readonly wait: (id: Shell.ID) => Effect.Effect<Shell.Info, NotFoundError>
-  // A known shell's terminal state and bounded tail. Missing capture remains distinct from its exit status.
+  // A known shell's terminal state and the head of its output. Missing capture remains distinct from its exit status.
   readonly result: (started: Shell.Info) => Effect.Effect<ShellResult.Result>
+  // Says the command left the foreground: from then on it is killed once its output passes the background limit.
+  readonly background: (id: Shell.ID) => Effect.Effect<void, NotFoundError>
+  // Kills every running command started for this session and marks it abandoned. Returns their IDs.
+  readonly abandon: (sessionID: string) => Effect.Effect<Shell.ID[]>
+  // Hands a finished command's output file to the step that settles the result of this call, as its saved copy.
+  readonly offer: (input: {
+    readonly id: Shell.ID
+    readonly sessionID: string
+    readonly messageID: string
+    readonly callID: string
+  }) => Effect.Effect<void, NotFoundError>
   // Replaces the running command's timeout from now; zero clears it.
   readonly timeout: (id: Shell.ID, duration: number) => Effect.Effect<Shell.Info, NotFoundError>
   readonly output: (id: Shell.ID, input?: Shell.OutputInput) => Effect.Effect<Shell.Output, NotFoundError>
@@ -128,11 +156,21 @@ const cleanupNode = makeGlobalNode({
   deps: [FSUtil.node, Global.node],
 })
 
-const layer = () =>
+type Options = {
+  /** The output size, in bytes, past which a command that left the foreground is killed. */
+  readonly backgroundLimit?: number
+  /** How often that size is checked. */
+  readonly watchInterval?: Duration.Duration
+}
+
+const layer = (options: Options) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
+      const backgroundLimit = options.backgroundLimit ?? BACKGROUND_LIMIT
+      const watchInterval = options.watchInterval ?? WATCH_INTERVAL
       const bus = yield* Bus.Service
+      const toolOutput = yield* ToolOutput.Service
       const location = yield* Location.Service
       const global = yield* Global.Service
       const shell = yield* ShellSelect.Service
@@ -148,7 +186,7 @@ const layer = () =>
 
       const outputDir = path.join(global.data, DIRECTORY, location.project.id)
       const { mkdir, unlink } = yield* Effect.promise(() => import("fs/promises"))
-      const { createWriteStream, createReadStream } = yield* Effect.promise(() => import("fs"))
+      const { createWriteStream, createReadStream, constants } = yield* Effect.promise(() => import("fs"))
       yield* Effect.promise(() => mkdir(outputDir, { recursive: true }))
 
       yield* Effect.addFinalizer(() =>
@@ -169,7 +207,7 @@ const layer = () =>
         return command
       })
 
-      const removeCommand = Effect.fnUntraced(function* (id: Shell.ID) {
+      const removeCommand = Effect.fnUntraced(function* (id: Shell.ID, evicted = false) {
         const command = commands.get(id)
         const index = exitOrder.indexOf(id)
         if (index !== -1) exitOrder.splice(index, 1)
@@ -178,7 +216,9 @@ const layer = () =>
         if (command.timeoutFiber) yield* Fiber.interrupt(command.timeoutFiber)
         // Unblock any wait still pending when the command is removed before it terminated.
         yield* Deferred.fail(command.done, new NotFoundError({ id }))
-        yield* Effect.promise(() => unlink(command.file).catch(() => {}))
+        // Eviction forgets the command but keeps a file that a saved result or a notice may still point at, for the sweep
+        // to remove later. An explicit removal takes the file with it.
+        if (!evicted || command.whole) yield* Effect.promise(() => unlink(command.file).catch(() => {}))
         yield* bus.publish(Shell.Event.Deleted, { id })
       })
 
@@ -244,24 +284,103 @@ const layer = () =>
             Effect.succeed({ ...started, status: "killed" as const, time: { ...started.time, completed: Date.now() } }),
           ),
         )
-        const capture = yield* Effect.gen(function* () {
-          const limits = Config.latest(yield* config.entries(), "tool_output")
-          const maxLines = limits?.max_lines ?? ToolOutput.MAX_LINES
-          const maxBytes = limits?.max_bytes ?? ToolOutput.MAX_BYTES
-          const latest = yield* output(info.id, { cursor: Number.MAX_SAFE_INTEGER })
-          const page = yield* output(info.id, { cursor: Math.max(0, latest.size - maxBytes), limit: maxBytes })
-          const lines = page.output.split("\n")
-          if (page.output.endsWith("\n")) lines.pop()
-          const truncated = latest.size > maxBytes || lines.length > maxLines
-          const text = lines.length > maxLines ? lines.slice(-maxLines).join("\n") : page.output
-          const total = (yield* require(info.id)).newlines + (page.output.endsWith("\n") ? 0 : 1)
-          const shown = Math.min(lines.length, maxLines)
-          const notice = truncated
-            ? `\n\n[showing lines ${total - shown + 1}-${total} of ${total}; full output saved to ${info.file}]`
-            : ""
-          return { output: `${text}${notice}`, truncated }
-        }).pipe(Effect.catchTag("Shell.NotFoundError", () => Effect.succeed(undefined)))
-        return { info, capture }
+        const command = commands.get(info.id)
+        if (!command) return { info, capture: undefined }
+        const head = yield* readHead(command.file, headLimit(Config.latest(yield* config.entries(), "tool_output")))
+        command.whole = head.whole
+        return {
+          info,
+          capture: {
+            // A size kill is said before the output, so its notice opens with it.
+            output: command.capped ? `${ShellResult.sizeNotice(backgroundLimit)}\n\n${head.text}` : head.text,
+            truncated: head.truncated,
+          },
+          ...(command.capped ? { capped: true as const } : {}),
+          ...(command.abandoned ? { abandoned: true as const } : {}),
+        }
+      })
+
+      // The first `limit` bytes of the output file, cut back to a whole character. The file is opened without following a
+      // link, so a link planted at its path is reported like a missing file and never read (class 4), and a file that
+      // cannot be read is named in the text, never shown as no output (class 7).
+      const readHead = (file: string, limit: number) =>
+        Effect.tryPromise({
+          try: async () => {
+            const handle = await ToolOutput.openFile(file, constants.O_RDONLY)
+            try {
+              const size = (await handle.stat()).size
+              const buffer = Buffer.alloc(Math.min(limit, size))
+              const read = (await handle.read(buffer, 0, buffer.length, 0)).bytesRead
+              const whole = read >= size
+              // Streaming decode holds back a character the limit cut in two.
+              return {
+                text: new TextDecoder().decode(buffer.subarray(0, read), { stream: !whole }),
+                whole,
+                truncated: !whole,
+              }
+            } finally {
+              await handle.close()
+            }
+          },
+          catch: (error) => error as NodeJS.ErrnoException,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.succeed({
+              text: `[The output file ${file} could not be read: ${error.code ?? error.message}]`,
+              whole: false,
+              truncated: false,
+            }),
+          ),
+        )
+
+      const background = Effect.fn("Shell.background")(function* (id: Shell.ID) {
+        const command = yield* require(id)
+        if (command.info.status !== "running" || command.watched) return
+        command.watched = true
+        // The bytes the command has written are what reaches the file.
+        const passed = Effect.sync(() => command.info.status === "running" && command.size > backgroundLimit)
+        runFork(
+          Effect.raceFirst(
+            passed.pipe(
+              Effect.delay(watchInterval),
+              Effect.repeat({ until: (over) => over || command.info.status !== "running" }),
+              Effect.flatMap((over) =>
+                over && command.kill
+                  ? Effect.sync(() => {
+                      command.capped = true
+                    }).pipe(Effect.andThen(command.kill))
+                  : Effect.void,
+              ),
+            ),
+            Deferred.await(command.done).pipe(Effect.ignore),
+          ),
+        )
+      })
+
+      const abandon = Effect.fn("Shell.abandon")(function* (sessionID: string) {
+        const owned = Array.from(commands.values()).filter(
+          (command) => command.info.status === "running" && command.info.metadata.sessionID === sessionID,
+        )
+        yield* Effect.forEach(
+          owned,
+          (command) =>
+            Effect.gen(function* () {
+              command.abandoned = true
+              if (command.kill) yield* command.kill
+            }),
+          { discard: true },
+        )
+        return owned.map((command) => command.info.id)
+      })
+
+      const offer = Effect.fn("Shell.offer")(function* (input: Parameters<Interface["offer"]>[0]) {
+        const command = yield* require(input.id)
+        yield* toolOutput.adopt({
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+          callID: input.callID,
+          file: command.file,
+        })
       })
 
       const create = Effect.fn("Shell.create")(function* <E = never, R = never>(
@@ -357,21 +476,28 @@ const layer = () =>
                 }),
                 file,
                 size: 0,
-                newlines: 0,
                 done: Deferred.makeUnsafe<Info, NotFoundError>(),
+                whole: false,
+                watched: false,
+                capped: false,
+                abandoned: false,
               }
               commands.set(id, command)
 
-              const stream = createWriteStream(file)
+              // Never through a link at the path (class 4). The stream hands its flags to `fs.open`, which takes them as a
+              // number; there is no string for O_NOFOLLOW.
+              const stream = createWriteStream(file, {
+                flags: (constants.O_WRONLY |
+                  constants.O_CREAT |
+                  constants.O_TRUNC |
+                  (constants.O_NOFOLLOW ?? 0)) as unknown as string,
+              })
               const outputDone = Latch.makeUnsafe()
               const pump = handle.all.pipe(
                 Stream.runForEach((chunk: Uint8Array) =>
                   Effect.sync(() => {
                     stream.write(chunk)
                     command.size += chunk.length
-                    // Count while streaming so truncation notices never rescan the output file.
-                    for (let index = chunk.indexOf(10); index !== -1; index = chunk.indexOf(10, index + 1))
-                      command.newlines++
                   }),
                 ),
               )
@@ -420,7 +546,7 @@ const layer = () =>
                   while (exitOrder.length > EXITED_LIMIT) {
                     const oldest = exitOrder[0]
                     if (!oldest) break
-                    yield* removeCommand(oldest)
+                    yield* removeCommand(oldest, true)
                   }
                   // Keep exited history data-only. Interrupt last because finish may run on the timeout fiber.
                   const timeoutFiber = command.timeoutFiber
@@ -503,23 +629,41 @@ const layer = () =>
         return command.info
       })
 
-      return Service.of({ create, list, get, wait, result, timeout, output, remove, kill })
+      return Service.of({
+        create,
+        list,
+        get,
+        wait,
+        result,
+        background,
+        abandon,
+        offer,
+        timeout,
+        output,
+        remove,
+        kill,
+      })
     }),
   )
 
-export const node = makeLocationNode({
-  service: Service,
-  layer: layer(),
-  deps: [
-    Bus.node,
-    Location.node,
-    Global.node,
-    ShellSelect.node,
-    Environment.node,
-    PluginHooks.node,
-    SessionEnvironment.node,
-    ManagedPolicy.node,
-    Config.node,
-    cleanupNode,
-  ],
-})
+/** The service with its own size watchdog: the seam for the background limit and how often it is checked. */
+export const nodeWith = (options: Options) =>
+  makeLocationNode({
+    service: Service,
+    layer: layer(options),
+    deps: [
+      Bus.node,
+      Location.node,
+      Global.node,
+      ShellSelect.node,
+      Environment.node,
+      PluginHooks.node,
+      SessionEnvironment.node,
+      ManagedPolicy.node,
+      Config.node,
+      ToolOutput.node,
+      cleanupNode,
+    ],
+  })
+
+export const node = nodeWith({})

@@ -242,26 +242,30 @@ const reported = new Set<string>()
 /**
  * The wrapper for a result the step saved, from its stored marker and content alone: the path is the tool-output folder,
  * the marker's session and its name, so lowering never reads the disk and a replay lowers byte for byte. A marker that
- * does not decode (an imported or forked history can hold anything) is ignored and the result goes as stored (classes 5
- * and 7). Only a marker makes a wrapper, never text that looks like one.
+ * does not decode (an imported or forked history can hold anything), or whose `parts` names more parts than the result
+ * has, is ignored and the result goes as stored (classes 5 and 7). Only a marker makes a wrapper, never text that looks
+ * like one. A marker with `parts` stands for its leading parts: the parts after them follow the wrapper, escaped like
+ * any tool text (class 9).
  */
 const savedOutput = (id: string, state: SessionMessage.ToolStateCompleted, root: string) => {
   if (state.metadata?.persisted === undefined) return undefined
   const persisted = Option.getOrUndefined(decodePersisted(state.metadata.persisted))
   const texts = state.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
-  if (persisted === undefined || texts.length !== state.content.length) {
+  const parts = persisted?.parts ?? texts.length
+  if (persisted === undefined || texts.length !== state.content.length || parts > texts.length) {
     if (!reported.has(id))
       console.warn("a saved tool result's marker does not decode, so the result is sent as stored", { id })
     reported.add(id)
     return undefined
   }
-  const head = ToolOutput.savedPreview(texts)
-  return ToolOutput.wrapper({
+  const head = ToolOutput.savedPreview(texts.slice(0, parts))
+  const wrapper = ToolOutput.wrapper({
     file: path.join(root, persisted.session, persisted.name),
     size: persisted.size,
     preview: neutralizeToolText(head.text),
     more: head.more,
   })
+  return parts === texts.length ? wrapper : `${wrapper}\n${neutralizeToolText(texts.slice(parts).join("\n"))}`
 }
 
 const assistant = (

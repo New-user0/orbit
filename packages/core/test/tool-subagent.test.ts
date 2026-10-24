@@ -1072,6 +1072,68 @@ describe("SubagentTool in Plan mode", () => {
     // A loaded Windows host needs more than the default limit.
     30_000,
   )
+
+  // Class 13. A notice that one of the killed shells left waiting in the child's inbox is withdrawn; the control is a
+  // notice of a shell that is not the child's, which stays. Fails without the inbox step: both notices stay.
+  it.live(
+    "withdraws a waiting notice of a shell killed when its run ends",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+            const sessions = yield* Session.Service
+            const parent = yield* sessions.create({ location, model: parentModel })
+            yield* withSubagent(parent.location)
+            const child = yield* sessions.create({
+              parentID: parent.id,
+              title: "done",
+              agent: Agent.ID.make("reviewer"),
+              model: childModel,
+            })
+            const locations = yield* LocationServiceMap.Service
+            const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+            const shell = yield* Shell.Service.pipe(Effect.provide(locations.get(parent.location)))
+            const childShell = yield* shell.create({
+              shell: ShellSelect.resolve({ priority: "compat" }),
+              command: process.platform === "win32" ? "Start-Sleep -Seconds 60" : "sleep 60",
+              timeout: 0,
+              metadata: { sessionID: child.id },
+            })
+            const notice = (shellID: string) =>
+              sessions.synthetic({
+                sessionID: child.id,
+                text: `<shell id="${shellID}" state="waiting">`,
+                metadata: { source: "shell", shellID },
+                resume: false,
+              })
+            yield* notice(childShell.id)
+            yield* notice("sh_elsewhere")
+
+            yield* executeTool(registry, {
+              sessionID: parent.id,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-child-notice",
+                name: SubagentTool.name,
+                input: { agent: "reviewer", description: "done", prompt: "work", sessionID: child.id },
+              },
+            })
+
+            yield* shell.wait(childShell.id).pipe(Effect.timeout(Duration.seconds(15)))
+            const waiting = (yield* sessions.inbox(child.id)).flatMap((item) =>
+              item.type === "synthetic" ? [String(item.payload.metadata?.shellID)] : [],
+            )
+            expect(waiting).toEqual(["sh_elsewhere"])
+          }),
+        ),
+      ),
+    30_000,
+  )
 })
 
 // shell-safety-6 (FU-M3-152): when the run that an Agent call started ends, by completing, by failing or in the

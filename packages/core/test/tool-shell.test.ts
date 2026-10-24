@@ -2518,14 +2518,15 @@ describe("ShellTool", () => {
     ),
   )
 
+  // shell-safety-6: output past the head limit keeps its head, not its tail.
   it.live(
-    "truncates the model view and points at the saved output file when output overflows",
+    "keeps the head of output that overflows",
     () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
         (tmp) => {
           reset()
-          const bytes = ToolOutput.MAX_BYTES + 1024
+          const bytes = Shell.HEAD_BYTES + 1024
           return withSession(tmp.path, (registry) =>
             executeTool(registry, call({ command: overflowCommand(bytes) }, "call-overflow")),
           ).pipe(
@@ -2534,9 +2535,8 @@ describe("ShellTool", () => {
                 expect(settled.metadata).toMatchObject({ exit: 0, truncated: true })
                 const content = settled.content?.[0]
                 if (!content || content.type !== "text") throw new Error("Expected text content")
-                expect(content.text.includes("output-start")).toBe(false)
-                expect(content.text.includes("output-end")).toBe(true)
-                expect(content).toMatchObject(Expected.text(expect.stringContaining("full output saved to ")))
+                expect(content.text).toStartWith("output-start")
+                expect(content.text.includes("output-end")).toBe(false)
               }),
             ),
           )
@@ -2546,45 +2546,51 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
-  // tool-runtime-8 review: the shell's capture is already bounded and names its own full-output file, so the step must
-  // not save that bounded text again. Above 50,000 characters it settles unmarked, with its tail and notice intact.
+  // shell-safety-6: a head limit raised past the declared 30,000 characters lets output that fits the head but not the
+  // limit reach the step, which saves it like any other result.
   it.live(
-    "keeps its own bounded output out of the step's saved results",
+    "leaves output past the declared limit to the step when the head limit is raised",
     () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
         (tmp) => {
           reset()
-          return withSession(tmp.path, (registry) =>
-            Effect.gen(function* () {
-              const input = { command: overflowCommand(300_000) }
-              const traits = yield* toolTraits(registry, "Bash", input)
-              const tools = yield* registry.snapshot()
-              const result = yield* tools.execute(call(input, "call-bounded"))
-              const toolOutput = yield* ToolOutput.Service
-              const settled = yield* toolOutput.settle({
-                sessionID,
-                messageID: SessionMessage.ID.create(),
-                callID: "call-bounded",
-                tool: "Bash",
-                limit: ToolOutput.threshold(traits.maxResultChars, undefined),
-                result,
-              })
-              expect(settled.metadata?.persisted).toBeUndefined()
-              const text = settled.content.map((part) => (part.type === "text" ? part.text : "")).join("")
-              expect(text.length).toBeGreaterThan(ToolOutput.MAX_RESULT_CHARS)
-              expect(text).toContain("output-end")
-              expect(text).toContain("full output saved to ")
-              expect(traits.maxResultChars).toBe(Infinity)
-            }),
-          )
+          return Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ tool_output: { max_bytes: 100_000 } })),
+            )
+            return yield* withSession(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const input = { command: overflowCommand(60_000) }
+                const traits = yield* toolTraits(registry, "Bash", input)
+                const tools = yield* registry.snapshot()
+                const result = yield* tools.execute(call(input, "call-raised"))
+                const toolOutput = yield* ToolOutput.Service
+                const settled = yield* toolOutput.settle({
+                  sessionID,
+                  messageID: SessionMessage.ID.create(),
+                  callID: "call-raised",
+                  tool: "Bash",
+                  limit: ToolOutput.threshold(traits.maxResultChars, undefined),
+                  result,
+                })
+                expect(traits.maxResultChars).toBe(30_000)
+                expect(settled.metadata?.truncated).toBe(false)
+                expect(settled.metadata?.persisted).toMatchObject({
+                  size: "output-start".length + 60_000 + "output-end".length,
+                })
+                expect(settled.metadata?.persisted).not.toHaveProperty("parts")
+              }),
+            )
+          })
         },
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
       ),
     { timeout: 15_000 },
   )
 
-  it.live("uses configured line limits", () =>
+  // shell-safety-6: `max_lines` no longer bounds a result; `max_bytes` alone does, from the start of the output.
+  it.live("reads the head by bytes and ignores max_lines", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
@@ -2593,7 +2599,7 @@ describe("ShellTool", () => {
           yield* Effect.promise(() =>
             Bun.write(
               path.join(tmp.path, "orbit.json"),
-              JSON.stringify({ tool_output: { max_lines: 2, max_bytes: 1_000 } }),
+              JSON.stringify({ tool_output: { max_lines: 2, max_bytes: 6 } }),
             ),
           )
           const settled = yield* withSession(tmp.path, (registry) =>
@@ -2602,10 +2608,8 @@ describe("ShellTool", () => {
           expect(settled.metadata).toMatchObject({ exit: 0, truncated: true })
           const content = settled.content?.[0]
           if (!content || content.type !== "text") throw new Error("Expected text content")
-          expect(content.text).not.toContain("one")
-          // Windows shells emit CRLF; the assertion targets line limits, not line endings.
-          expect(content.text.replaceAll("\r\n", "\n")).toStartWith("two\nthree")
-          expect(content.text).toContain("full output saved to ")
+          // The first six bytes; Windows shells end a line with CRLF.
+          expect(["one\ntw", "one\r\nt"]).toContain(content.text)
         })
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
@@ -2625,7 +2629,7 @@ describe("ShellTool", () => {
             Effect.gen(function* () {
               const observed = yield* Deferred.make<string>()
               yield* executeTool(registry, {
-                ...call({ command: progressOverflowCommand(ToolOutput.MAX_BYTES + 1024, release) }, "call-progress"),
+                ...call({ command: progressOverflowCommand(Shell.HEAD_BYTES + 1024, release) }, "call-progress"),
                 progress: (update) =>
                   Effect.gen(function* () {
                     if (typeof update.shellID !== "string") return

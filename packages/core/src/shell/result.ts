@@ -6,7 +6,12 @@ import { ShellStall } from "./stall.js"
 
 export type Result = {
   info: Shell.Info
+  /** The head of the output; `truncated` when the file holds more than the head. A size kill's notice comes first. */
   capture: { output: string; truncated: boolean } | undefined
+  /** Killed because its output passed the background limit. */
+  capped?: true
+  /** Killed because the run that started it ended: nothing reports it. */
+  abandoned?: true
 }
 
 type Output = { output: string; truncated: boolean; exit?: number; signal?: string; timeout?: boolean }
@@ -33,6 +38,22 @@ export function notice(output: Pick<Output, "exit" | "signal" | "timeout">) {
   if (output.timeout) return "Timed out before completion"
   if (output.signal !== undefined) return `Killed by ${output.signal}`
   if (output.exit !== undefined && output.exit !== 0) return `Exited with code ${output.exit}`
+}
+
+/** Why a command that left the foreground was killed. Holds only a number. */
+export function sizeNotice(limit: number) {
+  const [value, unit] =
+    limit >= 1024 ** 3
+      ? [limit / 1024 ** 3, "GB"]
+      : limit >= 1024 ** 2
+        ? [limit / 1024 ** 2, "MB"]
+        : [limit / 1024, "KB"]
+  return `Background command killed: output file exceeded ${Number(value.toFixed(1))} ${unit}.`
+}
+
+/** The line of a notice that names the file holding output that did not fit. Holds only a path. */
+export function savedNotice(file: string) {
+  return `The output did not fit in this message; all of it is in ${file}`
 }
 
 /** Why a foreground command that was still running came back as a background one. Holds only a number. */

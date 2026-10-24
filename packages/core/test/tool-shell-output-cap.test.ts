@@ -610,14 +610,7 @@ it.live(
         AppNodeBuilder.build(nodes, [
           ...replacements,
           PluginSupervisor.node.replace(shellPluginSupervisor),
-          // Typed through a view so the file compiles before the seam exists; the builder calls `Shell.nodeWith` directly.
-          Shell.node.replace(
-            (
-              Shell as unknown as {
-                nodeWith: (options: { backgroundLimit: number; watchInterval: Duration.Duration }) => typeof Shell.node
-              }
-            ).nodeWith({ backgroundLimit: 256 * 1024, watchInterval: Duration.millis(50) }),
-          ),
+          Shell.node.replace(Shell.nodeWith({ backgroundLimit: 256 * 1024, watchInterval: Duration.millis(50) })),
         ]),
       ),
     ),

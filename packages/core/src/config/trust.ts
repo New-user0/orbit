@@ -285,6 +285,9 @@ export const classification = {
     // A budget: a tiny timeout turns every command into a background job whose completion wakes the session for a paid
     // request, and the atomic value would replace the user's own.
     shell_tool: withhold("providers"),
+    // The person's false keeps their commands in the foreground; a repository's true would outrank it, as the later
+    // document wins.
+    background_tasks: withhold("settings"),
     tool_output: withhold("providers"),
     tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
