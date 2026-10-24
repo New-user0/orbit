@@ -2496,6 +2496,28 @@ describe("ShellTool", () => {
     ),
   )
 
+  // tool-runtime-8: a command that prints nothing returns no text of its own, so the step's empty marker names the tool,
+  // as the reference's empty shell result does. Control: a command that prints keeps its text.
+  it.live("gives no text for a command that prints nothing", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const silent = yield* executeTool(registry, call({ command: "exit 0" }, "call-silent"))
+            expect(silent.status).toBe("completed")
+            expect(silent.metadata).toMatchObject({ exit: 0 })
+            expect(silent.content?.every((item) => item.type === "text" && item.text.trim() === "")).toBe(true)
+            const spoken = yield* executeTool(registry, call({ command: helloCommand }, "call-spoken"))
+            expect(spoken.content?.[0]).toEqual({ type: "text", text: "hello" })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
   it.live(
     "truncates the model view and points at the saved output file when output overflows",
     () =>
@@ -2517,6 +2539,44 @@ describe("ShellTool", () => {
                 expect(content).toMatchObject(Expected.text(expect.stringContaining("full output saved to ")))
               }),
             ),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  // tool-runtime-8 review: the shell's capture is already bounded and names its own full-output file, so the step must
+  // not save that bounded text again. Above 50,000 characters it settles unmarked, with its tail and notice intact.
+  it.live(
+    "keeps its own bounded output out of the step's saved results",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const input = { command: overflowCommand(300_000) }
+              const traits = yield* toolTraits(registry, "Bash", input)
+              const tools = yield* registry.snapshot()
+              const result = yield* tools.execute(call(input, "call-bounded"))
+              const toolOutput = yield* ToolOutput.Service
+              const settled = yield* toolOutput.settle({
+                sessionID,
+                messageID: SessionMessage.ID.create(),
+                callID: "call-bounded",
+                tool: "Bash",
+                limit: ToolOutput.threshold(traits.maxResultChars, undefined),
+                result,
+              })
+              expect(settled.metadata?.persisted).toBeUndefined()
+              const text = settled.content.map((part) => (part.type === "text" ? part.text : "")).join("")
+              expect(text.length).toBeGreaterThan(ToolOutput.MAX_RESULT_CHARS)
+              expect(text).toContain("output-end")
+              expect(text).toContain("full output saved to ")
+              expect(traits.maxResultChars).toBe(Infinity)
+            }),
           )
         },
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
@@ -2734,7 +2794,7 @@ describe("ShellTool", () => {
               {
                 id: settled.metadata?.shellID,
                 status: "completed",
-                output: "(no output)\n\nExited with code 7",
+                output: "Exited with code 7",
               },
             ])
           }),

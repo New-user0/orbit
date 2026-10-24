@@ -299,6 +299,8 @@ const hasLocalReference = (value: unknown): boolean => {
 export const normalizeContent = (value: string | ReadonlyArray<Tool.Content> | undefined, output?: unknown) => {
   if (typeof value === "string") return [{ type: "text" as const, text: value }]
   if (value !== undefined && value.length > 0) return [...value]
+  // A result with nothing in it has no parts, and the step stores its empty marker (an MCP tool's empty content is null).
+  if (output === undefined || output === null) return []
   return [{ type: "text" as const, text: stringify(output) }]
 }
 

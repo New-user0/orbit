@@ -46,8 +46,9 @@ const layout = Effect.gen(function* () {
     await fs.mkdir(cfgReal, { recursive: true })
     await fs.writeFile(path.join(cfgReal, "AGENTS.md"), "x")
     await fs.symlink(cfgReal, cfgLink, linkType)
-    await fs.mkdir(path.join(dataReal, "tool-output"), { recursive: true })
-    await fs.writeFile(path.join(dataReal, "tool-output", "out.txt"), "x")
+    // A result this session saved: the prompt-free read covers the session's own folder only.
+    await fs.mkdir(path.join(dataReal, "tool-output", sessionID), { recursive: true })
+    await fs.writeFile(path.join(dataReal, "tool-output", sessionID, "out.txt"), "x")
     await fs.symlink(dataReal, dataLink, linkType)
     // Links the repository ships into the real config folder and into its linked spelling.
     await fs.symlink(cfgReal, path.join(project, "cfg"), linkType)
@@ -133,7 +134,7 @@ describe("Orbit's own folders reached through a link", () => {
   // Folder x the spelling the rule names x the spelling the call names: every cell is a deny.
   const folders = [
     { name: "config", rel: ["AGENTS.md"], spelled: "cfgLink", real: "cfgReal" },
-    { name: "data", rel: ["tool-output", "out.txt"], spelled: "dataLink", real: "dataReal" },
+    { name: "data", rel: ["tool-output", sessionID, "out.txt"], spelled: "dataLink", real: "dataReal" },
   ] as const
   for (const folder of folders)
     for (const rule of ["spelled", "real"] as const)
@@ -164,8 +165,8 @@ describe("Orbit's own folders reached through a link", () => {
           return [
             (yield* decide(path.join(l.cfgLink, "AGENTS.md"))).effect,
             (yield* decide(path.join(l.cfgReal, "AGENTS.md"))).effect,
-            (yield* decide(path.join(l.dataLink, "tool-output", "out.txt"))).effect,
-            (yield* decide(path.join(l.dataReal, "tool-output", "out.txt"))).effect,
+            (yield* decide(path.join(l.dataLink, "tool-output", sessionID, "out.txt"))).effect,
+            (yield* decide(path.join(l.dataReal, "tool-output", sessionID, "out.txt"))).effect,
             (yield* decide(path.join(l.tmp, "dotfiles", "x.txt"))).effect,
           ]
         }).pipe(provide(l.project, { config: l.cfgLink, data: l.dataLink, tmp: path.join(l.tmp, "t") }, true))
