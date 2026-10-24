@@ -185,6 +185,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     consoleMode: "disabled",
     clearOnShutdown: false,
   })
+  // Created with the renderer, so the focus it records covers the start-up below: a terminal reports a blur only when
+  // focus changes, and the recap trigger, created later, reads what was missed.
+  const attention = createTuiAttention({ renderer, config: tuiConfig })
   if (mono) renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
   const title = createMiniTitle(renderer, input.host.platform, input.sessionTitle)
   const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono, input.root)
@@ -215,7 +218,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
   const { RunFooter } = await footerTask
   let sessionTitle = input.sessionTitle
-  const attention = createTuiAttention({ renderer, config: tuiConfig })
   const attentionEvents = createAttentionEvents({
     attention,
     // Mini follows one session tree: the root, and the subagents it started.
@@ -235,6 +237,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   const recap = input.recap
     ? createRecapTrigger({
         renderer,
+        focus: attention.focus,
         afterMinutes: () => tuiConfig.session.recap.after_minutes,
         busy: () => running,
         request: input.recap,

@@ -265,7 +265,10 @@ describe("attention in Mini", () => {
 // has been gone for session.recap.after_minutes, not before the session's turn is over, and never once the person is
 // back. The server decides whether a recap is due, so Mini sends only the request.
 describe("away summary in Mini", () => {
-  async function recapHarness(afterMinutes = 0.001, answer?: () => Promise<void>) {
+  async function recapHarness(afterMinutes = 0.001, answer?: () => Promise<void>, blurWhileStarting = false) {
+    // Mini reads the folder for its splash after the renderer exists and before the recap trigger does, so a blur sent
+    // with that first read comes while Mini is still starting.
+    let blurred = !blurWhileStarting
     const app = await createTestRenderer({
       width: 100,
       height: 24,
@@ -277,7 +280,11 @@ describe("away summary in Mini", () => {
     const lifecycle = await createRuntimeLifecycle({
       host: host("linux"),
       createRenderer: async () => app.renderer as CliRenderer,
-      getDirectory: () => "/project",
+      getDirectory: () => {
+        if (!blurred) app.renderer.emit("blur")
+        blurred = true
+        return "/project"
+      },
       findFiles: async () => [],
       agents: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
       references: [],
@@ -404,6 +411,15 @@ describe("away summary in Mini", () => {
       while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
       expect(harness.asked).toHaveLength(1)
     }
+  })
+
+  // A terminal reports a blur once, when focus changes, so one that comes while Mini starts is read when the trigger is
+  // created, as the reference does when it mounts.
+  test("a terminal blurred while Mini starts asks after the delay", async () => {
+    using harness = await recapHarness(0.001, undefined, true)
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
   })
 
   // Class 13: a refused recap (an untrusted folder, a server that is gone) is silent, as the reference's failures are.

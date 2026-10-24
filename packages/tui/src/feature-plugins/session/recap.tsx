@@ -1,26 +1,36 @@
 import { Plugin } from "@orbit/plugin/tui"
 import { onCleanup } from "solid-js"
 import { useConfig } from "../../config"
+import { useAttention } from "../../context/attention"
 import { createRecapTrigger } from "../../recap"
 
-// The away summary for the session in view. Once focus has been gone for session.recap.after_minutes, the session asks
-// its server for one recap, which arrives as a `recap` message and is drawn in the transcript.
+// The away summary for the main conversation of the session in view. Once focus has been gone for
+// session.recap.after_minutes, that session asks its server for one recap, which arrives as a `recap` message and is
+// drawn in the transcript.
 export default Plugin.define({
   id: "orbit.recap",
   setup(context) {
-    // Only the main conversation is recapped, as in the reference: a subagent's session in view asks for nothing.
+    // A subagent's session in view stands for the conversation that started it: as in the reference, which recaps the
+    // main conversation whichever transcript is shown, the recap and its deferral follow the root of the tree.
+    const root = (sessionID: string): string => {
+      const parentID = context.data.session.get(sessionID)?.parentID
+      return parentID ? root(parentID) : sessionID
+    }
     const current = () => {
       const route = context.ui.router.current()
       if (route.type !== "session") return undefined
-      return context.data.session.get(route.sessionID)?.parentID ? undefined : route.sessionID
+      return root(route.sessionID)
     }
 
     context.ui.slot({
       append: "app",
       render() {
         const config = useConfig().data
+        const attention = useAttention()
         const trigger = createRecapTrigger({
           renderer: context.renderer,
+          // The attention host listens from before plugins load, so a blur that came while they loaded is not lost.
+          focus: attention.focus,
           afterMinutes: () => config.session.recap.after_minutes,
           busy: () => {
             const sessionID = current()

@@ -13,6 +13,11 @@ type FocusHost = {
 
 export function createRecapTrigger(input: {
   renderer: FocusHost
+  /**
+   * The focus the terminal reported before the trigger was created. A terminal reports a blur once, when focus changes,
+   * so one that is already blurred at creation starts the timer then, as the reference does when it mounts.
+   */
+  focus?: () => "unknown" | "focused" | "blurred"
   /** `session.recap.after_minutes`; 0 turns the recap off. */
   afterMinutes: () => number
   /** Whether the session is running a turn. */
@@ -62,6 +67,7 @@ export function createRecapTrigger(input: {
 
   input.renderer.on("blur", onBlur)
   input.renderer.on("focus", onFocus)
+  if (input.focus?.() === "blurred") onBlur()
 
   return {
     /** The session's turn ended: a deferred request goes out now. Coming back has already cleared one. */

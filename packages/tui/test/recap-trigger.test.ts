@@ -80,6 +80,26 @@ test("a deferred request goes out at the turn's end, and a turn's end with nothi
   trigger.dispose()
 })
 
+// The terminal reports a blur only when focus changes, so a trigger created after one reads the focus already recorded.
+test("a terminal already blurred when the trigger is created starts the delay then", async () => {
+  for (const focus of ["blurred", "focused", "unknown"] as const) {
+    const renderer = new EventEmitter()
+    const asked: AbortSignal[] = []
+    const trigger = createRecapTrigger({
+      renderer,
+      focus: () => focus,
+      afterMinutes: () => delay,
+      busy: () => false,
+      request: async (signal) => {
+        asked.push(signal)
+      },
+    })
+    await Bun.sleep(80)
+    expect({ focus, asked: asked.length }).toEqual({ focus, asked: focus === "blurred" ? 1 : 0 })
+    trigger.dispose()
+  }
+})
+
 // A delay past a 32-bit count of milliseconds would make the timer fire at once, so a person who sets a huge value to
 // mean "almost never" would be asked on every blur.
 test("a delay longer than a timer holds waits the longest a timer can rather than firing at once", async () => {

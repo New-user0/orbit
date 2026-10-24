@@ -26,6 +26,8 @@ async function start(input: {
   recap?: (request: Request) => Response | Promise<Response>
   /** Makes the session in view a subagent's session under this parent. */
   parentID?: string
+  /** Blurs the terminal while the plugins still wait for the folder's trust, before the recap's slot has mounted. */
+  blurWhileLoading?: boolean
 }) {
   const state = await tmpdir()
   const setup = await createTestRenderer({ width: input.width ?? 100, height: 30, useThread: false, kittyKeyboard: true })
@@ -42,7 +44,14 @@ async function start(input: {
   }
   const requests: Request[] = []
   const events = createEventStream()
+  // The plugins load only once the trust status has been read, so a blur sent with that read reaches the client before
+  // the recap's slot mounts.
+  let blurred = false
   const calls = createFetch(async (url, request) => {
+    if (url.pathname === "/api/location/trust" && input.blurWhileLoading && !blurred) {
+      blurred = true
+      setup.renderer.emit("blur")
+    }
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
     if (url.pathname === `/api/session/${sessionID}/message`) {
@@ -55,7 +64,8 @@ async function start(input: {
       })
     }
     if (url.pathname.endsWith("/inbox") || url.pathname.endsWith("/permission")) return json({ data: [] })
-    if (request.method === "POST" && url.pathname === `/api/session/${sessionID}/recap`) {
+    if (input.parentID && url.pathname === `/api/session/${input.parentID}/message`) return json({ data: [], cursor: {} })
+    if (request.method === "POST" && /^\/api\/session\/[^/]+\/recap$/.test(url.pathname)) {
       requests.push(request)
       return input.recap ? input.recap(request) : json({ recorded: true })
     }
@@ -203,13 +213,36 @@ test("a session resumed with a recap after its last prompt asks for none", async
   expect(app.requests).toHaveLength(0)
 })
 
-// The reference recaps only the main conversation. A subagent's session opens in the same route with a prompt its
-// parent agent wrote, so blurring while it is in view asks for nothing; the main-session rows above are the control.
-test("a subagent's session in view asks for no recap", async () => {
-  await using app = await start({ messages: [user("Fix the build")], parentID: "ses_recap_parent" })
-  app.blur()
-  await Bun.sleep(400)
-  expect(app.requests).toHaveLength(0)
+// The reference recaps the main conversation whichever transcript is shown. A subagent's session opens in the same
+// route, so while it is in view the recap, and its wait for a turn's end, follow the conversation that started it.
+test("a subagent's session in view asks for the recap of the main conversation", async () => {
+  const parentID = "ses_recap_parent"
+  {
+    await using app = await start({ messages: [user("Fix the build")], parentID })
+    app.blur()
+    expect(await until(() => app.requests.length === 1)).toBe(true)
+    expect(new URL(app.requests[0]!.url).pathname).toBe(`/api/session/${parentID}/recap`)
+  }
+  {
+    await using app = await start({ messages: [user("Fix the build")], parentID })
+    app.execution("session.execution.started", parentID)
+    app.blur()
+    await Bun.sleep(400)
+    // The subagent's own turn ending is not the end of the main conversation's turn.
+    app.execution("session.execution.succeeded")
+    await Bun.sleep(400)
+    expect(app.requests).toHaveLength(0)
+    app.execution("session.execution.succeeded", parentID)
+    expect(await until(() => app.requests.length === 1)).toBe(true)
+    expect(new URL(app.requests[0]!.url).pathname).toBe(`/api/session/${parentID}/recap`)
+  }
+})
+
+// A terminal reports a blur once, when focus changes. The full TUI may still be loading its plugins then, so the recap
+// reads the focus the client has recorded since it started, as the reference does when it mounts.
+test("a terminal blurred while the TUI loads asks for the recap after the delay", async () => {
+  await using app = await start({ messages: [user("Fix the build")], blurWhileLoading: true })
+  expect(await until(() => app.requests.length === 1)).toBe(true)
 })
 
 test("a terminal that never reports focus never asks, and 0 minutes turns the recap off", async () => {

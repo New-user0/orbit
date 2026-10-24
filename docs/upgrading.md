@@ -1870,9 +1870,11 @@ written by the provider's small model, or by `agents.side.model` when you set on
 with neither, no recap is made. It sees the last 30 messages, less any assistant replies at their start, so that the
 conversation opens on your prompt or on a tool result, with
 no system prompt and no tools, so the tool calls and results among them go as text, and it is never sent to a model
-afterwards. Only the main conversation is recapped: a subagent's session in view asks for none, and a prompt another
+afterwards. Only the main conversation is recapped: while a subagent's session is in view, the terminal UI asks for the
+recap of the conversation that started it and waits for that conversation's turn to end, and a prompt another
 agent wrote does not count as one of yours. A recap you come back during is dropped,
-and its estimated cost is still counted, as for a side query that times out. A terminal that does not report focus never asks. The server adds the route
+and its estimated cost is still counted, as for a side query that times out. A terminal that does not report focus
+never asks, and one that lost focus while the client was still starting begins the wait once the client has started. The server adds the route
 `POST /api/session/:sessionID/recap` and the durable event `session.recap.recorded`, and session message lists can
 hold a `recap` message, whose text is stored with its control and bidi characters written out, both when the server
 writes it and when `orb session import` brings it in from a file. `orb export --sanitize` redacts a recap's text as it does a
