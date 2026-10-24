@@ -129,11 +129,23 @@ test("the message dialog's Rewind opens step 2 for that prompt, and Esc closes t
 })
 
 // The skip-picker shortcut: a prompt followed only by a reply with nothing in it, whose rewind would change no file,
-// goes straight back into the input with its conversation rewound. The control is the same prompt when the dry run
-// says a file would change: step 2 opens and nothing is rewound yet.
+// goes straight back into the input with its conversation rewound, as does one whose dry run lists files it cannot
+// put back (no checkpoint). The control is the same prompt when the dry run says a file would change: step 2 opens
+// and nothing is rewound yet.
 test.each([
-  { label: "no file would change", filesChanged: [], shortcut: true },
-  { label: "a file would change", filesChanged: ["/tmp/orbit/packages/tui/src/quick.ts"], shortcut: false },
+  { label: "no file would change", canRewind: true, filesChanged: [], shortcut: true },
+  {
+    label: "the dry run cannot rewind the files it lists",
+    canRewind: false,
+    filesChanged: ["/tmp/orbit/packages/tui/src/quick.ts"],
+    shortcut: true,
+  },
+  {
+    label: "a file would change",
+    canRewind: true,
+    filesChanged: ["/tmp/orbit/packages/tui/src/quick.ts"],
+    shortcut: false,
+  },
 ])("the message dialog rewinds at once when only an empty reply follows and $label", async (row) => {
   await using state = await tmpdir()
   await using setup = await rewindApp({
@@ -141,7 +153,7 @@ test.each([
     messages: [...conversation, quick, reply([], true)],
     answer: (request) =>
       request.path.endsWith("/revert/files") && request.body?.dryRun && request.body.messageID === "msg_0007"
-        ? json({ data: { canRewind: true, filesChanged: row.filesChanged, insertions: 0, deletions: 1 } })
+        ? json({ data: { canRewind: row.canRewind, filesChanged: row.filesChanged, insertions: 0, deletions: 1 } })
         : undefined,
   })
   await setup.waitForFrame(loaded)
