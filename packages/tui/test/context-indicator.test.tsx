@@ -85,10 +85,10 @@ const ready = (frame: string) => footerRow(frame).includes(":main")
 
 test.each([
   // The reference truncates the line at its end when the row is short, so a narrow terminal keeps its start.
-  { name: "automatic compaction off", width: 120, report: off, text: "Context almost full (3% left) · run /compact" },
-  { name: "automatic compaction off", width: 40, report: off, text: "Context almost full (3%" },
-  { name: "automatic compaction on", width: 120, report: on, text: "4% left before auto-compaction" },
-  { name: "automatic compaction on", width: 40, report: on, text: "4% left before auto" },
+  { name: "automatic compaction off", width: 120, report: off, text: "Context almost full (3% left) · run /compact", full: "" },
+  { name: "automatic compaction off", width: 40, report: off, text: "Context almost full (3%", full: "run /compact" },
+  { name: "automatic compaction on", width: 120, report: on, text: "4% left before auto-compaction", full: "" },
+  { name: "automatic compaction on", width: 40, report: on, text: "4% left before auto", full: "auto-compaction" },
 ])("the prompt's footer row says the context is almost full with $name at $width columns", async (row) => {
   await using state = await tmpdir()
   await using setup = await render(state.path, row.width)
@@ -115,4 +115,22 @@ test.each([40, 120])("nothing is drawn at %s columns before a report arrives", a
 
   expect(frame).not.toContain("Context almost full")
   expect(frame).not.toContain("before auto-compaction")
+})
+
+test("the line gives way to the footer shortcuts on a row that is too short for all of them", async () => {
+  await using state = await tmpdir()
+  await using setup = await render(state.path, 80)
+  await setup.waitForFrame(ready)
+
+  setup.events.emit({
+    id: "evt_context",
+    created: 1,
+    type: "session.context.updated",
+    location: { directory },
+    data: off,
+  })
+  const frame = await setup.waitForFrame((frame) => footerRow(frame).includes("Context"))
+
+  expect(footerRow(frame)).toContain("ctrl+p commands")
+  expect(footerRow(frame)).not.toContain("run /compact")
 })
