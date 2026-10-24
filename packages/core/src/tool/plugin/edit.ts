@@ -314,19 +314,28 @@ export const Plugin = {
               })
               const replacementBom = replaced.startsWith("\uFEFF")
               yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, original)
-              const result = yield* fileMutation.write({
-                target,
-                content: Bom.join(replaced, original.bom || replacementBom),
-              })
               const bom = original.bom || replacementBom
-              if (yield* formatter.file(target.absolute))
-                yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-              const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
-              yield* ledger.recordWrite(context.sessionID, target.absolute, final)
-              return {
-                files: [fileDiff(result.resource, source, final.text)],
-                replacements,
-              } satisfies Output
+              return yield* Effect.gen(function* () {
+                const result = yield* fileMutation.write({ target, content: Bom.join(replaced, bom) })
+                if (yield* formatter.file(target.absolute))
+                  yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
+                const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+                yield* ledger.recordWrite(context.sessionID, target.absolute, final)
+                return {
+                  files: [fileDiff(result.resource, source, final.text)],
+                  replacements,
+                } satisfies Output
+              }).pipe(
+                // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
+                Effect.mapError(
+                  (error) =>
+                    new ToolFailure({
+                      message: `Unable to edit ${input.file_path}`,
+                      error,
+                      metadata: { files: [{ file: target.resource }] },
+                    }),
+                ),
+              )
             }).pipe(
               fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]),
               Effect.map((output) => ({

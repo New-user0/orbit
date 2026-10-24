@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector.js"
 
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import path from "path"
 import { Database } from "../database/database.js"
@@ -855,10 +855,16 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!boundary) return yield* Effect.die(new Error(`Revert boundary message not found: ${event.data.to}`))
+        // A revert leaves the session in the folder it is in, so the record of each move stays: it is what tells which
+        // folder an earlier step ran in, and so which snapshot repository holds its trees.
         yield* db
           .delete(SessionMessageTable)
           .where(
-            and(eq(SessionMessageTable.session_id, event.data.sessionID), gte(SessionMessageTable.seq, boundary.seq)),
+            and(
+              eq(SessionMessageTable.session_id, event.data.sessionID),
+              gte(SessionMessageTable.seq, boundary.seq),
+              ne(SessionMessageTable.type, "location-switched"),
+            ),
           )
           .run()
           .pipe(Effect.orDie)
