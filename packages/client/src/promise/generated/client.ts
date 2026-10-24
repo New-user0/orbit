@@ -94,6 +94,10 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionAssistLabelInput,
+  SessionAssistLabelOutput,
+  SessionAssistSuggestionInput,
+  SessionAssistSuggestionOutput,
   SessionLogInput,
   SessionLogOutput,
   SessionInterruptInput,
@@ -1079,6 +1083,31 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      assist: {
+        label: (input: SessionAssistLabelInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionAssistLabelOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/assist/label`,
+              body: { messageID: input["messageID"], toolCallIDs: input["toolCallIDs"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401, 403, 404],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        suggestion: (input: SessionAssistSuggestionInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionAssistSuggestionOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/assist/suggestion`,
+              successStatus: 200,
+              declaredStatuses: [400, 401, 403, 404],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
       log: (input: SessionLogInput, requestOptions?: RequestOptions): AsyncIterable<SessionLogOutput> =>
         sse<SessionLogOutput>(
           {
