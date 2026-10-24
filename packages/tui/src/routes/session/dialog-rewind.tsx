@@ -68,7 +68,6 @@ export function DialogRewind(props: {
   })
   const [stats, setStats] = createStore<Record<string, readonly RewindFileStat[] | "failed">>({})
   const asked = new Set<string>()
-  let closed = false
 
   onMount(() => {
     dialog.setSize("xlarge")
@@ -95,10 +94,8 @@ export function DialogRewind(props: {
     return Array.from({ length: Math.min(VISIBLE_ROWS, total) }, (_, offset) => start + offset)
   })
 
-  const close = () => {
-    closed = true
-    props.onClose()
-  }
+  // Closing removes the picker, so a dry run that answers later has nothing left to update.
+  const close = () => props.onClose()
 
   function confirm(messageID: string) {
     const prompt = props.prompts.find((item) => item.id === messageID)
@@ -108,7 +105,6 @@ export function DialogRewind(props: {
       .dryRun(messageID)
       .catch(() => undefined)
       .then((result) => {
-        if (closed) return
         const files = result?.canRewind && Array.isArray(result.filesChanged) ? result.filesChanged : []
         setState({
           checking: false,
