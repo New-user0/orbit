@@ -816,7 +816,7 @@ describe("SessionProjector tool overrides", () => {
       if (row === undefined) throw new Error("Expected the assistant row")
       const projected = Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type })
       if (projected.type !== "assistant") throw new Error("Expected the assistant message")
-      expect(projected.content).toEqual([
+      expect<unknown>(projected.content).toEqual([
         { ...original.content[0], override: override("call_done") },
         original.content[1],
       ])
