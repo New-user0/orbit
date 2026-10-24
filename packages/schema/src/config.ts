@@ -147,8 +147,13 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   shell_tool: ConfigShellTool.Info.pipe(optional).annotate({
     description: "Shell command timeouts",
   }),
+  background_tasks: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Whether shell commands and subagents may run in the background. On by default. false keeps shell commands and the subagents of the Agent and Workflow tools in the foreground: the background options are not offered, a shell command still running at its timeout is stopped, and moving running work to the background leaves them where they are. A command defined to run as a subagent still runs in the background. A project's or local value applies once the folder is trusted",
+  }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
-    description: "When a tool result is saved to a file, and how much of a shell command's output its result keeps",
+    description:
+      "When a tool result is saved to a file, and how much of the start of a shell command's output its result keeps",
   }),
   tool_execution: ConfigToolExecution.Info.pipe(optional).annotate({
     description: "How the tool calls of one step are scheduled",

@@ -303,6 +303,7 @@ export function normalize(input: unknown): Result {
     memory: Info.fields.memory,
     media: Info.fields.media,
     shell_tool: Info.fields.shell_tool,
+    background_tasks: Info.fields.background_tasks,
     tool_output: Info.fields.tool_output,
     tool_execution: Info.fields.tool_execution,
     websearch: Info.fields.websearch,

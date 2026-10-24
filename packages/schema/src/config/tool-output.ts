@@ -5,11 +5,12 @@ import { optional, PositiveInt } from "../schema.js"
 
 export class Info extends Schema.Class<Info>("Config.ToolOutput")({
   max_lines: PositiveInt.pipe(optional).annotate({
-    description: "Most lines of a shell command's output that its result keeps. Defaults to 2,000.",
+    description:
+      "No longer used: a shell command's result is limited by max_bytes alone. Accepted so older settings still load.",
   }),
   max_bytes: PositiveInt.pipe(optional).annotate({
     description:
-      "Most bytes of a shell command's output that its result keeps (default 51,200), and the ceiling for saving tool results when max_result_chars is not set.",
+      "Most bytes from the start of a shell command's output that its result keeps (default 30,000, at most 150,000); output past it is saved to a file. Also the ceiling for saving tool results when max_result_chars is not set.",
   }),
   max_result_chars: PositiveInt.pipe(optional).annotate({
     description:

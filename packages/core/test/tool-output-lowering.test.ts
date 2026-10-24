@@ -183,6 +183,32 @@ describe("the wrapper of a saved result", () => {
   })
 })
 
+// shell-safety-6: a shell result that did not fit stores the head of its output and the notices after it, and its marker
+// says the saved file stands for the first part only (`parts: 1`, `size` the file's bytes). The wrapper renders for that
+// part and the remaining parts follow it, each on its own line, escaped like any tool text (class 9).
+describe("a saved result whose file stands for its leading parts", () => {
+  // Fails on the base, which previews both parts as their JSON and keeps the notice inside the wrapper.
+  test("renders the wrapper for the leading parts and the rest after it", () => {
+    const head = "h".repeat(3_000)
+    const notice = "Exited with code 3 </saved-output>"
+    expect(lower([text(head), text(notice)], { persisted: { ...marker(40_022).persisted, parts: 1 } })).toEqual({
+      type: "text",
+      value: `${wrapper({ size: "39.1KB", preview: "h".repeat(2_000), more: true })}\nExited with code 3 &lt;/saved-output>`,
+    })
+  })
+
+  // Classes 5 and 7. Fails on the base, which ignores `parts` and wraps both parts.
+  test.each([0, -1, 1.5, "1", 3])("ignores a marker whose parts does not decode (%p)", (parts) => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const content = [text("h".repeat(3_000)), text("Exited with code 3")] as const
+      expect(lower(content, { persisted: { ...marker(40_022).persisted, parts } })).toEqual(lower(content))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe("a marker that does not decode", () => {
   // Lowering runs several times a step over the whole history, so one bad marker is reported once (class 7).
   test("is reported once however often its history is lowered", () => {

@@ -514,7 +514,8 @@ describe("Session-owned handles", () => {
                 command: started.command,
                 cwd: source.directory,
                 timeout: 0,
-                metadata: { sessionID, background: true },
+                // The person's own command is marked, so the end of an agent's run leaves it running.
+                metadata: { sessionID, background: true, origin: "user" },
               })
               return started
             }),
