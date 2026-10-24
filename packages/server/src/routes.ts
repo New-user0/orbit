@@ -28,6 +28,7 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { LocationActivity } from "@orbit/core/location-activity"
 import { ModelsDev } from "@orbit/core/models-dev"
 import { SessionRestart } from "@orbit/core/session/execution/restart"
+import { SessionRetention } from "@orbit/core/session/retention"
 import { PluginUpdate } from "@orbit/core/plugin/update"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { WellKnown } from "@orbit/core/wellknown"
@@ -80,6 +81,7 @@ const applicationServiceNodes = [
   LocationServiceMap.node,
   LocationActivity.node,
   SessionRestart.node,
+  SessionRetention.node,
   Workspace.node,
   // Listing grants needs no location, so the handler reads the store the locations share.
   WorkspaceTrust.node,

@@ -370,6 +370,7 @@ describe("LocationWatcher subscriptions", () => {
       Config.Service,
       Config.Service.of({
         entries: () => Effect.sync(() => entries.current),
+        rejected: () => Effect.succeed([]),
         compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
         compat: () => Effect.succeed(Config.defaultCompat),
         changes: () => Stream.never,

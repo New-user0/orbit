@@ -295,6 +295,7 @@ export function normalize(input: unknown): Result {
     attribution: Info.fields.attribution,
     sandbox: Info.fields.sandbox,
     share: Info.fields.share,
+    cleanup_period_days: Info.fields.cleanup_period_days,
     enterprise: Info.fields.enterprise,
     username: Info.fields.username,
     snapshots: Info.fields.snapshots,
