@@ -60,15 +60,41 @@ function render(state: string, width: number) {
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
       if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
-      if (/^\/api\/session\/[^/]+\/(message|inbox|permission)$/.test(url.pathname))
-        return json({ data: [], cursor: {} })
+      // A report is published only after a measured response, so the session in view always has one: the footer then
+      // also has the context bar to place beside the warning.
+      if (url.pathname === `/api/session/${session.id}/message`)
+        return json({
+          data: [
+            {
+              id: "msg_0001",
+              type: "assistant",
+              agent: session.agent,
+              model: session.model,
+              time: { created: 1, streamed: 2, completed: 3 },
+              finish: "stop",
+              cost: 0,
+              tokens: { input: 175_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              content: [{ type: "text", text: "Answer" }],
+            },
+          ],
+          cursor: {},
+        })
+      if (/^\/api\/session\/[^/]+\/(inbox|permission)$/.test(url.pathname)) return json({ data: [], cursor: {} })
       if (url.pathname === "/api/agent")
         return json({ location, data: [{ id: "build", mode: "primary", hidden: false, permissions: [] }] })
       if (url.pathname === "/api/provider") return json({ location, data: [{ id: "provider", name: "Provider" }] })
       if (url.pathname === "/api/model")
         return json({
           location,
-          data: [{ id: "model", providerID: "provider", name: "Model", variants: [] }],
+          data: [
+            {
+              id: "model",
+              providerID: "provider",
+              name: "Model",
+              variants: [],
+              limit: { context: 200_000, output: 32_000 },
+            },
+          ],
         })
     },
   })
@@ -82,17 +108,22 @@ function footerRow(frame: string) {
 
 // The prompt has drawn its footer once the location label (with its branch) is on the footer row.
 const ready = (frame: string) => footerRow(frame).includes(":main")
+const measured = (frame: string) => ready(frame) && footerRow(frame).includes("88%")
 
 test.each([
-  // The reference truncates the line at its end when the row is short, so a narrow terminal keeps its start.
-  { name: "automatic compaction off", width: 120, report: off, text: "Context almost full (3% left) · run /compact", full: "" },
-  { name: "automatic compaction off", width: 40, report: off, text: "Context almost full (3%", full: "run /compact" },
-  { name: "automatic compaction on", width: 120, report: on, text: "4% left before auto-compaction", full: "" },
-  { name: "automatic compaction on", width: 40, report: on, text: "4% left before auto", full: "auto-compaction" },
+  // The reference keeps the warning visible and cuts it at its end when the row is short, so 40 columns keep its start
+  // and percent; from 80 columns the whole line shows, beside the model, instead of the context bar and the shortcuts.
+  { name: "automatic compaction off", width: 120, report: off, text: "Context almost full (3% left) · run /compact" },
+  { name: "automatic compaction off", width: 80, report: off, text: "Context almost full (3% left) · run /compact" },
+  { name: "automatic compaction off", width: 40, report: off, text: "Context almost full (3%" },
+  { name: "automatic compaction on", width: 120, report: on, text: "4% left before auto-compaction" },
+  { name: "automatic compaction on", width: 80, report: on, text: "4% left before auto-compaction" },
+  { name: "automatic compaction on", width: 40, report: on, text: "4% left before auto" },
 ])("the prompt's footer row says the context is almost full with $name at $width columns", async (row) => {
   await using state = await tmpdir()
   await using setup = await render(state.path, row.width)
-  await setup.waitForFrame(ready)
+  // The measured response is loaded, so the footer has its context bar when the report arrives.
+  await setup.waitForFrame(measured)
 
   setup.events.emit({
     id: "evt_context",
@@ -106,6 +137,8 @@ test.each([
   expect(footerRow(frame)).toContain(row.text)
   // The model label keeps its place at the start of the row.
   expect(footerRow(frame)).toContain("Model")
+  // The warning reports the same figure more precisely, so the bar gives way to it.
+  expect(footerRow(frame)).not.toContain("88%")
 })
 
 test.each([40, 120])("nothing is drawn at %s columns before a report arrives", async (width) => {
@@ -115,22 +148,4 @@ test.each([40, 120])("nothing is drawn at %s columns before a report arrives", a
 
   expect(frame).not.toContain("Context almost full")
   expect(frame).not.toContain("before auto-compaction")
-})
-
-test("the line gives way to the footer shortcuts on a row that is too short for all of them", async () => {
-  await using state = await tmpdir()
-  await using setup = await render(state.path, 80)
-  await setup.waitForFrame(ready)
-
-  setup.events.emit({
-    id: "evt_context",
-    created: 1,
-    type: "session.context.updated",
-    location: { directory },
-    data: off,
-  })
-  const frame = await setup.waitForFrame((frame) => footerRow(frame).includes("Context"))
-
-  expect(footerRow(frame)).toContain("ctrl+p commands")
-  expect(footerRow(frame)).not.toContain("run /compact")
 })

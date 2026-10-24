@@ -3898,6 +3898,40 @@ describe("context report", () => {
     expect(frame).not.toContain("Context almost full")
   })
 
+  test("hides the line while a revert is staged, draws it when the revert is cleared and forgets it when committed", async () => {
+    await using setup = await renderFooter()
+    setup.emit(report())
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    emitEvent(setup.events, {
+      id: "evt_context_staged",
+      created: 3,
+      type: "session.revert.staged",
+      durable: durable(sessionID, 3),
+      data: { sessionID, revert: { messageID: "msg_revert" } },
+    })
+    await wait(() => setup.data.session.get(sessionID)?.revert?.messageID === "msg_revert")
+    expect(await setup.settle()).not.toContain("Context almost full")
+
+    emitEvent(setup.events, {
+      id: "evt_context_cleared",
+      created: 4,
+      type: "session.revert.cleared",
+      durable: durable(sessionID, 4),
+      data: { sessionID },
+    })
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    emitEvent(setup.events, {
+      id: "evt_context_committed",
+      created: 5,
+      type: "session.revert.committed",
+      durable: durable(sessionID, 5),
+      data: { sessionID, to: "msg_revert" },
+    })
+    expect(await setup.settle()).not.toContain("Context almost full")
+  })
+
   test.each([
     { name: "on", paused: false },
     // The reference shows nothing about the pause; the line reads the same.
