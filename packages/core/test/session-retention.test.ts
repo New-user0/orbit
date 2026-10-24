@@ -877,6 +877,125 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
   )
 })
 
+// Class 4: the door follows no link wherever it deletes, in either root. Each row plants one spelling of a link (a
+// junction on Windows, a folder link elsewhere) to a folder outside the roots that holds a marker, beside a removed
+// session's plain folder as the control. After the pass both session folders are gone and the marker is still there.
+describe("SessionRetention.prune: the links the door meets", () => {
+  const roots = [
+    ["saved-results", (l: Layout) => l.outputs],
+    ["scratchpad", (l: Layout) => l.scratch],
+  ] as const
+  // Each plants its spelling where the folder of the removed session `ses_ret_door` is, under `root`.
+  const spellings = [
+    {
+      name: "the session folder is a link",
+      plant: (root: string, target: string) => link(target, path.join(root, "ses_ret_door")),
+    },
+    {
+      name: "the session folder is a link whose target is gone",
+      plant: (root: string, target: string) =>
+        Effect.gen(function* () {
+          const missing = path.join(path.dirname(target), "missing")
+          yield* folder(missing)
+          yield* link(missing, path.join(root, "ses_ret_door"))
+          yield* Effect.promise(() => fs.rm(missing, { recursive: true, force: true }))
+        }),
+    },
+    {
+      name: "a link inside the session folder",
+      plant: (root: string, target: string) =>
+        Effect.gen(function* () {
+          yield* folder(path.join(root, "ses_ret_door"))
+          yield* link(target, path.join(root, "ses_ret_door", "link"))
+        }),
+    },
+    {
+      name: "a link nested in a folder of the session folder",
+      plant: (root: string, target: string) =>
+        Effect.gen(function* () {
+          yield* folder(path.join(root, "ses_ret_door", "sub"))
+          yield* link(target, path.join(root, "ses_ret_door", "sub", "link"))
+        }),
+    },
+  ]
+  for (const [rootName, pick] of roots)
+    for (const spelling of spellings)
+      it.live(`${rootName} root: ${spelling.name} goes and its target stays`, () =>
+        scenario((l) =>
+          Effect.gen(function* () {
+            const root = pick(l)
+            const target = path.join(l.outside, "target")
+            yield* folder(target)
+            yield* spelling.plant(root, target)
+            yield* folder(path.join(root, "ses_ret_plain"))
+            yield* row({ id: "ses_ret_door", updated: Date.now() })
+            yield* row({ id: "ses_ret_plain", updated: Date.now() })
+
+            yield* prune({ days: 30, now: later() })
+
+            expect(yield* remaining).toEqual([])
+            expect(yield* exists(path.join(root, "ses_ret_door"))).toBe(false)
+            expect(yield* exists(path.join(root, "ses_ret_plain"))).toBe(false)
+            expect(yield* exists(path.join(target, "keep.txt"))).toBe(true)
+          }),
+        ),
+      )
+
+  // The root itself is a link: nothing under it is touched, and its records wait for a later pass. The other root is
+  // swept in the same pass as the control.
+  for (const [rootName, pick] of roots)
+    it.live(`${rootName} root: a root that is a link is left alone`, () =>
+      scenario((l) =>
+        Effect.gen(function* () {
+          const root = pick(l)
+          const other = root === l.outputs ? l.scratch : l.outputs
+          const elsewhere = path.join(l.outside, "elsewhere")
+          yield* folder(path.join(elsewhere, "ses_ret_door"))
+          yield* link(elsewhere, root)
+          yield* folder(path.join(other, "ses_ret_door"))
+          yield* row({ id: "ses_ret_door", updated: Date.now() })
+
+          yield* prune({ days: 30, now: later() })
+
+          expect(yield* remaining).toEqual([])
+          expect(yield* exists(path.join(elsewhere, "ses_ret_door", "keep.txt"))).toBe(true)
+          expect((yield* Effect.promise(() => fs.lstat(root))).isSymbolicLink()).toBe(true)
+          expect(yield* exists(path.join(other, "ses_ret_door"))).toBe(false)
+          expect(yield* records).toEqual(["ses_ret_door"])
+        }),
+      ),
+    )
+
+  // A link named like a flat saved result of an earlier version, past the period: it stays, and so does its target. Only
+  // the saved-results root holds such files; the plain file beside it is the control, and in the scratchpad root no
+  // file of that name is swept at all.
+  for (const [rootName, pick] of roots)
+    it.live(`${rootName} root: a link named like a flat saved result stays`, () =>
+      scenario((l) =>
+        Effect.gen(function* () {
+          const root = pick(l)
+          const target = path.join(l.outside, "target")
+          const linked = path.join(root, "tool_0123456789ad")
+          const plain = path.join(root, "tool_0123456789ae")
+          const old = new Date(Date.now() - 10 * DAY)
+          yield* folder(target)
+          yield* link(target, linked)
+          yield* Effect.promise(async () => {
+            await fs.writeFile(plain, "old")
+            await fs.utimes(plain, old, old)
+            await fs.lutimes(linked, old, old)
+          })
+
+          yield* prune({ days: 5, now: Date.now() })
+
+          expect(yield* exists(linked)).toBe(true)
+          expect(yield* exists(path.join(target, "keep.txt"))).toBe(true)
+          expect(yield* exists(plain)).toBe(root === l.scratch)
+        }),
+      ),
+    )
+})
+
 // Class 7: a folder that cannot be removed costs only itself. A folder inside it without write permission keeps its
 // files, which POSIX enforces for a user who is not root (Windows removes it anyway, so the row runs there only).
 describe.skipIf(process.platform === "win32")("SessionRetention.prune: a folder that cannot be removed", () => {

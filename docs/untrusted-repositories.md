@@ -822,12 +822,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   stats cannot be folded (message data that is not JSON) stays with one log line (class 7). It reads nothing a folder
   supplies; the period comes from the config of the server's own folder, where an untrusted project's file is not read
   and the key is withheld (`settings`) from a folder that is not trusted (classes 1 and 8). The door deletes in Orbit's own two folders, worked out once from `Global`: each root is checked with `lstat`
-  and left alone when it is a link, each entry is `lstat`ed and removed at that joined path (a link as a link), and
-  nothing is `stat`ed or resolved before the decision, so a junction to a share is never opened (class 4). Only a name of
-  the session-folder shape is touched, compared without letter case, and a row whose ID cannot name a folder or whose
-  clock does not decode keeps its family with one log line (classes 5 and 7). A config document that does not parse, or
-  one rejected while the period is set, skips the pass (class 7). Proof: `test/session-retention.test.ts` (the folder,
-  link, case, other-database, decode and fold rows, each with a control), `test/config/cleanup-period.test.ts` and the
+  and left alone when it is a link, each entry is `lstat`ed and removed at that joined path (a link as a link, dangling
+  or not), and nothing is `stat`ed or resolved before the decision, so a junction to a share is never opened (class 4).
+  A link inside a removed session's folder, at any depth, goes with the folder without being entered, and a link named
+  like a flat `tool_*` file stays. Only a name of the session-folder shape is touched, compared without letter case, and
+  a row whose ID cannot name a folder or whose clock does not decode keeps its family with one log line (classes 5 and
+  7). A config document of any scope (user, home, project, local, the flag file, `ORBIT_CONFIG_CONTENT`, remote and the
+  managed settings files) that does not parse, or one rejected while the period is set, skips the pass (class 7). Proof:
+  `test/session-retention.test.ts` (the folder, link, case, other-database, decode and fold rows, each with a control,
+  and the table of link spellings in both roots), `test/config/cleanup-period.test.ts` (with its table of scopes) and the
   `cleanup_period_days` row of `test/config/trust.test.ts`; in `packages/cli`, the bare row of
   `test/server-process.test.ts`.
 
