@@ -2091,3 +2091,52 @@ describe("Permission.denied", () => {
     }),
   )
 })
+
+// `allowed` answers what `ask` would decide without asking: the file-change reminder's rebuild keeps only a file that the
+// read tool would read with no question.
+describe("Permission.allowed", () => {
+  const command = (resource: string) => assertion({ action: "bash", resources: [resource] })
+
+  it.effect("is true for an allow only, a lead onto an ask included", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "bash", resource: "*", effect: "allow" },
+        { action: "bash", resource: "rm *", effect: "ask" },
+        { action: "bash", resource: "rm -rf /", effect: "deny" },
+        { action: "bash", resource: "danger", effect: "ask" },
+      ])
+      const service = yield* Permission.Service
+      expect(yield* service.allowed(command("ls -a"))).toBe(true)
+      expect(yield* service.allowed(command("rm x"))).toBe(false)
+      expect(yield* service.allowed(command("rm -rf /"))).toBe(false)
+      expect(yield* service.allowed({ ...command("ls -a"), leads: { "ls -a": ["danger"] } })).toBe(false)
+    }),
+  )
+
+  it.effect("creates no request, publishes nothing and runs no hook, so a hook's allow is not seen", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const bus = yield* Bus.Service
+      const events: string[] = []
+      const unsubscribe = yield* bus.listen((event) => Effect.sync(() => void events.push(event.type)))
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const hooks = yield* PluginHooks.Service
+      const ran: string[] = []
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.sync(() => {
+          ran.push("hook")
+          event.effect = "allow"
+        }),
+      )
+
+      expect(yield* service.allowed(command("ls -a"))).toBe(false)
+      expect(events).toEqual([])
+      expect(ran).toEqual([])
+      expect(yield* service.list()).toEqual([])
+      // The control: `ask` runs the hook, which allows.
+      expect((yield* service.ask(command("ls -a"))).effect).toBe("allow")
+      expect(ran).toEqual(["hook"])
+    }),
+  )
+})

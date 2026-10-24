@@ -713,6 +713,41 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   spellings), `test/formatter.test.ts`, and `test/tool-lsp.test.ts` (the `LSP` tool's new actions refused while the folder
   is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
+- The file-change reminder (`FileChangeReminder`, `packages/core/src/file-change-reminder.ts`) reads again, at each
+  logical step, a file the session wrote, and on the first step of a main session (one with no parent) in a process it
+  rebuilds what the session saw from the history it is given, which `orb session import` can bring from a file or URL. Both resolve a path once
+  with the read tool's resolver (`FileAccess.locate`: a share or device spelling is refused before any disk is read,
+  then a device or, outside Windows, anything but a file or folder), and check and read that same target. The re-read
+  (`FileChangeReminder.gate`) asks `ProjectTrust.reachable` on it at every step, skips a name in the project that the
+  resolver now finds leading out of it (even in a trusted project, where the read tool would ask), skips a file outside
+  the project whose real path is no longer the one its write resolved (`FileLedger.Seen.place`, kept by Write, Edit,
+  Patch and NotebookEdit), so a link or junction swapped in for the file, its folder or any folder above it cannot move
+  the read, and asks `Permission.denied` for `Read` on the
+  file and on where a link now leads, and for the `external_directory` request of a file outside the project; a refusal
+  skips the file silently and keeps it. An ask rule does not stop this re-read of a file the session wrote. The rebuild
+  treats every name in history as hostile (class 5): it keeps only a file inside the project that passes the same gate
+  and that `Permission.allowed` says the read tool would read with no question, so a file under an ask rule (the
+  built-in `.env` asks, a rule the person wrote, a link onto such a file) is neither seeded nor read. It reads from
+  disk only for an `Edit` in history and for each file a completed `Patch` adds, updates or moves a file to (the names
+  come from the Patch tool's own parser and pass the same gate and `Permission.allowed` check), and reads at most the
+  newest 100 files. The path and the changed lines go only in
+  the reminder's data block. The re-read changes no freshness record while it runs: each change is an entry's commit,
+  run after the rows are posted and only while the record is the one it checked (`FileLedger.settle`), so a deadline,
+  an interruption, a failed read, a refusal or a compaction meanwhile leaves every stale refusal in place (class 7;
+  the "collection that ends early" rows). A file that is slow to check or read, in the re-read or in the rebuild, is
+  left out on its own: files start within a budget, each with half of it to finish (past the budget's end if need be,
+  so no check is counted that the budget cut short), all below the producer's deadline, and the comparisons run
+  smallest first, so one slow or hung file costs only its share. When the budget covers only part of the files, the
+  re-read takes the newest first and goes on at the next step where the last one stopped (a scan the ledger keeps per
+  session), and the rebuild works from the newest call back, so it leaves out the oldest (class 7; the same rows and
+  the "budget smaller than one pass over the files" rows). Proof: the "re-read gate" and "rebuild after a restart" rows of
+  `test/durable-reminders.test.ts` (an outside file after a revoke, a project file swapped for a link out with and
+  without trust, a table of the file, its folder and a folder above it swapped for a link or junction into another
+  outside folder, for a file outside and inside the project, trusted and revoked, a dangling link, a deny on a link's
+  target, an `external_directory` deny, outside spellings in history including `~`, `..` and shares, ask-ruled names
+  from a failed write, a write, a read, an edit and a patch, outside spellings named in a patch, and a pipe marker server and device names that are never opened).
+  The rows that link a file need links, so they run on Linux or with Developer Mode; the rows that swap a folder use a
+  junction on Windows, which needs no privilege.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder. It skips an empty or relative `PATH` entry such as `.`, so the working folder is reached only through
