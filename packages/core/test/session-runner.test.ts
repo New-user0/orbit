@@ -11835,4 +11835,18 @@ describe("SessionRunnerLLM message budget", () => {
     expect((yield* s.messages).filter((message) => message.type === "compaction")).toEqual([])
     expect(wrapped(s.requests[1])).toEqual(["call_1", "call_2", "call_3", "call_4"])
   })
+
+  // With automatic compaction off, the refusal measures the same request: whole, the five results would pass the
+  // window's blocking limit, and the wrappers the budget chose bring it under (class 3).
+  budgetScenario("refuses no request the budget made fit when automatic compaction is off", function* (s) {
+    s.currentModel = testModel("forty-budget-off", { context: 40_000, output: 32_000 })
+    const compaction = yield* SessionCompaction.Service
+    yield* compaction.transform((editor) => editor.configure({ auto: false }))
+    yield* limit(s, 60_000)
+    yield* s.admit("Search five ways")
+    yield* s.llm.push(emits("", 45_000, 45_000, 45_000, 45_000, 45_000), TestLLM.text("Done", "done-budget-off"))
+    yield* s.resume
+
+    expect(wrapped(s.requests[1])).toEqual(["call_1", "call_2", "call_3", "call_4"])
+  })
 })

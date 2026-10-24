@@ -861,11 +861,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   session is imported or forked: it is stored as any JSON so one bad entry costs only its own result, and lowering
   decodes it strictly and renders the wrapper from the stored content without reading the disk, so a session or name
   that climbs out, a device name, an unknown format or a string sends the stored result and names no path (classes 5
-  and 7); a look-alike of the wrapper in the preview is escaped (class 9). Side queries lower overrides and record none
-  (class 12). Proof: the `message budget` rows of `test/session-runner.test.ts` (an imported `../../.ssh/id_rsa` with a
-  marker file, a linked session folder), the `override` rows of `test/tool-output-lowering.test.ts`,
-  `test/session-message-budget.test.ts`, the override rows of `test/session-compaction.test.ts` and
-  `test/config/trust.test.ts`.
+  and 7); a look-alike of the wrapper in the preview is escaped (class 9). A sanitized export drops the override along
+  with the content it described (classes 7 and 9). Side queries lower overrides and record none (class 12), and the
+  refusal of a request that no longer fits measures the request as it is sent (class 3). Proof: the `message budget`
+  rows of `test/session-runner.test.ts` (an imported `../../.ssh/id_rsa` with a marker file, a linked session folder,
+  automatic compaction off), the `override` rows of `test/tool-output-lowering.test.ts`,
+  `test/session-message-budget.test.ts`, the override rows of `test/session-compaction.test.ts`, the sanitized export
+  row of `test/session-create.test.ts` and `test/config/trust.test.ts`.
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 

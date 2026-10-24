@@ -3461,11 +3461,13 @@ results to the model however large they were together. Now, before each request,
 added up. When they pass `tool_output.max_message_chars` (200,000 characters by default), the largest are saved to the
 session's tool-output folder and sent as the same `<saved-output>` preview a large single result gets, one after
 another until the rest fit; equal sizes go in call order. A step's results are decided once: the request after them is
-the first to carry them, and every later request, a fork and compaction send the same text. Results of a tool without
-a result limit (such as Read), results already saved on their own, failed calls, results from tools the
+the first to carry them, and every later request, a fork and compaction send the same text. Automatic compaction, and
+the refusal of a request that no longer fits when automatic compaction is off, measure that same text. Results of a
+tool without a result limit (such as Read), results already saved on their own, failed calls, results from tools the
 provider runs and results that hold an image or another file part neither count nor go. A result whose file cannot be
-written is sent whole. The stored result keeps the tool's own content, and clients show it as before. An untrusted
-folder cannot set the key (`tool_output` is withheld whole).
+written is sent whole. The stored result keeps the tool's own content, and clients show it as before. A sanitized
+export (`orb session export --sanitize`) leaves the choice out, so an import of it sends the redacted text. An
+untrusted folder cannot set the key (`tool_output` is withheld whole).
 
 **Affects:** people whose model runs many tools in one step, such as several large searches at once.
 
