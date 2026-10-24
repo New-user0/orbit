@@ -11143,6 +11143,83 @@ describe("context accounting", () => {
       if (reason === "auto") expect(updates.at(-1)).toMatchObject({ used: 20_000, stale: false })
     })
 
+  // A pass of the same step after the compaction (here a resume after an output-limit stop) must not report it twice.
+  scenario("reports an automatic compaction once when the step passes again", function* (s) {
+    const updates = yield* contextUpdates(s)
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "once-first", 185_000))
+    yield* s.runPrompt("Earlier question")
+    yield* s.llm.push(
+      summary("once"),
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" }, usage: measured(30_000) },
+        LLMEvent.textStart({ id: "once-cut" }),
+        LLMEvent.textDelta({ id: "once-cut", text: "Part" }),
+        LLMEvent.textEnd({ id: "once-cut" }),
+      ),
+      TestLLM.textWithUsage("Rest", "once-rest", 31_000),
+    )
+    yield* s.runPrompt("Next question")
+    yield* settled(updates, 4)
+    for (let turn = 0; turn < 50; turn++) yield* Effect.yieldNow
+
+    expect(updates.map((update) => [update.used, update.stale])).toEqual([
+      [185_000, false],
+      [expect.any(Number), true],
+      [30_000, false],
+      [31_000, false],
+    ])
+  })
+
+  // The report after a manual compaction is ephemeral: the compaction is already durable when it is built.
+  const reportWarnings: string[] = []
+  const reportIt = testEffect(
+    layer.pipe(
+      Layer.provideMerge(
+        Logger.layer([
+          Logger.make(({ message }) => {
+            if (Array.isArray(message) && message[0] === "could not report context use after compaction")
+              reportWarnings.push(message[0])
+          }),
+        ]),
+      ),
+    ),
+  )
+  reportIt.effect(
+    "logs and survives a failure to report context use after a manual compaction",
+    Effect.gen(function* () {
+      const s = yield* setup
+      yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "report-fail-first", 185_000))
+      yield* s.runPrompt("Earlier question")
+      s.requests.length = 0
+      const compaction = yield* s.session.compact({ sessionID })
+      yield* s.llm.push(summary("report-fail"))
+      // The summary request is the last model resolution the compaction itself needs; the report resolves again.
+      s.modelResolveHook = Effect.suspend(() =>
+        s.requests.length > 0 ? Effect.die("report resolution failed") : Effect.void,
+      )
+      const exit = yield* s.resume.pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(reportWarnings).toHaveLength(1)
+      expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
+        type: "compaction",
+        status: "completed",
+      })
+    }),
+  )
+
+  scenario("does not swallow an interruption while reporting context use after a manual compaction", function* (s) {
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "report-int-first", 185_000))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.session.compact({ sessionID })
+    yield* s.llm.push(summary("report-int"))
+    s.modelResolveHook = Effect.suspend(() => (s.requests.length > 0 ? Effect.interrupt : Effect.void))
+    const exit = yield* s.resume.pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+  })
+
   scenario("reports the pause on the next measured response", function* (s) {
     const updates = yield* contextUpdates(s)
     yield* tripBreaker(s)
