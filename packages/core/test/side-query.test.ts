@@ -46,6 +46,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Context, DateTime, Duration, Effect, Fiber, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
@@ -140,6 +141,7 @@ const it = testEffect(
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(builtins),
         noScratchpad,
+        noMemory,
         noVcsSnapshot,
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
