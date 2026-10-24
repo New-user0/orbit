@@ -765,6 +765,77 @@ describe("memory.directory", () => {
     timeout,
   )
 
+  // Classes 3 and 8: one folder, two spellings. The person's deny names one spelling of a configured folder that is a
+  // link and the file tool names the other, and the deny still wins; an ask by either spelling reaches no memory file,
+  // as no ask does. A plain memory file by each spelling is the allowed control.
+  for (const written of ["linked", "real"] as const)
+    it.live(
+      `denies a memory write by either spelling when the person's deny names the ${written} spelling of a configured folder that is a link`,
+      () =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          const folders = { real: path.join(l.root, "real-memory"), linked: path.join(l.root, "linked-memory") }
+          yield* Effect.promise(async () => {
+            await fs.mkdir(folders.real, { recursive: true })
+            await fs.symlink(folders.real, folders.linked, linkType)
+          })
+          const out = yield* Effect.gen(function* () {
+            yield* seed(l, [
+              { action: "Edit", resource: path.join(folders[written], "private", "*"), effect: "deny" },
+              { action: "Edit", resource: path.join(folders[written], "asked", "*"), effect: "ask" },
+            ])
+            return {
+              deniedLinked: (yield* decide(path.join(folders.linked, "private", "a.md"))).effect,
+              deniedReal: (yield* decide(path.join(folders.real, "private", "a.md"))).effect,
+              askedLinked: (yield* decide(path.join(folders.linked, "asked", "a.md"))).effect,
+              askedReal: (yield* decide(path.join(folders.real, "asked", "a.md"))).effect,
+              plainLinked: (yield* decide(path.join(folders.linked, "a.md"))).effect,
+              plainReal: (yield* decide(path.join(folders.real, "a.md"))).effect,
+            }
+          }).pipe(provide(l, {}, [configured("user", { directory: folders.linked })]))
+          expect(out).toEqual({
+            deniedLinked: "deny",
+            deniedReal: "deny",
+            askedLinked: "allow",
+            askedReal: "allow",
+            plainLinked: "allow",
+            plainReal: "allow",
+          })
+        }),
+      timeout,
+    )
+
+  // The managed twin: a managed deny written with one spelling of the linked folder decides a call by the other.
+  for (const written of ["linked", "real"] as const)
+    it.live(
+      `denies a memory write by either spelling when a managed deny names the ${written} spelling of a configured folder that is a link`,
+      () =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          const folders = { real: path.join(l.root, "real-memory"), linked: path.join(l.root, "linked-memory") }
+          yield* Effect.promise(async () => {
+            await fs.mkdir(folders.real, { recursive: true })
+            await fs.symlink(folders.real, folders.linked, linkType)
+          })
+          const out = yield* Effect.gen(function* () {
+            yield* seed(l)
+            const policy = yield* ManagedPolicy.Service
+            yield* policy.set("file", {
+              statements: [],
+              rules: [{ action: "Edit", resource: path.join(folders[written], "private", "*"), effect: "deny" }],
+            })
+            return {
+              deniedLinked: (yield* decide(path.join(folders.linked, "private", "a.md"))).effect,
+              deniedReal: (yield* decide(path.join(folders.real, "private", "a.md"))).effect,
+              plainLinked: (yield* decide(path.join(folders.linked, "a.md"))).effect,
+              plainReal: (yield* decide(path.join(folders.real, "a.md"))).effect,
+            }
+          }).pipe(provide(l, {}, [configured("user", { directory: folders.linked })]))
+          expect(out).toEqual({ deniedLinked: "deny", deniedReal: "deny", plainLinked: "allow", plainReal: "allow" })
+        }),
+      timeout,
+    )
+
   // Class 3: a folder inside the project is named relative to the session folder by a file tool and by its absolute
   // path in the person's deny, and the deny decides by either spelling.
   it.live(

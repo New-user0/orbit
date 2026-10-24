@@ -268,6 +268,17 @@ const layer = Layer.effect(
         (input.leads?.[resource] ?? [place]).every((lead) => FSUtil.contains(memory.real, lead))
       )
     }
+    // A place in the real memory folder, named as the configured folder spells it. The carve-out accepts either spelling of
+    // a configured folder that is a link, so a deny written with the link's spelling must also decide a call made by the
+    // real path (class 3). A call by the link's spelling brings its real place as a lead, which the deny of the real
+    // spelling meets already.
+    const memorySpelled = (resource: string) => {
+      const inside = path.relative(
+        memory.real,
+        path.isAbsolute(resource) ? resource : path.resolve(location.directory, resource),
+      )
+      return inside.startsWith("..") || path.isAbsolute(inside) ? [] : [path.join(memory.folder, inside)]
+    }
     const decide = (
       input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads" | "shell">,
       resource: string,
@@ -296,6 +307,7 @@ const layer = Layer.effect(
           ...(input.aliases?.[resource] ?? []),
           ...resolved(input.action, resource),
           ...respelled(input.action, resource),
+          ...memorySpelled(resource),
         ])
         if (decided.effect === "deny") return decided
         if (stricter(input.action, input.leads?.[resource], decisive).effect === "deny")
@@ -381,12 +393,14 @@ const layer = Layer.effect(
       resource: string,
       written: Permission.Ruleset,
     ): Permission.Effect | undefined {
-      // A managed ask does not reach the memory folder either; a managed deny does.
-      const rules = inMemory(input, resource) ? written.filter((rule) => rule.effect !== "ask") : written
+      // A managed ask does not reach the memory folder either; a managed deny does, by either spelling of the folder.
+      const memoryCall = inMemory(input, resource)
+      const rules = memoryCall ? written.filter((rule) => rule.effect !== "ask") : written
       const subjects = [
         resource,
         ...resolved(input.action, resource),
         ...respelled(input.action, resource),
+        ...(memoryCall ? memorySpelled(resource) : []),
         ...(input.aliases?.[resource] ?? []),
       ]
       const own = rules.findLast(
