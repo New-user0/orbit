@@ -2550,7 +2550,7 @@ export type ConfigEntry =
           }
         }
         compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
-        memory?: { enabled?: boolean; directory?: string }
+        memory?: { enabled?: boolean; directory?: string; team?: boolean }
         compatibility?: { enabled?: boolean }
         skills?: Array<string>
         commands?: {

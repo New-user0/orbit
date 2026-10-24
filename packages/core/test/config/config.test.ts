@@ -1029,6 +1029,7 @@ describe("Config", () => {
               {
                 type: "directory",
                 path: AbsolutePath.make(path.join(tmp.path, "global")),
+                // The global config folder holds no team memory, so it leaves no `team-memory` folder out (context-memory-11).
                 ignore: ["**/{node_modules,.git}/**", ".git", "node_modules"],
               },
               {

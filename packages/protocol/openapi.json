@@ -15958,6 +15958,9 @@
               },
               "directory": {
                 "type": "string"
+              },
+              "team": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false

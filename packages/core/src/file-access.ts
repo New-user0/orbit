@@ -10,7 +10,9 @@ import path from "path"
 import { DevicePath } from "./device-path.js"
 import { LinkShare } from "@orbit/util/link-share"
 import { Location } from "./location.js"
+import { SecretScan } from "@orbit/util/secret-scan"
 import { MemoryStore } from "./memory/store.js"
+import { MemoryTeam } from "./memory/team.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
 import { ProjectTrust } from "./project-trust.js"
@@ -118,8 +120,19 @@ export interface Interface {
    * or asked: they are paths that a shell command names in its text, not paths a tool was given.
    */
   readonly escaped: (files: readonly string[]) => Effect.Effect<readonly Target[], FSUtil.Error | ToolFailure>
-  /** Whether memory is on and a file that exists really is in the project's memory folder (`MemoryStore`). */
+  /**
+   * Whether a file that exists really is in a memory folder that is on: the project's own (`MemoryStore`), or the team
+   * folder while team memory is on (`MemoryTeam`).
+   */
   readonly inMemory: (file: string) => Effect.Effect<boolean>
+  /**
+   * Fails when `text` looks like it holds a credential and any of `targets` is in the team memory folder, which is
+   * committed with the repository (context-memory-11). A target is in it when it is by name, or when where it really
+   * leads is in the folder's real path, so a link elsewhere in the project that leads in is held to it too (class 3).
+   * It follows the path alone, not the `memory.team` switch or trust, and is called before anything is asked or written.
+   * The failure names the kinds of credential found, never the text.
+   */
+  readonly refuseTeamSecrets: (targets: readonly Target[], text: string) => Effect.Effect<void, ToolFailure>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -179,6 +192,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const memory = yield* MemoryStore.Service
+    const team = yield* MemoryTeam.Service
     const location = yield* Location.Service
     const permission = yield* Permission.Service
     const trust = yield* ProjectTrust.Service
@@ -494,23 +508,49 @@ const layer = Layer.effect(
       return targets.flat()
     })
 
-    const inMemory = (file: string) =>
-      memory
-        .enabled()
-        .pipe(
-          Effect.flatMap((on) =>
-            on ? memory.locate(file).pipe(Effect.map((real) => real !== undefined)) : Effect.succeed(false),
-          ),
-        )
+    const inMemory = Effect.fnUntraced(function* (file: string) {
+      if (!(yield* memory.enabled())) return false
+      if ((yield* memory.locate(file)) !== undefined) return true
+      return (yield* team.locate(file)) !== undefined
+    })
 
-    return Service.of({ resolve, externalRequest, authorizeExternal, authorizeRead, escaped, inMemory })
+    const refuseTeamSecrets = Effect.fn("FileAccess.refuseTeamSecrets")(function* (
+      targets: readonly Target[],
+      text: string,
+    ) {
+      const found = SecretScan.scan(text)
+      if (found.length === 0) return
+      const real = yield* team.guarded()
+      // By name, `absolute` decides: a target's `place` differs from it only when a link leads it out of the project, and
+      // then it is no name of the team folder, which is in the project.
+      const inTeam = targets.some(
+        (target) =>
+          FSUtil.contains(team.folder, target.absolute) ||
+          (real !== undefined &&
+            [target.place, target.leads].some((place) => place !== undefined && FSUtil.contains(real, place))),
+      )
+      if (!inTeam) return
+      return yield* new ToolFailure({
+        message: `Nothing was written: the content looks like it holds a secret (${found.map((match) => match.label).join(", ")}). Team memory is shared with everyone who works in this repository, so a secret must never go into it. Take the secret out of the content and try again.`,
+      })
+    })
+
+    return Service.of({
+      resolve,
+      externalRequest,
+      authorizeExternal,
+      authorizeRead,
+      escaped,
+      inMemory,
+      refuseTeamSecrets,
+    })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node, MemoryStore.node],
+  deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node, MemoryStore.node, MemoryTeam.node],
 })
 
 // The name in `folder` that `part` stands for: `part` itself when the folder has an entry of that name or nothing is
