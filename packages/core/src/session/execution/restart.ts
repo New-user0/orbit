@@ -12,6 +12,7 @@ import { SessionSchema } from "../schema.js"
 import { SessionStore } from "../store.js"
 import { ShellResult } from "../../shell/result.js"
 import { SubagentCompletion } from "../subagent-completion.js"
+import { SubagentJob } from "../subagent-job.js"
 
 const CONTINUE_AFTER_SERVER_RESTART =
   "The server restarted while you were working. Continue from where you left off without repeating completed work."
@@ -191,6 +192,7 @@ export const layer = (options?: Options) =>
               )
               return SubagentCompletion.text(assistant)
             }),
+            SubagentJob.endsShells(sessions, recovery.childSessionID),
           ),
         })
         yield* jobs.background(background.id)
