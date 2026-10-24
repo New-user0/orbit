@@ -125,6 +125,47 @@ test("session instructions methods use the public HTTP contract", async () => {
   ])
 })
 
+// clients-ux-37: a label names the assistant message and its calls; a suggestion sends nothing but the session. Both
+// answers decode as text or as null with the reason.
+test("session.assist methods use the public HTTP contract and decode both answers", async () => {
+  const requests: Array<{ method: string; url: string; body?: unknown }> = []
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        Response.json({
+          data: request.url.endsWith("/label") ? { label: "Read notes.txt" } : { suggestion: null, reason: "busy" },
+        }),
+      ),
+    )
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const label = yield* client.session.assist.label({
+      sessionID: Session.ID.make("ses_test"),
+      messageID: SessionMessage.ID.make("msg_a"),
+      toolCallIDs: ["call_1", "call_2"],
+    })
+    const suggestion = yield* client.session.assist.suggestion({ sessionID: Session.ID.make("ses_test") })
+    return { label, suggestion }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual({ label: { label: "Read notes.txt" }, suggestion: { suggestion: null, reason: "busy" } })
+  expect(requests).toEqual([
+    {
+      method: "POST",
+      url: "http://localhost:3000/api/session/ses_test/assist/label",
+      body: { messageID: "msg_a", toolCallIDs: ["call_1", "call_2"] },
+    },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/assist/suggestion", body: undefined },
+  ])
+})
+
 // clients-ux-5: a code rewind's dry run and a prompt's own diff reach the server as the HTTP contract says.
 test("session.revert.files sends a dry run and decodes its result; session.diff sends the prompt scope", async () => {
   const requests: Array<{ method: string; url: string; query: unknown; body?: unknown }> = []
