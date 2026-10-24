@@ -66,12 +66,18 @@ export interface Services {
   readonly permission: Permission.Interface
   readonly trust: ProjectTrust.Interface
   readonly environment: Environment.Interface
+  /**
+   * The budget, in milliseconds, for the files' checks and reads and for the rebuild's (`FILE_BUDGET_MS` when not
+   * given); the producer's deadline follows it. Production gives none. A test that counts which of many files are read
+   * gives more, so a loaded machine does not leave some out.
+   */
+  readonly budget?: number
 }
 
 export const durable = (services: Services): Durable => ({
   name: KIND,
   // The rebuild's budget, the checks' budget and the comparisons' time, with room to spare.
-  timeout: Duration.millis(2 * FILE_BUDGET_MS + DIFF_TIMEOUT_MS + 500),
+  timeout: Duration.millis(2 * (services.budget ?? FILE_BUDGET_MS) + DIFF_TIMEOUT_MS + 500),
   run: (input) =>
     Effect.gen(function* () {
       // Claimed before the work, so a rebuild that runs past the producer's deadline costs one step, not every step. A
@@ -80,7 +86,7 @@ export const durable = (services: Services): Durable => ({
         yield* rebuild(services, input)
       if (postedInRun(input.messages, KIND)) return []
       const watched = yield* services.ledger.watched(input.session.id)
-      const deadline = Date.now() + FILE_BUDGET_MS
+      const deadline = Date.now() + (services.budget ?? FILE_BUDGET_MS)
       const checked = yield* Effect.forEach(
         watched,
         (file, index) =>
@@ -290,7 +296,7 @@ const shown = (text: string) =>
  * so one that runs past the producer's deadline is not tried again in this process.
  */
 const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
-  const deadline = Date.now() + FILE_BUDGET_MS
+  const deadline = Date.now() + (services.budget ?? FILE_BUDGET_MS)
   // The newest call for each spelling; then the newest for each file, whatever spelling named it.
   const bySpelling = new Map(fromHistory(input.messages).map((found) => [found.path, found] as const))
   const resolved = yield* Effect.forEach(

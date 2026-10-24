@@ -377,4 +377,27 @@ describe("FileLedger bounds", () => {
       expect(yield* ledger.watched(sessionID)).toEqual([])
     }).pipe(Effect.provide(ledgerLayer)),
   )
+
+  // A write that left the same time, or the same text, is still a different record when any one field differs.
+  const replacements = [
+    { field: "time", next: { ...written("first"), place: "/outside/a.ts", mtimeMs: 2_000 } },
+    { field: "digest", next: { ...written("first"), place: "/outside/a.ts", digest: digestOf("other") } },
+    { field: "text", next: { ...written("first"), place: "/outside/a.ts", text: "other" } },
+    { field: "place", next: { ...written("first"), place: "/elsewhere/a.ts" } },
+  ]
+  for (const row of replacements)
+    it.live(`does not settle a record a write replaced with one whose ${row.field} alone differs`, () =>
+      Effect.gen(function* () {
+        const ledger = yield* FileLedger.Service
+        yield* ledger.recordWrite(sessionID, "/project/a.ts", { ...written("first"), place: "/outside/a.ts" })
+        const [held] = yield* ledger.watched(sessionID)
+        yield* ledger.recordWrite(sessionID, "/project/a.ts", row.next)
+        yield* ledger.settle(sessionID, held.path, held.seen, { mtimeMs: 3_000, digest: digestOf("read") })
+        expect(yield* ledger.watched(sessionID)).toEqual([{ path: "/project/a.ts", seen: row.next }])
+        // The control: settling the record that is there now replaces it with the read, which holds no text.
+        const [current] = yield* ledger.watched(sessionID)
+        yield* ledger.settle(sessionID, current.path, current.seen, { mtimeMs: 3_000, digest: digestOf("read") })
+        expect(yield* ledger.watched(sessionID)).toEqual([])
+      }).pipe(Effect.provide(ledgerLayer)),
+    )
 })

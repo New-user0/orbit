@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import net from "net"
 import path from "path"
-import { Deferred, Duration, Effect, Fiber, Layer, Option, Schedule, Schema, Scope } from "effect"
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Schema, Scope } from "effect"
 import { Document, Info, type Entry } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -1829,6 +1829,7 @@ describe("the rebuild after a restart", () => {
     h: Effect.Success<ReturnType<typeof setup>>,
     read: ReadToolFileSystem.Interface["read"],
     deadline?: Duration.Input,
+    budget?: number,
   ) {
     const reader = yield* ReadToolFileSystem.Service
     const agents = yield* Agent.Service
@@ -1840,6 +1841,7 @@ describe("the rebuild after a restart", () => {
       permission: yield* Permission.Service,
       trust: h.trust,
       environment: yield* Environment.Service,
+      budget,
     })
     return (messages: ReadonlyArray<SessionMessage.Info>) =>
       made
@@ -1883,18 +1885,55 @@ describe("the rebuild after a restart", () => {
       yield* Effect.promise(() => Promise.all(files.map((file) => fs.writeFile(file, text(["a"])))))
       const real = yield* ReadToolFileSystem.Service
       const reads: Array<string> = []
-      // Which files are read is the point here, not how fast: 100 reads can overrun the one-second deadline on a loaded
-      // runner, so this row allows more time.
+      // Which files are read is the point here, not how fast: the checks and reads of 105 files can overrun the
+      // rebuild's budget on a loaded runner, so this row gives the rebuild, and the producer's deadline, more time.
       const run = yield* producer(
         h,
         (file, resource, page) =>
           Effect.sync(() => reads.push(file)).pipe(Effect.andThen(real.read(file, resource, page))),
-        "30 seconds",
+        undefined,
+        10_000,
       )
       expect(yield* run(edits(files))).toEqual(Option.some([]))
       expect(reads.toSorted()).toEqual(files.slice(5).toSorted())
       yield* h.ledger.assertFresh(h.session.id, files.at(-1)!, "newest")
       expect((yield* h.ledger.assertRead(h.session.id, files[0], "oldest").pipe(Effect.flip)).code).toBe("file.unread")
+    }),
+    40_000,
+  )
+
+  // The row above relies on the budget a producer is given. Each read here is slower than the default budget, and the
+  // rebuild's read and the watched file's read together take longer than the default deadline: without a budget the
+  // edited file is left out of the rebuild and the written file is not reported, and with one both are done in time.
+  it.live("a budget given to the producer covers the rebuild, the watched files and the deadline", () =>
+    Effect.gen(function* () {
+      const real = yield* ReadToolFileSystem.Service
+      const slow: ReadToolFileSystem.Interface["read"] = (file, resource, page) =>
+        Effect.sleep("4 seconds").pipe(Effect.andThen(real.read(file, resource, page)))
+      const results = yield* Effect.forEach(
+        [undefined, 6_000],
+        (budget) =>
+          Effect.gen(function* () {
+            const h = yield* setup()
+            const edited = h.inside(`edited-${budget ?? "default"}.txt`)
+            const written = h.inside(`written-${budget ?? "default"}.txt`)
+            yield* Effect.promise(() => fs.writeFile(edited, text(["a"])))
+            yield* h.write(written, text(["a"]))
+            yield* h.change(written, text(["b"]))
+            const run = yield* producer(h, slow, undefined, budget)
+            const found = yield* run(edits([edited]))
+            const seeded = Exit.isSuccess(yield* h.ledger.assertRead(h.session.id, edited, "edited").pipe(Effect.exit))
+            return {
+              done: Option.isSome(found),
+              reported: Option.getOrElse(found, () => []).map((entry) => entry.data?.label),
+              seeded,
+            }
+          }),
+      )
+      expect(results).toEqual([
+        { done: true, reported: [], seeded: false },
+        { done: true, reported: [expect.stringContaining("written-6000.txt")], seeded: true },
+      ])
     }),
     40_000,
   )
