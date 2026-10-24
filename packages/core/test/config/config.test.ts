@@ -1029,7 +1029,8 @@ describe("Config", () => {
               {
                 type: "directory",
                 path: AbsolutePath.make(path.join(tmp.path, "global")),
-                ignore: ["**/{node_modules,.git}/**", ".git", "node_modules"],
+                // Team memory is written by the agent, so its writes are not config changes (context-memory-11).
+                ignore: ["**/team-memory/**", "**/{node_modules,.git}/**", ".git", "node_modules", "team-memory"],
               },
               {
                 type: "entries",
