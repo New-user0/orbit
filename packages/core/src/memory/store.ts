@@ -94,7 +94,8 @@ export function validateDirectory(raw: string | undefined, home: string) {
   if (process.platform === "win32" && !/^[A-Za-z]:[\\/]/.test(value)) return undefined
   const normalized = path.normalize(value)
   const trimmed = normalized.replace(/[\\/]+$/, "") || normalized
-  if (trimmed.length < 3 || path.parse(normalized).root === normalized) return undefined
+  // A root (`/`, `C:\`) is shorter than 3 characters once its separator is dropped, so this refuses it too.
+  if (trimmed.length < 3) return undefined
   return trimmed.normalize("NFC")
 }
 

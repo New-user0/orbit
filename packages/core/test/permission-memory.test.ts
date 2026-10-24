@@ -653,6 +653,42 @@ describe("the real places a memory call leads to", () => {
       }),
     timeout,
   )
+
+  // A folder question by a spelling that is not the memory folder's is left to the rules, and the memory folder's allow
+  // meets it by a spelling the asker gives for it (`aliases`). With the data folder a link, that allow is written for both
+  // spellings, and it decides only when the real place the call leads to is in the real memory folder: the real folder,
+  // not the linked spelling, is what the place is judged against. The call without the alias is the control.
+  it.live(
+    "lets the folder's allow decide a call by an asker's alias of a linked data folder, judged by the real folder",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const linked = path.join(l.root, "data-link")
+        yield* Effect.promise(() => fs.symlink(l.data, linked, linkType))
+        yield* Effect.promise(() => fs.mkdir(l.memory, { recursive: true }))
+        const resource = path.join(l.elsewhere, "*")
+        const folder = (aliased: boolean) =>
+          Effect.gen(function* () {
+            const permission = yield* Permission.Service
+            const answer = yield* permission.ask({
+              id: Permission.ID.create(),
+              action: "external_directory",
+              resources: [resource],
+              ...(aliased ? { aliases: { [resource]: [path.join(linked, "memory", Project.ID.global, "*")] } } : {}),
+              leads: { [resource]: [path.join(l.memory, "*")] },
+              sessionID: SessionSchema.ID.make(main),
+              agent: probe,
+            })
+            return answer.effect
+          })
+        const out = yield* Effect.gen(function* () {
+          yield* seed(l)
+          return { aliased: yield* folder(true), plain: yield* folder(false) }
+        }).pipe(provide(l, { data: linked }))
+        expect(out).toEqual({ aliased: "allow", plain: "ask" })
+      }),
+    timeout,
+  )
 })
 
 // Class 8: a managed ask does not reach the memory folder, as no other ask does, while a managed deny for a memory file

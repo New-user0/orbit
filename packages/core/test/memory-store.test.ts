@@ -205,7 +205,7 @@ describe("MemoryStore.validateDirectory", () => {
       expect(MemoryStore.validateDirectory(raw, home)).toBeUndefined()
     })
 
-  // A home deep enough that two `..` parts stop short of the root, which the root check would refuse anyway. The folder
+  // A home deep enough that two `..` parts stop short of the root, which the length check would refuse anyway. The folder
   // below home in the same run is the control.
   test("refuses a remainder of only `..` parts, which names a folder above a deep home", () => {
     const deep = path.resolve("/srv/users/u/home")
