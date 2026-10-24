@@ -1426,6 +1426,30 @@ it.effect("a handoff that quotes an <analysis> tag is stored whole", () =>
   }),
 )
 
+it.effect("analysis never stored: an analysis that names the handoff tag", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_analysis_names_tag",
+      [userText("Do it")],
+      [answer("<analysis>\nI will write <handoff> next.\nDRAFT-N\n</analysis>\n<handoff>\nreal\n</handoff>")],
+    )
+    expect(run.summary).toBe("Summary:\nreal")
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-N")
+  }),
+)
+
+it.effect("analysis never stored: an analysis that quotes a whole handoff block", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_analysis_quotes_block",
+      [userText("Do it")],
+      [answer("<analysis>\nFixture has <handoff>x</handoff>.\nDRAFT-S\n</analysis>\n<handoff>\n1. Requests: real\n</handoff>")],
+    )
+    expect(run.summary).toBe("Summary:\n1. Requests: real")
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-S")
+  }),
+)
+
 // Which history counts as something to compact: each row is compacted, or fails as nothing to compact.
 const lone = (message: unknown) => [Schema.decodeUnknownSync(SessionMessage.Info)(message)]
 const loneBase = { id: "msg_lone", time: { created: 0 } }

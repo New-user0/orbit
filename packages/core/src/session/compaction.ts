@@ -137,18 +137,38 @@ export const buildPrompt = (instructions?: string) => {
  * since section 6 quotes user messages that may mention an `<analysis>` tag.
  */
 export const formatSummary = (raw: string) => {
-  const handoff = /<handoff>([\s\S]*?)<\/handoff>/.exec(raw)
+  const handoff = findHandoff(raw)
   return (
     handoff
       ? [
           withoutAnalysis(raw.slice(0, handoff.index)),
-          `Summary:\n${handoff[1].trim()}`,
-          withoutAnalysis(raw.slice(handoff.index + handoff[0].length)),
+          `Summary:\n${handoff.body.trim()}`,
+          withoutAnalysis(raw.slice(handoff.end)),
         ].join("")
       : withoutAnalysis(raw)
   )
     .replace(/(?:\r?\n){2,}/g, "\n\n")
     .trim()
+}
+
+/** The first closed handoff block that opens outside an analysis block, so a drafting note naming the tag is skipped. */
+const findHandoff = (raw: string) => {
+  let from = 0
+  while (from < raw.length) {
+    const open = raw.indexOf("<handoff>", from)
+    if (open < 0) return undefined
+    const analysis = raw.indexOf("<analysis>", from)
+    if (analysis >= 0 && analysis < open) {
+      const close = raw.indexOf("</analysis>", analysis)
+      if (close < 0) return undefined
+      from = close + "</analysis>".length
+      continue
+    }
+    const close = raw.indexOf("</handoff>", open)
+    if (close < 0) return undefined
+    return { index: open, end: close + "</handoff>".length, body: raw.slice(open + "<handoff>".length, close) }
+  }
+  return undefined
 }
 
 const withoutAnalysis = (text: string) =>
@@ -234,7 +254,7 @@ export const layer = Layer.effect(
      *
      * The first request shares the main request's system prompt, tools and settings. Its reply decides by its text
      * alone: a tool call is never run. When that request yields no text, or fails, one fallback request is made with
-     * a one-line system prompt, no media, no reasoning and the read tool only. A rejection of the fallback as too long
+     * a one-line system prompt, no media, no reasoning settings from hooks or variants and the read tool only. A rejection of the fallback as too long
      * drops the oldest round groups of the history and starts again, at most three times.
      */
     const summarize = Effect.fnUntraced(function* (trigger: Trigger, budget: number): Effect.fn.Return<Result, Failure> {
@@ -752,7 +772,7 @@ const transcript = (
   })
 
 /**
- * The same request for a reply that the first one did not give: a one-line system prompt, no media, no reasoning, and
+ * The same request for a reply that the first one did not give: a one-line system prompt, no media, no reasoning settings from hooks or variants, and
  * only the read tool so that tool calls in the history stay valid. It is never run.
  */
 const fallbackRequest = (request: LLMRequest, outputMax: number) =>

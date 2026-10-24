@@ -4311,7 +4311,7 @@ window less the summary's room instead of the whole window; lower it if compacti
   stored with recent text keeps its wrapper and renders as before; one stored without recent text now reaches the model as the resume message below
   (`session-compaction.test.ts`; `session-runner-message.test.ts`, "checkpoint resume message").
 - **What is stored.** The `<analysis>` block is never stored: every closed block is removed, and so is one that was cut
-  off, through to the end of the reply. The `<handoff>` block is stored under a `Summary:` heading, and runs of blank
+  off, through to the end of the reply. The handoff block is the first one that opens outside an analysis, so an analysis that names the `<handoff>` tag is not mistaken for it. The `<handoff>` block is stored under a `Summary:` heading, and runs of blank
   lines collapse to one. A handoff that quotes an `<analysis>` tag is stored whole, with its later sections. A summary that a `compaction` hook supplies is formatted the same way. A reply that is only an
   unfinished analysis fails as "Compaction produced no summary". A reply that stopped at the output limit is stored as
   it is, where it used to fail (`session-compaction.test.ts`, "analysis never stored").
@@ -4322,7 +4322,7 @@ window less the summary's room instead of the whole window; lower it if compacti
 - **A reply with no text gets one more request.** The first request shares the main request's system prompt, tools and
   settings; any text it returns is used, and a tool call in it is never run. When it returns no text, or fails, one
   fallback request follows, with a one-line system prompt, no media (an image or a document becomes `[image]` or
-  `[document]`), no reasoning, only the `Read` tool and at most 20,000 output tokens. A second reply without text fails
+  `[document]`), no reasoning settings from hooks or variants (a model's own defaults still apply), only the `Read` tool and at most 20,000 output tokens. A second reply without text fails
   as "Compaction produced no summary" (`session-compaction.test.ts`, "a reply with no text gets one fallback request").
 - **Too long to summarize.** A summary request is no longer shortened to fit before it is sent. When the fallback is
   rejected as too long, the oldest round groups are dropped (those that cover the gap the provider reports, or a fifth
