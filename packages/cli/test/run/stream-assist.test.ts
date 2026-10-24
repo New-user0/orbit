@@ -221,7 +221,14 @@ test("a new user line drops the suggestion in flight, and the next result gets i
     const run = controller(home, own, { args: ["--prompt-suggestions"], workspace })
     run.send({ type: "user", text: "one" })
     const first = await run.until((line) => line.type === "result")
-    // Sent while the first suggestion is still being written.
+    // Sent while the first suggestion is still being written: once the model has the request, which it answers after
+    // 4 s. Sent before that, the server answers that request busy without asking the model, and the second result's
+    // request would be the model's first and get the stale answer.
+    const deadline = Date.now() + 60_000
+    while (!own.requests.some(isSuggestion)) {
+      if (Date.now() > deadline) throw new Error("The model was not asked for the first suggestion")
+      await Bun.sleep(25)
+    }
     run.send({ type: "user", text: "two" })
     const second = await run.until((line) => line.type === "result", first.next)
     await run.until((line) => line.type === "prompt_suggestion", second.next)
