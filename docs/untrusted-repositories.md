@@ -799,8 +799,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `memory.directory` names. That key is read only from the user, local, flag and managed scopes, never from a project's
   or a remote one, and `ConfigTrust` withholds all of `memory` from an untrusted folder as `permissions` (class 8). The
   value is refused before any disk access when it is relative, a share or device spelling (two leading separators), a
-  root, shorter than 3 characters, holds a NUL, names home or a folder above it through `~/`, or on Windows has no drive
-  letter (class 4); the default folder is kept then. The folder and its real path are decided once for the Location.
+  root, shorter than 3 characters, holds a NUL, names home or a folder above it through `~/` (with or without trailing
+  separators, as in `~/./` or `~/../`), or on Windows has no drive letter (class 4); the default folder is kept then. The folder and its real path are decided once for the Location.
   The file tools write and read there without a question (`inMemory` in `Permission`): only for `Edit`, `Read` and
   `external_directory`, only when the place is in the folder by one of its spellings and every real place it leads to is
   in the real folder (a link inside the folder that points out is decided as the place it points to), never for a call
@@ -810,19 +810,26 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the carve-out nor Orbit's own allow for the folder decides it, so the default agent's `external_directory * ask` still
   asks (class 8). This is stricter than the reference, whose shell path check lets the memory folder through but which
   still asks about a command that is not read-only: the default agent here allows every command, so the folder question
-  is the only gate a command meets. The guide goes only to a main thread whose base prompt is Orbit's (class 12). The index reader
+  is the only gate a command meets. The guide goes only to a main thread whose base prompt is Orbit's (class 12); when it
+  goes in the middle of a session, the update tells the model that memory is off only when memory is switched off
+  (`test/session-context-memory.test.ts`, an agent switch and its `memory.enabled` control). The index reader
   (`MemoryInstructions`, `packages/core/src/memory/instructions.ts`) loads `MEMORY.md` only when its real path is in the
-  real folder, takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
-  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) lists only files whose real
-  path is in the folder's, and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
+  real folder, and asks `LinkShare.blocked` before it resolves the file, so a link to a share is never opened (class 6);
+  the carry-over of notes saved before trust adds its lines only to a `MEMORY.md` that is not a link, one that leads
+  nowhere included (class 4). The reader takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
+  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) asks `LinkShare.blocked` about each link entry before it
+  resolves it (class 6), lists only files whose real path is in the folder's, reads each at the real path it checked,
+  and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
   asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
   the five places beside the folder, four link targets with a new and an existing file, the data folder and the
   configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a deny that names the
   other spelling of the folder (linked or real data folder, absolute or relative configured folder, an asker's
   aliases), a mode's deny, the
-  built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation, scopes, the switch order,
-  front matter with a marker file, the scan's links), `test/memory-instructions.test.ts` (the index link to a marker, which
-  neither the reader, the carry-over nor the header rewrite goes through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
+  built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation with the trailing-separator
+  and deep-home `~` rows, scopes, the switch order, front matter with a marker file, the scan's links, a link to a share
+  with the recorded file system, the read at the checked real path), `test/memory-instructions.test.ts` (the index link to a marker, which
+  neither the reader, the carry-over nor the header rewrite goes through, an index link to a share with the recorded file
+  system, a dangling index link the carry-over does not write through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and

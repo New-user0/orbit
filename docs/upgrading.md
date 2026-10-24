@@ -3433,11 +3433,16 @@ memory file may carry `name`, `description` and `type` front matter. Writes and 
 even under an `edit: ask` or `read: ask` rule or in plan mode. A deny rule there wins over any ask and over plan mode;
 as elsewhere, a later allow rule of yours lifts it. A shell command that names the folder, or runs in it, is asked about
 as before, even by an agent that allows every command. The main thread's prompt gets a guide to memory, except when a
-`system_prompt`, a `system_prompt_file` with text or an agent's own prompt takes the place of Orbit's.
+`system_prompt`, a `system_prompt_file` with text or an agent's own prompt takes the place of Orbit's. When the guide
+goes in the middle of a session, the model is told that memory is switched off only when it is; after a switch to such
+an agent it is told only that the guide no longer applies.
 `MEMORY.md` loads after the instruction files, cut at 200 lines and 25,000 characters with a note to the model, and a
 change to it reaches a session from its next compaction or in a new session. A Read of a memory file more than a day old starts with a note of its age. The index Orbit generated before is
 kept, without the line that named the tool. New: `memory.enabled`, `memory.directory` (read only from your own, local,
-command-line and managed configs) and `ORBIT_DISABLE_AUTO_MEMORY`; `orb run --bare` turns memory off.
+command-line and managed configs) and `ORBIT_DISABLE_AUTO_MEMORY`; `orb run --bare` turns memory off. A
+`memory.directory` of `~/` that names home or a folder above it is not used, with or without trailing separators
+(`~/./`, `~//`, `~/../`), and the default folder is kept. A `MEMORY.md` that links out of the memory folder, or to a
+network share, is not loaded, and notes moved over from before trust add no line to a `MEMORY.md` that is a link.
 
 **Affects:** people with permission rules or hooks written for the `Memory` tool, which now name no tool, and anyone
 who reads the memory folder.
