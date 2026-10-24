@@ -84,7 +84,10 @@ type Layout = Effect.Success<typeof layout>
 
 type Services = Database.Service | Bus.Service | Session.Service
 
-const scenario = <A, E>(body: (l: Layout) => Effect.Effect<A, E, Services | Scope.Scope>) =>
+const scenario = <A, E>(
+  body: (l: Layout) => Effect.Effect<A, E, Services | Scope.Scope>,
+  execution: Layer.Layer<SessionExecution.Service> = SessionExecution.noopLayer,
+) =>
   Effect.gen(function* () {
     const l = yield* layout
     return yield* body(l).pipe(
@@ -103,7 +106,7 @@ const scenario = <A, E>(body: (l: Layout) => Effect.Effect<A, E, Services | Scop
           ]),
           [
             Project.node.replace(globalProjectNode),
-            SessionExecution.node.replace(SessionExecution.noopLayer),
+            SessionExecution.node.replace(execution),
             SessionModelTransport.node.replace(transport),
             offlineModels,
             Global.node.replace(Global.layerWith({ data: l.data, tmp: l.tmp, config: path.join(l.root, "config") })),
@@ -784,6 +787,42 @@ describe("SessionRetention.prune: stats", () => {
       }),
     ),
   )
+
+  // The family is folded before its members go. When a removal fails, the member that stays is counted from its own
+  // rows only, not again from the archive, while the member that went is counted from the archive.
+  it.live("counts a session whose removal failed once", () =>
+    scenario(() =>
+      Effect.gen(function* () {
+        const now = Date.now()
+        yield* row({ id: "ses_ret_once", updated: now })
+        yield* row({ id: "ses_ret_once_child", parent: "ses_ret_once", updated: now })
+        const database = yield* Database.Service
+        yield* database.db
+          .insert(SessionMessageTable)
+          .values([
+            messageRow("ses_ret_once", 1, assistant("msg_ret_once", Date.UTC(2026, 0, 2, 10), [])),
+            messageRow("ses_ret_once_child", 1, assistant("msg_ret_once_child", Date.UTC(2026, 0, 3, 10), [], "large")),
+          ])
+          .run()
+          .pipe(Effect.orDie)
+        // `Session.remove` fails on the root, whose creation time does not decode; the child goes first.
+        yield* database.db
+          .run(sql`UPDATE session_v2 SET time_created = 'soon' WHERE id = 'ses_ret_once'`)
+          .pipe(Effect.orDie)
+        const read = SessionStats.get({ from: Date.UTC(2025, 11, 1), to: Date.UTC(2026, 2, 1), timezone: "UTC" }).pipe(
+          Effect.orDie,
+          Effect.map((stats) => ({ ...stats, range: undefined })),
+        )
+        const before = yield* read
+        expect(before.steps).toBe(2)
+
+        yield* prune({ days: 30, now: later() }).pipe(logging([]))
+
+        expect(yield* remaining).toEqual(["ses_ret_once"])
+        expect(yield* read).toEqual(before)
+      }),
+    ),
+  )
 })
 
 describe("SessionRetention.schedule", () => {
@@ -850,6 +889,37 @@ describe("SessionRetention.schedule", () => {
       }),
     ),
   )
+
+  // A session this process is running counts as active however long ago its row last changed (a long model call writes
+  // nothing until it ends), so the pass waits for it as well.
+  it.effect("defers the pass while this process runs a session", () => {
+    const running = { now: true }
+    return scenario(
+      () =>
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.now() + 40 * DAY)
+          yield* row({ id: "ses_ret_waiting", updated: Date.now() })
+          yield* Effect.forkScoped(schedule(Effect.succeed(30)))
+
+          yield* TestClock.adjust("10 minutes")
+          expect(yield* still("ses_ret_waiting")).toBe(true)
+          running.now = false
+          yield* TestClock.adjust("10 minutes")
+          expect(yield* gone("ses_ret_waiting")).toBe(true)
+        }),
+      Layer.succeed(
+        SessionExecution.Service,
+        SessionExecution.Service.of({
+          active: Effect.sync(() => new Set(running.now ? [SessionSchema.ID.make("ses_ret_running")] : [])),
+          isActive: () => Effect.succeed(false),
+          resume: () => Effect.void,
+          wake: () => Effect.void,
+          interrupt: () => Effect.succeed(false),
+          awaitIdle: () => Effect.void,
+        }),
+      ),
+    )
+  })
 
   // A pass that fails (the server's config could not be loaded) is logged, and the next pass a day later still runs.
   it.effect("logs a pass that fails and runs the next one", () =>
