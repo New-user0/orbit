@@ -61,7 +61,6 @@ const renamed: ReadonlyArray<readonly [string, string]> = [
   ["enter_worktree", "EnterWorktree"],
   ["exit_worktree", "ExitWorktree"],
   ["workflow", "Workflow"],
-  ["memory", "Memory"],
   ["execute", "Execute"],
 ]
 
