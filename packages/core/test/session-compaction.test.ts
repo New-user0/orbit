@@ -1450,6 +1450,30 @@ it.effect("analysis never stored: an analysis that quotes a whole handoff block"
   }),
 )
 
+it.effect("analysis never stored: an analysis cut off while it quotes a whole handoff block", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_analysis_cut_quotes_block",
+      [userText("Do it")],
+      [answer("<analysis>\nFixture has <handoff>QUOTED-X</handoff>.\nDRAFT-U cut", "length")],
+    )
+    expect(run.outcome).toMatchObject({ status: "failed", error: { type: "compaction.failed", message: NO_SUMMARY } })
+    expect(JSON.stringify(run.events)).not.toContain("QUOTED-X")
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-U")
+  }),
+)
+
+it.effect("a handoff cut off before its closing tag stays as written", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_handoff_cut",
+      [userText("Do it")],
+      [answer("<handoff>\n## Objective\n- cut", "length")],
+    )
+    expect(run.summary).toBe("<handoff>\n## Objective\n- cut")
+  }),
+)
+
 // Which history counts as something to compact: each row is compacted, or fails as nothing to compact.
 const lone = (message: unknown) => [Schema.decodeUnknownSync(SessionMessage.Info)(message)]
 const loneBase = { id: "msg_lone", time: { created: 0 } }
