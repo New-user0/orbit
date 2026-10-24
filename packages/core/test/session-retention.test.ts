@@ -1094,6 +1094,13 @@ describe("SessionRetention.prune: stats", () => {
           cost: Money.USD.make(0.25),
           tokens: { input: 2, output: 2, reasoning: 2, cache: { read: 2, write: 2 } },
         })
+        // Naming a session is not counted live, so the archive must not count it either.
+        yield* bus.publish(SessionEvent.UsageRecorded, {
+          sessionID: SessionSchema.ID.make("ses_ret_stats_child"),
+          source: "title",
+          cost: Money.USD.make(0.5),
+          tokens: { input: 3, output: 3, reasoning: 3, cache: { read: 3, write: 3 } },
+        })
         const range = { from: Date.UTC(2025, 11, 1), to: Date.UTC(2026, 2, 1) }
         const queries = [
           { ...range, timezone: "UTC", tools: "detail" },
@@ -1223,6 +1230,29 @@ describe("SessionRetention.schedule", () => {
         yield* TestClock.adjust("10 minutes")
         expect(yield* gone("ses_ret_idle")).toBe(true)
         expect(yield* remaining).toEqual(["ses_ret_busy"])
+      }),
+    ),
+  )
+
+  // Only a change in the last minute up to now counts: a clock ahead of now (a clock set back, or an imported row) or one
+  // stored as text would otherwise put the pass off for as long as it stays so. The row above is the control.
+  it.effect("does not defer the pass for a session whose clock is ahead or stored as text", () =>
+    scenario(() =>
+      Effect.gen(function* () {
+        const clock = Date.now() + 40 * DAY
+        yield* TestClock.setTime(clock)
+        yield* row({ id: "ses_ret_idle", updated: Date.now() })
+        yield* row({ id: "ses_ret_ahead", updated: clock + 10 * 60_000 + 60 * 60_000 })
+        yield* row({ id: "ses_ret_text", updated: Date.now() })
+        const database = yield* Database.Service
+        yield* database.db
+          .run(sql`UPDATE session_v2 SET time_updated = 'later' WHERE id = 'ses_ret_text'`)
+          .pipe(Effect.orDie)
+        yield* Effect.forkScoped(schedule(Effect.succeed(30))).pipe(logging([]))
+
+        yield* TestClock.adjust("10 minutes")
+        expect(yield* gone("ses_ret_idle")).toBe(true)
+        expect(yield* remaining).toEqual(["ses_ret_ahead", "ses_ret_text"])
       }),
     ),
   )

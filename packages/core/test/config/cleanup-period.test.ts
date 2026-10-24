@@ -46,6 +46,10 @@ type Input = {
 }
 
 const read = (input: Input) =>
+  configured(input).pipe(Effect.flatMap((built) => setting.pipe(Effect.provide(built.layer))))
+
+// The files of `input` on disk and a Config layer that reads them; the watcher is a test one, so only a reload rereads.
+const configured = (input: Input) =>
   Effect.gen(function* () {
     const root = (yield* tmpdirScoped()).path
     const global = path.join(root, "global")
@@ -66,26 +70,25 @@ const read = (input: Input) =>
     })
     const directory = AbsolutePath.make(project)
     const served = input.remote === undefined ? undefined : remote(input.remote)
-    return yield* setting.pipe(
-      Effect.provide(
-        AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
-          Config.node.replace(
-            Config.configured({ file: input.file === undefined ? undefined : flag, content: input.content }),
-          ),
-          Location.node.replace(Layer.succeed(Location.Service, Location.Service.of(location({ directory })))),
-          Global.node.replace(Global.layerWith({ config: global, home })),
-          Credential.node.replace(served?.credential ?? emptyCredentialNode),
-          WellKnown.node.replace(served?.wellknown ?? emptyWellknownNode),
-          ManagedSettings.node.replace(
-            input.managed === undefined ? emptyManagedNode : ManagedSettings.configured({ directory: managed }),
-          ),
-          Watcher.node.replace(Watcher.testLayer),
-          ...(input.trusted === false
-            ? [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]
-            : []),
-        ]),
-      ),
-    )
+    return {
+      user: path.join(global, "orbit.json"),
+      layer: AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
+        Config.node.replace(
+          Config.configured({ file: input.file === undefined ? undefined : flag, content: input.content }),
+        ),
+        Location.node.replace(Layer.succeed(Location.Service, Location.Service.of(location({ directory })))),
+        Global.node.replace(Global.layerWith({ config: global, home })),
+        Credential.node.replace(served?.credential ?? emptyCredentialNode),
+        WellKnown.node.replace(served?.wellknown ?? emptyWellknownNode),
+        ManagedSettings.node.replace(
+          input.managed === undefined ? emptyManagedNode : ManagedSettings.configured({ directory: managed }),
+        ),
+        Watcher.node.replace(Watcher.testLayer),
+        ...(input.trusted === false
+          ? [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]
+          : []),
+      ]),
+    }
   })
 
 // A well-known source the person signed in to, which serves `config` as its remote document.
@@ -221,6 +224,31 @@ describe("SessionRetention.setting", () => {
   )
 })
 
+// The server lives for days and reads its files again when they change. A reload that breaks the period must skip the
+// pass as a first load does, not keep the verdict of the clean load before it and fall back to the default (class 7).
+// The fixed file after each break is the control: the reload then gives its value.
+describe("SessionRetention.setting: after a reload", () => {
+  it.live("skips the pass once a reload breaks the period and reads it again once the file is fixed", () =>
+    Effect.gen(function* () {
+      const built = yield* configured({ user: JSON.stringify({ cleanup_period_days: 365 }) })
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const rewrite = (text: string) =>
+          Effect.promise(() => fs.writeFile(built.user, text)).pipe(Effect.andThen(config.reload!()))
+        expect(yield* setting).toBe(365)
+        yield* rewrite(JSON.stringify({ cleanup_period_days: "365" }))
+        expect(yield* setting).toBeUndefined()
+        yield* rewrite(JSON.stringify({ cleanup_period_days: 120 }))
+        expect(yield* setting).toBe(120)
+        yield* rewrite('{ "cleanup_period_days": 120,, ')
+        expect(yield* setting).toBeUndefined()
+        yield* rewrite(JSON.stringify({ cleanup_period_days: 60 }))
+        expect(yield* setting).toBe(60)
+      }).pipe(Effect.provide(built.layer))
+    }),
+  )
+})
+
 // Class 7 over every document of the load: a scope's rejected document stops the pass as the user's does. `beside`
 // adds the user's own valid period of 90 (the scope's document replaces it in the user scope). A remote document comes
 // as an object, so it cannot fail to parse. Each row's control is a valid document in the same scope.
@@ -255,6 +283,17 @@ describe("SessionRetention.setting: every scope", () => {
         expect(yield* read(put(JSON.stringify({ snapshots: "yes" }), false))).toBe(30)
         expect(yield* read(put(JSON.stringify({ snapshots: "yes" }), true))).toBe(name === "user" ? 30 : undefined)
         expect(yield* read(put(JSON.stringify({ snapshots: true }), true))).toBe(name === "user" ? 30 : 90)
+      }),
+    )
+
+    // A value set twice of which one was kept is a conflict, not an error: the document is taken as written, so it
+    // stops nothing, as in the reference. The control without a second value gives the same period.
+    it.live(`${name}: a conflict does not skip the pass`, () =>
+      Effect.gen(function* () {
+        const conflict = { system_prompt: "a", system_prompt_file: "b.md" }
+        expect(yield* read(put(JSON.stringify(conflict), true))).toBe(name === "user" ? 30 : 90)
+        expect(yield* read(put(JSON.stringify({ ...conflict, cleanup_period_days: 9 }), false))).toBe(9)
+        expect(yield* read(put(JSON.stringify({ system_prompt: "a" }), true))).toBe(name === "user" ? 30 : 90)
       }),
     )
 
