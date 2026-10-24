@@ -1562,3 +1562,22 @@ it.effect("a fallback that fails for another reason than the size stops the comp
     expect(run.sent).toHaveLength(2)
   }),
 )
+
+it.effect("a history of only a synthetic note counts as conversation to compact", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_synthetic_only",
+      [
+        SessionMessage.Synthetic.make({
+          id: SessionMessage.ID.create(),
+          type: "synthetic",
+          text: "User shell pwd completed: /project",
+          time: { created: DateTime.makeUnsafe(0) },
+        }),
+      ],
+      [answer("<handoff>\nok\n</handoff>")],
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(JSON.stringify(run.sent[0]?.messages)).toContain("User shell pwd completed")
+  }),
+)
