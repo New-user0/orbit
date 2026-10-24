@@ -117,7 +117,7 @@ from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`
 for the failures). A repository with no remote is named by its path until it is
 trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
 `project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
-path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
+path-named ID are moved to the new one when the folder is opened (`memory-instructions.test.ts`), and snapshots taken after a
 grant, before the folder was opened again, can be restored (`snapshot-trust-restart.test.ts`). Saved "always allow"
 answers stay with the old ID, so Orbit asks again.
 
@@ -3001,6 +3001,91 @@ taken a snapshot of before.
 
 **What to do:** Nothing.
 
+### Undo puts back only what Orbit's file tools changed
+
+Undoing to a prompt (`/undo`, a revert with its files) used to put back every file that changed during the steps after
+it, including what a shell command, a subagent or you changed by hand. It now puts back only the files that the
+session's own Edit, Write, Patch and NotebookEdit calls changed, and only where git sees a difference; a shell
+command's edits stay as they are (`session-revert-files.test.ts`, "undoes only the file-tool edits when /undo stages a
+conversation revert with its files"). To record what it changed, Write now names its file in the completed call, as
+Edit already did, and a Patch move names its source beside its destination.
+
+Undo and the code-only rewind count only the file-tool calls made in the folder the session is in now. After the
+session has moved (EnterWorktree, ExitWorktree or a session move), a file that a file tool changed in the other folder
+is a different file from the one with the same name here, so a shell edit to the one here stays; calls made here
+before the session left and came back still count (`session-revert.test.ts`, "Session.revert names from another
+folder"). A Write recorded before this upgrade did not name its file in its result, so it counts by the path it was
+given; a Patch move recorded before the upgrade names only its destination, so undoing it does not bring the source
+back.
+
+An undo to a prompt from before such a move used to fail (the server answered 500) whenever a step in another folder had
+changed a file, because it asked this folder's git for a snapshot that only the other folder's snapshot repository
+holds. It now puts back what the file tools changed here, from this folder's own snapshots, and leaves the other folder
+as it is; the code-only rewind and its dry run answer that such a prompt has no checkpoint, as before
+(`session-revert.test.ts`, "Session.revert across a folder switch"). Two related changes keep this true later on:
+committing an undo (by sending the next prompt) now keeps the record of each move among the messages it removes, so
+the transcript still shows that the session moved, and moving a session that has an undo staged commits that undo
+first, as a prompt does, so a redo is no longer offered in the new folder ("commits a staged undo when the session
+moves, so a redo there touches nothing").
+
+A restore now skips, with a log line, a file whose folder became a link after the snapshot (a junction, a dangling link
+or a link to a share), a file whose own name is now a link or a folder, and a file one of whose folders is now a file
+of yours; the other files still go back. Before, git wrote through the link, removed a junction's target files on
+Windows, removed a folder with what it held, removed your file to make the folder again, or the whole restore failed.
+No folder is removed with what it holds. A file that git fails to put back no longer stops the rest:
+the others go back and the restore then reports that it failed (`snapshot-restore-links.test.ts`). A tracked folder
+that became a link no longer stops snapshots: git refuses a path beyond a link, which made every later snapshot fail on
+Linux, so a rewind answered that snapshots were unavailable. The files behind the link now leave the snapshot and the
+rest is recorded (`snapshot-restore-links.test.ts`, "takes the capture without the files behind the link, and records
+the control"). On Windows a snapshot no longer stores the files that a junction in the project leads to ("does not
+capture the files a link leads to").
+
+An Edit, Write, Patch or NotebookEdit call that fails after it changed a file now names that file in the failed call
+too, so an undo or a rewind puts it back.
+
+An undo with its files now fails, and stages nothing, when Orbit cannot take the snapshot of the files it compares the
+edits with (git fails on the snapshot repository, say). Before, it staged the conversation alone and reported success
+without putting any file back (`session-revert.test.ts`, "fails a revert with its files when the capture before it
+fails, and stages one without its files"). Undoing the conversation alone still works.
+
+**Affects:** people who undo after letting the agent run shell commands that change files, and folders whose layout
+changed to links after a step.
+
+**What to do:** Undo shell edits yourself, for example with git.
+
+### Rewind a prompt's files without touching the conversation
+
+`POST /api/session/:sessionID/revert/files` with `{ messageID, dryRun? }` puts back, as they were when that prompt's
+work began, the files that the session's own file tools changed, and leaves the conversation as it is. It takes effect
+at once and has no redo. A dry run answers `canRewind` with the files that would change (absolute paths) and the lines
+the rewind would add (`insertions`) and remove (`deletions`). It refuses a busy session (409 `SessionBusyError`), a
+folder that is no longer trusted (403 `UntrustedFolderError`), an unknown message (404), and a message with no checkpoint,
+a folder without snapshots or a restore that failed (409 `RewindFilesError` with `reason`; a dry run answers
+`canRewind: false` instead). `orb run --rewind-files <message id>` and `orb -p --rewind-files <message id>` call it
+once; they need `--session`, `--continue` or `--resume`, take no prompt, print one line and exit. A file that git leaves
+out of snapshots (one the repository ignores, or an untracked file over 2 MB) is not rewound, and neither is a file
+whose name or folder is now a link, nor one where a folder now stands, nor one whose folder is now a file; the dry run
+leaves those out too. Prompts delivered together (sent while a step ran) share the checkpoint of the step after them.
+
+`GET /api/session/:sessionID/diff` takes `scope=prompt`, which diffs from `from` to the next prompt and counts only the
+file tools' edits, so a prompt steered in while the session was busy gets its own diff; `scope=turn`, the default, is
+unchanged.
+
+**Affects:** SDK callers and scripts that call `orb run` or `orb -p`.
+
+**What to do:** Nothing.
+
+### An imported session keeps no checkpoint ID that is not a snapshot tree
+
+Importing a session (`orb session import` or `POST /api/experimental/session/import`) now drops, with a log line, a
+step's start or end checkpoint that is not a git tree ID and a changed path that is not a plain name inside the
+project, and keeps the rest of the step. Such a value used to reach git: `--output=<file>` made viewing the session's
+diff write that file. Comparing, restoring and rewinding refuse such an ID before git starts.
+
+**Affects:** imported sessions whose files were edited by hand.
+
+**What to do:** Nothing.
+
 ## Prompts and instructions
 
 What the model is told about itself and the place it works in.
@@ -3481,6 +3566,35 @@ string, such as `"5s"`, is still invalid input, and the tool's schema still asks
 **Affects:** models that send numbers as strings.
 
 **What to do:** Nothing.
+### Memory is kept with the file tools, and the Memory tool is gone
+
+Before, the model saved notes with a `Memory` tool, and Orbit regenerated `MEMORY.md` from them after every save and
+showed the new index to the session at once. Now the model writes memory files with Write and Edit into the project's
+memory folder (`<data>/memory/<project ID>/`, or the folder `memory.directory` names) and keeps `MEMORY.md` itself. A
+memory file may carry `name`, `description` and `type` front matter. Writes and reads in that folder ask no question,
+even under an `edit: ask` or `read: ask` rule or in plan mode. A deny rule there wins over any ask and over plan mode;
+as elsewhere, a later allow rule of yours lifts it. A shell command that names the folder, or runs in it, is asked about
+as before, even by an agent that allows every command. The main thread's prompt gets a guide to memory, except when a
+`system_prompt`, a `system_prompt_file` with text or an agent's own prompt takes the place of Orbit's. When the guide
+goes in the middle of a session, the model is told that memory is switched off only when it is; after a switch to such
+an agent it is told only that the guide no longer applies.
+`MEMORY.md` loads after the instruction files, cut at 200 lines and 25,000 characters with a note to the model, and a
+change to it reaches a session from its next compaction or in a new session. A Read of a memory file more than a day old starts with a note of its age. The index Orbit generated before is
+kept, without the line that named the tool. New: `memory.enabled`, `memory.directory` (read only from your own, local,
+command-line and managed configs) and `ORBIT_DISABLE_AUTO_MEMORY`; `orb run --bare` turns memory off. A
+`memory.directory` of `~/` that names home or a folder above it is not used, with or without trailing separators
+(`~/./`, `~//`, `~/../`), and the default folder is kept; so is one whose path leads through a link to a network
+share. A deny rule written for a `memory.directory` that is a link also decides a file named by the folder's real path. A `MEMORY.md` that links out of the memory folder, or to a
+network share, is not loaded, and notes moved over from before trust add no line to a `MEMORY.md` that is a link.
+
+**Affects:** people with permission rules or hooks written for the `Memory` tool, which now name no tool, and anyone
+who reads the memory folder.
+
+**What to do:** Nothing for existing notes in the default folder. If you set `memory.directory`, Orbit neither reads
+the default folder nor moves anything into yours: move the notes, and their `MEMORY.md`, from
+`<data>/memory/<project ID>/` to your folder yourself. Notes saved before a folder was trusted keep moving to the
+default folder. Move a rule written for `Memory` to `Edit` and `Read` on the memory folder, and set
+`"memory": { "enabled": false }` or `ORBIT_DISABLE_AUTO_MEMORY=1` to switch memory off.
 
 ## Files and web tools
 

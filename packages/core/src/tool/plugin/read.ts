@@ -5,8 +5,9 @@ import { basename, dirname, join } from "path"
 import { ToolFailure } from "@orbit/ai"
 import { Tool } from "../../tool.js"
 import { createHash } from "crypto"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
+import { MemoryStore } from "../../memory/store.js"
 import { InstructionTriggers } from "../../instruction-triggers.js"
 import { FileAccess } from "../../file-access.js"
 import { FileLedger } from "../../file-ledger.js"
@@ -42,6 +43,23 @@ export const Plugin = {
     const ledger = yield* FileLedger.Service
     const environment = yield* Environment.Service
     const fs = yield* FSUtil.Service
+    // A memory file more than a day old starts with a note of its age: it records a moment that has passed, and the code
+    // may have moved on since.
+    const staleness = (file: string) =>
+      access.inMemory(file).pipe(
+        Effect.flatMap((held) =>
+          held
+            ? fs
+                .stat(file)
+                .pipe(
+                  Effect.map((info) =>
+                    MemoryStore.freshnessNote(Option.getOrUndefined(info.mtime)?.getTime() ?? Date.now(), Date.now()),
+                  ),
+                )
+            : Effect.succeed(""),
+        ),
+        Effect.orElseSucceed(() => ""),
+      )
 
     yield* ctx.tool
       .transform((editor) =>
@@ -143,6 +161,10 @@ export const Plugin = {
                       createHash("sha256").update(content).digest("hex"),
                     ))
                   if (!unchanged) {
+                    const note =
+                      typeof content === "string" && result.output.type !== "list-page"
+                        ? yield* staleness(result.absolute)
+                        : ""
                     // The read has produced what the model gets, so the instruction files near it are due. An external
                     // read, a PDF and a failed read trigger nothing, and a repeat read answered with the stub brings
                     // nothing new. A failure to load them never fails the read.
@@ -151,7 +173,7 @@ export const Plugin = {
                         sessionID: context.sessionID,
                         targets: [{ path: result.absolute, listing: result.output.type === "list-page" }],
                       })
-                    return { output: result.output, content, metadata }
+                    return { output: result.output, content: note === "" ? content : `${note}${content}`, metadata }
                   }
                   return {
                     output: result.output,

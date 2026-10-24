@@ -255,6 +255,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     index, so the row runs on every platform; a rewrite a second later is the control). Mutations: giving the copy the
     current time fails the row; a plain copy fails it on Linux, where the copy is new, and not on Windows, where it keeps
     the time of the index it copies.
+  - Code-only rewind (`POST /api/session/:sessionID/revert/files`, `orb run --rewind-files` and `orb -p --rewind-files`,
+    `SessionRevert.files` in `packages/core/src/session/revert.ts`): it reads the folder's git and writes its files, so
+    core refuses it, dry run included, with `WorkspaceTrust.UntrustedError` (403 `UntrustedFolderError` on the route)
+    before any git or file access once the folder's trust has ended, and refuses a busy session (409), so an embedded
+    host meets the same gates as the route (classes 1, 12 and 13). The CLI flag runs the same trust door as a run first.
+    Proof: `packages/server/test/session-revert-files.test.ts` ("refuses a rewind once the folder's trust has ended, and
+    restores once it is trusted again", "refuses a busy session with 409 and writes nothing") and
+    `packages/cli/test/rewind-files.test.ts`. Mutations: taking the trust check or the busy check out of core fails the
+    matching row. The writes go through `Snapshot.restore`, whose containment is in class 4.
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
@@ -795,6 +804,44 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   ID would name a folder, and a control), `test/permission-scratchpad.test.ts` (the sessions of a lineage, the hostile IDs,
   the links and the Windows spellings, with the plain file in the folder as the control),
   `test/session-scratchpad-baseline.test.ts` and the `scratchpad` rows of `test/session-runner.test.ts`.
+- The memory folder (`MemoryStore`, `packages/core/src/memory/store.ts`): `<data>/memory/<project ID>`, or the folder
+  `memory.directory` names. That key is read only from the user, local, flag and managed scopes, never from a project's
+  or a remote one, and `ConfigTrust` withholds all of `memory` from an untrusted folder as `permissions` (class 8). The
+  value is refused before any disk access when it is relative, a share or device spelling (two leading separators), a
+  root, shorter than 3 characters, holds a NUL, names home or a folder above it through `~/` (with or without trailing
+  separators, as in `~/./` or `~/../`), or on Windows has no drive letter (class 4); the default folder is kept then. A
+  valid value whose path crosses a link to a share is refused the same way, asked with `LinkShare.blocked` before it is
+  resolved, and the guide does not create a folder whose path has come to cross one since (class 6). The folder and its
+  real path are decided once for the Location.
+  The file tools write and read there without a question (`inMemory` in `Permission`): only for `Edit`, `Read` and
+  `external_directory`, only when the place is in the folder by one of its spellings and every real place it leads to is
+  in the real folder (a link inside the folder that points out is decided as the place it points to), never for a call
+  marked `escaped`. A deny of the person's, the session's, an agent's own or the managed policy decides there over any ask
+  and over a mode's deny, which do not reach the folder, and as elsewhere a later allow of the person's lifts it (class
+  8). A shell command is not covered: the folder question that `ShellGuard.prepare` asks is marked `shell`, and neither
+  the carve-out nor Orbit's own allow for the folder decides it, so the default agent's `external_directory * ask` still
+  asks (class 8). This is stricter than the reference, whose shell path check lets the memory folder through but which
+  still asks about a command that is not read-only: the default agent here allows every command, so the folder question
+  is the only gate a command meets. The guide goes only to a main thread whose base prompt is Orbit's (class 12); when it
+  goes in the middle of a session, the update tells the model that memory is off only when memory is switched off
+  (`test/session-context-memory.test.ts`, an agent switch and its `memory.enabled` control). The index reader
+  (`MemoryInstructions`, `packages/core/src/memory/instructions.ts`) loads `MEMORY.md` only when its real path is in the
+  real folder, and asks `LinkShare.blocked` before it resolves the file, so a link to a share is never opened (class 6);
+  the carry-over of notes saved before trust adds its lines only to a `MEMORY.md` that is not a link, one that leads
+  nowhere included (class 4). The reader takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
+  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) asks `LinkShare.blocked` about the folder and each link entry before it
+  resolves it (class 6), lists only files whose real path is in the folder's, reads each at the real path it checked,
+  and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
+  asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
+  the five places beside the folder, four link targets with a new and an existing file, the data folder and the
+  configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a deny that names the
+  other spelling of the folder (linked or real data folder, absolute or relative configured folder, linked or
+  real configured folder in the person's and in a managed deny, an asker's aliases), a mode's deny, the
+  built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation with the trailing-separator
+  and deep-home `~` rows, scopes, the switch order, front matter with a marker file, the scan's links, a link to a share
+  with the recorded file system, the read at the checked real path), `test/memory-instructions.test.ts` (the index link to a marker, which
+  neither the reader, the carry-over nor the header rewrite goes through, an index link to a share with the recorded file
+  system, a dangling index link the carry-over does not write through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and
@@ -1513,9 +1560,30 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   `Git.clean` does this for `.orbit`, `.orbit/worktrees` and the run's folder and removes nothing, branches included,
   when one is a link (`packages/flow/test/git.test.ts`, "a run whose folder is reached through a link is left alone
   with everything it leads to", and the `orb flow clean` row in `packages/cli/test/flow.test.ts`).
+- Writing files back from a checkpoint is the same case at a later moment: a folder on the way, or the file's own name,
+  can have become a link after the checkpoint. `Snapshot.restore`, which `/undo`, `/redo` and the code-only rewind
+  share, asks `ProjectTrust.leads` for each path's folder when it writes, under the real work tree, and skips the path
+  with one log line unless that folder leads where its name says (`FSUtil.contains` of the name and the real place, so
+  a folder whose name changed case on Windows still counts). It also skips a path whose own name is now a link or a
+  folder: git writes a file there by removing what stands in its way, and git for Windows takes a junction for a folder
+  and removes the files it leads to. It skips a path, too, when a folder on its way is now a file: git makes the folder
+  by removing that file, which is the person's own. So nothing is written through a link, no folder is removed with
+  what it holds, and no file is removed to make room for a folder. A file that git fails to put back costs only itself:
+  the others still go back and the restore then fails (class 7). The rewind's dry run lists only the paths the same
+  decision lets through (`Snapshot.restorable`). A capture leaves out every path behind a link, and on Windows a path
+  that is a link, because git for Windows lists and adds the files a junction leads to; the ignore check
+  (`Git.index.ignored`, which `Lsp.ignored` uses) answers such a path by asking about the first linked folder on its
+  way, so an ignored result below a link stays hidden (`packages/core/test/lsp-ignored.test.ts`, "hides an ignored file
+  below a linked folder, and shows one below a link that is not ignored"). Rows:
+  `packages/core/test/snapshot-restore-links.test.ts`: a junction, a folder replaced by a link, a link to the project
+  itself, a dangling link, a link to a share, a grown folder, a file whose name became a link, a folder where the
+  checkpoint had a file, a file where the checkpoint had a folder ("does not remove a file that now stands where the
+  checkpoint had a folder"), a file git fails on, `.` and `../`, each beside a control that goes back, and "does not
+  capture the files a link leads to"; `packages/server/test/session-revert-files.test.ts`, "does not restore over a
+  file whose name became a link to an outside folder, and restores the control".
 - A name that becomes a file name is one plain name (the output style rule in
-  `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
-  `packages/core/src/tool/plugin/memory.ts`).
+  `packages/core/src/plugin/output-style.ts`). Where the model names the file itself, as it does in the memory folder,
+  the real place of the file decides, not its name (`inMemory` in `Permission`).
 - Check at the moment of reading, not once when the file is discovered.
 
 **How to test:**
@@ -1584,6 +1652,22 @@ the store.
   (`packages/flow/src/git.ts`). A `*` in an ID would otherwise become a ref pattern that matches other runs' branches.
   `Git.clean` then keeps the entries of `git worktree list` whose real path is inside the run's folder, compared with
   `path.relative`, and leaves the run alone when that folder is reached through a link (class 4).
+- A checkpoint ID in a session's steps reaches git as an argument, and an imported session's steps say whatever its file
+  says: `--output=<file>` made `git diff` write that file. `Snapshot.files`, `Snapshot.diff` and `Snapshot.restore`
+  refuse an ID that is not a tree ID (`Snapshot.isTree`: 40 or 64 lowercase hex digits) before git starts, and an import
+  drops such an ID, and a changed path that is not a plain name inside the work tree, with one log line, keeping the
+  rest of the step (`packages/core/test/snapshot-restore-links.test.ts`, "… refuses an option-shaped ID and writes no
+  file"; `packages/server/test/session-revert-files.test.ts`, "keeps a forged checkpoint ID of an imported session away
+  from git"). A rewind writes and deletes only paths that git reports as changed since the checkpoint, filtered by the
+  names the session's file tools recorded, so no stored name becomes a path by itself. A name counts only when its step
+  ran in the folder being restored, as the session's recorded moves place it, so a name recorded in another folder
+  never selects a file here (class 3, one resolved folder; `packages/core/test/session-revert.test.ts`,
+  "Session.revert names from another folder"). The same rule picks the trees: an undo plans its restore only from the
+  steps that ran in that folder, and a rewind finds no checkpoint in a step followed by a move, so no tree of another
+  folder's snapshot repository reaches git here. To keep the rule answerable, committing an undo keeps the records of
+  the moves it would otherwise remove, and a move commits a staged undo, whose tree and paths belong to the folder the
+  session leaves ("Session.revert across a folder switch": `/undo`, the rewind and its dry run to a prompt before
+  EnterWorktree, after ExitWorktree, after a session move, after a committed undo, and the move-and-back control).
 - For every identifier in a change, say where it comes from: the runner, the person, or a file that a clone can ship.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust
