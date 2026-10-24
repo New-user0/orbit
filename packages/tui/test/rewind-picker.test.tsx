@@ -304,3 +304,23 @@ test("a prompt whose own edits cannot be read shows the warning on its row only"
   expect(frame.indexOf("No code rewind for this prompt")).toBeLessThan(frame.indexOf("evil\\x1b[2K"))
   expect(setup.actions()).toEqual([])
 })
+
+// Home and End jump to the oldest prompt and to "(current)", as the list's top and bottom keys.
+test("Home selects the oldest prompt and End the current row", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  setup.mockInput.pressKey("HOME")
+  setup.mockInput.pressEnter()
+  const confirm = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(confirm).toContain("Rewind the conversation to just before this prompt:")
+  expect(setup.dryRunsSent()).toEqual(["msg_0001"])
+
+  setup.mockInput.pressEscape()
+  await setup.waitForFrame((frame) => frame.includes(listHeading))
+  setup.mockInput.pressKey("END")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => !frame.includes(listHeading))
+  expect(setup.dryRunsSent()).toEqual(["msg_0001"])
+  expect(setup.actions()).toEqual([])
+})

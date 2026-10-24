@@ -191,3 +191,20 @@ test.each([
   ])
   await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
 })
+
+// Opened from the message dialog, the picker has no list to go back to: Never mind closes it, as Esc does. The newest
+// prompt is the timeline's first row, so it is chosen without a filter.
+test("Never mind on a picker opened from the message dialog closes it", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await setup.waitForFrame(loaded)
+  await openFromTimeline(setup, "Fix the")
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  expect(setup.dryRunsSent()).toEqual(["msg_0005"])
+  for (let index = 0; index < 3; index++) setup.mockInput.pressArrow("down")
+  setup.mockInput.pressEnter()
+  const closed = await setup.waitForFrame((frame) => !frame.includes("Never mind"))
+  expect(closed).not.toContain(listHeading)
+  expect(closed).not.toContain("Checking files")
+  expect(setup.actions()).toEqual([])
+})
