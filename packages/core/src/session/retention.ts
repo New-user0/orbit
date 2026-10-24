@@ -490,11 +490,13 @@ const layer = Layer.effect(
     const busy = Effect.gen(function* () {
       if ((yield* execution.active).size > 0) return true
       const now = yield* Clock.currentTimeMillis
+      // SQLite orders text and blobs above every number, so the upper bound also leaves out a clock stored as either; a
+      // clock ahead of now would otherwise put every pass off for as long as it stays ahead.
       const recent = yield* db
         .get<{ id: string }>(
           sql`
           SELECT id FROM ${SessionTable}
-          WHERE typeof(time_updated) = 'integer' AND time_updated >= ${now - ACTIVE} AND time_updated <= ${now}
+          WHERE time_updated >= ${now - ACTIVE} AND time_updated <= ${now}
           LIMIT 1
         `,
         )
