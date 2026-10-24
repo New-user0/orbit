@@ -312,8 +312,14 @@ describe("ShellTool output cap", () => {
           const accepted = yield* executeTool(registry, call({ command: helloCommand, timeout: "5000" }))
           expect(accepted.status).toBe("completed")
           if (accepted.status === "completed") expect(text(accepted)).toBe("hello")
-          const refused = yield* executeTool(registry, call({ command: helloCommand, timeout: "5s" }))
-          expect(refused).toMatchObject({ status: "error", error: { type: "tool.input-invalid" } })
+          // Only a plain decimal literal is read as a number: each of these is a number to `Number`, and each is refused.
+          for (const timeout of ["5s", "", " 5000", "0x10", "1e3"]) {
+            const refused = yield* executeTool(registry, call({ command: helloCommand, timeout }))
+            expect({ timeout, refused }).toMatchObject({
+              timeout,
+              refused: { status: "error", error: { type: "tool.input-invalid" } },
+            })
+          }
           // The model is still told the timeout is a number.
           const definition = (yield* toolDefinitions(registry)).find((tool) => tool.name === "Bash")
           expect(definition?.inputSchema).toHaveProperty("properties.timeout.type", "integer")
@@ -557,6 +563,38 @@ describe("ShellTool output cap", () => {
         }),
       ),
     { timeout: 30_000 },
+  )
+
+  // With background tasks off no command can leave the foreground, so its job carries no restart record and the call's
+  // wait releases it into the 25-entry history of finished jobs, where later calls push it out. Fails when the job keeps
+  // a restart record, which leaves every finished job held for good.
+  shellIt.live(
+    "releases each command's job when background tasks are off",
+    () =>
+      inFolder({ background_tasks: false }, (registry) =>
+        Effect.gen(function* () {
+          const jobs = yield* Job.Service
+          // A command's job is named by its shell ID, which the call reports as progress.
+          const shellIDs: string[] = []
+          yield* Effect.forEach(
+            Array.from({ length: 26 }, (_, index) => index),
+            (index) =>
+              executeTool(registry, {
+                ...call({ command: helloCommand }, `call-release-${index}`),
+                progress: (update) =>
+                  Effect.sync(() => {
+                    if (typeof update.shellID === "string" && shellIDs[index] === undefined)
+                      shellIDs[index] = update.shellID
+                  }),
+              }),
+            { discard: true },
+          )
+          expect(typeof shellIDs[0]).toBe("string")
+          expect(yield* jobs.get(String(shellIDs[0]))).toBeUndefined()
+          expect(yield* jobs.get(String(shellIDs[25]))).toBeDefined()
+        }),
+      ),
+    { timeout: 120_000 },
   )
 
   // Class 8, the trusted control is "kills a command at its timeout ...". This passes on the base, where nothing reads the
