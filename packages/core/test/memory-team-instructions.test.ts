@@ -402,6 +402,74 @@ describe("team memory in a folder it must not read", () => {
     }),
   )
 
+  // Class 4: a team folder, or an `.orbit` above it, that is a link to a folder that is not there (out of the project or
+  // in it) or a loop has no real place to compare, and the name kept for the part that cannot be followed reads like the
+  // plain folder. Team memory is then off: no scope section, no team path, nothing made where the link points, and the
+  // private index still loads (class 7). A plain team folder is the control.
+  it.live("turns team memory off when its folder is a link that leads nowhere", () =>
+    Effect.gen(function* () {
+      const links = [
+        {
+          name: "team-memory to a missing folder outside",
+          from: (l: Layout) => l.team,
+          to: (l: Layout) => path.join(l.outside, "missing"),
+        },
+        {
+          name: "team-memory to a missing folder of the project",
+          from: (l: Layout) => l.team,
+          to: (l: Layout) => path.join(l.project, "src-new"),
+        },
+        {
+          name: ".orbit to a missing folder outside",
+          from: (l: Layout) => path.dirname(l.team),
+          to: (l: Layout) => path.join(l.outside, "missing"),
+        },
+        {
+          name: "team-memory in a loop",
+          from: (l: Layout) => l.team,
+          to: (l: Layout) => path.join(path.dirname(l.team), "loop"),
+        },
+      ]
+      const rows = yield* Effect.forEach(links, (link) =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          yield* write(path.join(l.memory, "MEMORY.md"), "- PRIVATE-INDEX-LINE\n")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.dirname(link.from(l)), { recursive: true })
+            await fs.symlink(link.to(l), link.from(l), linkType)
+            if (link.name === "team-memory in a loop") await fs.symlink(l.team, link.to(l), linkType)
+          })
+          const out = yield* initial(l, teamOn)
+          return {
+            name: link.name,
+            team: Object.keys(out.values).includes(TEAM),
+            scope: headings(out.text).includes(SCOPE),
+            folder: out.text.includes(l.team),
+            scopes: scopeLines(out.text).length,
+            made: link.name === "team-memory in a loop" ? false : yield* exists(link.to(l)),
+            private: out.text.includes("PRIVATE-INDEX-LINE"),
+          }
+        }),
+      )
+      for (const row of rows)
+        expect(row).toEqual({
+          name: row.name,
+          team: false,
+          scope: false,
+          folder: false,
+          scopes: 0,
+          made: false,
+          private: true,
+        })
+      const plain = yield* layout
+      yield* write(path.join(plain.team, "MEMORY.md"), "- PLAIN-TEAM-LINE\n")
+      const control = yield* initial(plain, teamOn)
+      expect(control.text).toContain("PLAIN-TEAM-LINE")
+      expect(headings(control.text)).toContain(SCOPE)
+      expect(control.text).toContain(plain.team)
+    }),
+  )
+
   // Class 4: a team MEMORY.md that is a link would send whatever it points at to the model provider with every request.
   if (canLinkFile)
     it.live("does not load a team MEMORY.md that is a link out of the folder", () =>

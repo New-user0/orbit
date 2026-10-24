@@ -3626,7 +3626,8 @@ memory goes where, and forbids secrets in team memory; the team folder is made w
 `MEMORY.md` loads after the private index, wrapped in a `<team-memory source="repository">` tag, with the same caps and
 front matter handling; and Read, Write and Edit in the folder ask no question, while a deny rule still wins. Team memory
 is on only for a plain folder: a `.orbit/team-memory` that is a link (out of the project, to a network share, or to the
-project itself, `.orbit`, `.git` or any other folder in it), or one under an `.orbit` that is a link, turns team memory
+project itself, `.orbit`, `.git` or any other folder in it, or to a folder that is not there), or one under an `.orbit`
+that is a link, turns team memory
 off for that project, and a team `MEMORY.md` that links out of the folder is not loaded. The config watch of a
 project's `.orbit` no longer reloads anything when a file below its `team-memory` folder changes; a skill, agent or
 command in a folder of that name further down still reloads.

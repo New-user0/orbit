@@ -849,7 +849,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   once for the Location: `LinkShare.blocked` is asked about it before anything resolves it (class 6), its real path is
   the nearest existing part with links followed, and it must be exactly `.orbit/team-memory` of the real project
   folder, compared with `FSUtil.contains` both ways on two real paths, so neither `.orbit` nor `team-memory` may be a
-  link: a folder that leads out of the project, or onto the project itself, `.orbit`, `.git` or any other folder of it,
+  link. The nearest existing part keeps the name of a part it cannot follow, so an `.orbit` or `team-memory` that reads
+  as a link and has no real path (it points at nothing, or loops) is refused before that comparison: a folder that leads out of the project, or onto the project itself, `.orbit`, `.git` or any other folder of it,
   would carry the carve-out, which drops every ask and every mode's deny, over the project's own files (classes 4, 8); a
   refused folder turns team memory off with one log line and costs
   nothing else, the private index included (class 7). That one value is what the guide's folder creation, the index
@@ -866,9 +867,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   file it moves in; all before any question or write, as a tool error that names the rules and never the text (classes 9, 13); NotebookEdit and Bash
   are not scanned. The config watch of a project or home `.orbit` leaves out only `team-memory` at its top
   (`ConfigWatch.plan`). Proof: `test/memory-team-instructions.test.ts` (untrusted with a trusted control, the folder as a
-  link out, the folder as a link to the project, `.orbit`, `.git` or `src` and an `.orbit` that is a link, a `MEMORY.md` link out, the folder as a link to a share with the recorded file system, front matter with a
+  link out, the folder as a link to the project, `.orbit`, `.git` or `src` and an `.orbit` that is a link, a folder or `.orbit` that links to a missing folder out of the project or in it and a folder in a link loop, a `MEMORY.md` link out, the folder as a link to a share with the recorded file system, front matter with a
   marker file, the tag escape), `test/permission-team-memory.test.ts` (spellings, places beside the folder, the switches,
-  trust, deny, links in and out, the folder as a link into the project under ask rules and a mode's deny, the shell,
+  trust, deny, links in and out, the folder as a link into the project under ask rules and a mode's deny, a folder or
+  `.orbit` that links to a missing folder, the shell,
   the config key), `test/memory-team.test.ts` (each tool, spellings, a link into the folder, a folder that leads onto
   the project or out of it, a Patch that takes a line out beside a key, an untrusted project, the config watch),
   `test/config/watch.test.ts` and `packages/util/test/secret-scan.test.ts`.

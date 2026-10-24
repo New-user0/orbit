@@ -432,6 +432,51 @@ describe("the team memory folder", () => {
     timeout,
   )
 
+  // Class 4: a team folder or an `.orbit` that is a link to a folder that is not there, out of the project or in it, turns
+  // team memory off, so a team file is asked about rather than allowed. A plain team folder is the control.
+  it.live(
+    "asks about a team folder that is a link that leads nowhere",
+    () =>
+      Effect.gen(function* () {
+        const links = [
+          { name: "team-memory out", from: (l: Layout) => l.team, to: (l: Layout) => path.join(l.outside, "missing") },
+          { name: "team-memory in", from: (l: Layout) => l.team, to: (l: Layout) => path.join(l.project, "src-new") },
+          {
+            name: ".orbit out",
+            from: (l: Layout) => path.dirname(l.team),
+            to: (l: Layout) => path.join(l.outside, "missing"),
+          },
+        ]
+        const run = (l: Layout) =>
+          Effect.gen(function* () {
+            yield* seed(l, askRules)
+            return {
+              spelled: (yield* decide(path.join(l.team, "a.md"))).effect,
+              index: (yield* decide(".orbit/team-memory/MEMORY.md", "Read")).effect,
+            }
+          }).pipe(provide(l))
+        const out = yield* Effect.forEach(links, (link) =>
+          Effect.gen(function* () {
+            const l = yield* layout
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.dirname(link.from(l)), { recursive: true })
+              await fs.symlink(link.to(l), link.from(l), linkType)
+            })
+            return { name: link.name, ...(yield* run(l)) }
+          }),
+        )
+        for (const row of out) {
+          expect({ name: row.name, spelled: row.spelled === "allow", index: row.index === "allow" }).toEqual({
+            name: row.name,
+            spelled: false,
+            index: false,
+          })
+        }
+        expect(yield* run(yield* layout)).toEqual({ spelled: "allow", index: "allow" })
+      }),
+    timeout,
+  )
+
   // Classes 4 and 8: the carve-out drops every ask and every mode's deny for what is in the team folder, so a clone that
   // ships `.orbit/team-memory` as a link to the project itself, to `.orbit`, to `.git` or to another folder of the
   // project, or ships `.orbit` as a link, would carry it over the project's own files. Team memory is then off: those

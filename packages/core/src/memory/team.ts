@@ -88,6 +88,18 @@ const layer = Layer.effect(
       Effect.gen(function* () {
         const found = yield* reals
         if (found === undefined) return undefined
+        // `realFolder` keeps a part it cannot follow by its name, so an `.orbit` or a `team-memory` that is a link to
+        // nothing (or a loop) would pass for the plain folder. Each of the two that is a link must lead somewhere
+        // (class 4), and one that does not turns team memory off with one line in the log (class 7).
+        const dangling = yield* Effect.forEach([path.dirname(folder), folder], (part) =>
+          Effect.isSuccess(fs.readLink(part)).pipe(
+            Effect.flatMap((link) => (link ? Effect.isFailure(fs.realPath(part)) : Effect.succeed(false))),
+          ),
+        )
+        if (dangling.some(Boolean)) {
+          yield* Effect.logWarning("team memory is off: its folder is a link that leads nowhere", { folder })
+          return undefined
+        }
         if (same(found.real, path.join(found.project, ".orbit", "team-memory"))) return { folder, real: found.real }
         // The carve-out drops every ask for what is in the folder, so a folder that is a link anywhere else, even inside
         // the project, would carry it there (class 4). It is refused with one line in the log (class 7).
