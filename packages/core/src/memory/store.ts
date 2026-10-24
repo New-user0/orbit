@@ -161,22 +161,23 @@ export interface Header {
  * The memory files below `folder`, newest first and at most `MAX_SCAN_FILES`, each with the description and type of the
  * front matter in its first `FRONT_MATTER_LINES` lines. Every `MEMORY.md` and every file that is not Markdown is left
  * out, and so is a file whose real path is not in the folder's real path, since a link inside the folder can lead
- * anywhere (class 4), and a link that leads to a share, which is left unresolved (class 6). Each file is read at the real
- * path that was checked. A file that cannot be read is left out; a folder that is not there gives none.
+ * anywhere (class 4), and a link that leads to a share, which is left unresolved (class 6): a link entry is asked about
+ * before it is resolved, since resolving a link to a share connects to its host, and one set of link answers serves the
+ * whole scan, so the parts above the folder are read once. Each file is read at the real path that was checked, not at
+ * the spelled one, which a link could lead elsewhere. A file that cannot be read is left out; a folder that is not there
+ * gives none.
  */
 export const scan = Effect.fn("MemoryStore.scan")(function* (folder: string) {
   const fs = yield* FSUtil.Service
   const root = yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => undefined))
   if (root === undefined) return []
   const listed = yield* walk(fs, folder, [])
-  // One set of link answers for the whole scan, so the parts above the folder are read once.
   const reads: LinkShare.Reads = new Map()
   const dated = yield* Effect.forEach(
     listed,
     (item) =>
       Effect.gen(function* () {
         const file = path.join(folder, ...item.parts)
-        // A link entry is asked about before it is resolved, since resolving a link to a share connects to its host.
         if (item.link && (yield* LinkShare.blocked(fs, file, reads))) return []
         const real = yield* fs.realPath(file)
         if (!FSUtil.contains(root, real)) return []
@@ -193,7 +194,6 @@ export const scan = Effect.fn("MemoryStore.scan")(function* (folder: string) {
     .slice(0, MAX_SCAN_FILES)
   const read = yield* Effect.forEach(
     newest,
-    // The read is of the real path that was checked, not of the spelled one, which a link could lead elsewhere.
     (item) =>
       fs.readFileString(item.real).pipe(
         Effect.map((text): Header[] => [
