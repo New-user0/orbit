@@ -124,6 +124,10 @@ const NO_SUMMARY: Failure = { error: { type: "compaction.failed", message: "Comp
 /** How often a rejected summary request is shortened and sent again. */
 const MAX_DROPS = 3
 const FALLBACK_OUTPUT_MAX = 20_000
+// The summary never asks for less than this, even when the request leaves less room; a rejection then drops history.
+const MIN_SUMMARY_OUTPUT = 3_000
+// Prompt text is estimated at about 4 characters per token, which can run low on dense text such as code.
+const ESTIMATE_ERROR = 0.15
 
 /** The summary prompt. Instructions from the person sit in a block of their own, before the closing reminder. */
 export const buildPrompt = (instructions?: string) => {
@@ -254,7 +258,7 @@ export const layer = Layer.effect(
      *
      * The first request shares the main request's system prompt, tools and settings. Its reply decides by its text
      * alone: a tool call is never run. When that request yields no text, or fails, one fallback request is made with
-     * a one-line system prompt, no media, no reasoning settings from hooks or variants and the read tool only. A rejection of the fallback as too long
+     * a one-line system prompt, no media, no request-level reasoning options, the model without its reasoning variant and the read tool only. A rejection of the fallback as too long
      * drops the oldest round groups of the history and starts again, at most three times.
      */
     const summarize = Effect.fnUntraced(function* (trigger: Trigger, budget: number): Effect.fn.Return<Result, Failure> {
@@ -267,16 +271,26 @@ export const layer = Layer.effect(
       if (trigger.reason !== "manual") {
         yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent: "" })
       }
-      if (prepared.event.result) {
-        const supplied = formatSummary(prepared.event.result.summary)
-        if (!supplied) return yield* Effect.fail(NO_SUMMARY)
-        return yield* fromHook(context, { ...prepared.event.result, summary: supplied })
-      }
+      if (prepared.event.result) return yield* fromHook(context, prepared.event.result)
 
       const policy = yield* SessionRunnerRetry.policy(context.session.id)
       // Hooks saw the request without the summary prompt, so it is appended here.
       const prompt = Message.user(buildPrompt(trigger.reason === "manual" ? trigger.instructions : undefined))
       const outputMax = Math.min(FALLBACK_OUTPUT_MAX, context.model.limit.output || FALLBACK_OUTPUT_MAX)
+
+      // The output limit is sized for the room this very request leaves in the window, not for `budget`: the history
+      // is sent whole, so it can be larger. A window that is not known is not fitted.
+      const fitOutput = (request: LLMRequest) => {
+        const asked = request.generation?.maxTokens
+        if (asked === undefined || context.model.limit.context <= 0) return request
+        const room = context.model.limit.context - Math.ceil(estimateRequest(request) * (1 + ESTIMATE_ERROR))
+        return LLMRequest.update(request, {
+          generation: GenerationOptions.make({
+            ...request.generation,
+            maxTokens: Math.min(asked, Math.max(MIN_SUMMARY_OUTPUT, room)),
+          }),
+        })
+      }
 
       // One call, resent under the session's retry policy. A rejection as too long is left to the caller.
       const call = Effect.fnUntraced(function* (request: LLMRequest): Effect.fn.Return<Streamed, AIError | Failure> {
@@ -310,10 +324,10 @@ export const layer = Layer.effect(
         const request = LLMRequest.update(prepared.request, {
           messages: [...(history[0]?.role === "assistant" ? [Message.user(LEFT_OUT)] : []), ...history, prompt],
         })
-        const first = yield* Effect.result(call(request))
+        const first = yield* Effect.result(call(fitOutput(request)))
         if (Result.isSuccess(first) && first.success.text.trim()) return yield* finish(first.success)
 
-        const second = yield* Effect.result(call(fallbackRequest(request, outputMax)))
+        const second = yield* Effect.result(call(fitOutput(fallbackRequest(request, outputMax, context.unreasoned ?? context.model))))
         if (Result.isSuccess(second)) return yield* finish(second.success)
         const cause = second.failure
         if (!(cause instanceof AIError)) return yield* Effect.fail(cause)
@@ -651,8 +665,16 @@ export const layer = Layer.effect(
       })
     }
 
-    /** A request hook supplied the summary itself, so no model call happens. */
-    const fromHook = (context: SessionContext.Loaded, supplied: SessionCompactionResult) => {
+    /**
+     * A request hook supplied the summary itself, so no model call happens. It is formatted like a model's reply, on
+     * every path, so an analysis block in it is never stored.
+     */
+    const fromHook = Effect.fnUntraced(function* (
+      context: SessionContext.Loaded,
+      supplied: SessionCompactionResult,
+    ): Effect.fn.Return<Result, Failure> {
+      const summary = formatSummary(supplied.summary)
+      if (!summary) return yield* Effect.fail(NO_SUMMARY)
       const reported = supplied.tokens && {
         tokens: supplied.tokens,
         cost: SessionUsage.calculateCost(context.model.cost, supplied.tokens),
@@ -660,15 +682,15 @@ export const layer = Layer.effect(
       // A hook that reports no tokens ran no model, so there is nothing to record: a record of zero tokens would read
       // as spend the provider failed to report.
       const usage = reported && SessionUsage.hasTokens(reported) ? reported : undefined
-      return spend(context.session.id, usage).pipe(
+      return yield* spend(context.session.id, usage).pipe(
         Effect.as<Result>({
-          text: supplied.summary,
+          text: summary,
           recent: "",
           providerState: supplied.providerState,
           metadata: supplied.metadata,
         }),
       )
-    }
+    })
 
     /**
      * A call that completes is billed when it finishes, and one that fails or is interrupted after the provider began
@@ -772,11 +794,13 @@ const transcript = (
   })
 
 /**
- * The same request for a reply that the first one did not give: a one-line system prompt, no media, no reasoning settings from hooks or variants, and
- * only the read tool so that tool calls in the history stay valid. It is never run.
+ * The same request for a reply that the first one did not give: a one-line system prompt, no media, no request-level
+ * reasoning options or effort notes, the session model without its reasoning variant (`model`), and only the read tool
+ * so that tool calls in the history stay valid.
  */
-const fallbackRequest = (request: LLMRequest, outputMax: number) =>
+const fallbackRequest = (request: LLMRequest, outputMax: number, model: SessionContext.Loaded["model"]) =>
   LLMRequest.update(request, {
+    model: model.model,
     system: [SystemPart.make(FALLBACK_SYSTEM)],
     messages: request.messages.flatMap(withoutMedia),
     tools: request.tools.filter((tool) => tool.name === "Read"),

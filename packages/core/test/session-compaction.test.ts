@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { GenerationOptions, LLMClient, LLMEvent, LanguageModel, Message, ToolDefinition, type LLMRequest } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
+import { OpenAI } from "@orbit/ai/providers"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { llmClient } from "@orbit/core/effect/app-node-platform"
@@ -1736,5 +1737,80 @@ it.effect("a history of only a synthetic note counts as conversation to compact"
     )
     expect(run.outcome).toEqual({ status: "completed" })
     expect(JSON.stringify(run.sent[0]?.messages)).toContain("User shell pwd completed")
+  }),
+)
+
+it.effect("a summary that a compaction hook supplies on the native path is formatted the same way", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "compaction", (event) =>
+      Effect.sync(() => {
+        event.result = { summary: "<analysis>DRAFT-N</analysis>\n<handoff>\n## Objective\n- native\n</handoff>" }
+      }),
+    )
+    // A configured endpoint gives the model a stable identity, which the native path requires before it reaches the hook.
+    const endpoint = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:1" }).responses("gpt-5.4-mini")
+    const run = yield* scripted("ses_cm2_hook_native", [userText("Do it")], [], {
+      context: (context) => ({ ...context, model: { ...context.model, model: endpoint, compaction: { type: "native" } } }),
+    })
+    expect(run.sent).toEqual([])
+    expect(run.summary).toBe("Summary:\n## Objective\n- native")
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
+  }),
+)
+
+it.effect("a reply with text and a tool call uses the text and runs no tool", () =>
+  Effect.gen(function* () {
+    const both = () =>
+      Stream.make(
+        LLMEvent.textDelta({ id: "summary", text: "<handoff>\nT\n</handoff>" }),
+        LLMEvent.toolCall({ id: "call_summary_read", name: "Read", input: { path: "/project/a.ts" } }),
+        LLMEvent.stepFinish({ index: 0, reason: { normalized: "tool-calls" }, usage }),
+        LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
+      )
+    // `withTools` makes `execute` die, so a tool run would fail the outcome.
+    const run = yield* scripted("ses_cm2_text_and_call", [userText("Do it")], [both], { context: withTools(32_000) })
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.summary).toBe("Summary:\nT")
+    expect(run.sent).toHaveLength(1)
+  }),
+)
+
+it.effect("a summary request is sized for the room it leaves and drops nothing when the history fits the window", () =>
+  Effect.gen(function* () {
+    // Above the effective window (the window minus the reserve), below the window itself.
+    const history = [userText("word ".repeat(152_000)), assistantText("ok"), userText("go on")]
+    const run = yield* scripted("ses_cm2_room", history, [answer("<handoff>\nT\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(1)
+    const request = run.sent[0]!
+    expect(request.messages).toHaveLength(history.length + 1)
+    const maxTokens = request.generation?.maxTokens ?? 0
+    expect(maxTokens).toBeGreaterThanOrEqual(3_000)
+    expect(SessionCompaction.estimateRequest(request) + maxTokens).toBeLessThanOrEqual(200_000)
+  }),
+)
+
+it.effect("the fallback is built on the model without the session's reasoning variant", () =>
+  Effect.gen(function* () {
+    const thinking = LanguageModel.update(model, {
+      defaults: { providerOptions: { openai: { reasoningEffort: "high" } } },
+    })
+    const run = yield* scripted(
+      "ses_cm2_unreasoned",
+      [userText("Do it")],
+      [silent, answer("<handoff>\nok\n</handoff>")],
+      {
+        context: (context) => {
+          const selected = withTools(32_000)(context)
+          return { ...selected, model: { ...selected.model, model: thinking }, unreasoned: selected.model }
+        },
+      },
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent[0]?.model.defaults?.providerOptions).toEqual({ openai: { reasoningEffort: "high" } })
+    expect(run.sent[1]?.model.defaults?.providerOptions).toBeUndefined()
   }),
 )

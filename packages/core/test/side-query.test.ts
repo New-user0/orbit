@@ -583,3 +583,25 @@ it.effect("text() reports a tool-call answer and a blank answer as InvalidOutput
     ])
   }),
 )
+
+const loadSelected = (variant: string) =>
+  Effect.gen(function* () {
+    const { store } = yield* setup({ variant })
+    const context = yield* SessionContext.Service
+    const session = yield* store.get(sessionID)
+    if (!session) return yield* Effect.die("Missing fixture session")
+    return yield* context.load({
+      session,
+      agent: { id: Agent.ID.make("build"), info: Agent.Info.default(Agent.ID.make("build")) },
+      instructions: Instructions.empty,
+      tools: { definitions: [] } as never,
+    })
+  })
+
+it.effect("load sets the model without its reasoning variant when the session selected a variant", () =>
+  Effect.gen(function* () {
+    const loaded = yield* loadSelected("high")
+    expect(String(loaded.model.ref.variant)).toBe("high")
+    expect(String(loaded.unreasoned?.ref.variant)).toBe("none")
+  }),
+)

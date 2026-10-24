@@ -49,6 +49,11 @@ export interface Loaded {
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
   readonly tools: Tool.Snapshot
+  /**
+   * The session model again with the variant that reasons least, set only when the session selected a variant. A
+   * request that must not think, such as the compaction fallback, is built on it.
+   */
+  readonly unreasoned?: SessionRunnerModel.Resolved
   /** The configured `output_token_cap`, when set. */
   readonly outputTokenCap?: number
 }
@@ -124,6 +129,18 @@ const layer = Layer.effect(
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
+    const catalog = model
+    // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
+    const leastReasoning = (session: SessionSchema.Info, info: Model.Info | undefined, pinned?: Model.VariantID) =>
+      Effect.gen(function* () {
+        if (!info) return
+        const variant = pinned ?? MINIMAL_REASONING_VARIANTS.find((id) => info.variants.some((item) => item.id === id))
+        return yield* resolveModel({
+          ...session,
+          model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
+        }).pipe(Effect.orElseSucceed(() => undefined))
+      })
+
     const selectAuxiliary = Effect.fn("SessionContext.selectAuxiliary")(function* (
       session: SessionSchema.Info,
       agentID: Agent.ID,
@@ -131,21 +148,11 @@ const layer = Layer.effect(
       const agent = yield* agents.get(agentID)
       if (!agent) return
       const sessionModel = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
-      // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
-      const leastReasoning = (info: Model.Info | undefined, pinned?: Model.VariantID) =>
-        Effect.gen(function* () {
-          if (!info) return
-          const variant = pinned ?? MINIMAL_REASONING_VARIANTS.find((id) => info.variants.some((item) => item.id === id))
-          return yield* resolveModel({
-            ...session,
-            model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
-          }).pipe(Effect.orElseSucceed(() => undefined))
-        })
       const pinned = agent.model ? yield* model.get(agent.model.providerID, agent.model.id) : undefined
       const small = pinned ?? (sessionModel ? yield* model.small(sessionModel.ref.providerID) : undefined)
-      const preferred = yield* leastReasoning(small, pinned ? agent.model?.variant : undefined)
+      const preferred = yield* leastReasoning(session, small, pinned ? agent.model?.variant : undefined)
       const primary = sessionModel
-        ? ((yield* leastReasoning(yield* model.get(sessionModel.ref.providerID, sessionModel.ref.id))) ?? sessionModel)
+        ? ((yield* leastReasoning(session, yield* model.get(sessionModel.ref.providerID, sessionModel.ref.id))) ?? sessionModel)
         : undefined
       const selected = preferred ?? primary
       if (!selected) return
@@ -265,10 +272,14 @@ const layer = Layer.effect(
         selection.instructions,
         SessionProviderContext.provenance(model) ?? "local",
       )
+      const unreasoned = model.ref.variant
+        ? yield* leastReasoning(selection.session, yield* catalog.get(model.ref.providerID, model.ref.id))
+        : undefined
       return {
         session: selection.session,
         agent: selection.agent,
         model,
+        unreasoned,
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
         tools: selection.tools,
