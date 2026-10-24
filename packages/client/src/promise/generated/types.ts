@@ -1125,6 +1125,26 @@ export type SessionUsageUpdated = {
   data: { sessionID: string; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
+export type SessionContextUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.context.updated"
+  location?: LocationRef
+  data: {
+    sessionID: string
+    used: number
+    window: number
+    threshold: number
+    auto: boolean
+    percentLeft: number
+    state: "ok" | "warning" | "error"
+    blocking?: number
+    paused: boolean
+    stale: boolean
+  }
+}
+
 export type SessionTextDelta = {
   id: string
   created: number
@@ -2812,6 +2832,7 @@ export type V2Event =
   | SessionPermissions
   | SessionViewed
   | SessionUsageUpdated
+  | SessionContextUpdated
   | SessionDeleted
   | SessionForked
   | SessionInboxDelivered
