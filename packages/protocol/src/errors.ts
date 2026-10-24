@@ -56,6 +56,21 @@ export class SessionBusyError extends Schema.TaggedError<SessionBusyError>()(
   { httpApiStatus: 409 },
 ) {}
 
+/**
+ * A code-only rewind that cannot put a prompt's files back: the folder takes no snapshots (`disabled`), the message has
+ * no checkpoint (`no-checkpoint`), or the restore failed (`failed`). The message is a fixed sentence.
+ */
+export class RewindFilesError extends Schema.TaggedError<RewindFilesError>()(
+  "RewindFilesError",
+  {
+    sessionID: Schema.String,
+    messageID: Schema.String,
+    reason: Schema.Literals(["disabled", "no-checkpoint", "failed"]),
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
 export class ServiceUnavailableError extends Schema.TaggedError<ServiceUnavailableError>()(
   "ServiceUnavailableError",
   {

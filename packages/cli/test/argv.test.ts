@@ -94,7 +94,10 @@ test("the flag tables match the flags that orb --help and orb -p --help print", 
   const print = await helpFlags(["-p", "--help"])
 
   const values = [...root, ...print].filter((flag) => flag.value)
-  expect([...new Set(values.map((flag) => flag.long))].sort()).toEqual([...RootValueFlags.long].sort())
+  // --rewind-files takes a value that the help does not print.
+  expect([...new Set([...values.map((flag) => flag.long), "rewind-files"])].sort()).toEqual(
+    [...RootValueFlags.long].sort(),
+  )
   expect([...new Set(values.flatMap((flag) => (flag.short ? [flag.short] : [])))].sort()).toEqual(
     [...RootValueFlags.short].sort(),
   )
