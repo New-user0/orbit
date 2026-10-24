@@ -3252,8 +3252,12 @@ with the changed lines, numbered as `Read` numbers them, with eight unchanged li
 8,192 characters in all. The reported change then counts as read, so the edit tools do not refuse the file as changed
 on disk. Before, the model learned of such a change only when an edit was refused. A change counts as read only once
 its reminder is stored: when the check runs out of time, is stopped, or a compaction ends while it runs, no file counts
-as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step. A file
-that is slow to check or read is left for a later step on its own, and the other files are reported at once; the
+as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step. Each
+step checks the files within a short time budget, and one file within half of it, so a file that is slow to check
+or read, or never answers, costs only its own share and the other files are reported. When a step has no time for
+every file, the files the session wrote most recently are checked first, and the next step goes on with the files not
+yet checked, so every file is checked within a few steps; a change to a file whose check ran out of time is reported
+once a later check finishes in time. The
 changed lines of small changes are worked out before those of large rewrites, so a formatter rewriting many large files
 does not hold up a one-line change.
 
@@ -3271,8 +3275,9 @@ After a restart, the first step of each main session rebuilds what it saw from i
 a whole `Read`, a `Write` (whether or not the call succeeded), and an `Edit` or `Patch` that succeeded, whose files are
 read from disk as they are then. A later `Patch` that deletes or moves a file away, or a later `NotebookEdit`, drops
 what earlier calls showed of that file, so the session's own patch is never reported as someone else's change. Changes
-made while Orbit was not running are then reported, and a file known this way can be edited without a new read. A file
-from history that is slow to check or read is left out of the rebuild, and a rebuild that does not finish within the
+made while Orbit was not running are then reported, and a file known this way can be edited without a new read. The
+rebuild works from the newest call back, within a budget of its own: a file from history that is slow to check or
+read, and the oldest files when there is no time for all of them, are left out of it, and a rebuild that does not finish within the
 step's time limit is not tried again until Orbit restarts. Only
 files inside the project that `Read` would open without a question are rebuilt, at most the 100 named most recently: a
 file under an ask rule, such as the built-in one for `.env` files, is left out. A subagent is never rebuilt: a

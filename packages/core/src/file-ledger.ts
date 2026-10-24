@@ -99,6 +99,17 @@ export interface Interface {
   /** The records that hold text, least recently used first. Listing them is not a use. */
   readonly watched: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<Watched>>
   /**
+   * The records that hold text, in the order the file-change reminder checks them: those not yet checked in the current
+   * scan first, then the rest, each part most recently used first. Once every one was checked, a new scan starts and all
+   * of them count as unchecked again. Listing them is not a use.
+   */
+  readonly toCheck: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<Watched>>
+  /**
+   * Note that these files were checked in the current scan, starting a new scan first when the last one was complete.
+   * It is not a use, and it does not count anything as seen: freshness changes only through `settle`.
+   */
+  readonly checked: (sessionID: Session.ID, paths: ReadonlyArray<string>) => Effect.Effect<void>
+  /**
    * Replace the record of one file with what a read saw (`next`), or drop it, freshness included, when `next` is
    * undefined (a file that is gone), but only while the record is still exactly `held`. The file-change reminder settles
    * what it found this way after its rows are posted, so a record that a write or a compaction changed or dropped in the
@@ -127,17 +138,21 @@ const layer = Layer.effect(
     // session -> path -> the last read's key and the digest of the text the model was shown (one slot per path)
     const marks = new Map<Session.ID, Map<string, { readonly key: string; readonly digest: string }>>()
     const rebuilt = new Set<Session.ID>()
+    // session -> the watched files checked in the current scan, so each step goes on where the last one stopped
+    const scans = new Map<Session.ID, Set<string>>()
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         sessions.clear()
         marks.clear()
         rebuilt.clear()
+        scans.clear()
       }),
     )
     const drop = (sessionID: Session.ID) => {
       sessions.delete(sessionID)
       marks.delete(sessionID)
       rebuilt.delete(sessionID)
+      scans.delete(sessionID)
     }
     yield* bus.subscribe([SessionEvent.Deleted, SessionEvent.Moved]).pipe(
       Stream.runForEach((event) => Effect.sync(() => drop(event.data.sessionID))),
@@ -161,6 +176,7 @@ const layer = Layer.effect(
         Effect.sync(() => {
           sessions.delete(event.data.sessionID)
           marks.delete(event.data.sessionID)
+          scans.delete(event.data.sessionID)
         }),
       ),
       Effect.forkScoped({ startImmediately: true }),
@@ -196,6 +212,15 @@ const layer = Layer.effect(
       })
       sessions.set(sessionID, files)
       bound(files)
+    }
+    const watched = (sessionID: Session.ID) =>
+      Array.from(sessions.get(sessionID) ?? []).flatMap(([path, seen]) =>
+        seen.text === undefined ? [] : [{ path, seen: { ...seen, text: seen.text } }],
+      )
+    // The scan's checked files, or none once every watched file was checked, which starts the next scan.
+    const scanned = (sessionID: Session.ID) => {
+      const scan = scans.get(sessionID) ?? new Set<string>()
+      return watched(sessionID).every((file) => scan.has(file.path)) ? new Set<string>() : scan
     }
     // Asking about a file is a use of its record, which moves it to the end.
     const use = (sessionID: Session.ID, path: string) => {
@@ -246,9 +271,17 @@ const layer = Layer.effect(
         marks.delete(sessionID)
       }),
       watched: Effect.fn("FileLedger.watched")(function* (sessionID) {
-        return Array.from(sessions.get(sessionID) ?? []).flatMap(([path, seen]) =>
-          seen.text === undefined ? [] : [{ path, seen: { ...seen, text: seen.text } }],
-        )
+        return watched(sessionID)
+      }),
+      toCheck: Effect.fn("FileLedger.toCheck")(function* (sessionID) {
+        const scan = scanned(sessionID)
+        const newest = watched(sessionID).toReversed()
+        return [...newest.filter((file) => !scan.has(file.path)), ...newest.filter((file) => scan.has(file.path))]
+      }),
+      checked: Effect.fn("FileLedger.checked")(function* (sessionID, paths) {
+        const scan = scanned(sessionID)
+        paths.forEach((path) => scan.add(path))
+        scans.set(sessionID, scan)
       }),
       settle: Effect.fn("FileLedger.settle")(function* (sessionID, path, held, next) {
         const seen = sessions.get(sessionID)?.get(path)
@@ -298,6 +331,8 @@ export const permissiveLayer = Layer.succeed(
     markRead: () => Effect.succeed(false),
     forgetReads: () => Effect.void,
     watched: () => Effect.succeed([]),
+    toCheck: () => Effect.succeed([]),
+    checked: () => Effect.void,
     settle: () => Effect.void,
     claim: () => Effect.succeed(false),
     seed: () => Effect.void,

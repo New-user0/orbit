@@ -62,7 +62,8 @@ export type Anchor = ReminderText.Anchor
  *   one exception is the file-change producer's rebuild after a restart: it claims the session and seeds the files'
  *   records from history inside `run`, as the reference rebuilds its cache outside a collection. It fills only files
  *   that have no record in this process, so it never changes a record a collection checked, and a rebuild cut short is
- *   not tried again in that process.
+ *   not tried again in that process. The same producer also notes which files it checked with nothing to report, so the
+ *   next step goes on with the others; that note counts nothing as seen.
  * - The envelope holds harness text only. Anything read from a file, a tool or an editor goes in `data`, which renders
  *   as a labelled fenced block after the envelope, and is neutralized there.
  * - Spacing (how many steps since the last one of mine) is read from history through the helpers, never from a counter

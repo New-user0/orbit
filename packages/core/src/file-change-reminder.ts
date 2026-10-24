@@ -35,10 +35,14 @@ import { ReadToolFileSystem } from "./tool/read-filesystem.js"
  * past its deadline, is interrupted or fails leaves the ledger as it was, so no change counts as seen unless its row was
  * posted, and the edit tools still refuse a changed file as stale.
  *
- * A slow file costs only itself. The files are checked and read within `FILE_BUDGET_MS`; a file not done by then is left
- * as it is for the next step, and the others are reported. The comparisons run after that, smallest first, within the
- * reference's `DIFF_TIMEOUT_MS` all together. The producer's own deadline is longer than all of it, so it is not what ends
- * a collection whose files keep to their budgets.
+ * A slow file costs only its own share. The files are checked and read within `FILE_BUDGET_MS`, eight at a time, each
+ * within half of it; a file whose check runs out of time is kept as it is. The ledger keeps a scan per session
+ * (`FileLedger.toCheck`): a file whose check started counts as checked in it, and the files not yet checked come first,
+ * the most recently used first. So each step goes on where the last one stopped, the newest file is checked at the first
+ * step, and a file the step's budget never reached goes first at the next. When a step's budget covers k of n watched
+ * files, every one of them is checked within about n / k steps while the session writes no new file. The comparisons
+ * run after that, smallest first, within the reference's `DIFF_TIMEOUT_MS` all together. The producer's own deadline is
+ * longer than all of it, so it is not what ends a collection whose files keep to their budgets.
  *
  * The path and the changed lines come from the disk, so they travel only in `data`; the harness text names neither.
  */
@@ -50,6 +54,8 @@ const CONTEXT_LINES = 8
 const MAX_SNIPPET = 8_192
 /** How long the checks and reads of the files may take, and those of the rebuild; a file not done by then waits. */
 const FILE_BUDGET_MS = 750
+/** How many files are checked at once. */
+const CONCURRENCY = 8
 /** How long the comparisons of one step may take together: the reference's limit for one comparison. */
 const DIFF_TIMEOUT_MS = 5_000
 
@@ -68,8 +74,9 @@ export interface Services {
   readonly environment: Environment.Interface
   /**
    * The budget, in milliseconds, for the files' checks and reads and for the rebuild's (`FILE_BUDGET_MS` when not
-   * given); the producer's deadline follows it. Production gives none. A test that counts which of many files are read
-   * gives more, so a loaded machine does not leave some out.
+   * given); one file's share is half of it, and the producer's deadline follows it. Production gives none. A test that
+   * counts which of many files are read gives more, so a loaded machine does not leave some out, and one that starves
+   * the files gives less.
    */
   readonly budget?: number
 }
@@ -85,30 +92,46 @@ export const durable = (services: Services): Durable => ({
       if (input.session.parentID === undefined && (yield* services.ledger.claim(input.session.id)))
         yield* rebuild(services, input)
       if (postedInRun(input.messages, KIND)) return []
-      const watched = yield* services.ledger.watched(input.session.id)
-      const deadline = Date.now() + (services.budget ?? FILE_BUDGET_MS)
+      const budget = services.budget ?? FILE_BUDGET_MS
+      // The rows keep the ledger's order, the least recently used first, whatever order the files are checked in.
+      const rank = new Map((yield* services.ledger.watched(input.session.id)).map((file, index) => [file.path, index]))
+      const deadline = Date.now() + budget
       const checked = yield* Effect.forEach(
-        watched,
-        (file, index) =>
-          inTime(input, deadline, changed(services, input, file)).pipe(
-            // One file that fails costs only itself.
-            Effect.catchCauseIf(
-              (cause) => !Cause.hasInterruptsOnly(cause),
-              (cause) =>
-                Effect.logWarning("A changed file could not be checked, so it was skipped").pipe(
-                  Effect.annotateLogs({ sessionID: input.session.id, cause: Cause.pretty(cause) }),
-                  Effect.as([]),
-                ),
+        yield* services.ledger.toCheck(input.session.id),
+        (file) =>
+          inTime(
+            input,
+            deadline,
+            budget / 2,
+            changed(services, input, file).pipe(
+              // One file that fails costs only itself.
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                (cause) =>
+                  Effect.logWarning("A changed file could not be checked, so it was skipped").pipe(
+                    Effect.annotateLogs({ sessionID: input.session.id, cause: Cause.pretty(cause) }),
+                    Effect.as([]),
+                  ),
+              ),
             ),
-            Effect.map((found) => found.map((item) => ({ ...item, index }))),
+          ).pipe(
+            Effect.map((found) => ({
+              path: file.path,
+              found: found?.map((item) => ({ ...item, index: rank.get(file.path) ?? 0 })),
+            })),
           ),
-        { concurrency: 8 },
+        { concurrency: CONCURRENCY },
       )
-      // The smallest comparisons first, so one large rewrite cannot use up the others' time; the rows keep the files'
-      // order.
+      // Each file whose check started had its turn in this scan. That marks nothing as seen: a change counts as seen only
+      // through its entry's commit.
+      yield* services.ledger.checked(
+        input.session.id,
+        checked.flatMap((result) => (result.found === undefined ? [] : [result.path])),
+      )
+      // The smallest comparisons first, so one large rewrite cannot use up the others' time.
       const end = Date.now() + DIFF_TIMEOUT_MS
       return checked
-        .flat()
+        .flatMap((result) => result.found ?? [])
         .toSorted((left, right) => left.size - right.size)
         .map((item) => ({ index: item.index, entries: item.report(end) }))
         .toSorted((left, right) => left.index - right.index)
@@ -116,13 +139,22 @@ export const durable = (services: Services): Durable => ({
     }),
 })
 
-// What `effect` found, or nothing once `deadline` has passed, so the file waits for a later step and the others go on.
-const inTime = <A>(input: Input, deadline: number, effect: Effect.Effect<ReadonlyArray<A>>) =>
+/**
+ * What `effect` found for one file within its own `share` of the time and before `deadline`, or nothing when it ran out
+ * of time, so a slow file costs only its share and the others go on. Undefined when `deadline` had passed before it
+ * started.
+ */
+const inTime = <A>(
+  input: Input,
+  deadline: number,
+  share: number,
+  effect: Effect.Effect<ReadonlyArray<A>>,
+): Effect.Effect<ReadonlyArray<A> | undefined> =>
   Effect.suspend(() => {
     const left = deadline - Date.now()
-    if (left <= 0) return Effect.succeed([])
+    if (left <= 0) return Effect.succeed(undefined)
     return effect.pipe(
-      Effect.timeoutOption(left),
+      Effect.timeoutOption(Math.min(share, left)),
       Effect.flatMap((found) =>
         Option.isSome(found)
           ? Effect.succeed(found.value)
@@ -290,23 +322,28 @@ const shown = (text: string) =>
  * what history held for a file it deletes or moves away. A completed notebook edit ends what history held for its
  * file, which is not seeded. A path in history may come from an imported session, so it is resolved as the read tool resolves
  * it, a share or device spelling is refused before any disk is read, and only a file inside the project that passes
- * `gate` and that the read tool would read without a question is kept. Of those, only the newest `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop
- * the rest. A record that is already there wins over one from history. A file whose check or read is not done within
- * `FILE_BUDGET_MS` is left out, so one slow file costs only itself. The session is claimed before the rebuild starts,
- * so one that runs past the producer's deadline is not tried again in this process.
+ * `gate` and that the read tool would read without a question is kept. Of those, only the newest
+ * `FileLedger.MAX_FILES` files are kept and read, as the ledger would drop the rest. A record that is already there
+ * wins over one from history.
+ *
+ * The names are resolved within the first half of `FILE_BUDGET_MS` and the files read within the rest, each file within
+ * half of it, the newest first in both, so a slow file costs only its share and a rebuild that runs out of time leaves
+ * out the oldest files, as the ledger would drop them first. The session is claimed before the rebuild starts, so one
+ * that runs past the producer's deadline is not tried again in this process.
  */
 const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
-  const deadline = Date.now() + (services.budget ?? FILE_BUDGET_MS)
+  const budget = services.budget ?? FILE_BUDGET_MS
+  const start = Date.now()
   // The newest call for each spelling; then the newest for each file, whatever spelling named it.
   const bySpelling = new Map(fromHistory(input.messages).map((found) => [found.path, found] as const))
   const resolved = yield* Effect.forEach(
-    Array.from(bySpelling.values()),
-    (found) => inTime(input, deadline, located(services, input, found)),
-    { concurrency: 8 },
+    Array.from(bySpelling.values()).toSorted((left, right) => right.order - left.order),
+    (found) => inTime(input, start + budget / 2, budget / 2, located(services, input, found)),
+    { concurrency: CONCURRENCY },
   )
   const byFile = new Map(
     resolved
-      .flat()
+      .flatMap((found) => found ?? [])
       .toSorted((left, right) => left.order - right.order)
       .map((found) => [found.target.absolute, found] as const),
   )
@@ -314,12 +351,16 @@ const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
   const files = yield* Effect.forEach(
     Array.from(byFile.values())
       .filter((found) => !found.ended)
-      .toSorted((left, right) => left.order - right.order)
-      .slice(-FileLedger.MAX_FILES),
-    (found) => inTime(input, deadline, seeded(services, found)),
-    { concurrency: 8 },
+      .toSorted((left, right) => right.order - left.order)
+      .slice(0, FileLedger.MAX_FILES),
+    (found) => inTime(input, start + budget, budget / 2, seeded(services, found)),
+    { concurrency: CONCURRENCY },
   )
-  yield* services.ledger.seed(input.session.id, files.flat())
+  // Seeded oldest first, so the newest file is the ledger's most recently used.
+  yield* services.ledger.seed(
+    input.session.id,
+    files.flatMap((found) => found ?? []).toSorted((left, right) => left.order - right.order),
+  )
 })
 
 // The target a call in history names, when it may be seeded.
@@ -338,13 +379,14 @@ const located = Effect.fnUntraced(function* (services: Services, input: Input, f
 
 // What the ledger is seeded with for a located call.
 const seeded = Effect.fnUntraced(function* (services: Services, found: Found & { readonly target: FileAccess.Target }) {
-  if (found.text !== undefined) return [{ path: found.target.absolute, seen: { mtimeMs: found.at, text: found.text } }]
+  if (found.text !== undefined)
+    return [{ path: found.target.absolute, order: found.order, seen: { mtimeMs: found.at, text: found.text } }]
   // An edit's result holds no text of the file, so the file is read as it is now.
   const read = yield* services.reader
     .read(found.target.absolute, found.target.resource)
     .pipe(Effect.orElseSucceed(() => undefined))
   if (read?.seen === undefined || read.content.type !== "file" || read.content.encoding !== "utf8") return []
-  return [{ path: found.target.absolute, seen: { ...read.seen, text: read.content.content } }]
+  return [{ path: found.target.absolute, order: found.order, seen: { ...read.seen, text: read.content.content } }]
 })
 
 interface Found {

@@ -1904,14 +1904,15 @@ describe("the rebuild after a restart", () => {
 
   // The row above relies on the budget a producer is given. Each read here is slower than the default budget, and the
   // rebuild's read and the watched file's read together take longer than the default deadline: without a budget the
-  // edited file is left out of the rebuild and the written file is not reported, and with one both are done in time.
+  // edited file is left out of the rebuild and the written file is not reported, and with one whose share for a file
+  // (half of it) is longer than a read, both are done in time.
   it.live("a budget given to the producer covers the rebuild, the watched files and the deadline", () =>
     Effect.gen(function* () {
       const real = yield* ReadToolFileSystem.Service
       const slow: ReadToolFileSystem.Interface["read"] = (file, resource, page) =>
         Effect.sleep("4 seconds").pipe(Effect.andThen(real.read(file, resource, page)))
       const results = yield* Effect.forEach(
-        [undefined, 6_000],
+        [undefined, 10_000],
         (budget) =>
           Effect.gen(function* () {
             const h = yield* setup()
@@ -1932,7 +1933,7 @@ describe("the rebuild after a restart", () => {
       )
       expect(results).toEqual([
         { done: true, reported: [], seeded: false },
-        { done: true, reported: [expect.stringContaining("written-6000.txt")], seeded: true },
+        { done: true, reported: [expect.stringContaining("written-10000.txt")], seeded: true },
       ])
     }),
     40_000,
@@ -2264,6 +2265,224 @@ describe("a collection that ends early (class 7)", () => {
       }),
     120_000,
   )
+})
+
+// Review fix loop 7: how a step's budget is spent when it covers only part of the watched files, as on a slow or loaded
+// machine. Every check of a file waits in its deny-rule lookup (or, in one row, every read), so one step of the real
+// producer gets through at most forty of them (eight at a time, five each within the budget), each well within its own
+// share of half the budget.
+describe("a budget smaller than one pass over the files (class 7)", () => {
+  const SLOW = "160 millis"
+  const BUDGET = 800
+  /** Far more steps than a pass of 100 files needs at forty or even ten a step, so only starvation runs out of them. */
+  const STEPS = 12
+  interface BudgetContext {
+    readonly h: Effect.Success<ReturnType<typeof setup>>
+    /** The files the session wrote, oldest first, and the ones someone else changed since. */
+    readonly files: ReadonlyArray<string>
+    /**
+     * Runs one step, then more until every file in `until` was reported or `STEPS` ran out, and gives the step each file
+     * was reported at, by its name.
+     */
+    readonly steps: (
+      until: ReadonlyArray<string>,
+      messages?: ReadonlyArray<SessionMessage.Info>,
+    ) => Effect.Effect<ReadonlyMap<string, number>, unknown>
+  }
+  interface Row {
+    readonly name: string
+    /** How many files the session writes before the steps; `f0` is the oldest. */
+    readonly written: number
+    /** The written files someone else changes. */
+    readonly changed: ReadonlyArray<number>
+    /** The changed files whose read never returns. */
+    readonly hung?: ReadonlyArray<number>
+    /** What waits: each file's deny-rule lookup (the default), or each read of a file instead. */
+    readonly slow?: "reads"
+    readonly check: (c: BudgetContext) => Effect.Effect<void, unknown, Scope.Scope>
+  }
+  const at = (c: BudgetContext, indexes: ReadonlyArray<number>) => indexes.map((index) => path.basename(c.files[index]))
+  const range = (from: number, to: number) => Array.from({ length: to - from }, (_, index) => from + index)
+
+  const rows: ReadonlyArray<Row> = [
+    {
+      name: "the newest file the session wrote is checked at the first step",
+      written: 100,
+      changed: [99],
+      check: (c) =>
+        Effect.gen(function* () {
+          expect((yield* c.steps(at(c, [99]))).get("f99.txt")).toBe(0)
+        }),
+    },
+    {
+      // Neither the oldest nor the newest forty: a step that started again from either end would never reach it.
+      name: "the next step goes on where the last one stopped",
+      written: 100,
+      changed: [50],
+      check: (c) =>
+        Effect.gen(function* () {
+          expect((yield* c.steps(at(c, [50]))).has("f50.txt")).toBe(true)
+          // And in the next scan, once this one has checked every file.
+          yield* c.h.change(c.files[55], text(["changed again"]))
+          expect((yield* c.steps(at(c, [55]))).has("f55.txt")).toBe(true)
+        }),
+    },
+    {
+      name: "every changed file is reported, once, within the steps a pass needs",
+      written: 100,
+      changed: [0, 50, 99],
+      check: (c) =>
+        Effect.gen(function* () {
+          const reported = yield* c.steps(at(c, [0, 50, 99]))
+          expect(Array.from(reported.keys()).toSorted()).toEqual(at(c, [0, 50, 99]).toSorted())
+          // Reported files count as seen, so a step after a whole pass finds nothing more.
+          expect(yield* c.steps(at(c, range(0, 100)))).toEqual(new Map())
+        }),
+    },
+    {
+      // Hung reads ahead of the one that answers, whichever end a step starts from: as many older ones as are checked
+      // at once, and four times as many newer ones. Each costs only its own share, so a step gets past two of them in
+      // each slot and the third step reaches the file; were each to hold its slot for the whole budget, it would take
+      // five.
+      name: "files whose reads never return cost only their own share",
+      written: 45,
+      changed: [...range(0, 8), 10, ...range(13, 45)],
+      hung: [...range(0, 8), ...range(13, 45)],
+      check: (c) =>
+        Effect.gen(function* () {
+          const reported = yield* c.steps(at(c, [10]))
+          expect(Array.from(reported.keys())).toEqual(at(c, [10]))
+          expect(reported.get("f10.txt")).toBeLessThanOrEqual(2)
+          // Nothing counts as seen for a file whose read never returned, so the edit tools still refuse it as changed.
+          for (const file of [c.files[0], c.files[44]])
+            expect(errorType(yield* c.h.run("Write", { file_path: file, content: "MODEL" }))).toBe("file.stale")
+        }),
+    },
+    {
+      // After a restart: the history edits 100 files, more than the rebuild's budget can resolve and read.
+      name: "a rebuild that runs out of time keeps the newest files and leaves out the oldest",
+      written: 0,
+      changed: [],
+      check: (c) =>
+        Effect.gen(function* () {
+          const edited = range(0, 100).map((index) => c.h.inside(`h${index}.txt`))
+          yield* Effect.promise(() => Promise.all(edited.map((file) => fs.writeFile(file, text(["a"])))))
+          yield* c.steps([], edits(edited))
+          const seeded = yield* Effect.forEach([edited[99], edited[0]], (file) =>
+            c.h.ledger
+              .assertRead(c.h.session.id, file, path.basename(file))
+              .pipe(Effect.exit, Effect.map(Exit.isSuccess)),
+          )
+          expect(seeded).toEqual([true, false])
+        }),
+    },
+    {
+      // The names resolve at once and each read of a file waits, so the rebuild reads only some of those it resolved.
+      name: "a rebuild that runs out of time reading files reads the newest first",
+      written: 0,
+      changed: [],
+      slow: "reads",
+      check: (c) =>
+        Effect.gen(function* () {
+          const edited = range(0, 100).map((index) => c.h.inside(`h${index}.txt`))
+          yield* Effect.promise(() => Promise.all(edited.map((file) => fs.writeFile(file, text(["a"])))))
+          yield* c.steps([], edits(edited))
+          // Read newest first, but recorded oldest first, so the newest is the ledger's most recently used.
+          const order = (yield* c.h.ledger.watched(c.h.session.id)).map((file) =>
+            Number(path.basename(file.path).slice(1, -4)),
+          )
+          expect(order.at(-1)).toBe(99)
+          expect(order).toEqual(order.toSorted((left, right) => left - right))
+          const seeded = yield* Effect.forEach([edited[99], edited[0]], (file) =>
+            c.h.ledger
+              .assertRead(c.h.session.id, file, path.basename(file))
+              .pipe(Effect.exit, Effect.map(Exit.isSuccess)),
+          )
+          expect(seeded).toEqual([true, false])
+        }),
+    },
+  ]
+
+  const edits = (files: ReadonlyArray<string>) =>
+    history([
+      assistant(
+        "msg_0000000001",
+        files.map((file, index) =>
+          toolPart(`e${index}`, "Edit", { file_path: file, old_string: "a", new_string: "b" }, {}, T(60)),
+        ),
+      ),
+    ])
+
+  for (const row of rows)
+    it.live(
+      row.name,
+      () =>
+        Effect.gen(function* () {
+          const h = yield* setup()
+          const bus = yield* Bus.Service
+          const real = yield* ReadToolFileSystem.Service
+          const permission = yield* Permission.Service
+          const files = range(0, row.written).map((index) => h.inside(`f${index}.txt`))
+          for (const file of files) yield* h.write(file, text(twenty))
+          for (const index of row.changed)
+            yield* h.change(files[index], text(twenty.map((line) => (line === "line4" ? "PERSON-EDIT" : line))))
+          const hung = new Set((row.hung ?? []).map((index) => files[index]))
+          const reminders = yield* Effect.gen(function* () {
+            return yield* SessionReminders.Service
+          }).pipe(
+            Effect.provide(
+              AppNodeBuilder.build(
+                LayerNode.group([
+                  Bus.node,
+                  SessionReminders.configured({
+                    durable: [
+                      FileChangeReminder.durable({
+                        ledger: h.ledger,
+                        access: yield* FileAccess.Service,
+                        trust: h.trust,
+                        environment: yield* Environment.Service,
+                        budget: BUDGET,
+                        permission: {
+                          ...permission,
+                          denied: (request) =>
+                            Effect.sleep(row.slow === "reads" ? 0 : SLOW).pipe(
+                              Effect.andThen(permission.denied(request)),
+                            ),
+                        },
+                        reader: {
+                          ...real,
+                          read: (file, resource, page) =>
+                            hung.has(file)
+                              ? Effect.never
+                              : Effect.sleep(row.slow === "reads" ? SLOW : 0).pipe(
+                                  Effect.andThen(real.read(file, resource, page)),
+                                ),
+                        },
+                      }),
+                    ],
+                    derived: [],
+                  }),
+                ]),
+                [Bus.node.replace(Layer.succeed(Bus.Service, bus))],
+              ),
+            ),
+          )
+          const steps: BudgetContext["steps"] = (until, messages = []) =>
+            Effect.gen(function* () {
+              const reported = new Map<string, number>()
+              for (let step = 0; step === 0 || (step < STEPS && !until.every((file) => reported.has(file))); step++)
+                for (const row of yield* h.changes(messages, { reminders })) {
+                  const file = path.basename(row.label?.slice("Changed lines of ".length) ?? "")
+                  // Each change is reported once.
+                  expect(reported.has(file)).toBe(false)
+                  reported.set(file, step)
+                }
+              return reported
+            })
+          yield* row.check({ h, files, steps })
+        }),
+      60_000,
+    )
 })
 
 describe("the output-style reminder", () => {

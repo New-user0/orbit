@@ -39,7 +39,9 @@ describe("FileLedger", () => {
 
       yield* readNow(sessionID, file)
       expect(yield* ledger.assertFresh(sessionID, file, "a.ts").pipe(Effect.exit)).toEqual(Exit.void)
-      expect(message(yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.exit))).toContain("has no read in this session")
+      expect(message(yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.exit))).toContain(
+        "has no read in this session",
+      )
       expect((yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.flip)).code).toBe("file.unread")
 
       yield* Effect.promise(() => fs.utimes(file, new Date(2_000_000), new Date(2_000_000)))
@@ -317,7 +319,8 @@ describe("FileLedger bounds", () => {
       const ledger = yield* FileLedger.Service
       const file = (index: number) => path.join(tmp.path, `file-${index}.ts`)
       yield* Effect.promise(() => Promise.all([0, 1, 2].map((index) => Bun.write(file(index), String(index)))))
-      for (let index = 0; index < 100; index++) yield* ledger.recordWrite(sessionID, file(index), written(String(index)))
+      for (let index = 0; index < 100; index++)
+        yield* ledger.recordWrite(sessionID, file(index), written(String(index)))
       // Asking about a file is a use: file-0 is now the most recent, so file-1 is the least recently used.
       yield* ledger.assertRead(sessionID, file(0), "file-0.ts")
       yield* ledger.recordWrite(sessionID, file(100), written("100"))
@@ -351,6 +354,31 @@ describe("FileLedger bounds", () => {
       yield* ledger.recordWrite(sessionID, "/project/b.ts", written("b"))
       yield* ledger.recordRead(sessionID, "/project/a.ts", written("a"))
       expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual(["/project/b.ts"])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  // Review fix loop 7: the order the file-change reminder checks the watched files in, which goes on across steps.
+  it.live("lists the files not yet checked in the scan first, the newest first, and starts a new scan after all", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      const order = ledger.toCheck(sessionID).pipe(Effect.map((files) => files.map((file) => file.path)))
+      for (const name of ["a", "b", "c", "d"])
+        yield* ledger.recordWrite(sessionID, `/project/${name}.ts`, written(name))
+      expect(yield* order).toEqual(["/project/d.ts", "/project/c.ts", "/project/b.ts", "/project/a.ts"])
+      yield* ledger.checked(sessionID, ["/project/d.ts", "/project/c.ts"])
+      expect(yield* order).toEqual(["/project/b.ts", "/project/a.ts", "/project/d.ts", "/project/c.ts"])
+      // A file no longer watched does not hold the scan open.
+      yield* ledger.recordRead(sessionID, "/project/a.ts", written("a"))
+      yield* ledger.checked(sessionID, ["/project/b.ts"])
+      expect(yield* order).toEqual(["/project/d.ts", "/project/c.ts", "/project/b.ts"])
+      yield* ledger.checked(sessionID, ["/project/d.ts"])
+      expect(yield* order).toEqual(["/project/c.ts", "/project/b.ts", "/project/d.ts"])
+      // Listing is not a use, and noting a check counts nothing as read.
+      expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual([
+        "/project/b.ts",
+        "/project/c.ts",
+        "/project/d.ts",
+      ])
     }).pipe(Effect.provide(ledgerLayer)),
   )
 

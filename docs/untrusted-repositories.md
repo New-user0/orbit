@@ -726,8 +726,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   run after the rows are posted and only while the record is the one it checked (`FileLedger.settle`), so a deadline,
   an interruption, a failed read, a refusal or a compaction meanwhile leaves every stale refusal in place (class 7;
   the "collection that ends early" rows). A file that is slow to check or read, in the re-read or in the rebuild, is
-  left out on its own within a budget below the producer's deadline, and the comparisons run smallest first, so one
-  slow file costs only itself (class 7; the same rows). Proof: the "re-read gate" and "rebuild after a restart" rows of
+  left out on its own within a budget below the producer's deadline, each file within half of it, and the comparisons
+  run smallest first, so one slow or hung file costs only its share. When the budget covers only part of the files, the
+  re-read takes the newest first and goes on at the next step where the last one stopped (a scan the ledger keeps per
+  session), and the rebuild works from the newest call back, so it leaves out the oldest (class 7; the same rows and
+  the "budget smaller than one pass over the files" rows). Proof: the "re-read gate" and "rebuild after a restart" rows of
   `test/durable-reminders.test.ts` (an outside file after a revoke, a project file swapped for a link out with and
   without trust, a table of the file, its folder and a folder above it swapped for a link or junction into another
   outside folder, for a file outside and inside the project, trusted and revoked, a dangling link, a deny on a link's
