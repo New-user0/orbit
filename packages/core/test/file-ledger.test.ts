@@ -353,4 +353,28 @@ describe("FileLedger bounds", () => {
       expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual(["/project/b.ts"])
     }).pipe(Effect.provide(ledgerLayer)),
   )
+
+  // Test gate row (class 7): the file-change reminder settles what it checked only after its row is posted, so a write
+  // recorded in between must survive that settle; the matching record is the control.
+  it.live("settles a record only while it is still the one that was checked", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      const read = { mtimeMs: 3_000, digest: digestOf("read") }
+      yield* ledger.recordWrite(sessionID, "/project/a.ts", written("first"))
+      yield* ledger.recordWrite(sessionID, "/project/b.ts", written("first"))
+      const [a, b] = yield* ledger.watched(sessionID)
+      yield* ledger.recordWrite(sessionID, "/project/a.ts", { ...written("second"), mtimeMs: 2_000 })
+      yield* ledger.settle(sessionID, a.path, a.seen, read)
+      yield* ledger.settle(sessionID, b.path, b.seen, read)
+      expect(yield* ledger.watched(sessionID)).toEqual([
+        { path: "/project/a.ts", seen: { ...written("second"), mtimeMs: 2_000 } },
+      ])
+      // A settle without a next record forgets the file, but again only while the record is the one checked.
+      yield* ledger.settle(sessionID, a.path, a.seen)
+      expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual(["/project/a.ts"])
+      const [current] = yield* ledger.watched(sessionID)
+      yield* ledger.settle(sessionID, current.path, current.seen)
+      expect(yield* ledger.watched(sessionID)).toEqual([])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
 })
