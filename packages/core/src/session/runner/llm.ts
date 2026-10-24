@@ -119,6 +119,9 @@ const layer = Layer.effect(
     const turnEnd = yield* SessionTurnEnd.Service
     const reminders = yield* SessionReminders.Service
     const toolOutput = yield* ToolOutput.Service
+    // Every context check measures what the request carries: a result the message budget replaced counts as its wrapper.
+    const estimate = (loaded: SessionContext.Loaded) =>
+      SessionCompaction.estimateContext(loaded, reminders.minimal, toolOutput.root)
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -465,7 +468,7 @@ const layer = Layer.effect(
           before = yield* loadSelected(selection, current.fallback)
         if (compacted) {
           compacted = false
-          yield* report(before, SessionCompaction.estimateContext(before, reminders.minimal, toolOutput.root), true, breaker)
+          yield* report(before, estimate(before), true, breaker)
         }
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
         const limit = yield* turnLimit(before, current.options)
@@ -510,7 +513,7 @@ const layer = Layer.effect(
         if (
           !window.auto &&
           window.thresholds &&
-          SessionCompaction.estimateContext(loaded, reminders.minimal, toolOutput.root) >= window.thresholds.blocking
+          estimate(loaded) >= window.thresholds.blocking
         )
           return yield* new StepFailedError({
             error: {
@@ -694,7 +697,7 @@ const layer = Layer.effect(
     ) {
       const selected = yield* context.select(sessionID)
       const loaded = yield* loadSelected(selected, (yield* SessionTurn.current(db, sessionID)).fallback)
-      yield* report(loaded, SessionCompaction.estimateContext(loaded, reminders.minimal, toolOutput.root), true, breaker)
+      yield* report(loaded, estimate(loaded), true, breaker)
     }, (effect, sessionID) =>
       effect.pipe(
         Effect.catchCause((cause) =>

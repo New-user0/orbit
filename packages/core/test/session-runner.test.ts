@@ -11286,6 +11286,8 @@ describe("context accounting", () => {
     yield* settled(updates, 2)
 
     expect(updates.map((update) => update.stale)).toEqual([true, false])
+    // The stale report is the estimate of the request the checkpoint left, not an empty window.
+    expect(updates[0]!.used).toBeGreaterThan(0)
   })
 
   scenario("reports the usage of a response that stopped at the output limit", function* (s) {
@@ -11848,5 +11850,64 @@ describe("SessionRunnerLLM message budget", () => {
     yield* s.resume
 
     expect(wrapped(s.requests[1])).toEqual(["call_1", "call_2", "call_3", "call_4"])
+  })
+
+  // A manual compaction steered into a turn that moved to a fallback model of another provider leaves a native window
+  // the fallback cannot replay, so the report after it measures the whole history, overridden results included. Whole,
+  // the five results are about 56,000 tokens; as one result and four wrappers they are about 14,000 (class 3).
+  budgetScenario("reports the wrappers after a manual compaction the fallback model cannot replay", function* (s) {
+    modelLimits.set("native-budget", { context: 1_000_000, output: 32_000 })
+    yield* Effect.addFinalizer(() => Effect.sync(() => modelLimits.delete("native-budget")))
+    s.currentModel = LanguageModel.make({ id: "native-budget", provider: "openai", route: OpenAIResponses.route })
+    s.compaction = { type: "native" }
+    yield* limit(s, 60_000)
+    const reports = new Array<{ readonly used: unknown; readonly stale: unknown }>()
+    yield* s.bus.subscribe().pipe(
+      Stream.filter((event) => event.type === "session.context.updated"),
+      Stream.runForEach((event) =>
+        Effect.sync(() => {
+          const data = event.data as { readonly used?: unknown; readonly stale?: unknown }
+          reports.push({ used: data.used, stale: data.stale })
+        }),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* s.session.prompt({
+      sessionID,
+      text: "Search five ways",
+      turn: { fallbackModel: { providerID: Provider.ID.make("fake"), id: ID.make("replacement") } },
+      resume: false,
+    })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(
+      emits("", 45_000, 45_000, 45_000, 45_000, 45_000),
+      TestLLM.tool("call_wait", "echo", { text: "wait" }),
+      CompactionCheckpointResponse.make({
+        responseID: "resp_budget_window",
+        checkpoint: { type: "compaction", provider: s.currentModel.provider, encrypted: "budget-window" },
+      }),
+      TestLLM.text("Done", "done-fallback-report"),
+    )
+    const blocked = yield* s.blockTools()
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (let index = 0; index < 2; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    yield* blocked.started
+    yield* s.session.compact({ sessionID })
+    yield* blocked.release
+    yield* Fiber.join(run)
+    for (let turn = 0; turn < 200 && !reports.some((report) => report.stale === true); turn++) yield* Effect.yieldNow
+
+    expect(wrapped(s.requests[4])).toEqual(["call_1", "call_2", "call_3", "call_4"])
+    expect((yield* s.messages).filter((message) => message.type === "compaction")).toMatchObject([
+      { status: "completed", reason: "manual", providerContext: { version: 1 } },
+    ])
+    const after = reports.filter((report) => report.stale === true)
+    expect(after).toHaveLength(1)
+    expect(after[0]!.used).toBeGreaterThan(11_000)
+    expect(after[0]!.used).toBeLessThan(30_000)
   })
 })
