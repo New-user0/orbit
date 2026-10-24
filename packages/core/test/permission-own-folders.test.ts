@@ -240,6 +240,9 @@ describe("Orbit's own folders that cannot be resolved", () => {
                         Global.Service.of(Global.make({ config, tmp: path.join(tmp, "t") })),
                       ),
                     ),
+                    // The permission layer reads the memory folder from the config; the config's own loader is not what
+                    // this row is about.
+                    Config.node.replace(Config.testLayer()),
                     Location.node.replace(
                       Layer.succeed(
                         Location.Service,

@@ -795,6 +795,44 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   ID would name a folder, and a control), `test/permission-scratchpad.test.ts` (the sessions of a lineage, the hostile IDs,
   the links and the Windows spellings, with the plain file in the folder as the control),
   `test/session-scratchpad-baseline.test.ts` and the `scratchpad` rows of `test/session-runner.test.ts`.
+- The memory folder (`MemoryStore`, `packages/core/src/memory/store.ts`): `<data>/memory/<project ID>`, or the folder
+  `memory.directory` names. That key is read only from the user, local, flag and managed scopes, never from a project's
+  or a remote one, and `ConfigTrust` withholds all of `memory` from an untrusted folder as `permissions` (class 8). The
+  value is refused before any disk access when it is relative, a share or device spelling (two leading separators), a
+  root, shorter than 3 characters, holds a NUL, names home or a folder above it through `~/` (with or without trailing
+  separators, as in `~/./` or `~/../`), or on Windows has no drive letter (class 4); the default folder is kept then. A
+  valid value whose path crosses a link to a share is refused the same way, asked with `LinkShare.blocked` before it is
+  resolved, and the guide does not create a folder whose path has come to cross one since (class 6). The folder and its
+  real path are decided once for the Location.
+  The file tools write and read there without a question (`inMemory` in `Permission`): only for `Edit`, `Read` and
+  `external_directory`, only when the place is in the folder by one of its spellings and every real place it leads to is
+  in the real folder (a link inside the folder that points out is decided as the place it points to), never for a call
+  marked `escaped`. A deny of the person's, the session's, an agent's own or the managed policy decides there over any ask
+  and over a mode's deny, which do not reach the folder, and as elsewhere a later allow of the person's lifts it (class
+  8). A shell command is not covered: the folder question that `ShellGuard.prepare` asks is marked `shell`, and neither
+  the carve-out nor Orbit's own allow for the folder decides it, so the default agent's `external_directory * ask` still
+  asks (class 8). This is stricter than the reference, whose shell path check lets the memory folder through but which
+  still asks about a command that is not read-only: the default agent here allows every command, so the folder question
+  is the only gate a command meets. The guide goes only to a main thread whose base prompt is Orbit's (class 12); when it
+  goes in the middle of a session, the update tells the model that memory is off only when memory is switched off
+  (`test/session-context-memory.test.ts`, an agent switch and its `memory.enabled` control). The index reader
+  (`MemoryInstructions`, `packages/core/src/memory/instructions.ts`) loads `MEMORY.md` only when its real path is in the
+  real folder, and asks `LinkShare.blocked` before it resolves the file, so a link to a share is never opened (class 6);
+  the carry-over of notes saved before trust adds its lines only to a `MEMORY.md` that is not a link, one that leads
+  nowhere included (class 4). The reader takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
+  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) asks `LinkShare.blocked` about the folder and each link entry before it
+  resolves it (class 6), lists only files whose real path is in the folder's, reads each at the real path it checked,
+  and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
+  asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
+  the five places beside the folder, four link targets with a new and an existing file, the data folder and the
+  configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a deny that names the
+  other spelling of the folder (linked or real data folder, absolute or relative configured folder, linked or
+  real configured folder in the person's and in a managed deny, an asker's aliases), a mode's deny, the
+  built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation with the trailing-separator
+  and deep-home `~` rows, scopes, the switch order, front matter with a marker file, the scan's links, a link to a share
+  with the recorded file system, the read at the checked real path), `test/memory-instructions.test.ts` (the index link to a marker, which
+  neither the reader, the carry-over nor the header rewrite goes through, an index link to a share with the recorded file
+  system, a dangling index link the carry-over does not write through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and
@@ -1508,8 +1546,8 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   when one is a link (`packages/flow/test/git.test.ts`, "a run whose folder is reached through a link is left alone
   with everything it leads to", and the `orb flow clean` row in `packages/cli/test/flow.test.ts`).
 - A name that becomes a file name is one plain name (the output style rule in
-  `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
-  `packages/core/src/tool/plugin/memory.ts`).
+  `packages/core/src/plugin/output-style.ts`). Where the model names the file itself, as it does in the memory folder,
+  the real place of the file decides, not its name (`inMemory` in `Permission`).
 - Check at the moment of reading, not once when the file is discovered.
 
 **How to test:**

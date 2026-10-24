@@ -10,6 +10,7 @@ import path from "path"
 import { DevicePath } from "./device-path.js"
 import { LinkShare } from "@orbit/util/link-share"
 import { Location } from "./location.js"
+import { MemoryStore } from "./memory/store.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
 import { ProjectTrust } from "./project-trust.js"
@@ -117,6 +118,8 @@ export interface Interface {
    * or asked: they are paths that a shell command names in its text, not paths a tool was given.
    */
   readonly escaped: (files: readonly string[]) => Effect.Effect<readonly Target[], FSUtil.Error | ToolFailure>
+  /** Whether memory is on and a file that exists really is in the project's memory folder (`MemoryStore`). */
+  readonly inMemory: (file: string) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -175,6 +178,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
+    const memory = yield* MemoryStore.Service
     const location = yield* Location.Service
     const permission = yield* Permission.Service
     const trust = yield* ProjectTrust.Service
@@ -490,14 +494,23 @@ const layer = Layer.effect(
       return targets.flat()
     })
 
-    return Service.of({ resolve, externalRequest, authorizeExternal, authorizeRead, escaped })
+    const inMemory = (file: string) =>
+      memory
+        .enabled()
+        .pipe(
+          Effect.flatMap((on) =>
+            on ? memory.locate(file).pipe(Effect.map((real) => real !== undefined)) : Effect.succeed(false),
+          ),
+        )
+
+    return Service.of({ resolve, externalRequest, authorizeExternal, authorizeRead, escaped, inMemory })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node],
+  deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node, MemoryStore.node],
 })
 
 // The name in `folder` that `part` stands for: `part` itself when the folder has an entry of that name or nothing is
