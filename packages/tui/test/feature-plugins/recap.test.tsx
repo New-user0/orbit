@@ -24,6 +24,8 @@ async function start(input: {
   ready?: string
   /** What the recap route does with a request; the default records it. */
   recap?: (request: Request) => Response | Promise<Response>
+  /** Makes the session in view a subagent's session under this parent. */
+  parentID?: string
 }) {
   const state = await tmpdir()
   const setup = await createTestRenderer({ width: input.width ?? 100, height: 30, useThread: false, kittyKeyboard: true })
@@ -32,6 +34,7 @@ async function start(input: {
     id: sessionID,
     title: "Recap",
     projectID: "project",
+    ...(input.parentID ? { parentID: input.parentID } : {}),
     location: { directory },
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -183,6 +186,15 @@ test("a prompt older than the loaded page of messages still lets the session ask
 
 test("a session resumed with a recap after its last prompt asks for none", async () => {
   await using app = await start({ messages: [user("Fix the build"), recap("Fixing the build.")] })
+  app.blur()
+  await Bun.sleep(400)
+  expect(app.requests).toHaveLength(0)
+})
+
+// The reference recaps only the main conversation. A subagent's session opens in the same route with a prompt its
+// parent agent wrote, so blurring while it is in view asks for nothing; the main-session rows above are the control.
+test("a subagent's session in view asks for no recap", async () => {
+  await using app = await start({ messages: [user("Fix the build")], parentID: "ses_recap_parent" })
   app.blur()
   await Bun.sleep(400)
   expect(app.requests).toHaveLength(0)

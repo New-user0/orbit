@@ -250,13 +250,13 @@ const userTexts = (request: LLMRequest | undefined) =>
 const allText = (request: LLMRequest | undefined) =>
   JSON.stringify([request?.system ?? [], request?.messages ?? []])
 
-const say = (bus: Bus.Interface, text: string) =>
+const say = (bus: Bus.Interface, text: string, metadata?: Record<string, unknown>) =>
   Effect.gen(function* () {
     const inboxID = SessionMessage.ID.create()
     yield* bus.publish(SessionEvent.InboxEnqueued, {
       sessionID,
       inboxID,
-      item: { type: "user", payload: { text }, delivery: "steer" },
+      item: { type: "user", payload: { text, metadata }, delivery: "steer" },
     })
     yield* bus.publish(SessionEvent.InboxDelivered, { sessionID, inboxID })
   })
@@ -436,6 +436,28 @@ it.effect(
       expect(yield* test.requests()).toHaveLength(3)
       expect(yield* recordedRecaps(db)).toHaveLength(3)
     }),
+)
+
+// The reference recaps only the main conversation. A subagent's session opens with a prompt its parent agent wrote,
+// which is not the person's input, so it never makes a recap due.
+it.effect("a prompt another agent wrote does not start a turn, so a subagent's session gets no recap", () =>
+  Effect.gen(function* () {
+    const { bus, db, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Find the failing parser test", { origin: "agent" })
+    yield* test.push(answer("unused"), answer("Fixing the build."))
+
+    expect(yield* recap.generate(sessionID)).toBeUndefined()
+    expect(yield* test.requests()).toHaveLength(0)
+
+    // The person's own prompt after it still starts a turn, and an agent's prompt after a recap does not reopen one.
+    yield* say(bus, "Fix the build")
+    expect(yield* recap.generate(sessionID)).toEqual({ text: "unused" })
+    yield* say(bus, "Check the lexer too", { origin: "agent" })
+    expect(yield* recap.generate(sessionID)).toBeUndefined()
+    expect(yield* test.requests()).toHaveLength(1)
+    expect(yield* recordedRecaps(db)).toHaveLength(1)
+  }),
 )
 
 it.effect("two clients asking at once make one call", () =>
@@ -660,6 +682,65 @@ it.effect("a window that would open on a tool result starts at the next message 
     expect(request?.messages[0]?.role).toBe("user")
     // The 29 prompts after the step, then the instruction.
     expect(request?.messages).toHaveLength(30)
+  }),
+)
+
+// Bedrock Converse refuses a conversation whose first message is not a user message, so the window opens on a user
+// message even when the 30th message from the end is the assistant's.
+it.effect("a window that would open on an assistant message starts at the next user message instead", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("build"),
+      model: { providerID: Provider.ID.make("test"), id: Model.ID.make("recap-primary") },
+      started: 0,
+    })
+    yield* bus.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, id: "call_1", name: "lookup" })
+    yield* bus.publish(SessionEvent.Tool.Called, {
+      sessionID,
+      assistantMessageID,
+      id: "call_1",
+      input: {},
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Tool.Success, {
+      sessionID,
+      assistantMessageID,
+      id: "call_1",
+      content: [{ type: "text", text: "found" }],
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Step.Ended, {
+      sessionID,
+      assistantMessageID,
+      finish: "tool-calls",
+      cost: Money.USD.make(0),
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    // 31 messages in all, so the last 30 begin with the assistant's tool call and then its result.
+    for (const index of Array.from({ length: 28 }, (_, item) => item + 1)) yield* say(bus, `message ${index}`)
+    yield* test.push(answer("Looking things up."))
+
+    yield* recap.generate(sessionID)
+
+    const [request] = yield* test.requests()
+    expect(request?.messages[0]?.role).toBe("user")
+    expect(allText(request)).not.toContain("[Assistant tool call]")
+    expect(allText(request)).not.toContain("[Tool result]")
+    // The 28 prompts after the step, then the instruction.
+    expect(request?.messages).toHaveLength(29)
+    const prepared = yield* compileRequest(
+      LLMRequest.update(request!, {
+        model: AmazonBedrock.configure({ baseURL: "https://bedrock-runtime.test", apiKey: "test" }).model("recap"),
+      }),
+    )
+    const body = prepared.body as { messages: ReadonlyArray<{ role: string }> }
+    expect(body.messages[0]?.role).toBe("user")
   }),
 )
 

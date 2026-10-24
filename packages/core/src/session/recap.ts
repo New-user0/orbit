@@ -2,7 +2,7 @@ export * as SessionRecap from "./recap.js"
 
 import { body } from "@orbit/util/plain"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
-import { and, desc, eq, inArray } from "drizzle-orm"
+import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { Context, Duration, Effect, Layer } from "effect"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
@@ -45,7 +45,8 @@ export const layer = Layer.effect(
     const writing = new Set<SessionSchema.ID>()
 
     // Only the person's own input starts a turn: a prompt or a `!` command. Notices, instruction updates, compactions
-    // and model or agent switches do not.
+    // and model or agent switches do not, and neither does a prompt another agent wrote: a subagent's task is not a
+    // conversation the person comes back to.
     const due = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
       const latest = yield* db
         .select({ type: SessionMessageTable.type })
@@ -54,6 +55,7 @@ export const layer = Layer.effect(
           and(
             eq(SessionMessageTable.session_id, sessionID),
             inArray(SessionMessageTable.type, ["user", "shell", "recap"]),
+            sql`json_extract(${SessionMessageTable.data}, '$.metadata.origin') is not 'agent'`,
           ),
         )
         .orderBy(desc(SessionMessageTable.seq))

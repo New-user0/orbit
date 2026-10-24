@@ -57,8 +57,8 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
 
 /**
  * The last `count` messages of the settled Session history, lowered for `model` as the runner lowers them, with no
- * system prompt, instructions or system message. The window never opens on a tool result whose call it cut off, and
- * its tool calls and results are written out as text.
+ * system prompt, instructions or system message. The window opens on its first user message, so it never starts on
+ * an assistant reply or on a tool result whose call it cut off, and its tool calls and results are written out as text.
  */
 export const recent = Effect.fn("SessionGenerate.recent")(function* (
   sessionID: SessionSchema.ID,
@@ -80,7 +80,9 @@ export const recent = Effect.fn("SessionGenerate.recent")(function* (
   )
     .filter((message) => message.role !== "system")
     .slice(-count)
-  const start = window.findIndex((message) => message.role !== "tool")
+  // Some providers refuse a conversation that does not open with a user message (Bedrock Converse), so the cut skips
+  // a leading assistant reply as well as a tool result. It looks before the tool messages become user text below.
+  const start = window.findIndex((message) => message.role === "user")
   // The window goes out with no tool definitions, so its tool calls and results go as text.
   return start === -1 ? [] : window.slice(start).map(SessionCompaction.withoutToolBlocks)
 })

@@ -8,9 +8,11 @@ import { createRecapTrigger } from "../../recap"
 export default Plugin.define({
   id: "orbit.recap",
   setup(context) {
+    // Only the main conversation is recapped, as in the reference: a subagent's session in view asks for nothing.
     const current = () => {
       const route = context.ui.router.current()
-      return route.type === "session" ? route.sessionID : undefined
+      if (route.type !== "session") return undefined
+      return context.data.session.get(route.sessionID)?.parentID ? undefined : route.sessionID
     }
 
     context.ui.slot({
