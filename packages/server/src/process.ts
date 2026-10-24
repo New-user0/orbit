@@ -2,7 +2,11 @@ export * as ServerProcess from "./process"
 
 import { NodeHttpServer } from "@effect/platform-node"
 import { Bus } from "@orbit/core/bus"
+import { Location } from "@orbit/core/location"
+import { LocationServiceMap } from "@orbit/core/location-service-map"
+import { AbsolutePath } from "@orbit/core/schema"
 import { SessionRestart } from "@orbit/core/session/execution/restart"
+import { SessionRetention } from "@orbit/core/session/retention"
 import { InstallationEvent } from "@orbit/schema/installation-event"
 import { hasPtyConnectTicketURL } from "@orbit/protocol/groups/pty"
 import { hasPersistentPtyConnectTicketURL } from "@orbit/protocol/groups/persistent-pty"
@@ -115,6 +119,11 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
         Effect.provideService(Scope.Scope, applicationScope),
       )
     }
+    if (options.retention !== false)
+      yield* SessionRetention.schedule(retentionSetting(Context.get(context, LocationServiceMap.Service))).pipe(
+        Effect.provideService(SessionRetention.Service, Context.get(context, SessionRetention.Service)),
+        Effect.provideService(Scope.Scope, applicationScope),
+      )
     yield* Ref.set(application, Option.some(Context.get(context, HttpRouter.HttpRouter).asHttpEffect()))
     yield* status.ready
     const bus = Context.get(context, Bus.Service)
@@ -237,6 +246,22 @@ function unavailable(status: Status.State) {
     { status: 503, headers: { "retry-after": "1" } },
   )
 }
+
+/**
+ * The retention period as the config of the folder the server runs in gives it: the folder a request without one of
+ * its own is served in. Config that cannot be read skips the pass.
+ */
+const retentionSetting = (locations: LocationServiceMap.Service["Service"]) =>
+  SessionRetention.setting.pipe(
+    Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.interrupt
+        : Effect.logWarning("session retention skipped: the config could not be read", { cause }).pipe(
+            Effect.as(undefined),
+          ),
+    ),
+  )
 
 /**
  * The managed server owns restart continuity: at boot it resumes Sessions whose execution claim was

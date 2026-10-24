@@ -9,7 +9,7 @@ import { Provider } from "@orbit/schema/provider"
 import { ToolMode } from "@orbit/schema/session-stats"
 import { TokenUsage } from "@orbit/schema/token-usage"
 import { Database } from "../database/database.js"
-import { SessionMessageTable, SessionTable, SessionUsageTable } from "./sql.js"
+import { SessionMessageTable, SessionStatsArchiveTable, SessionTable, SessionUsageTable } from "./sql.js"
 
 type Input = {
   readonly from?: number
@@ -72,6 +72,8 @@ type ToolAggregate = {
 }
 
 const Window = 31 * 24 * 60 * 60 * 1_000
+/** The width of an archive bucket (`SessionStatsArchiveTable`): every real time zone is a whole number of these from UTC. */
+export const BUCKET = 15 * 60 * 1_000
 
 export class InvalidRangeError extends Schema.TaggedError<InvalidRangeError>()("SessionStats.InvalidRangeError", {
   from: Schema.Finite,
@@ -83,22 +85,37 @@ export const get = Effect.fn("SessionStats.get")(function* (input: Input = {}) {
   const to = input.to ?? Date.now()
   if (input.from !== undefined && input.from >= to) return yield* new InvalidRangeError({ from: input.from, to })
   const project = input.projectID === undefined ? sql`` : sql`AND session.project_id = ${input.projectID}`
+  // The stats of the sessions that retention removed; a session still here (a removal that failed after the fold) is
+  // counted from its own rows only.
+  const archived = sql`
+    NOT EXISTS (SELECT 1 FROM ${SessionTable} AS live WHERE live.id = archive.session_id)
+    ${input.projectID === undefined ? sql`` : sql`AND archive.project_id = ${input.projectID}`}
+  `
   const from =
     input.from ??
-    (yield* db
-      .get<{ time: number | null }>(
-        sql`
-        SELECT min(message.time_created) AS time
-        FROM ${SessionMessageTable} AS message
-        JOIN ${SessionTable} AS session ON session.id = message.session_id
-        WHERE message.type IN ('user', 'assistant')
-          AND message.time_created < ${to}
-          AND (session.fork_session_id IS NULL OR message.time_created >= session.time_created)
-          ${project}
-      `,
-      )
-      .pipe(Effect.orDie))?.time ??
-    to
+    Math.min(
+      to,
+      ...(yield* Effect.all([
+        db.get<{ time: number | null }>(
+          sql`
+          SELECT min(message.time_created) AS time
+          FROM ${SessionMessageTable} AS message
+          JOIN ${SessionTable} AS session ON session.id = message.session_id
+          WHERE message.type IN ('user', 'assistant')
+            AND message.time_created < ${to}
+            AND (session.fork_session_id IS NULL OR message.time_created >= session.time_created)
+            ${project}
+        `,
+        ),
+        db.get<{ time: number | null }>(
+          sql`
+          SELECT min(archive.bucket) AS time
+          FROM ${SessionStatsArchiveTable} AS archive
+          WHERE archive.kind IN ('user', 'step') AND archive.bucket < ${to} AND ${archived}
+        `,
+        ),
+      ]).pipe(Effect.orDie)).flatMap((row) => row?.time ?? []),
+    )
   const ranges = windows(from, to)
   const toolMode = input.tools ?? "summary"
   const sessions = new Set<string>()
@@ -114,6 +131,62 @@ export const get = Effect.fn("SessionStats.get")(function* (input: Input = {}) {
   }
   const toolTotals = { calls: 0, succeeded: 0, failed: 0, unfinished: 0 }
   const dateKey = makeDateKey(input.timezone)
+  // A live message counts once; an archive bucket counts the messages it folded.
+  const addMessages = (row: {
+    sessionID: string
+    subagent: boolean
+    type: "user" | "assistant"
+    time: number
+    count: number
+    providerID: string | null
+    modelID: string | null
+    variant: string | null
+    tokens: Tokens
+    cost: number
+  }) => {
+    if (row.subagent) subagents.add(row.sessionID)
+    else sessions.add(row.sessionID)
+    if (row.type === "user") {
+      if (!row.subagent) totals.prompts += row.count
+      return
+    }
+    totals.steps += row.count
+    addTokens(totals.tokens, row.tokens)
+    totals.cost += row.cost
+    const day = dateKey(row.time)
+    activity.set(day, (activity.get(day) ?? 0) + row.count)
+    if (!row.providerID || !row.modelID) return
+    const key = `${row.providerID}/${row.modelID}#${row.variant ?? ""}`
+    const model = models.get(key) ?? {
+      model: {
+        providerID: Provider.ID.make(row.providerID),
+        id: Model.ID.make(row.modelID),
+        variant: row.variant ? Model.VariantID.make(row.variant) : undefined,
+      },
+      steps: 0,
+      tokens: emptyTokens(),
+      cost: 0,
+    }
+    models.set(key, model)
+    model.steps += row.count
+    model.cost += row.cost
+    addTokens(model.tokens, row.tokens)
+  }
+  const addTools = (row: { name: string | null; status: string | null; count: number; duration: number | null }) => {
+    addToolStatus(toolTotals, row.status, row.count)
+    if (toolMode !== "detail" || !row.name) return
+    const tool = tools.get(row.name) ?? {
+      name: row.name,
+      calls: 0,
+      succeeded: 0,
+      failed: 0,
+      unfinished: 0,
+      durations: [],
+    }
+    tools.set(row.name, tool)
+    addToolStatus(tool, row.status, row.count)
+    if (row.duration !== null) tool.durations.push(row.duration)
+  }
 
   yield* Effect.forEach(
     ranges,
@@ -148,37 +221,16 @@ export const get = Effect.fn("SessionStats.get")(function* (input: Input = {}) {
           Effect.orDie,
           Effect.tap((rows) =>
             Effect.sync(() => {
-              rows.forEach((row) => {
-                if (row.parentID === null) sessions.add(row.sessionID)
-                else subagents.add(row.sessionID)
-                if (row.type === "user") {
-                  if (row.parentID === null) totals.prompts++
-                  return
-                }
-
-                totals.steps++
-                const tokens = rowTokens(row)
-                addTokens(totals.tokens, tokens)
-                totals.cost += row.cost ?? 0
-                const day = dateKey(row.timeCreated)
-                activity.set(day, (activity.get(day) ?? 0) + 1)
-                if (!row.providerID || !row.modelID) return
-                const key = `${row.providerID}/${row.modelID}#${row.variant ?? ""}`
-                const model = models.get(key) ?? {
-                  model: {
-                    providerID: Provider.ID.make(row.providerID),
-                    id: Model.ID.make(row.modelID),
-                    variant: row.variant ? Model.VariantID.make(row.variant) : undefined,
-                  },
-                  steps: 0,
-                  tokens: emptyTokens(),
-                  cost: 0,
-                }
-                models.set(key, model)
-                model.steps++
-                model.cost += row.cost ?? 0
-                addTokens(model.tokens, tokens)
-              })
+              rows.forEach((row) =>
+                addMessages({
+                  ...row,
+                  subagent: row.parentID !== null,
+                  time: row.timeCreated,
+                  count: 1,
+                  tokens: rowTokens(row),
+                  cost: row.cost ?? 0,
+                }),
+              )
             }),
           ),
         ),
@@ -250,25 +302,7 @@ export const get = Effect.fn("SessionStats.get")(function* (input: Input = {}) {
           )
           .pipe(
             Effect.orDie,
-            Effect.tap((rows) =>
-              Effect.sync(() => {
-                rows.forEach((row) => {
-                  addToolStatus(toolTotals, row.status)
-                  if (!row.name) return
-                  const tool = tools.get(row.name) ?? {
-                    name: row.name,
-                    calls: 0,
-                    succeeded: 0,
-                    failed: 0,
-                    unfinished: 0,
-                    durations: [],
-                  }
-                  tools.set(row.name, tool)
-                  addToolStatus(tool, row.status)
-                  if (row.duration !== null) tool.durations.push(row.duration)
-                })
-              }),
-            ),
+            Effect.tap((rows) => Effect.sync(() => rows.forEach((row) => addTools({ ...row, count: 1 })))),
             Effect.asVoid,
           )
       },
@@ -308,6 +342,75 @@ export const get = Effect.fn("SessionStats.get")(function* (input: Input = {}) {
       cache: { read: row.tokens_cache_read, write: row.tokens_cache_write },
     })
     totals.cost += row.cost
+  })
+
+  // The archive keeps no tool durations, so a tool's median comes from live rows only.
+  const archive = yield* db
+    .all<{
+      sessionID: string
+      subagent: number
+      bucket: number
+      kind: "user" | "step" | "tool" | "usage"
+      providerID: string | null
+      modelID: string | null
+      variant: string | null
+      name: string | null
+      status: string | null
+      count: number
+      cost: number
+      input: number
+      output: number
+      reasoning: number
+      cacheRead: number
+      cacheWrite: number
+    }>(
+      sql`
+      SELECT
+        archive.session_id AS sessionID,
+        archive.subagent AS subagent,
+        archive.bucket AS bucket,
+        archive.kind AS kind,
+        archive.provider_id AS providerID,
+        archive.model_id AS modelID,
+        archive.variant AS variant,
+        archive.name AS name,
+        archive.status AS status,
+        archive.count AS count,
+        archive.cost AS cost,
+        archive.tokens_input AS input,
+        archive.tokens_output AS output,
+        archive.tokens_reasoning AS reasoning,
+        archive.tokens_cache_read AS cacheRead,
+        archive.tokens_cache_write AS cacheWrite
+      FROM ${SessionStatsArchiveTable} AS archive
+      WHERE archive.bucket < ${to} AND archive.bucket + ${BUCKET} > ${from} AND ${archived}
+      ORDER BY archive.bucket, archive.id
+    `,
+    )
+    .pipe(Effect.orDie)
+  archive.forEach((row) => {
+    const tokens = {
+      input: row.input,
+      output: row.output,
+      reasoning: row.reasoning,
+      cache: { read: row.cacheRead, write: row.cacheWrite },
+    }
+    if (row.kind === "usage") {
+      addTokens(totals.tokens, tokens)
+      totals.cost += row.cost
+      return
+    }
+    if (row.kind === "tool") {
+      if (toolMode !== "none") addTools({ ...row, duration: null })
+      return
+    }
+    addMessages({
+      ...row,
+      type: row.kind === "user" ? "user" : "assistant",
+      subagent: row.subagent !== 0,
+      time: row.bucket,
+      tokens,
+    })
   })
 
   const days = [...activity.entries()].sort(([a], [b]) => a.localeCompare(b))
@@ -382,17 +485,18 @@ function addTokens(target: Tokens, source: Tokens) {
 function addToolStatus(
   target: { calls: number; succeeded: number; failed: number; unfinished: number },
   status: string | null,
+  count: number,
 ) {
-  target.calls++
+  target.calls += count
   if (status === "completed") {
-    target.succeeded++
+    target.succeeded += count
     return
   }
   if (status === "error") {
-    target.failed++
+    target.failed += count
     return
   }
-  target.unfinished++
+  target.unfinished += count
 }
 
 function makeDateKey(timezone = "UTC") {

@@ -16,7 +16,6 @@ import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
 import { ManagedSettings } from "@orbit/core/managed-settings"
 import { AbsolutePath } from "@orbit/core/schema"
-// @ts-expect-error foundations-19 adds this module; remove the directive with the build.
 import { SessionRetention } from "@orbit/core/session/retention"
 import { WellKnown } from "@orbit/core/wellknown"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
@@ -123,6 +122,14 @@ describe("SessionRetention.setting", () => {
   it.live("keeps the default when a rejected document does not name the period", () =>
     Effect.gen(function* () {
       expect(yield* read({ user: JSON.stringify({ snapshots: "yes" }) })).toBe(30)
+    }),
+  )
+
+  // A document whose root is not an object has no keys to look the period up in, so it counts as one that did not parse.
+  it.live("skips the pass when a document is not an object", () =>
+    Effect.gen(function* () {
+      expect(yield* read({ user: "[]" })).toBeUndefined()
+      expect(yield* read({ user: JSON.stringify({ cleanup_period_days: 9 }), project: '"text"' })).toBeUndefined()
     }),
   )
 

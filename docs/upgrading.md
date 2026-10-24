@@ -791,6 +791,24 @@ changed config, and SDK hosts that read `changed` or send `holder`.
 config folder, or `.orbit` in your home folder). Look over what a pull brings into a folder you trust, or end the trust
 with `orb trust --revoke`.
 
+### Idle sessions are removed after 30 days (`cleanup_period_days`)
+
+The Orbit server now removes a session, with its subagents, its forks and their saved tool results and scratchpads,
+once none of them has changed for `cleanup_period_days` days (default 30). A session that is shared, has queued input
+or was running when the server stopped is kept. The first pass runs 10 minutes after the server starts, later ones every
+24 hours, and a pass waits while a session was active in the last minute. Sessions from before this version count their
+idle time from the first start of this version, so nothing is removed until 30 days after the upgrade. `orb stats`
+keeps counting removed sessions. `0` removes every session that can be removed at the next pass; sessions are still
+saved while they are used. A value that is not a whole number of 0 or more, a config file with errors while the key is
+set, or a config file that does not parse skips the cleanup. A bare run (`orb run --bare`, `orb -p --bare`) removes
+nothing. The flat `tool_*` files of earlier versions in the saved-results folder follow the same period instead of a
+fixed 7 days.
+
+**Affects:** everyone who keeps sessions for longer than 30 days without changing them.
+
+**What to do:** set `cleanup_period_days` to a larger number in your own config to keep sessions longer, or share a
+session you want to keep.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.

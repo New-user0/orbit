@@ -31,7 +31,6 @@ import { SessionEnvironment } from "@orbit/core/session/environment"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionModelTransport } from "@orbit/core/session/model-transport"
 import { SessionProjector } from "@orbit/core/session/projector"
-// @ts-expect-error foundations-19 adds this module; remove the directive with the build.
 import { SessionRetention } from "@orbit/core/session/retention"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
@@ -367,6 +366,39 @@ describe("SessionRetention.prune", () => {
   )
 })
 
+describe("SessionRetention.prune: the order of removal", () => {
+  // Rows that name each other as parent have no member to remove first; the family stays, with one line (class 7).
+  it.live("keeps a family whose sessions name each other in a loop", () =>
+    scenario(() =>
+      Effect.gen(function* () {
+        const now = Date.now()
+        const logged: string[] = []
+        yield* row({ id: "ses_ret_loop_a", parent: "ses_ret_loop_b", updated: now })
+        yield* row({ id: "ses_ret_loop_b", parent: "ses_ret_loop_a", updated: now })
+        yield* row({ id: "ses_ret_loop_leaf", parent: "ses_ret_loop_a", updated: now })
+        yield* row({ id: "ses_ret_loop_control", updated: now })
+
+        const pass = yield* prune({ days: 30, now: later() }).pipe(
+          Effect.provideService(
+            Logger.CurrentLoggers,
+            new Set([
+              Logger.make((entry) => {
+                const message = [entry.message].flat()[0]
+                if (typeof message === "string" && message.startsWith("session retention")) logged.push(message)
+              }),
+            ]),
+          ),
+        )
+
+        expect(pass.removed).toEqual(["ses_ret_loop_control"])
+        // The member that hangs off the loop stays with it: a family goes whole or not at all.
+        expect(yield* remaining).toEqual(["ses_ret_loop_a", "ses_ret_loop_b", "ses_ret_loop_leaf"])
+        expect(logged).toEqual(["session retention kept a family: its sessions name each other in a loop"])
+      }),
+    ),
+  )
+})
+
 describe("SessionRetention.prune: the folders that sessions name", () => {
   // The family goes and with it the folders only it used. A live session's stored result still names the root's saved
   // results (a fork whose intermediate source is gone carries such a marker), so that folder stays. The scratchpad goes
@@ -512,6 +544,26 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         expect(yield* exists(path.join(l.scratch, "notes", "keep.txt"))).toBe(true)
         expect(yield* exists(path.join(l.outputs, "readme.txt"))).toBe(true)
         expect(yield* exists(path.join(l.outputs, "ses_ret_orphan"))).toBe(false)
+      }),
+    ),
+  )
+
+  // Another channel's database (`orbit-<channel>.db`) keeps its sessions' folders under the same roots, so a folder that
+  // no session here names goes only once its own last change is past the cutoff; a folder of a session this pass
+  // removed goes at once (the rows above).
+  it.live("keeps a folder no session names while it changed inside the period", () =>
+    scenario((l) =>
+      Effect.gen(function* () {
+        yield* folder(path.join(l.outputs, "ses_ret_elsewhere"))
+        yield* folder(path.join(l.scratch, "ses_ret_elsewhere"))
+
+        yield* prune({ days: 30, now: Date.now() + DAY })
+        expect(yield* exists(path.join(l.outputs, "ses_ret_elsewhere", "keep.txt"))).toBe(true)
+        expect(yield* exists(path.join(l.scratch, "ses_ret_elsewhere", "keep.txt"))).toBe(true)
+
+        yield* prune({ days: 30, now: later() })
+        expect(yield* exists(path.join(l.outputs, "ses_ret_elsewhere"))).toBe(false)
+        expect(yield* exists(path.join(l.scratch, "ses_ret_elsewhere"))).toBe(false)
       }),
     ),
   )

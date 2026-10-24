@@ -724,13 +724,10 @@ describe("ConfigTrust.stamp", () => {
     const project = document("project", { cleanup_period_days: 1 })
 
     const untrusted = ConfigTrust.sanitize(project.info, place)
-    // @ts-expect-error foundations-19 adds the key; remove the directive with the build.
     expect(untrusted.info.cleanup_period_days).toBeUndefined()
     expect(untrusted.withheld).toEqual(["settings"])
-    // @ts-expect-error foundations-19 adds the key; remove the directive with the build.
     expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "cleanup_period_days")).toBe(365)
     // Control: trusted, the project's value stands.
-    // @ts-expect-error foundations-19 adds the key; remove the directive with the build.
     expect<unknown>(Config.latest([user, project], "cleanup_period_days")).toBe(1)
   })
 

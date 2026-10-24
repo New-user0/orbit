@@ -4,14 +4,12 @@ import { createHash } from "crypto"
 import fs from "fs/promises"
 import path from "path"
 import type { Tool } from "./tool.js"
-import { Context, Duration, Effect, Layer, Schedule, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import type { ConfigToolOutput } from "@orbit/schema/config/tool-output"
 import { NonNegativeInt } from "@orbit/schema/schema"
-import { makeGlobalNode, makeLocationNode } from "@orbit/util/effect/app-node"
-import { FSUtil } from "@orbit/util/fs-util"
+import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Global } from "@orbit/util/global"
 import { plain } from "@orbit/util/plain"
-import { FileRetention } from "./file-retention.js"
 import { SessionFolder } from "./session/folder.js"
 
 /** The shell's own capture limits (`Shell.result`). A saved result is decided by characters, not by these. */
@@ -19,7 +17,6 @@ export const MAX_LINES = 2_000
 export const MAX_BYTES = 50 * 1024 // 50 KiB
 /** The ceiling on every finite result limit when the person sets neither `max_result_chars` nor `max_bytes`. */
 export const MAX_RESULT_CHARS = 50_000
-export const RETENTION = Duration.days(7)
 export const DIRECTORY = "tool-output"
 /** The version of the wrapper a `persisted` marker asks for. */
 export const FORMAT = 1
@@ -132,28 +129,34 @@ export interface Interface {
     readonly limit: number
     readonly result: Result
   }) => Effect.Effect<Result>
-  readonly cleanup: () => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ToolOutput") {}
 
-// The flat `tool_*` files of earlier versions; the session folders have no sweep of their own.
-const cleanup = Effect.fn("ToolOutput.cleanup")(function* (fs: FSUtil.Interface, directory: string) {
-  const entries = yield* fs.readDirectory(directory).pipe(
-    Effect.map((entries) => entries.filter((entry) => /^tool_[0-9a-f]{12}/.test(entry))),
-    Effect.orElseSucceed(() => []),
-  )
-  yield* FileRetention.cleanup(
-    fs,
-    entries.map((entry) => path.join(directory, entry)),
-    RETENTION,
-  )
-})
+/**
+ * Removes the flat `tool_*` files of earlier versions in `directory` whose last change is before `cutoff`; session
+ * retention calls it with its period. Nothing is followed: a `directory` that is a link is left alone, and only plain
+ * files go (class 4). A file that cannot be removed stays for the next pass.
+ */
+export const cleanup = (directory: string, cutoff: number) =>
+  Effect.tryPromise(async () => {
+    const info = await fs.lstat(directory).catch(() => undefined)
+    if (!info?.isDirectory()) return
+    await Promise.all(
+      (await fs.readdir(directory))
+        .filter((name) => /^tool_[0-9a-f]{12}/.test(name))
+        .map(async (name) => {
+          const file = path.join(directory, name)
+          const found = await fs.lstat(file)
+          if (found.isFile() && found.mtimeMs < cutoff) await fs.unlink(file)
+        })
+        .map((removal) => removal.catch(() => undefined)),
+    )
+  }).pipe(Effect.catch((error) => Effect.logWarning("flat tool results not cleaned", { directory, error })))
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const files = yield* FSUtil.Service
     const global = yield* Global.Service
     const root = path.join(global.data, DIRECTORY)
 
@@ -203,29 +206,12 @@ const layer = Layer.effect(
       return { ...result, metadata: { ...metadata, persisted } }
     })
 
-    return Service.of({ root, settle, cleanup: () => cleanup(files, root) })
+    return Service.of({ root, settle })
   }),
 )
-
-const cleanupLayer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const fs = yield* FSUtil.Service
-    const global = yield* Global.Service
-    yield* cleanup(fs, path.join(global.data, DIRECTORY)).pipe(
-      Effect.repeat(Schedule.spaced(Duration.hours(1))),
-      Effect.forkScoped,
-    )
-  }),
-)
-
-const cleanupNode = makeGlobalNode({
-  name: "tool-output-cleanup",
-  layer: cleanupLayer,
-  deps: [FSUtil.node, Global.node],
-})
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Global.node, cleanupNode],
+  deps: [Global.node],
 })

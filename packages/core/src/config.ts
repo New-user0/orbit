@@ -103,6 +103,18 @@ export interface Interface {
    * trusted asks it, because nothing of that folder was read before.
    */
   readonly reload?: () => Effect.Effect<void>
+  /**
+   * The documents of the current load that were not taken as written: one that did not parse (no `keys`), one that failed
+   * final validation (`keys` lists its top-level keys) and one that lost top-level keys to normalization (`keys` lists
+   * them). Each still gives what survived. A reader that must not act on a guess, such as retention, asks it.
+   */
+  readonly rejected?: () => Effect.Effect<readonly Rejected[]>
+}
+
+export interface Rejected {
+  readonly source: string
+  readonly scope: Scope
+  readonly keys?: readonly string[]
 }
 
 export const Options = Schema.Struct({
@@ -123,6 +135,8 @@ export interface TestInterface extends Interface {
   readonly setEntries: (entries: Entry[]) => Effect.Effect<void>
   /** Emits one filesystem update to every changes() subscriber. */
   readonly emitChange: (update: Watcher.Update) => Effect.Effect<void>
+  /** Replaces what subsequent rejected() calls return. */
+  readonly setRejected: (rejected: readonly Rejected[]) => Effect.Effect<void>
 }
 
 export class Test extends Context.Service<Test, TestInterface>()("@orbit/Config/Test") {}
@@ -135,9 +149,12 @@ export const testLayer = (initial: Entry[] = [], compat: Compat = defaultCompat)
   Layer.effectContext(
     Effect.gen(function* () {
       const entries = yield* Ref.make(initial)
+      const rejected = yield* Ref.make<readonly Rejected[]>([])
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const service = Test.of({
         entries: () => Ref.get(entries),
+        rejected: () => Ref.get(rejected),
+        setRejected: (next) => Ref.set(rejected, next),
         compatEnabled: () => Effect.succeed(compat.enabled),
         compat: () => Effect.succeed(compat),
         changes: () => Stream.fromPubSub(updates),
@@ -188,10 +205,14 @@ export const layer = (options?: Options) =>
       const updateLock = Semaphore.makeUnsafe(1)
       const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
       const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
-      const parseInfo = Effect.fn("Config.parseInfo")(function* (text: string, source: string) {
+      // The documents of the load that is running that were not taken as written, and those of the last load.
+      let rejecting: Rejected[] = []
+      let rejected: readonly Rejected[] = []
+      const parseInfo = Effect.fn("Config.parseInfo")(function* (text: string, source: string, scope: Scope) {
         const errors: ParseError[] = []
         const input: unknown = parse(text, errors, { allowTrailingComma: true })
         if (errors.length) {
+          rejecting.push({ source, scope })
           yield* Effect.logWarning("configuration normalization diagnostic", {
             source,
             path: "$",
@@ -209,8 +230,18 @@ export const layer = (options?: Options) =>
             action: diagnostic.message,
           }),
         )
-        if (result.type === "rejected") return
+        // A root that is not an object has no keys, so it counts as a document that did not parse.
+        if (result.type === "rejected") {
+          rejecting.push({ source, scope })
+          return
+        }
         const info = Option.getOrUndefined(decodeInfo(result.encoded))
+        // The top-level keys normalization dropped a value of, and every key of a document final validation rejects.
+        const lost = new Set([
+          ...result.diagnostics.flatMap((item) => (item.kind === "invalid" ? item.path.slice(0, 1) : [])),
+          ...(info ? [] : Object.keys(result.encoded)),
+        ])
+        if (lost.size > 0) rejecting.push({ source, scope, keys: [...lost] })
         if (info) return info
         yield* Effect.logWarning("configuration normalization diagnostic", {
           source,
@@ -296,7 +327,7 @@ export const layer = (options?: Options) =>
           text,
           within: place?.trusted === false ? place.roots : undefined,
         })
-        const info = yield* parseInfo(substituted, filepath)
+        const info = yield* parseInfo(substituted, filepath, scope)
         if (!info) return
         return new Document({ type: "document", path: AbsolutePath.make(filepath), scope, info })
       })
@@ -329,7 +360,7 @@ export const layer = (options?: Options) =>
             text: JSON.stringify(config),
             env: variables,
           }).pipe(
-            Effect.flatMap((text) => parseInfo(text, entry.origin)),
+            Effect.flatMap((text) => parseInfo(text, entry.origin, "remote")),
             Effect.map((info) => (info ? new Document({ type: "document", scope: "remote", info }) : undefined)),
           ),
         ).pipe(Effect.map((documents) => documents.filter((document) => document !== undefined)))
@@ -421,6 +452,7 @@ export const layer = (options?: Options) =>
 
       const load = Effect.fn("Config.load")(function* (discovered: ConfigDiscovery.Sources) {
         decisions.clear()
+        rejecting = []
         const sources = yield* trustedSources(discovered)
         // The files of a folder that is not trusted are not read, but they stay that folder's: naming one as the explicit
         // file must not load it in the flag scope, where the folder's trust no longer applies (class 4).
@@ -478,7 +510,7 @@ export const layer = (options?: Options) =>
                 dir: location.directory,
                 text: options.content,
               }).pipe(
-                Effect.flatMap((text) => parseInfo(text, "ORBIT_CONFIG_CONTENT")),
+                Effect.flatMap((text) => parseInfo(text, "ORBIT_CONFIG_CONTENT", "flag")),
                 Effect.map((info) => (info ? [new Document({ type: "document", scope: "flag", info })] : [])),
                 Effect.orDie,
               )
@@ -540,6 +572,7 @@ export const layer = (options?: Options) =>
       let sources = initial
       let restrictions = managedSettings.current().restrictions
       let configs = yield* load(initial)
+      rejected = rejecting
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const reloads = yield* PubSub.sliding<void>(1)
       // Readiness rescans recover writes made before a watch attached.
@@ -573,6 +606,7 @@ export const layer = (options?: Options) =>
           const discovered = yield* ConfigDiscovery.discover(options)
           const nextRestrictions = managedSettings.current().restrictions
           const next = yield* load(discovered)
+          rejected = rejecting
           yield* reconcile(discovered, next)
           const compatibilityChanged = !isDeepStrictEqual(
             applicable(sources, configs).compat,
@@ -695,6 +729,7 @@ export const layer = (options?: Options) =>
         notify: (paths) =>
           Effect.forEach(paths, (file) => PubSub.publish(updates, { type: "update" as const, path: file }), { discard: true }),
         update,
+        rejected: () => Effect.sync(() => rejected),
         reload: () =>
           reload().pipe(
             Effect.catchCause((cause) => Effect.logError("failed to reload config", { cause })),

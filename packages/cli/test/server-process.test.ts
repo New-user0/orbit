@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { ConfigOverlay } from "../src/config-overlay"
 import { ServerProcess } from "../src/server-process"
+import { bareEnvironment } from "../src/commands/handlers/run"
 
 test("a private or foreground server trusts folders only when its environment asks it to", () => {
   for (const mode of ["default", "stdio"] as const) {
@@ -17,6 +18,18 @@ test("the background service never takes its trust from the environment, which b
   expect(ServerProcess.trustOptions("service", {})).toEqual({ implicit: false })
   expect(ServerProcess.trustOptions("service", { ORBIT_TRUST_PROJECT: "1" })).toEqual({ implicit: false })
   expect(ServerProcess.trustOptions("service", { ORBIT_TRUST_PROJECT: "true" })).toEqual({ implicit: false })
+})
+
+// foundations-19: the reference's bare runs do no housekeeping, so the private server of `orb run --bare` and
+// `orb -p --bare` removes no sessions (class 12: the bare entry point is held to the same switch as the server).
+test("a bare run's private server schedules no session retention, and the background service ignores the switch", () => {
+  for (const mode of ["default", "stdio"] as const) {
+    expect(ServerProcess.retentionOption(mode, {})).toBe(true)
+    expect(ServerProcess.retentionOption(mode, bareEnvironment)).toBe(false)
+    expect(ServerProcess.retentionOption(mode, { ORBIT_DISABLE_RETENTION: "true" })).toBe(false)
+    expect(ServerProcess.retentionOption(mode, { ORBIT_DISABLE_RETENTION: "0" })).toBe(true)
+  }
+  expect(ServerProcess.retentionOption("service", bareEnvironment)).toBe(true)
 })
 
 test("a server that orb starts puts the managed env into its own environment, and reads the folder the environment names", () => {
