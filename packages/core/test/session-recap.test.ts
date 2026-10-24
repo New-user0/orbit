@@ -635,7 +635,9 @@ it.effect("a step still running is left out of the window", () =>
   }),
 )
 
-it.effect("a window that would open on a tool result starts at the next message instead", () =>
+// A tool result whose call was cut off still opens the window: it goes as user text, so no provider sees an orphan
+// tool result, and the recap keeps the work it reports.
+it.effect("a window that would open on a tool result sends that result as user text", () =>
   Effect.gen(function* () {
     const { bus, recap } = yield* setup()
     const test = yield* TestLLM.Test
@@ -680,14 +682,15 @@ it.effect("a window that would open on a tool result starts at the next message 
     const [request] = yield* test.requests()
     expect(request?.messages.map((message) => message.role)).not.toContain("tool")
     expect(request?.messages[0]?.role).toBe("user")
-    // The 29 prompts after the step, then the instruction.
-    expect(request?.messages).toHaveLength(30)
+    expect(userTexts(request)[0]).toBe("[Tool result]: found")
+    // The orphan result and the 29 prompts after the step, then the instruction.
+    expect(request?.messages).toHaveLength(31)
   }),
 )
 
-// Bedrock Converse refuses a conversation whose first message is not a user message, so the window opens on a user
-// message even when the 30th message from the end is the assistant's.
-it.effect("a window that would open on an assistant message starts at the next user message instead", () =>
+// Bedrock Converse refuses a conversation whose first message is not a user message, so the window skips a leading
+// assistant message and opens on the tool result after it, which goes as user text.
+it.effect("a window that would open on an assistant message starts at the next tool result instead", () =>
   Effect.gen(function* () {
     const { bus, recap } = yield* setup()
     const test = yield* TestLLM.Test
@@ -731,9 +734,9 @@ it.effect("a window that would open on an assistant message starts at the next u
     const [request] = yield* test.requests()
     expect(request?.messages[0]?.role).toBe("user")
     expect(allText(request)).not.toContain("[Assistant tool call]")
-    expect(allText(request)).not.toContain("[Tool result]")
-    // The 28 prompts after the step, then the instruction.
-    expect(request?.messages).toHaveLength(29)
+    expect(userTexts(request)[0]).toBe("[Tool result]: found")
+    // The tool result and the 28 prompts after the step, then the instruction.
+    expect(request?.messages).toHaveLength(30)
     const prepared = yield* compileRequest(
       LLMRequest.update(request!, {
         model: AmazonBedrock.configure({ baseURL: "https://bedrock-runtime.test", apiKey: "test" }).model("recap"),
@@ -903,3 +906,124 @@ it.effect("a window of assistant replies alone is left out, as no conversation m
     expect(allText(request)).not.toContain("reply ")
   }),
 )
+
+// The first role of a request lowered for Bedrock Converse, which refuses a conversation that opens on the assistant.
+const bedrockFirstRole = (request: LLMRequest | undefined) =>
+  compileRequest(
+    LLMRequest.update(request!, {
+      model: AmazonBedrock.configure({ baseURL: "https://bedrock-runtime.test", apiKey: "test" }).model("recap"),
+    }),
+  ).pipe(Effect.map((prepared) => (prepared.body as { messages: ReadonlyArray<{ role: string }> }).messages[0]?.role))
+
+// A long tool run followed by a short prompt is the common shape of an agentic session. The window keeps the tool run
+// before that prompt, so the recap is written from the work and not only from "continue".
+it.effect("a short prompt after a long tool run leaves the tool run in the recap window", () =>
+  Effect.gen(function* () {
+    const { bus, recap } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* say(bus, "Fix the build")
+    for (const index of Array.from({ length: 14 }, (_, item) => item + 1)) yield* toolStep(bus, index)
+    yield* textStep(bus, "The build passes now.")
+    yield* say(bus, "continue")
+    yield* textStep(bus, "Done.")
+    yield* test.push(answer("Fixing the build."))
+
+    yield* recap.generate(sessionID)
+
+    const [request] = yield* test.requests()
+    // 32 messages in all; the last 30 open on step 1's tool result, then the instruction.
+    expect(request?.messages).toHaveLength(31)
+    expect(request?.messages[0]?.role).toBe("user")
+    expect(allText(request)).toContain("[Tool result]: found 14")
+    expect(allText(request)).toContain("The build passes now.")
+    expect(userTexts(request)).toContain("continue")
+    expect(yield* bedrockFirstRole(request)).toBe("user")
+  }),
+)
+
+// Where the last 30 messages begin decides what the recap sees. Each row builds a session, then names how many
+// messages the request carries with the instruction and the text the window opens on (none when it is empty).
+const windowEdges = [
+  {
+    name: "a tool result first opens the window as user text",
+    build: (bus: Bus.Interface) =>
+      Effect.gen(function* () {
+        yield* say(bus, "Fix the build")
+        yield* toolStep(bus, 1)
+        for (const index of Array.from({ length: 29 }, (_, item) => item + 1)) yield* say(bus, `message ${index}`)
+      }),
+    length: 31,
+    first: "[Tool result]: found 1",
+  },
+  {
+    name: "an assistant message first is skipped",
+    build: (bus: Bus.Interface) =>
+      Effect.gen(function* () {
+        yield* say(bus, "Fix the build")
+        yield* toolStep(bus, 1)
+        for (const index of Array.from({ length: 28 }, (_, item) => item + 1)) yield* say(bus, `message ${index}`)
+      }),
+    length: 30,
+    first: "[Tool result]: found 1",
+  },
+  {
+    name: "a user message first opens the window",
+    build: (bus: Bus.Interface) =>
+      Effect.gen(function* () {
+        yield* say(bus, "Earlier prompt")
+        yield* say(bus, "Fix the build")
+        for (const index of Array.from({ length: 14 }, (_, item) => item + 1)) yield* toolStep(bus, index)
+        yield* say(bus, "continue")
+      }),
+    length: 31,
+    first: "Fix the build",
+  },
+  {
+    name: "a window of tool steps alone opens on its first tool result",
+    build: (bus: Bus.Interface) =>
+      Effect.gen(function* () {
+        yield* say(bus, "Fix the build")
+        for (const index of Array.from({ length: 15 }, (_, item) => item + 1)) yield* toolStep(bus, index)
+      }),
+    length: 30,
+    first: "[Tool result]: found 1",
+  },
+  {
+    name: "a window of assistant replies alone is empty, so only the instruction goes",
+    build: (bus: Bus.Interface) =>
+      Effect.gen(function* () {
+        yield* say(bus, "Fix the build")
+        for (const index of Array.from({ length: 30 }, (_, item) => item + 1)) yield* textStep(bus, `reply ${index}`)
+      }),
+    length: 1,
+    first: undefined,
+  },
+  {
+    name: "a session of exactly 30 messages goes whole",
+    build: (bus: Bus.Interface) =>
+      Effect.gen(function* () {
+        for (const index of Array.from({ length: 30 }, (_, item) => item + 1)) yield* say(bus, `message ${index}`)
+      }),
+    length: 31,
+    first: "message 1",
+  },
+]
+
+for (const edge of windowEdges)
+  it.effect(`the recap window at its edge: ${edge.name}`, () =>
+    Effect.gen(function* () {
+      const { bus, recap } = yield* setup()
+      const test = yield* TestLLM.Test
+      yield* edge.build(bus)
+      yield* test.push(answer("Fixing the build."))
+
+      yield* recap.generate(sessionID)
+
+      const [request] = yield* test.requests()
+      expect(request?.messages).toHaveLength(edge.length)
+      // The window's own first message; an empty window leaves only the instruction.
+      expect(edge.length > 1 ? userTexts(request)[0] : undefined).toBe(edge.first)
+      expect(request?.messages[0]?.role).toBe("user")
+      expect(yield* bedrockFirstRole(request)).toBe("user")
+    }),
+  )

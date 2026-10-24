@@ -57,9 +57,9 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
 
 /**
  * The last `count` messages of the settled Session history, lowered for `model` as the runner lowers them, with no
- * system prompt, instructions or system message. The window opens on its first user message, so it never starts on
- * an assistant reply or on a tool result whose call it cut off, and its tool calls and results are written out as text.
- * A window with no user message opens on its first tool result, and one with neither is empty.
+ * system prompt, instructions or system message. Leading assistant replies are skipped, so the window opens on its
+ * first user message or tool result, and its tool calls and results are written out as text. A window of assistant
+ * replies alone is empty.
  */
 export const recent = Effect.fn("SessionGenerate.recent")(function* (
   sessionID: SessionSchema.ID,
@@ -82,11 +82,9 @@ export const recent = Effect.fn("SessionGenerate.recent")(function* (
     .filter((message) => message.role !== "system")
     .slice(-count)
   // Some providers refuse a conversation that does not open with a user message (Bedrock Converse), so the cut skips
-  // a leading assistant reply as well as a tool result. It looks before the tool messages become user text below. A
-  // window of tool steps alone, such as a long run of tool calls after one prompt, opens on its first tool result
-  // instead, which goes as user text, so the recap still sees the work.
-  const user = window.findIndex((message) => message.role === "user")
-  const start = user === -1 ? window.findIndex((message) => message.role === "tool") : user
+  // leading assistant replies. A tool result may open the window, even one whose call was cut off, because it goes
+  // as user text below; cutting it would hide the work before a short prompt such as "continue" from the recap.
+  const start = window.findIndex((message) => message.role === "user" || message.role === "tool")
   // The window goes out with no tool definitions, so its tool calls and results go as text.
   return start === -1 ? [] : window.slice(start).map(SessionCompaction.withoutToolBlocks)
 })
