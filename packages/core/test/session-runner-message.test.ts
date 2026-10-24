@@ -245,6 +245,28 @@ Recent work
         expect(checkpoint?.content).toEqual([{ type: "text", text: expected }])
       })
 
+    test("a checkpoint stored with verbatim text keeps its wrapper and escapes both parts", () => {
+      const [checkpoint] = toLLMMessages(
+        [
+          SessionMessage.Compaction.make({
+            id: id("compaction"),
+            type: "compaction",
+            status: "completed",
+            reason: "auto",
+            summary: hostile,
+            recent: hostile,
+            time: { created },
+          }),
+        ],
+        model,
+      )
+      const text = checkpoint?.content.map((part) => (part.type === "text" ? part.text : "")).join("") ?? ""
+      expect(text).toContain("<conversation-checkpoint>")
+      expect(text).toContain(`<summary>\n${ReminderText.neutralize(hostile)}\n</summary>`)
+      expect(text).toContain(`<recent-context>\n${ReminderText.neutralize(hostile)}\n</recent-context>`)
+      expect(text).not.toContain("<system-reminder>")
+    })
+
     test("escapes the look-alike in the control row's text", () => {
       expect(ReminderText.neutralize(hostile)).not.toContain("<system-reminder>")
     })
