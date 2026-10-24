@@ -864,8 +864,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Shell output files and their saved copies (`Shell.result`, `Shell.offer` and `ToolOutput.adopt`, in
   `packages/core/src/shell.ts` and `packages/core/src/tool-output.ts`): a command writes its output to
   `<data>/shell/<project ID>/<shell ID>.out`, Orbit's own folder and outside every sandbox write root, so it reads nothing
-  that a folder supplies. The head read opens the file without following a link (`O_NOFOLLOW`; on Windows an `lstat`
-  refuses anything but a regular file first, and the writer and the 64 MB cut open it the same way), so a link planted at
+  that a folder supplies. The head read opens the file without following a link (`O_NOFOLLOW` where the platform has one, which Windows does not; on
+  Windows an `lstat` refuses anything but a regular file first, and the 64 MB cut opens the file the same way), so a link planted at
   its path is reported like a missing file and nothing is read through it (class 4); a file that cannot be read is named in
   the result, never read as no output (class 7). A foreground result whose output did not fit offers the file to the step
   of that call, which links it into the session's tool-output folder, creating a name only where none is, through the
