@@ -521,9 +521,11 @@ const layer = Layer.effect(
       const found = SecretScan.scan(text)
       if (found.length === 0) return
       const real = yield* team.guarded()
+      // By name, `absolute` decides: a target's `place` differs from it only when a link leads it out of the project, and
+      // then it is no name of the team folder, which is in the project.
       const inTeam = targets.some(
         (target) =>
-          [target.absolute, target.place].some((place) => FSUtil.contains(team.folder, place)) ||
+          FSUtil.contains(team.folder, target.absolute) ||
           (real !== undefined &&
             [target.place, target.leads].some((place) => place !== undefined && FSUtil.contains(real, place))),
       )

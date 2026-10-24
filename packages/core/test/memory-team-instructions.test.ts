@@ -23,6 +23,7 @@ import { Location } from "@orbit/core/location"
 import { MemoryInstructions } from "@orbit/core/memory/instructions"
 import { Project } from "@orbit/core/project"
 import { AbsolutePath } from "@orbit/core/schema"
+import { SessionEvent } from "@orbit/core/session/event"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { recordedFileSystem } from "./fixture/recorded-fs"
@@ -219,6 +220,59 @@ describe("the team memory index", () => {
       expect(out.other.text).toContain("SECOND-TEAM-VERSION")
     }),
   )
+
+  // The team index a session froze is let go when the private one is: once the session's compaction completes, once the
+  // session is deleted, and at a rescan of the instruction files. The session is then shown the team index on disk.
+  for (const row of [
+    {
+      name: "its compaction completes",
+      release: Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: first, reason: "manual", recent: "" })
+        yield* bus.publish(SessionEvent.Compaction.Ended, {
+          sessionID: first,
+          reason: "manual",
+          text: "summary",
+          recent: "",
+        })
+      }),
+    },
+    {
+      name: "it is deleted",
+      release: Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        yield* bus.publish(SessionEvent.Deleted, { sessionID: first })
+      }),
+    },
+    {
+      name: "the instruction files are rescanned",
+      release: Effect.gen(function* () {
+        const discovery = yield* InstructionDiscovery.Service
+        yield* discovery.rescan()
+      }),
+    },
+  ])
+    it.live(`lets go of the team index a session froze once ${row.name}`, () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const index = path.join(l.team, "MEMORY.md")
+        yield* write(index, "- FIRST-TEAM-VERSION\n")
+        const out = yield* Effect.gen(function* () {
+          yield* sessions
+          const before = yield* readInitial(yield* load(first, { guide: false }))
+          yield* write(index, "- SECOND-TEAM-VERSION\n")
+          const during = yield* readUpdate(yield* load(first, { guide: false }), before)
+          yield* row.release
+          const after = yield* readUpdate(yield* load(first, { guide: false }), before)
+          return { before, during, after }
+        }).pipe(provide(l))
+        expect(out.before.text).toContain("FIRST-TEAM-VERSION")
+        expect(out.during.changed).toBe(false)
+        expect(out.after.changed).toBe(true)
+        expect(out.after.text).toContain("The team memory index changed.")
+        expect(out.after.text).toContain("SECOND-TEAM-VERSION")
+      }),
+    )
 
   // Decision 2 (reference): nothing of team memory loads while `memory.team` is off, or while memory itself is off, even
   // when the folder is there. The run with it on is the control.
