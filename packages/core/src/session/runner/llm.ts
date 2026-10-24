@@ -2,6 +2,7 @@ export * as SessionRunnerLLM from "./llm.js"
 
 import { Message } from "@orbit/ai"
 import { Model } from "@orbit/schema/model"
+import { TokenUsage } from "@orbit/schema/token-usage"
 import { DEFAULT_OUTPUT_ATTEMPTS } from "@orbit/schema/session-turn"
 import { plain } from "@orbit/util/plain"
 import { and, desc, eq, gt, inArray, or, sql } from "drizzle-orm"
@@ -13,6 +14,7 @@ import { LocationLifecycle } from "../../location-lifecycle.js"
 import { InstructionState } from "../instruction-state.js"
 import { SessionCompaction } from "../compaction.js"
 import { SessionContext } from "../context.js"
+import { SessionContextWindow } from "../context-window.js"
 import { SessionEvent } from "../event.js"
 import { SessionInbox } from "../inbox.js"
 import { SessionHistory } from "../history.js"
@@ -125,6 +127,8 @@ const layer = Layer.effect(
       let continuing = input.continuation !== undefined
       let step = input.continuation?.step ?? 1
       let entering = true
+      // Failed automatic compactions in the running turn. In memory only: a restart tries again, which fails safe.
+      const breaker = { failures: 0 }
       const promotable = input.promotable ?? "input"
       if (!force && !continuing) {
         const pending = yield* SessionInbox.nextPromotable(db, sessionID, "input")
@@ -177,6 +181,8 @@ const layer = Layer.effect(
               if (!continuing && pending?.delivery !== "steer") {
                 entering = true
                 step = 1
+                // A new turn tries automatic compaction again; input steered into a running turn does not.
+                breaker.failures = 0
               }
               if (pending?.type === "move")
                 return DrainResult.Moved({ continuation: continuing ? { step } : undefined })
@@ -206,12 +212,14 @@ const layer = Layer.effect(
                     })
                   }).pipe(
                     Effect.catch((error) =>
-                      bus.publish(SessionEvent.Compaction.Failed, {
-                        sessionID,
-                        reason: "manual",
-                        inputID: pending.id,
-                        error: toSessionError(error),
-                      }),
+                      bus
+                        .publish(SessionEvent.Compaction.Failed, {
+                          sessionID,
+                          reason: "manual",
+                          inputID: pending.id,
+                          error: toSessionError(error),
+                        })
+                        .pipe(Effect.as(undefined)),
                     ),
                   ),
                 ).pipe(Effect.exit)
@@ -226,6 +234,7 @@ const layer = Layer.effect(
                   })
                   return yield* Effect.failCause(compacted.cause)
                 }
+                if (compacted.value?.status === "completed") yield* restore(reportAfterCompaction(sessionID, breaker))
                 force = false
                 continue
               }
@@ -263,7 +272,7 @@ const layer = Layer.effect(
       while (true) {
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
-        const stopped = yield* runStep(next.context, next.selection, step)
+        const stopped = yield* runStep(next.context, next.selection, step, breaker)
         // A turn that stops at the agent's step allowance never reaches the turn-end checks, so it is checked here.
         if (stopped === "limited") yield* requireOutput(next.context, yield* SessionTurn.current(db, sessionID))
         continuing = stopped === "continue" || (stopped === "ended" && (yield* endTurn(next.context)))
@@ -389,6 +398,7 @@ const layer = Layer.effect(
       first: SessionContext.Loaded,
       firstSelection: SessionContext.Selection,
       step: number,
+      breaker: { failures: number },
     ) {
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
@@ -397,6 +407,12 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      // One automatic compaction attempt per model request: once one has run (or the turn is paused), retries, a
+      // fallback switch and a continuation resend the same request without another. An output-limit resume is a new
+      // request carrying the cut-off reply, so it clears the flag and is checked again.
+      let autoChecked = false
+      // Set by a completed compaction, reported once the context is reloaded from it.
+      let compacted = false
       let selection = firstSelection
       // Durable reminders are collected once per logical step. Retries, a fallback switch, an incomplete-stream
       // continuation, an output-limit escalation and a resume all resend the step's request, so they keep the flag; a
@@ -433,16 +449,39 @@ const layer = Layer.effect(
             return yield* loadSelected(selection, current.fallback)
           }))
         initial = undefined
+        if (compacted) {
+          compacted = false
+          yield* report(before, SessionCompaction.estimateContext(before, reminders.minimal), true, breaker)
+        }
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
         const limit = yield* turnLimit(before, current.options)
         if (limit) return yield* new StepFailedError({ error: limit })
         const output = yield* outputFor(before, current)
-        const compacted = yield* compaction.compact({ reason: "auto", context: before })
-        if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
-        if (compacted.status === "completed") {
-          assistantMessageID = SessionMessage.ID.create()
-          collected = false
-          continue
+        if (!autoChecked) {
+          // A request that is not due leaves the check open: a later pass of the step may find it due.
+          if (breaker.failures >= SessionContextWindow.BREAKER_LIMIT) autoChecked = true
+          else {
+            const outcome = yield* compaction.compact({ reason: "auto", context: before })
+            if (outcome.status !== "skipped") autoChecked = true
+            if (outcome.status === "completed") {
+              breaker.failures = 0
+              compacted = true
+              assistantMessageID = SessionMessage.ID.create()
+              collected = false
+              continue
+            }
+            // A failed attempt does not fail the step: the request goes ahead, and its failure counts toward the pause.
+            if (outcome.status === "failed") {
+              breaker.failures++
+              assistantMessageID = SessionMessage.ID.create()
+              if (breaker.failures === SessionContextWindow.BREAKER_LIMIT)
+                yield* Effect.logWarning("automatic compaction failed repeatedly; pausing it for this turn").pipe(
+                  Effect.annotateLogs({ sessionID, failures: breaker.failures }),
+                )
+              // The failed attempt's own spend may have put the turn over a limit it set: the top of the loop checks again.
+              continue
+            }
+          }
         }
         // After compaction has settled, so the reminders land in the epoch the request is made in. The reload applies
         // the turn's fallback, or a turn that moved to its fallback model would snap back to the session's.
@@ -452,6 +491,20 @@ const layer = Layer.effect(
           if (yield* reminders.collect({ loaded: before, step }))
             loaded = yield* loadSelected(selection, current.fallback)
         }
+        // With automatic compaction off, only the person compacts, so a request that cannot fit is refused here.
+        const window = compaction.thresholds(loaded)
+        if (
+          !window.auto &&
+          window.thresholds &&
+          SessionCompaction.estimateContext(loaded, reminders.minimal) >= window.thresholds.blocking
+        )
+          return yield* new StepFailedError({
+            error: {
+              type: "context.limit",
+              message:
+                "The conversation no longer fits the model's context window. Run /compact to summarize it, or start a new session.",
+            },
+          })
         const recovery = yield* outputRecovery(db, sessionID)
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
         // The allowance turns tools off for the last step, which would make an answer impossible: until one is accepted,
@@ -502,14 +555,25 @@ const layer = Layer.effect(
               retry: proposed,
             }),
           recoverContinuation,
+          // A paused turn also skips the rebuild, so the provider's rejection ends the step.
           recoverOverflow: Effect.suspend(() =>
-            recoverOverflow
-              ? compaction
-                  .compact({ reason: "overflow", context: loaded })
-                  .pipe(Effect.map((result) => result.status === "completed"))
+            recoverOverflow && breaker.failures < SessionContextWindow.BREAKER_LIMIT
+              ? compaction.compact({ reason: "overflow", context: loaded }).pipe(
+                  Effect.map((result) => {
+                    if (result.status !== "completed") return false
+                    breaker.failures = 0
+                    compacted = true
+                    return true
+                  }),
+                )
               : Effect.succeed(false),
           ),
         })
+        if (outcome._tag === "Completed" || outcome._tag === "OutputLimited") {
+          const message = (yield* store.message(assistantMessageID))?.message
+          if (message?.type === "assistant" && message.tokens)
+            yield* report(loaded, TokenUsage.total(message.tokens), false, breaker)
+        }
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) =>
             Effect.succeed(
@@ -550,6 +614,7 @@ const layer = Layer.effect(
               text: RESUME_AFTER_OUTPUT_LIMIT,
               metadata: { notice: "output-limit" },
             })
+            autoChecked = false
             if (outcome.needsContinuation) return "continue" as const
             assistantMessageID = SessionMessage.ID.create()
           }),
@@ -585,6 +650,47 @@ const layer = Layer.effect(
         if (completed !== undefined) return completed
       }
     })
+
+    const report = Effect.fnUntraced(function* (
+      loaded: SessionContext.Loaded,
+      used: number,
+      stale: boolean,
+      breaker: { readonly failures: number },
+    ) {
+      const window = compaction.thresholds(loaded)
+      if (!window.thresholds) return
+      yield* bus.publish(SessionEvent.ContextUpdated, {
+        sessionID: loaded.session.id,
+        used,
+        window: window.thresholds.effective,
+        threshold: window.thresholds.threshold,
+        auto: window.auto,
+        ...SessionContextWindow.state(used, window.thresholds, window.auto),
+        ...(window.auto ? {} : { blocking: window.thresholds.blocking }),
+        paused: breaker.failures >= SessionContextWindow.BREAKER_LIMIT,
+        stale,
+      })
+    })
+
+    // A manual compaction ends the boundary without reloading, so the report loads what the checkpoint left. The
+    // report is ephemeral: a failure to load it is logged and never fails a drain whose compaction is already durable.
+    const reportAfterCompaction = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      breaker: { readonly failures: number },
+    ) {
+      const selected = yield* context.select(sessionID)
+      const loaded = yield* loadSelected(selected, (yield* SessionTurn.current(db, sessionID)).fallback)
+      yield* report(loaded, SessionCompaction.estimateContext(loaded, reminders.minimal), true, breaker)
+    }, (effect, sessionID) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("could not report context use after compaction").pipe(
+                Effect.annotateLogs({ sessionID, cause: Cause.pretty(cause) }),
+              ),
+        ),
+      ))
 
     const settleStaleCompactions = Effect.fn("SessionRunner.settleStaleCompactions")(function* (
       sessionID: SessionSchema.ID,
