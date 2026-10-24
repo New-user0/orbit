@@ -85,7 +85,7 @@ The registry gate is the last step before `execute` (hooks, decode, traits, `val
 
 ## Output
 
-Built-ins return complete tool responses. `Tool.Snapshot.execute` is the local execution boundary. Generic output bounding is applied by the Session runner after execution.
+Built-ins return complete tool responses. `Tool.Snapshot.execute` is the local execution boundary. The Session step settles each result after execution and after the `execute.after` hooks (`ToolOutput.settle`): an empty one becomes the empty marker, and a text-only one above its threshold (`maxResultChars` capped by `tool_output.max_result_chars`) is saved to the session's folder and marked, while its stored content stays whole. Lowering turns the marker into the saved-output wrapper. A tool never sets `metadata.persisted` itself; the step drops one it finds.
 
 Producer capture remains local to producers. Shell stores combined process output in its backing file and returns a bounded tail with the full-output path when truncated.
 

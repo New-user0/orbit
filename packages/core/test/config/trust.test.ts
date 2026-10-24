@@ -702,6 +702,21 @@ describe("ConfigTrust.stamp", () => {
     expect(Config.latest([user, project], field)).toEqual(projectValue)
   })
 
+  // tool-runtime-8: the ceiling on every saved-result threshold sets how much each request carries, like the rows above.
+  test("keeps an untrusted folder from setting tool_output.max_result_chars", () => {
+    const user = document("user", { tool_output: { max_result_chars: 200_000 } })
+    const project = document("project", { tool_output: { max_result_chars: 100 } })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info.tool_output).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["providers"])
+    expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "tool_output")).toEqual({
+      max_result_chars: 200_000,
+    })
+    // Control: trusted, the project's value stands.
+    expect<unknown>(Config.latest([user, project], "tool_output")).toEqual({ max_result_chars: 100 })
+  })
+
   test("keeps a repository from masking the values the user set", () => {
     const user = document("user", {
       experimental: { portable_shell_scanner: true },

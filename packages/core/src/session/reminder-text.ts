@@ -29,15 +29,16 @@ export const oneLine = (value: string) => neutralize(value.replace(/[\p{Cc}\p{Zl
 /**
  * Neutralizes text parts that an adapter may join into one string. A provider joins tool-result parts with nothing or
  * with a line break, and the server chooses where the parts split, so a tag cut across parts is escaped when it would
- * read as a tag under either join. Each returned part is the input part with its `<` escaped.
+ * read as a tag under either join. Each returned part is the input part with its `<` escaped. `tag` matches the `<` of
+ * each tag to escape (a global pattern); it is the envelope's unless a caller escapes another tag of Orbit's.
  */
-export const neutralizeParts = (parts: ReadonlyArray<string>) => {
+export const neutralizeParts = (parts: ReadonlyArray<string>, tag: RegExp = TAG) => {
   const marked = parts.map(() => new Set<number>())
   for (const separator of ["", "\n"]) {
     const starts = parts.map((_, index) =>
       parts.slice(0, index).reduce((sum, part) => sum + part.length + separator.length, 0),
     )
-    for (const match of parts.join(separator).matchAll(TAG)) {
+    for (const match of parts.join(separator).matchAll(tag)) {
       const part = starts.findLastIndex((start) => start <= match.index)
       marked[part].add(match.index - starts[part])
     }

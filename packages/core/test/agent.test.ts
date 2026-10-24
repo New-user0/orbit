@@ -315,12 +315,12 @@ describe("Agent.scratchpad", () => {
     expect([cut[1], cut[3]].every((rule) => Agent.isOwnFolder(rule!))).toBe(true)
     expect(first!.resource).toBe(path.join("/tmp/orbit", "sessions", "*"))
     // Each names its folder for both spellings, so a call through a link is held to the real place.
-    expect(Agent.scratchpadFolders(cut[1]!)).toEqual([
+    expect(Agent.narrowedFolders(cut[1]!)).toEqual([
       path.join("/tmp/orbit", "sessions", "ses_a"),
       path.join("/real/tmp", "sessions", "ses_a"),
     ])
-    expect(Agent.scratchpadFolders(first!)).toBeUndefined()
-    expect(Agent.scratchpadFolders(person)).toBeUndefined()
+    expect(Agent.narrowedFolders(first!)).toBeUndefined()
+    expect(Agent.narrowedFolders(person)).toBeUndefined()
   })
 
   test("leaves a session that has no scratchpad with none of them", () => {

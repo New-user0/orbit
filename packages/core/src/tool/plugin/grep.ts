@@ -120,7 +120,7 @@ export const Plugin = {
         editor.add({
           name,
           options: { authorizes: true, codemode: false },
-          traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
+          traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel", maxResultChars: 20_000 },
           description: `Search file contents using ripgrep's regular expression syntax or literal text matching. Use it to locate specific code, symbols, or text patterns, and narrow searches with \`path\` or \`include\`. Returns matching file paths, line numbers, and line previews. A page holds up to ${FileSystem.DEFAULT_GREP_LIMIT} matches by default and stops earlier when its text would pass about ${MAX_OUTPUT_TOKENS.toLocaleString("en-US")} tokens; when results are truncated the note gives the \`offset\` that continues the search. Lines longer than ${Ripgrep.MAX_LINE_COLUMNS} characters are clipped around the first match.`,
           input: Input,
           output: Output,

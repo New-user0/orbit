@@ -823,6 +823,25 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation, scopes, the switch order,
   front matter with a marker file, the scan's links), `test/memory-instructions.test.ts` (the index link to a marker, which
   neither the reader, the carry-over nor the header rewrite goes through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
+- Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
+  client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
+  (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and
+  the call ID from the model, so the session ID names a folder only with the scratchpad's shape (`SessionFolder.KEY`), a
+  message ID only as `msg_` and letters and digits, and the call ID is reduced to letters, digits, `_` and `-` with a hash
+  of the raw ID (class 5); any other session or message ID writes nothing and sends the result whole. The door resolves
+  its folder once: `tool-output` and the session's folder are checked with `lstat` after they are made, and a link at
+  either is refused before a file is created, so a junction to a share is never followed; the file is created only when
+  none is there (class 4), and any failure costs only that result, which is sent whole with one log line (class 7).
+  Lowering (`toLLMMessages` with `toolOutput`) renders the wrapper from the stored `persisted` marker alone and reads no
+  disk: a marker whose session, name, size or format does not decode is ignored (class 5 and 7), only a marker opens a
+  wrapper, and a look-alike of its tag in tool text is escaped (class 9). The prompt-free read covers the asking session's
+  own folder (`Agent.narrowToolOutput`) and decides a call only where every real lead is in that folder (class 4).
+  Proof: `test/session-step-tool-output.test.ts` (the hostile call and session IDs, the linked session folder, a
+  `tool-output` that is a file), `test/tool-output.test.ts` (a linked `tool-output`, a hostile message ID),
+  `test/tool-output-lowering.test.ts` (the markers that do not decode, the look-alikes),
+  `test/permission-tool-output.test.ts` (other sessions of a lineage, the flat files of earlier builds, `..`, a sibling
+  prefix, a link out, a crafted session ID, Windows letter case) and the `saved tool results` rows of
+  `test/session-runner.test.ts`.
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 
@@ -1466,7 +1485,8 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   link that points nowhere by where it points. `FileAccess.resolve` asks `escapes` and treats such a path as external.
 
 - A place that a link leads out to is the person's to allow, never Orbit's. Orbit gives every agent allows for folders
-  of its own (`Agent.folders`: the global config folder, the temporary folder, shell and tool output), and a link that a
+  of its own (`Agent.folders`: the global config folder, the temporary folder, shell output, and the asking session's
+  own folder of saved tool results), and a link that a
   repository ships into one of them took that allow: a read, a write, a search or a command through it asked no folder
   question, and the shell, Grep and Glob approvals named the link. `FileAccess` marks the external folder of such a target `escaped`, `authorizeExternal`
   passes those resources to `Permission.assert` as `escaped`, and Permission decides them without Orbit's allows

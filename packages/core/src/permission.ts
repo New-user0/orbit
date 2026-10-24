@@ -274,14 +274,14 @@ const layer = Layer.effect(
       rules: Permission.Ruleset,
       approvals: Permission.Ruleset = [],
     ) => {
-      // The allow for a scratchpad or the memory folder is written for the spelling that a call gives, and a link inside
-      // the folder can lead out of it, so the allow decides only a call whose real place is in the folder too. A link that
-      // points out is decided by the rules for the place it points to (class 4). The memory allow is for the file tools,
-      // so it never decides the folder question of a shell command (class 8).
-      const scratch = (rule: Permission.Rule) => {
+      // The allows for a scratchpad, for saved tool results and for the memory folder are written for the spelling that a
+      // call gives, and a link inside the folder can lead out of it, so such an allow decides only a call whose real place
+      // is in the folder too. A link that points out is decided by the rules for the place it points to (class 4). The
+      // memory allow is for the file tools, so it never decides the folder question of a shell command (class 8).
+      const contained = (rule: Permission.Rule) => {
         const memoryFolders = Agent.memoryFolders(rule)
         if (memoryFolders !== undefined && input.shell) return false
-        const folders = Agent.scratchpadFolders(rule) ?? memoryFolders
+        const folders = Agent.narrowedFolders(rule) ?? memoryFolders
         return (
           folders === undefined ||
           (input.leads?.[resource] ?? []).every((lead) => folders.some((folder) => FSUtil.contains(folder, lead)))
@@ -303,7 +303,7 @@ const layer = Layer.effect(
         return { action: input.action, resource: "*", effect: "allow" } satisfies Permission.Rule
       }
       const all = [
-        ...(input.escaped?.includes(resource) ? own(rules) : rules).filter(scratch),
+        ...(input.escaped?.includes(resource) ? own(rules) : rules).filter(contained),
         ...(steersProgram(input.action, resource)
           ? approvals.filter((rule) => rule.resource === resource && !/[*?]/.test(rule.resource))
           : approvals),
@@ -360,10 +360,14 @@ const layer = Layer.effect(
         // managed rules.
         agent: agent?.id ?? name,
         rules: merge(
-          // The allow for editing in a scratchpad names the scratchpad of this session's lineage and no other.
-          // The allow for the memory folder names the folder of this Location.
+          // The allow for editing in a scratchpad names the scratchpad of this session's lineage and no other, the allow for
+          // saved tool results names this session's own folder and no other, and the allow for the memory folder names the
+          // folder of this Location.
           Agent.placeMemory(
-            Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
+            Agent.narrowToolOutput(
+              Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
+              session.id,
+            ),
             memory,
           ),
           managed.current().restrictions.managed_permissions_only ? own.filter((rule) => rule.effect !== "allow") : own,

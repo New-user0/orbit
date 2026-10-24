@@ -7,10 +7,10 @@ import { Agent } from "@orbit/schema/agent"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Bus } from "./bus.js"
+import { SessionFolder } from "./session/folder.js"
 import { State } from "./state.js"
 
 const SHELL_OUTPUT_GLOB = (data: string) => path.join(data, "shell", "*", "*")
-const TOOL_OUTPUT_GLOB = (data: string) => path.join(data, "tool-output", "*")
 
 export const ID = Agent.ID
 export type ID = typeof ID.Type
@@ -41,11 +41,14 @@ export const folders = (
   real: Pick<Global.Interface, "data" | "tmp" | "config"> = global,
 ): Info["permissions"] => {
   const allow = (resource: string) => ({ action: "external_directory", resource, effect: "allow" as const })
+  const toolOutputs = places(global.data, real.data).map((data) => path.join(data, "tool-output"))
   const rules = [
-    ...places(global.data, real.data).flatMap((data) => [
-      allow(SHELL_OUTPUT_GLOB(data)),
-      allow(TOOL_OUTPUT_GLOB(data)),
-    ]),
+    ...places(global.data, real.data).flatMap((data, index) => {
+      // Names every session's saved results until `narrowToolOutput` cuts it to the folder of the session that asks.
+      const output = allow(path.join(toolOutputs[index]!, "*"))
+      perSession.set(output, { kind: "tool-output", root: toolOutputs[index]!, roots: toolOutputs })
+      return [allow(SHELL_OUTPUT_GLOB(data)), output]
+    }),
     ...places(global.tmp, real.tmp).map((tmp) => allow(path.join(tmp, "*"))),
     ...places(global.config, real.config).map((config) => allow(path.join(config, "*"))),
   ]
@@ -63,21 +66,25 @@ const places = (spelled: string, leads: string) => (spelled === leads ? [spelled
 export const scratchpadRoot = (tmp: string) => path.join(tmp, "sessions")
 
 /**
- * The scratchpad allows, each with the folders of scratchpads it was written for: the one it names and the other
- * spelling of it, when the temporary folder is reached through a link. The allow is the same kind of rule as Plan's allow
- * for its folder, and it is Orbit's own like `folders`, so it never decides a place that a link leads out to.
+ * The allows written for a folder of every session (the scratchpads, the saved tool results), each with the root it
+ * names and the other spelling of that root, when the folder above it is reached through a link. The scratchpad allow is
+ * the same kind of rule as Plan's allow for its folder, and both are Orbit's own like `folders`, so they never decide a
+ * place that a link leads out to.
  */
-const scratchpads = new WeakMap<object, { readonly root: string; readonly roots: readonly string[] }>()
+const perSession = new WeakMap<
+  object,
+  { readonly kind: "scratchpad" | "tool-output"; readonly root: string; readonly roots: readonly string[] }
+>()
 
-/** The allows that `narrowScratchpad` cut, and the folders of the one scratchpad each is for. */
+/** The allows that `narrowScratchpad` and `narrowToolOutput` cut, and the folders of the one session each is for. */
 const narrowed = new WeakMap<object, readonly string[]>()
 
 /**
- * The scratchpad folders that `rule` allows editing in, when `narrowScratchpad` made it: the folder as it is spelled and
+ * The folders that `rule` allows, when `narrowScratchpad` or `narrowToolOutput` made it: the folder as it is spelled and
  * as it really is. A name is not where a file is: a link inside the folder can point out of it, so `Permission` lets the
- * rule decide only a place whose real path is in one of these folders too.
+ * rule decide only a place whose real path is in one of these folders too (class 4).
  */
-export const scratchpadFolders = (rule: object) => narrowed.get(rule)
+export const narrowedFolders = (rule: object) => narrowed.get(rule)
 
 /**
  * The allow that lets an agent edit in its session's scratchpad without a question, written for each spelling of the
@@ -91,7 +98,7 @@ export const scratchpad = (
   const roots = places(global.tmp, real.tmp).map(scratchpadRoot)
   return roots.map((root) => {
     const rule = { action: "Edit", resource: path.join(root, "*"), effect: "allow" as const }
-    scratchpads.set(rule, { root, roots })
+    perSession.set(rule, { kind: "scratchpad", root, roots })
     orbitOwn.add(rule)
     return rule
   })
@@ -103,9 +110,20 @@ export const scratchpad = (
  * later rule of the person's still wins. The cut allow is Orbit's own, as the one it came from is.
  */
 export const narrowScratchpad = (rules: Info["permissions"], key: string | undefined) =>
+  narrow("scratchpad", rules, key)
+
+/**
+ * `rules` as they apply to the session `sessionID`: the tool-output allow of `folders` names only the folder of that
+ * session's own saved results. A subagent, a parent and a fork each have their own, so reading another's asks. A session
+ * whose ID cannot name a folder has none (class 5).
+ */
+export const narrowToolOutput = (rules: Info["permissions"], sessionID: string) =>
+  narrow("tool-output", rules, SessionFolder.KEY.test(sessionID) ? sessionID : undefined)
+
+const narrow = (kind: "scratchpad" | "tool-output", rules: Info["permissions"], key: string | undefined) =>
   rules.flatMap((rule) => {
-    const written = scratchpads.get(rule)
-    if (written === undefined) return [rule]
+    const written = perSession.get(rule)
+    if (written?.kind !== kind) return [rule]
     if (key === undefined) return []
     const cut = { ...rule, resource: path.join(written.root, key, "*") }
     narrowed.set(
