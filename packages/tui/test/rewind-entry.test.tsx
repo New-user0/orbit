@@ -72,7 +72,7 @@ test("Esc once, Esc twice slowly, or Esc twice over a typed prompt does not open
 const queued = { id: "msg_queued", type: "user", delivery: "queue", payload: { text: "Later" }, time: { created: 5 } }
 test.each([
   { label: "over a typed prompt", messages: undefined, inbox: [], typed: "draft", ready: "Renamed it." },
-  { label: "in a session with no messages", messages: [], inbox: [], typed: "", ready: "Rewind fixture" },
+  { label: "in a session with no messages", messages: [] as unknown[], inbox: [], typed: "", ready: "Rewind fixture" },
   { label: "while a queued prompt waits", messages: undefined, inbox: [queued], typed: "", ready: "Renamed it." },
 ])("Esc twice $label does not open the picker", async (row) => {
   await using state = await tmpdir()
