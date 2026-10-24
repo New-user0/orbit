@@ -14,6 +14,7 @@ describe("ConfigEntryObserver", () => {
       const reloaded = yield* Deferred.make<void>()
       const config = Config.Service.of({
         entries: () => Ref.get(current),
+        rejected: () => Effect.succeed([]),
         compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
         compat: () => Effect.succeed(Config.defaultCompat),
         changes: () => Stream.empty,

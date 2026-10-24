@@ -733,6 +733,20 @@ describe("ConfigTrust.stamp", () => {
     expect<unknown>(Config.latest([user, project], "tool_output")).toEqual({ max_message_chars: 100 })
   })
 
+  // foundations-19: the period decides which of the person's sessions are deleted, so a folder that is not trusted
+  // cannot set it (class 8); a trusted one can, as the reference's merged settings allow.
+  test("keeps an untrusted folder from setting cleanup_period_days", () => {
+    const user = document("user", { cleanup_period_days: 365 })
+    const project = document("project", { cleanup_period_days: 1 })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info.cleanup_period_days).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["settings"])
+    expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "cleanup_period_days")).toBe(365)
+    // Control: trusted, the project's value stands.
+    expect<unknown>(Config.latest([user, project], "cleanup_period_days")).toBe(1)
+  })
+
   test("keeps a repository from masking the values the user set", () => {
     const user = document("user", {
       experimental: { portable_shell_scanner: true },
