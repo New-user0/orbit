@@ -1357,3 +1357,32 @@ it.effect("the fallback leaves out reasoning settings and effort notes, and name
     expect(sent).not.toContain("iVBORw0KGgo")
   }),
 )
+
+it.effect("a prompt-too-long rejection with a larger gap drops as many oldest groups as the gap needs", () =>
+  Effect.gen(function* () {
+    // The gap is 1,003 tokens: u0 (about 1,000) is not enough, so the next group goes too. A fifth of four groups
+    // would be one.
+    const gap = tooLong("Prompt is too long: 2,003 tokens > 1,000 maximum")
+    const run = yield* scripted("ses_cm2_ptl_two_groups", rounds(3), [gap, gap, answer("<handoff>\nfits\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    const sent = JSON.stringify(run.sent[2]?.messages)
+    expect(sent).not.toContain("U0-")
+    expect(sent).not.toContain("A1-reply")
+    expect(sent).not.toContain("U1-ask")
+    expect(sent).toContain("A2-reply")
+  }),
+)
+
+it.effect("analysis never stored: a second analysis ahead of the handoff", () =>
+  Effect.gen(function* () {
+    const run = yield* scripted(
+      "ses_cm2_analysis_before",
+      [userText("Do it")],
+      [answer("<analysis>DRAFT-A</analysis>\n<analysis>DRAFT-B</analysis>\n<handoff>\n## Objective\n- keep\n</handoff>")],
+    )
+    expect(run.summary).toBe("Summary:\n## Objective\n- keep")
+    expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
+  }),
+)
