@@ -67,6 +67,34 @@ test("Esc once, Esc twice slowly, or Esc twice over a typed prompt does not open
   expect(setup.captureCharFrame()).not.toContain(listHeading)
 })
 
+// Each condition on its own, in a fresh app so no earlier press arms the first Esc: a typed prompt, a session with no
+// messages, and one whose queued prompt waits in the inbox (Esc twice belongs to the picker only when none holds).
+const queued = { id: "msg_queued", type: "user", delivery: "queue", payload: { text: "Later" }, time: { created: 5 } }
+test.each([
+  { label: "over a typed prompt", messages: undefined, inbox: [], typed: "draft", ready: "Renamed it." },
+  { label: "in a session with no messages", messages: [], inbox: [], typed: "", ready: "Rewind fixture" },
+  { label: "while a queued prompt waits", messages: undefined, inbox: [queued], typed: "", ready: "Renamed it." },
+])("Esc twice $label does not open the picker", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: row.messages,
+    answer: (request) => (request.path.endsWith("/inbox") ? json({ data: row.inbox }) : undefined),
+  })
+  await setup.waitForFrame((frame) => frame.includes(row.ready))
+  if (row.typed) {
+    await setup.mockInput.typeText(row.typed)
+    await setup.waitForFrame((frame) => frame.includes(row.typed))
+  }
+  setup.mockInput.pressEscape()
+  setup.mockInput.pressEscape()
+  await Bun.sleep(300)
+  await setup.renderOnce()
+  const frame = setup.captureCharFrame()
+  expect(frame).not.toContain(listHeading)
+  expect(frame).not.toContain("Nothing to rewind yet.")
+})
+
 const openFromTimeline = async (setup: Awaited<ReturnType<typeof rewindApp>>, prompt: string) => {
   await setup.mockInput.typeText("/timeline")
   setup.mockInput.pressEnter()

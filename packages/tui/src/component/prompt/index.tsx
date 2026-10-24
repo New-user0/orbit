@@ -517,11 +517,10 @@ export function Prompt(props: PromptProps) {
     ),
   )
 
-  // Esc on an idle session belongs to the rewind picker only when nothing else would take it: an empty prompt in normal
-  // mode with no completion open, and a session that has something to rewind.
+  // Esc on an idle session belongs to the rewind picker only on an empty prompt of a session that has something to
+  // rewind. Shell mode, Vim's insert mode and an open completion take Esc before this command sees it.
   let lastEscape = 0
-  const rewindReady = () =>
-    !!props.rewind?.ready() && store.mode === "normal" && store.prompt.text === "" && !auto()?.visible
+  const rewindReady = () => !!props.rewind?.ready() && store.prompt.text === ""
 
   const promptCommands = createMemo(() =>
     [
