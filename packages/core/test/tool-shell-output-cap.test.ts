@@ -41,6 +41,7 @@ import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { Shell } from "@orbit/core/shell"
+import { ShellResult } from "@orbit/core/shell/result"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
@@ -484,25 +485,32 @@ describe("ShellTool output cap", () => {
       }),
     )
 
-  productionIt.live("states the head limit in the description", () =>
-    Effect.gen(function* () {
-      expect((yield* advertised(undefined)).shell.description).toMatch(/30,?000/)
-      expect((yield* advertised({ tool_output: { max_bytes: 1_000 } })).shell.description).toMatch(/\b1,?000\b/)
-    }),
+  // Every built-in plugin starts in each folder, which a loaded Windows host does not finish within the default limit.
+  productionIt.live(
+    "states the head limit in the description",
+    () =>
+      Effect.gen(function* () {
+        expect((yield* advertised(undefined)).shell.description).toMatch(/30,?000/)
+        expect((yield* advertised({ tool_output: { max_bytes: 1_000 } })).shell.description).toMatch(/\b1,?000\b/)
+      }),
+    { timeout: 30_000 },
   )
 
   // Fails on the base, which has no `background_tasks`. The defaults are the control.
-  productionIt.live("hides background parameters and guidance when background tasks are off", () =>
-    Effect.gen(function* () {
-      const defaults = yield* advertised(undefined)
-      expect(defaults.shell.properties).toContain("run_in_background")
-      expect(defaults.agent.properties).toContain("background")
-      const off = yield* advertised({ background_tasks: false })
-      expect(off.shell.properties).not.toContain("run_in_background")
-      expect(off.shell.description).not.toMatch(/background/i)
-      expect(off.agent.properties).not.toContain("background")
-      expect(off.agent.description).not.toMatch(/background/i)
-    }),
+  productionIt.live(
+    "hides background parameters and guidance when background tasks are off",
+    () =>
+      Effect.gen(function* () {
+        const defaults = yield* advertised(undefined)
+        expect(defaults.shell.properties).toContain("run_in_background")
+        expect(defaults.agent.properties).toContain("background")
+        const off = yield* advertised({ background_tasks: false })
+        expect(off.shell.properties).not.toContain("run_in_background")
+        expect(off.shell.description).not.toMatch(/background/i)
+        expect(off.agent.properties).not.toContain("background")
+        expect(off.agent.description).not.toMatch(/background/i)
+      }),
+    { timeout: 30_000 },
   )
 
   // Fails on the base, which moves the command to the background at its deadline.
@@ -678,6 +686,12 @@ describe("ShellTool output cap", () => {
           expect(notice).toContain("output-start")
           expect(notice).not.toContain("output-end")
           expect(notice).toContain(file)
+          // The job's output is what a restart delivers in place of this notice (`SessionRestart`), so it names the file
+          // too. Fails when the job's run reports the head alone.
+          const jobs = yield* Job.Service
+          const output = (yield* jobs.get(result.metadata.shellID))?.output ?? ""
+          expect(output).toContain("output-start")
+          expect(output).toContain(ShellResult.savedNotice(file))
         }),
       ),
     { timeout: 30_000 },

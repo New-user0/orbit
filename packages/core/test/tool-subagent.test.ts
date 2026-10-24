@@ -70,6 +70,17 @@ const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 }
 const outputSessionID = (value: unknown) =>
   Schema.decodeUnknownSync(Schema.Struct({ sessionID: Session.ID }))(value).sessionID
 
+/** Runs of the fake execution that wait, by Session title, until the test settles the deferred. */
+const holds = new Map<string, Deferred.Deferred<void>>()
+
+/** Reads `read` every 20 ms until `done` holds for its value. */
+const eventually = <A, E>(read: Effect.Effect<A, E>, done: (value: A) => boolean): Effect.Effect<A, E> =>
+  read.pipe(
+    Effect.flatMap((value) =>
+      done(value) ? Effect.succeed(value) : Effect.sleep(Duration.millis(20)).pipe(Effect.andThen(eventually(read, done))),
+    ),
+  )
+
 const executionNode = makeGlobalNode({
   service: SessionExecution.Service,
   layer: Layer.effect(
@@ -80,10 +91,14 @@ const executionNode = makeGlobalNode({
       const completed = new Set<Session.ID>()
       const complete = Effect.fn("SubagentTest.complete")(function* (sessionID: Session.ID) {
         if (completed.has(sessionID)) return
-        if ((yield* store.get(sessionID))?.title?.includes("fail")) {
+        const title = (yield* store.get(sessionID))?.title
+        if (title?.includes("fail")) {
           yield* new SessionRunnerModel.ModelNotSelectedError({ sessionID })
           return
         }
+        // A Session whose title a test holds runs until the test releases it.
+        const hold = title === undefined ? undefined : holds.get(title)
+        if (hold) yield* Deferred.await(hold)
         completed.add(sessionID)
         const assistantMessageID = SessionMessage.ID.create()
         yield* bus.publish(SessionEvent.Step.Started, {
@@ -1073,10 +1088,13 @@ describe("SubagentTool in Plan mode", () => {
     30_000,
   )
 
-  // Class 13. A notice that one of the killed shells left waiting in the child's inbox is withdrawn; the control is a
-  // notice of a shell that is not the child's, which stays. Fails without the inbox step: both notices stay.
+  // Class 13. Every shell notice waiting in the child's inbox is withdrawn when its run ends, as the reference drops every
+  // notification queued for the agent: the notice of a shell that was killed, and the notice of one that is not running
+  // (`sh_elsewhere`, standing for a command that finished just before the run ended). Fails when only the killed shells'
+  // notices go: the second stays. The controls stay: the person's own `!` command in the child, and a shell notice
+  // waiting for the parent.
   it.live(
-    "withdraws a waiting notice of a shell killed when its run ends",
+    "withdraws every waiting shell notice of the child when its run ends",
     () =>
       Effect.acquireRelease(
         Effect.promise(() => tmpdir()),
@@ -1103,15 +1121,17 @@ describe("SubagentTool in Plan mode", () => {
               timeout: 0,
               metadata: { sessionID: child.id },
             })
-            const notice = (shellID: string) =>
+            const notice = (sessionID: Session.ID, shellID: string, origin?: string) =>
               sessions.synthetic({
-                sessionID: child.id,
+                sessionID,
                 text: `<shell id="${shellID}" state="waiting">`,
-                metadata: { source: "shell", shellID },
+                metadata: { source: "shell", shellID, ...(origin ? { origin } : {}) },
                 resume: false,
               })
-            yield* notice(childShell.id)
-            yield* notice("sh_elsewhere")
+            yield* notice(child.id, childShell.id)
+            yield* notice(child.id, "sh_elsewhere")
+            yield* notice(child.id, "sh_person", "user")
+            yield* notice(parent.id, "sh_parent")
 
             yield* executeTool(registry, {
               sessionID: parent.id,
@@ -1125,10 +1145,16 @@ describe("SubagentTool in Plan mode", () => {
             })
 
             yield* shell.wait(childShell.id).pipe(Effect.timeout(Duration.seconds(15)))
-            const waiting = (yield* sessions.inbox(child.id)).flatMap((item) =>
-              item.type === "synthetic" ? [String(item.payload.metadata?.shellID)] : [],
-            )
-            expect(waiting).toEqual(["sh_elsewhere"])
+            const waiting = (sessionID: Session.ID) =>
+              sessions
+                .inbox(sessionID)
+                .pipe(
+                  Effect.map((items) =>
+                    items.flatMap((item) => (item.type === "synthetic" ? [String(item.payload.metadata?.shellID)] : [])),
+                  ),
+                )
+            expect(yield* waiting(child.id)).toEqual(["sh_person"])
+            expect(yield* waiting(parent.id)).toEqual(["sh_parent"])
           }),
         ),
       ),
@@ -1238,6 +1264,183 @@ describe("SubagentTool and the child's shells", () => {
     30_000,
   )
 })
+
+// shell-safety-6: with background tasks off, the session's move-to-background signal (Ctrl+B) leaves a running Agent or
+// Workflow subagent in the foreground, as it leaves a shell command, so the call returns the subagent's reply. With them
+// on (the control) the same signal moves it. Fails when a foreground subagent blocks on its job whatever the setting:
+// the off rows are moved too.
+describe("SubagentTool and the move-to-background signal", () => {
+  const signalled = (input: { tool: "Agent" | "Workflow"; tasks: boolean }) =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          if (!input.tasks)
+            yield* Effect.promise(() =>
+              Bun.write(path.join(dir.path, "orbit.json"), JSON.stringify({ background_tasks: false })),
+            )
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const jobs = yield* Job.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const title = `hold ${input.tool} ${input.tasks}`
+          const release = yield* Deferred.make<void>()
+          holds.set(title, release)
+
+          const running = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call:
+              input.tool === "Agent"
+                ? {
+                    type: "tool-call",
+                    id: "call-signal",
+                    name: SubagentTool.name,
+                    input: { agent: "reviewer", description: title, prompt: "work" },
+                  }
+                : {
+                    type: "tool-call",
+                    id: "call-signal",
+                    name: WorkflowTool.name,
+                    input: {
+                      description: "held workflow",
+                      script: `return await tools.agent({ description: "${title}", prompt: "work", agent: "reviewer" })`,
+                    },
+                  },
+          }).pipe(Effect.forkScoped({ startImmediately: true }))
+
+          const child = (yield* eventually(sessions.list({ parentID: parent.id }), (page) => page.data.length > 0))
+            .data[0]!
+          yield* eventually(jobs.get(child.id), (job) => job?.status === "running")
+          // Time for the call to start waiting on the job it just started.
+          yield* Effect.sleep(Duration.millis(200))
+          yield* sessions.background(parent.id)
+          yield* Deferred.succeed(release, undefined)
+          const result = yield* Fiber.join(running)
+          holds.delete(title)
+          return { result, child }
+        }),
+      ),
+    )
+
+  it.live(
+    "moves an Agent subagent on the session signal when background tasks are on",
+    () =>
+      Effect.gen(function* () {
+        const moved = yield* signalled({ tool: "Agent", tasks: true })
+        expect(moved.result.metadata).toMatchObject({ status: "running" })
+      }),
+    30_000,
+  )
+
+  it.live(
+    "keeps a subagent in the foreground on the session signal when background tasks are off",
+    () =>
+      Effect.gen(function* () {
+        const kept = yield* signalled({ tool: "Agent", tasks: false })
+        expect(kept.result.metadata).toMatchObject({ status: "completed" })
+        expect(kept.result.content).toEqual([{ type: "text", text: completedOutput(kept.child.id) }])
+      }),
+    30_000,
+  )
+
+  it.live(
+    "moves a Workflow subagent on the session signal when background tasks are on",
+    () =>
+      Effect.gen(function* () {
+        const moved = yield* signalled({ tool: "Workflow", tasks: true })
+        expect(moved.result).toMatchObject({
+          status: "error",
+          error: { message: expect.stringContaining("moved to the background") },
+        })
+      }),
+    30_000,
+  )
+
+  it.live(
+    "keeps a Workflow subagent in the foreground on the session signal when background tasks are off",
+    () =>
+      Effect.gen(function* () {
+        const kept = yield* signalled({ tool: "Workflow", tasks: false })
+        expect(kept.result).toMatchObject({
+          status: "completed",
+          content: [{ type: "text", text: expect.stringContaining(childText) }],
+        })
+      }),
+    30_000,
+  )
+})
+
+// shell-safety-6 (FU-M3-152): a background subagent that a restart resumes ends its child's shells when that run ends,
+// as the run an Agent call starts does. The child's shell stands for one it started after the restart. Fails when the
+// recovered run lacks `SubagentJob.endsShells`: the child's shell runs on and the wait runs out. The parent's shell is
+// the control: it keeps running.
+completionIt.live(
+  "kills the child's shells when a subagent resumed after a restart ends",
+  () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const jobs = yield* Job.Service
+          const kv = yield* KV.Service
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const child = yield* sessions.create({
+            parentID: parent.id,
+            title: "recovered",
+            agent: Agent.ID.make("reviewer"),
+            model: childModel,
+          })
+          const locations = yield* LocationServiceMap.Service
+          const shell = yield* Shell.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const start = (sessionID: Session.ID) =>
+            shell.create({
+              shell: ShellSelect.resolve({ priority: "compat" }),
+              command: process.platform === "win32" ? "Start-Sleep -Seconds 60" : "sleep 60",
+              timeout: 0,
+              metadata: { sessionID },
+            })
+          const childShell = yield* start(child.id)
+          const parentShell = yield* start(parent.id)
+
+          // The marker a background subagent leaves when the server stops while it runs.
+          const notificationID = SessionMessage.ID.create()
+          yield* kv.set(`job.background/${notificationID}`, {
+            id: child.id,
+            notificationID,
+            recovery: {
+              kind: "subagent",
+              parentSessionID: parent.id,
+              childSessionID: child.id,
+              agent: "reviewer",
+              description: "recovered",
+            },
+            status: "running",
+          })
+          const restart = yield* SessionRestart.Service
+          yield* restart.resumeSuspendedSessions
+
+          const ended = yield* shell.wait(childShell.id).pipe(Effect.timeout(Duration.seconds(15)))
+          expect(ended.status).toBe("killed")
+          expect((yield* shell.get(parentShell.id)).status).toBe("running")
+          yield* shell.kill(parentShell.id)
+          yield* jobs.pendingBackground.pipe(Effect.repeat({ until: (pending) => pending.length === 0 }))
+          yield* sessions.wait(parent.id)
+        }),
+      ),
+    ),
+  30_000,
+)
 
 const shellSubagentSupervisor = makeLocationNode({
   name: "test/subagent-shell-plugins",

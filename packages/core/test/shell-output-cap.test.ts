@@ -250,9 +250,17 @@ it.live(
   () =>
     withShell((shell, run) =>
       Effect.gen(function* () {
-        const notification = ShellResult.userNotification(yield* shell.result(yield* run(overflowCommand(40_000))))
+        const info = yield* run(overflowCommand(40_000))
+        const notification = ShellResult.userNotification(yield* shell.result(info))
         expect(notification.text).toContain("output-start")
         expect(notification.text).not.toContain("output-end")
+        // Output that did not fit names the kept file, as a moved command's notice does. Fails when `userNotification`
+        // leaves that line out. The command whose output fits is the control: it names no file.
+        expect(notification.text).toContain(ShellResult.savedNotice(info.file))
+        const small = yield* run(smallCommand)
+        const whole = ShellResult.userNotification(yield* shell.result(small))
+        expect(whole.text).toContain("small")
+        expect(whole.text).not.toContain(small.file)
       }),
     ),
   { timeout: 30_000 },
@@ -299,3 +307,38 @@ it.live(
     ),
   { timeout: 60_000 },
 )
+
+// The watchdog kills with SIGKILL at once, as the reference does, rather than with SIGTERM and a 3-second grace. The
+// command ignores SIGTERM (what it starts inherits that), so only SIGKILL stops it. Fails when the watchdog uses the
+// ordinary kill, which waits out the grace: the command then lives on for 3 seconds after its file passes the limit.
+// POSIX: Windows has no SIGTERM to ignore.
+if (!isWindows)
+  it.live(
+    "kills a moved command past the limit without a grace period",
+    () =>
+      withShell(
+        (shell, run) =>
+          Effect.gen(function* () {
+            const limit = 256 * 1024
+            const moved = yield* run(`trap '' TERM; ${floodCommand}`)
+            yield* shell.background(moved.id)
+            const passed = (): Effect.Effect<number, Shell.NotFoundError> =>
+              shell
+                .output(moved.id, { cursor: Number.MAX_SAFE_INTEGER })
+                .pipe(
+                  Effect.flatMap((latest) =>
+                    latest.size > limit
+                      ? Effect.sync(() => Date.now())
+                      : Effect.sleep(Duration.millis(10)).pipe(Effect.andThen(passed())),
+                  ),
+                )
+            const start = yield* passed()
+            const killed = yield* shell.wait(moved.id).pipe(Effect.timeout(Duration.seconds(20)))
+            expect(killed.status).toBe("killed")
+            expect((yield* shell.result(moved)).capped).toBe(true)
+            expect(Date.now() - start).toBeLessThan(2_000)
+          }),
+        { node: Shell.nodeWith({ backgroundLimit: 256 * 1024, watchInterval: Duration.millis(50) }) },
+      ),
+    { timeout: 60_000 },
+  )

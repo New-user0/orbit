@@ -227,7 +227,8 @@ export interface Interface {
   readonly interrupt: (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) => Effect.Effect<boolean>
   /**
    * Kills every shell command the Session still has running in its Location, for the end of the run that started them:
-   * none of them reports back, and a notice of theirs still waiting in the inbox is cancelled.
+   * none of them reports back, and every shell notice still waiting in the inbox is cancelled (the person's own `!`
+   * commands excepted).
    */
   readonly abandonShells: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly synthetic: (
@@ -509,13 +510,14 @@ const layer = Layer.effect(
       abandonShells: Effect.fn("Session.abandonShells")(function* (sessionID) {
         const session = yield* result.get(sessionID)
         const shell = yield* Shell.Service.pipe(instances.provide(session))
-        const abandoned = new Set<string>(yield* shell.abandon(sessionID))
-        if (abandoned.size === 0) return
+        yield* shell.abandon(sessionID)
+        // Every shell notice still waiting goes, not only those of the commands just killed: one that finished as the run
+        // ended would otherwise wake the Session outside any run. The person's own `!` command is their input and stays.
         const pending = (yield* result.inbox(sessionID)).filter(
           (item) =>
             item.type === "synthetic" &&
             item.payload.metadata?.source === "shell" &&
-            abandoned.has(String(item.payload.metadata.shellID)),
+            item.payload.metadata.origin !== "user",
         )
         yield* Effect.forEach(
           pending,

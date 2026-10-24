@@ -144,7 +144,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   background_tasks: Schema.Boolean.pipe(optional).annotate({
     description:
-      "Whether shell commands and subagents may run in the background. On by default. false keeps every one in the foreground: the background options are not offered, a shell command still running at its timeout is stopped, and moving running work to the background leaves shell commands where they are. A project's or local value applies once the folder is trusted",
+      "Whether shell commands and subagents may run in the background. On by default. false keeps shell commands and the subagents of the Agent and Workflow tools in the foreground: the background options are not offered, a shell command still running at its timeout is stopped, and moving running work to the background leaves them where they are. A command defined to run as a subagent still runs in the background. A project's or local value applies once the folder is trusted",
   }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
     description:

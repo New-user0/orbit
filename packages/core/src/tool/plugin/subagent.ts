@@ -241,9 +241,9 @@ export const Plugin = {
                     ),
                   ))
 
-              // With background tasks off a background request runs in the foreground.
-              const background =
-                input.background === true && Config.latest(yield* config.entries(), "background_tasks") !== false
+              // With background tasks off a background request runs in the foreground, and nothing moves it later.
+              const tasks = Config.latest(yield* config.entries(), "background_tasks") !== false
+              const background = input.background === true && tasks
               yield* context.progress({ sessionID: child.id, status: "running" })
 
               // Standard prompt admission outside the job: Job.start joining a running child skips
@@ -275,7 +275,7 @@ export const Plugin = {
                 return backgroundResult(child.id)
               }
 
-              const result = yield* jobs.block({ id: child.id, sessionID: context.sessionID }).pipe(
+              const result = yield* SubagentJob.waitFor(jobs, { id: child.id, sessionID: context.sessionID }, tasks).pipe(
                 Effect.onInterrupt(() =>
                   Effect.all([sessions.interrupt(child.id), jobs.cancel(child.id)], {
                     discard: true,

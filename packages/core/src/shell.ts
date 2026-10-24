@@ -70,6 +70,8 @@ type Active = {
   timeoutFiber?: Fiber.Fiber<void>
   timeout?: (duration: number) => Effect.Effect<void>
   kill?: Effect.Effect<void>
+  // Kills with SIGKILL at once, for the size watchdog: a command that ignores SIGTERM would write on through a grace period.
+  forceKill?: Effect.Effect<void>
   // A result read the whole file, so eviction may delete it; every other file stays for the sweep.
   whole: boolean
   watched: boolean
@@ -102,8 +104,8 @@ export interface Interface {
   readonly result: (started: Shell.Info) => Effect.Effect<ShellResult.Result>
   // Says the command left the foreground: from then on it is killed once its output passes the background limit.
   readonly background: (id: Shell.ID) => Effect.Effect<void, NotFoundError>
-  // Kills every running command started for this session and marks it abandoned. Returns their IDs.
-  readonly abandon: (sessionID: string) => Effect.Effect<Shell.ID[]>
+  // Kills every running command started for this session and marks it abandoned.
+  readonly abandon: (sessionID: string) => Effect.Effect<void>
   // Hands a finished command's output file to the step that settles the result of this call, as its saved copy.
   readonly offer: (input: {
     readonly id: Shell.ID
@@ -347,10 +349,13 @@ const layer = (options: Options) =>
               Effect.delay(watchInterval),
               Effect.repeat({ until: (over) => over }),
               Effect.andThen(
-                Effect.suspend(() => {
-                  command.capped = true
-                  return command.kill ?? Effect.void
-                }),
+                // Uninterruptible: the kill settles `done`, and the other side of the race must not cut it short.
+                Effect.uninterruptible(
+                  Effect.suspend(() => {
+                    command.capped = true
+                    return command.forceKill ?? Effect.void
+                  }),
+                ),
               ),
             ),
             Deferred.await(command.done).pipe(Effect.ignore),
@@ -371,7 +376,6 @@ const layer = (options: Options) =>
             }),
           { discard: true },
         )
-        return owned.map((command) => command.info.id)
       })
 
       const offer = Effect.fn("Shell.offer")(function* (input: Parameters<Interface["offer"]>[0]) {
@@ -579,6 +583,11 @@ const layer = (options: Options) =>
                 "killed",
                 undefined,
                 handle.kill({ forceKillAfter: Duration.seconds(3) }).pipe(Effect.catch(() => Effect.void)),
+              )
+              command.forceKill = finish(
+                "killed",
+                undefined,
+                handle.kill({ killSignal: "SIGKILL" }).pipe(Effect.catch(() => Effect.void)),
               )
 
               runFork(

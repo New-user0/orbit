@@ -163,6 +163,13 @@ const resultMessages = (output: Output, exitNotice = true, notes: ReadonlyArray<
   return [...(output.output ? [output.output] : []), ...notes, ...(notice ? [notice] : [])]
 }
 
+// What a command that finished away from its call reports: its result, then the kept file when the output did not fit.
+const completionText = (done: Settled, file: string) =>
+  [
+    ...resultMessages(done.output, true, done.notes),
+    ...(done.output.truncated ? [ShellResult.savedNotice(file)] : []),
+  ].join("\n\n")
+
 // The head that stands for output that did not fit starts at its first line that is not blank and has no trailing space.
 const trimHead = (text: string) => text.replace(/^(?:[ \t]*\r?\n)+/, "").trimEnd()
 
@@ -366,10 +373,7 @@ export const Plugin = {
           return
         }
         const text = done
-          ? [
-              ...resultMessages(done.output, true, done.notes),
-              ...(done.output.truncated ? [ShellResult.savedNotice(file)] : []),
-            ].join("\n\n")
+          ? completionText(done, file)
           : info.status === "error"
             ? (info.error ?? "Command failed")
             : "Cancelled"
@@ -491,7 +495,8 @@ export const Plugin = {
                   }
                 }).pipe(
                   Effect.tap((done) => Deferred.succeed(settled, done)),
-                  Effect.map((done) => resultMessages(done.output, true, done.notes).join("\n\n")),
+                  // The job's output is what a restart delivers, so it names the kept file too.
+                  Effect.map((done) => completionText(done, info.file)),
                   Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
                 )
                 const started = yield* jobs.start({

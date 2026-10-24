@@ -111,7 +111,10 @@ export function userNotification(result: Result) {
     shellID: result.info.id,
     command: result.info.command,
     state: result.info.status === "killed" ? "cancelled" : "completed",
-    text: [captured.output, status].filter((item) => item !== undefined && item !== "").join("\n\n"),
+    // Output that did not fit names the kept file, as a moved command's notice does.
+    text: [captured.output, status, captured.truncated ? savedNotice(result.info.file) : undefined]
+      .filter((item) => item !== undefined && item !== "")
+      .join("\n\n"),
     output: captured,
   })
   // The command is kept in metadata so the lowering can look for the reasoning keyword in what the person typed.
