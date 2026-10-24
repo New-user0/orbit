@@ -83,6 +83,25 @@ describe("SessionMessageBudget.select", () => {
     ).toEqual([])
   })
 
+  test("saves nothing when the new results come to exactly the limit", () => {
+    expect(chosen([assistant("msg_a", [result("call_1", 60), result("call_2", 40)])])).toEqual([])
+  })
+
+  // Its own step already saved it and lowering sends the wrapper, so it neither counts nor goes.
+  test("leaves a result its step saved on its own out of the sum", () => {
+    const marker = {
+      persisted: { session: "ses_source", name: "msg_0123abc-call_m-1a2b3c4d.txt", size: 300, format: 1 },
+    }
+    expect(
+      chosen([
+        assistant("msg_a", [
+          { ...result("call_marker", 300), state: { ...result("call_marker", 300).state, metadata: marker } },
+          result("call_1", 60),
+        ]),
+      ]),
+    ).toEqual([])
+  })
+
   // Lowering sends a result whose marker does not decode as stored, so it counts and can go.
   test("counts a result whose saved marker does not decode", () => {
     const marker = { persisted: { session: "../x", name: "msg_0123abc-call_m-1a2b3c4d.txt", size: 80, format: 1 } }
