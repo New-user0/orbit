@@ -530,22 +530,29 @@ describe("V2 mini transport", () => {
       footer: ui.api,
     })
 
-    events.push({
-      id: "evt_recap_live",
-      created: 3,
-      type: "session.recap.recorded",
-      durable: durable("ses_1", 3),
-      data: { sessionID: "ses_1", text: "Next: run the tests." },
-    } as RunV2Event)
+    const recorded = (id: string, seq: number, text: string) =>
+      ({
+        id,
+        created: seq,
+        type: "session.recap.recorded",
+        durable: durable("ses_1", seq),
+        data: { sessionID: "ses_1", text },
+      }) as RunV2Event
+    // The live event of the replayed recap, the new recap, and that new recap delivered again each draw no second row.
+    events.push(recorded("evt_recap", 2, "Fixing the build."))
+    events.push(recorded("evt_recap_live", 3, "Next: run the tests."))
+    events.push(recorded("evt_recap_live", 3, "Next: run the tests."))
+    events.push(recorded("evt_recap_last", 4, "Done."))
     const deadline = Date.now() + 3000
-    while (!ui.commits.some((commit) => commit.text.includes("Next: run the tests.")) && Date.now() < deadline)
-      await Bun.sleep(5)
+    while (!ui.commits.some((commit) => commit.text.includes("Done.")) && Date.now() < deadline) await Bun.sleep(5)
 
     const rows = ui.commits.filter((commit) => commit.text.startsWith("※"))
     expect(rows).toMatchObject([
       { kind: "system", messageID: "msg_recap" },
       { kind: "system", text: "※ Next: run the tests." },
+      { kind: "system", text: "※ Done." },
     ])
+    expect(rows).toHaveLength(3)
     const replayed = entryBody(rows[0]!)
     expect(replayed).toMatchObject({ type: "text" })
     const content = replayed.type === "text" ? replayed.content : ""
