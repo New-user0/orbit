@@ -145,6 +145,8 @@ const fakeIdentity = identity("fake", "fake-model")
 const replacementIdentity = identity("fake", "replacement")
 const gptIdentity = identity("openai", "gpt-5")
 const replacementModel = testModel("replacement")
+// What the catalog resolves a session that selected the "none" reasoning variant to, so a request can tell it apart.
+const unreasonedModel = testModel("fake-model-none")
 const compactModel = testModel("compact", { context: 4_000, output: 50 })
 // Automatic compaction starts at half this window, which the first request of a scenario stays under.
 const halfWindowModel = testModel("half-window", { context: 6_000, output: 50 })
@@ -243,6 +245,8 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     currentModel: model,
     toolsEnabled: true,
     modelCost: [] as Model.Info["cost"],
+    // What the catalog lists for the session model; unset lists nothing.
+    modelInfo: undefined as Model.Info | undefined,
     compaction,
     modelResolveHook: resolvesModel,
     systemBaseline: "Initial context",
@@ -514,7 +518,12 @@ const makeLayer = (persist: boolean, real = false) =>
       resolve: (session) =>
         state.modelResolveHook.pipe(
           Effect.map(() => {
-            const selected = session.model?.id === "replacement" ? replacementModel : state.currentModel
+            const selected =
+              session.model?.id === "replacement"
+                ? replacementModel
+                : session.model?.variant === "none"
+                  ? unreasonedModel
+                  : state.currentModel
             return SessionRunnerModel.resolved(selected, {
               capabilities: { tools: state.toolsEnabled, input: ["text", "image"], output: ["text"] },
               cost: state.modelCost,
@@ -602,7 +611,7 @@ const makeLayer = (persist: boolean, real = false) =>
       ),
     )
     const promptModels = Layer.mock(Model.Service, {
-      get: () => Effect.undefined,
+      get: () => Effect.sync(() => state.modelInfo),
       all: () => Effect.succeed([]),
       available: () => Effect.succeed([]),
       default: () => Effect.undefined,
@@ -3308,6 +3317,32 @@ describe("SessionRunnerLLM", () => {
       })
     }
   }
+
+  scenario("a manual compaction falls back on the session model without its reasoning variant", function* (s) {
+    s.modelInfo = Model.Info.make({
+      ...Model.Info.default(Provider.ID.make(s.currentModel.provider), Model.ID.make(s.currentModel.id)),
+      variants: [{ id: Model.VariantID.make("high") }, { id: Model.VariantID.make("none") }],
+    })
+    yield* s.bus.publish(SessionEvent.ModelSelected, {
+      sessionID,
+      model: {
+        id: ID.make(s.currentModel.id),
+        providerID: Provider.ID.make(s.currentModel.provider),
+        variant: Model.VariantID.make("high"),
+      },
+    })
+    yield* s.llm.push(TestLLM.text("Earlier answer", "unreasoned-history"))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    yield* s.llm.push(
+      TestLLM.stop(LLMEvent.reasoningDelta({ id: "unreasoned-thinking", text: "Not a summary" })),
+      [LLMEvent.textDelta({ id: "unreasoned-summary", text: "### Active\n- Recovered summary" })],
+    )
+    yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    expect(s.requests.map((request) => String(request.model.id))).toEqual(["fake-model", "fake-model-none"])
+  })
 
   scenario("compaction accepts any text as the summary, with no fallback request", function* (s) {
     yield* s.llm.push(TestLLM.text("Earlier answer", "summary-history"))

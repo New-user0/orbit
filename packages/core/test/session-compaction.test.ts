@@ -1795,6 +1795,21 @@ it.effect("a summary request is sized for the room it leaves and drops nothing w
   }),
 )
 
+it.effect("a summary request leaves a margin of 15 percent for an estimate that runs low", () =>
+  Effect.gen(function* () {
+    // About 160,000 estimated tokens: 15 percent over leaves 16,000 of the 200,000 window, below the 20,000 asked for.
+    const history = [userText("word ".repeat(128_000)), assistantText("ok"), userText("go on")]
+    const run = yield* scripted("ses_cm2_margin", history, [answer("<handoff>\nT\n</handoff>")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toEqual({ status: "completed" })
+    const request = run.sent[0]!
+    expect(request.generation?.maxTokens).toBe(200_000 - Math.ceil(SessionCompaction.estimateRequest(request) * 1.15))
+    expect(request.generation?.maxTokens).toBeGreaterThan(3_000)
+    expect(request.generation?.maxTokens).toBeLessThan(20_000)
+  }),
+)
+
 it.effect("the fallback is built on the model without the session's reasoning variant", () =>
   Effect.gen(function* () {
     const thinking = LanguageModel.update(model, {
