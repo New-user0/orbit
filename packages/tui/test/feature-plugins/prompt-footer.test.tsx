@@ -30,6 +30,7 @@ test("prompt footer separates simultaneous subagent, shell, and usage status", a
         status: (id: string) => (id === "child" ? "running" : "idle"),
         get: () => ({ id: "session", location: { directory: "/workspace" } }),
         cost: () => 1,
+        context: () => undefined,
         message: { list: () => [] },
       },
       shell: {
@@ -88,6 +89,7 @@ test("prompt footer can hide details", async () => {
         status: () => "running",
         get: () => ({ id: "session", location: { directory: "/workspace" } }),
         cost: () => 1,
+        context: () => undefined,
         message: {
           list: () => [
             {
