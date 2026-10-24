@@ -658,6 +658,7 @@ describe("ConfigInstructionPlugin.Plugin", () => {
             entries: () => Effect.succeed([]),
             changes: () => Stream.never,
             notify: () => Effect.void,
+            rejected: () => Effect.succeed([]),
             compatEnabled: () => Effect.sync(() => state.enabled),
             compat: () => Effect.sync(() => ({ enabled: state.enabled, roots: [] })),
           }),

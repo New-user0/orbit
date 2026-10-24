@@ -2384,6 +2384,7 @@ export type ConfigEntry =
         system_prompt_file?: string
         append_system_prompt?: string
         update?: "disable" | "notify" | "auto"
+        cleanup_period_days?: number
         share?: "manual" | "auto" | "disabled"
         enterprise?: { url?: string }
         username?: string
