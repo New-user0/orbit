@@ -804,7 +804,7 @@ const dropOldestGroups = (messages: ReadonlyArray<Message>, rejection: string) =
           { covered: 0, count: 0 },
         ).count
       : Math.max(1, Math.floor(groups.length * 0.2))
-  return groups.slice(Math.min(count, groups.length - 1)).flat()
+  return groups.slice(count).flat()
 }
 
 const oldestToDrop = <T>(items: ReadonlyArray<T>, size: (item: T) => number, budget: number) => {

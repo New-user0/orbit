@@ -1214,6 +1214,7 @@ it.effect("a prompt-too-long rejection drops the oldest round groups covering th
     expect(sent[first]?.role).toBe("assistant")
     // The slice would open with an assistant reply, so a marker user message goes first.
     expect(sent[first - 1]?.role).toBe("user")
+    expect(textOf(sent[first - 1])).toBe("[Earlier messages were left out so that this summary request fits.]")
     expect(JSON.stringify(sent)).toContain("U3-ask")
   }),
 )
@@ -1542,5 +1543,22 @@ it.effect("a context overflow never reaches the retry policy", () =>
     expect(run.outcome).toEqual({ status: "completed" })
     expect(decided).toBe(0)
     expect(run.sent).toHaveLength(3)
+  }),
+)
+
+it.effect("a fallback that fails for another reason than the size stops the compaction without dropping history", () =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "retry", (event) =>
+      Effect.sync(() => {
+        event.decision = { retry: false }
+      }),
+    )
+    const run = yield* scripted("ses_cm2_fallback_fails", rounds(3), [failedFinish, failedFinish, answer("unused")], {
+      context: withTools(32_000),
+    })
+    expect(run.outcome).toMatchObject({ status: "failed" })
+    expect(run.outcome).not.toMatchObject({ error: { message: TOO_LONG } })
+    expect(run.sent).toHaveLength(2)
   }),
 )
