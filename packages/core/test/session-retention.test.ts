@@ -178,6 +178,18 @@ const link = (target: string, at: string) =>
     await fs.symlink(target, at, linkType)
   })
 
+// Keeps the messages of retention's own log lines.
+const logging = (logged: string[]) =>
+  Effect.provideService(
+    Logger.CurrentLoggers,
+    new Set([
+      Logger.make((entry) => {
+        const message = [entry.message].flat()[0]
+        if (typeof message === "string" && message.startsWith("session retention")) logged.push(message)
+      }),
+    ]),
+  )
+
 // The pass time of most rows: every row written at the wall clock is 31 days idle by then, and the upgrade (the
 // migration that the layer ran) is as well, so the grace has passed.
 const later = () => Date.now() + 31 * DAY
@@ -401,6 +413,30 @@ describe("SessionRetention.prune: the order of removal", () => {
       }),
     ),
   )
+
+  // A member that `Session.remove` cannot remove (here its creation time does not decode) stops its family where it is:
+  // the members removed before it stay removed, the rest stay, one line is logged, and the next family still goes.
+  it.live("keeps the rest of a family when removing one of its sessions fails", () =>
+    scenario(() =>
+      Effect.gen(function* () {
+        const now = Date.now()
+        const logged: string[] = []
+        yield* row({ id: "ses_ret_stuckroot", updated: now })
+        yield* row({ id: "ses_ret_stuckchild", parent: "ses_ret_stuckroot", updated: now })
+        yield* row({ id: "ses_ret_stuckcontrol", updated: now })
+        const database = yield* Database.Service
+        yield* database.db
+          .run(sql`UPDATE session_v2 SET time_created = 'soon' WHERE id = 'ses_ret_stuckroot'`)
+          .pipe(Effect.orDie)
+
+        const pass = yield* prune({ days: 30, now: later() }).pipe(logging(logged))
+
+        expect(pass.removed.toSorted()).toEqual(["ses_ret_stuckchild", "ses_ret_stuckcontrol"])
+        expect(yield* remaining).toEqual(["ses_ret_stuckroot"])
+        expect(logged).toEqual(["session retention could not remove a session"])
+      }),
+    ),
+  )
 })
 
 describe("SessionRetention.prune: the folders that sessions name", () => {
@@ -511,6 +547,27 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
         expect(yield* exists(path.join(elsewhere, "tool_0123456789ab"))).toBe(true)
         expect((yield* Effect.promise(() => fs.lstat(l.outputs))).isSymbolicLink()).toBe(true)
         expect(yield* exists(path.join(l.scratch, "ses_ret_gone"))).toBe(false)
+      }),
+    ),
+  )
+
+  // Class 7: a root that cannot be read costs only itself. With a file where the temporary folder was, the scratchpad
+  // root cannot be looked at (POSIX says so, with one line; Windows reports it missing, which is no error), and the
+  // saved-results root is still swept in the same pass.
+  it.live("sweeps the other root when one cannot be read", () =>
+    scenario((l) =>
+      Effect.gen(function* () {
+        const logged: string[] = []
+        yield* folder(path.join(l.outputs, "ses_ret_unread"))
+        yield* Effect.promise(async () => {
+          await fs.rm(l.tmp, { recursive: true, force: true })
+          await fs.writeFile(l.tmp, "not a folder")
+        })
+
+        yield* prune({ days: 30, now: later() }).pipe(logging(logged))
+
+        expect(yield* exists(path.join(l.outputs, "ses_ret_unread"))).toBe(false)
+        expect(logged).toEqual(process.platform === "win32" ? [] : ["session retention could not read a folder"])
       }),
     ),
   )
@@ -790,6 +847,30 @@ describe("SessionRetention.schedule", () => {
         yield* TestClock.adjust("10 minutes")
         expect(yield* gone("ses_ret_idle")).toBe(true)
         expect(yield* remaining).toEqual(["ses_ret_busy"])
+      }),
+    ),
+  )
+
+  // A pass that fails (the server's config could not be loaded) is logged, and the next pass a day later still runs.
+  it.effect("logs a pass that fails and runs the next one", () =>
+    scenario(() =>
+      Effect.gen(function* () {
+        const logged: string[] = []
+        let reads = 0
+        yield* TestClock.setTime(Date.now() + 40 * DAY)
+        yield* row({ id: "ses_ret_retry", updated: Date.now() })
+        yield* Effect.forkScoped(
+          schedule(
+            Effect.suspend(() => (reads++ === 0 ? Effect.die("config could not be loaded") : Effect.succeed(30))),
+          ),
+        ).pipe(logging(logged))
+
+        yield* TestClock.adjust("10 minutes")
+        expect(yield* eventually(Effect.sync(() => logged.length > 0))).toBe(true)
+        expect(logged).toEqual(["session retention pass failed"])
+        expect(yield* still("ses_ret_retry")).toBe(true)
+        yield* TestClock.adjust("24 hours")
+        expect(yield* gone("ses_ret_retry")).toBe(true)
       }),
     ),
   )
