@@ -699,12 +699,15 @@ export function Session(props: {
     ))
   // The rewind picker (/rewind, /checkpoint, Esc twice, the message dialog). It sends only this session's ID and a
   // message ID read from its own message list; the server resolves the folder and decides trust when it acts.
+  // A command the person ran with `!` is a row too; the server's dry run offers no code rewind for it.
   const rewindPrompts = () =>
-    messagesBeforeRevert().flatMap((message) =>
-      message.type === "user" && !pendingDeliveries().has(message.id)
+    messagesBeforeRevert().flatMap((message) => {
+      if (message.type === "shell")
+        return [{ id: message.id, text: message.command, created: message.time.created, shell: true }]
+      return message.type === "user" && !pendingDeliveries().has(message.id)
         ? [{ id: message.id, text: message.text, created: message.time.created }]
-        : [],
-    )
+        : []
+    })
   const rewindStats = (messageID: string) =>
     client.api.session
       .diff({ sessionID: route.sessionID, from: messageID, scope: "prompt", context: 0 })
@@ -729,6 +732,11 @@ export function Session(props: {
   }
   const refill = (messageID: string) => {
     const message = data.session.message.get(route.sessionID, messageID)
+    if (message?.type === "shell") {
+      prompt()?.set({ text: message.command, pasted: [] })
+      prompt()?.setMode("shell")
+      return
+    }
     if (message?.type !== "user") return
     prompt()?.set({ ...projectedPromptInput(message), pasted: [] })
     return message

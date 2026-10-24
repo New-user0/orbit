@@ -54,6 +54,25 @@ export const conversation = [
   assistant("msg_0006", now - 5 * 60_000 + 1000, [{ type: "text", text: "Fixed the title." }]),
 ]
 
+// A command run with `!` that writes a window-title sequence (class 9).
+export const hostileCommand = "echo \u001b]0;pwned\u0007 hi"
+
+/** `conversation` with a command the person ran with `!` (`msg_0004a`) just before the newest prompt. */
+export const withShell = (command: string) => [
+  ...conversation.slice(0, 4),
+  {
+    id: "msg_0004a",
+    type: "shell",
+    shellID: "sh_rewind",
+    command,
+    status: "exited",
+    exit: 0,
+    output: { output: "done\n", cursor: 5, size: 5, truncated: false },
+    time: { created: now - 30 * 60_000, completed: now - 30 * 60_000 + 100 },
+  },
+  ...conversation.slice(4),
+]
+
 /** What `scope=prompt` reports for each prompt's own file-tool edits. */
 export const promptStats: Record<string, unknown[]> = {
   msg_0001: [{ file: "src/parser.ts", patch: "", additions: 12, deletions: 0, status: "added" }],

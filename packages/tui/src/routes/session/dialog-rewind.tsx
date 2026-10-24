@@ -12,7 +12,8 @@ import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 import { bodyText } from "../../util/renderer"
 
-export type RewindPrompt = { id: string; text: string; created: number }
+/** A person's prompt, or with `shell` a command they ran with `!`, whose text is then the command. */
+export type RewindPrompt = { id: string; text: string; created: number; shell?: boolean }
 export type RewindOption = "both" | "conversation" | "code"
 export type RewindFileStat = { file: string; additions: number; deletions: number }
 export type RewindDryRun = {
@@ -186,11 +187,14 @@ export function DialogRewind(props: {
   }))
 
   const line = (text: string) => Locale.truncate(bodyText(text).replace(/\n/g, " "), width())
+  // A shell command is drawn behind the `!` that ran it.
+  const quote = (prompt: RewindPrompt) => line(prompt.shell ? `! ${prompt.text}` : prompt.text) || "(empty prompt)"
 
   function Row(row: { index: number }) {
     const prompt = props.prompts[row.index]
     const active = () => selected() === row.index
-    if (prompt) ask(prompt.id)
+    // A shell command has no file-tool edits of its own to count: the prompt-scoped diff answers only for a prompt.
+    if (prompt && !prompt.shell) ask(prompt.id)
     const files = () => (prompt ? stats[prompt.id] : undefined)
     return (
       <box flexDirection="row" flexShrink={0}>
@@ -203,7 +207,7 @@ export function DialogRewind(props: {
             wrapMode="none"
             overflow="hidden"
           >
-            {prompt ? line(prompt.text) || "(empty prompt)" : "(current)"}
+            {prompt ? quote(prompt) : "(current)"}
           </text>
           <Show when={files()}>{(value) => <FileStats files={value()} />}</Show>
         </box>
@@ -277,7 +281,7 @@ export function DialogRewind(props: {
               </text>
               <box border={["left"]} borderColor={theme.border.base} paddingLeft={1} flexDirection="column">
                 <text fg={theme.text.base} wrapMode="none" overflow="hidden">
-                  {line(prompt().text) || "(empty prompt)"}
+                  {quote(prompt())}
                 </text>
                 <text fg={theme.text.muted}>({Locale.ago(prompt().created)})</text>
               </box>

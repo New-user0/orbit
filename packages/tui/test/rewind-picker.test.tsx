@@ -1,7 +1,16 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
-import { controlFree, linesWith, listHeading, rewindApp, sessionID, until } from "./fixture/rewind"
+import {
+  controlFree,
+  hostileCommand,
+  linesWith,
+  listHeading,
+  rewindApp,
+  sessionID,
+  until,
+  withShell,
+} from "./fixture/rewind"
 
 // clients-ux-5 part 2: the three-way rewind picker. Step 1 lists the person's prompts, oldest first, with a "(current)"
 // row selected at the bottom; each prompt's second line is its own file-tool edits from `scope=prompt`. Step 2 confirms
@@ -26,7 +35,7 @@ test.each([64, 120])(
   "/rewind lists every prompt with its own file edits and a current row, at %i columns",
   async (width) => {
     await using state = await tmpdir()
-    await using setup = await rewindApp({ state: state.path, width })
+    await using setup = await rewindApp({ state: state.path, width, messages: withShell("ls -la") })
 
     await openPicker(setup)
     const frame = await setup.waitForFrame(
@@ -41,7 +50,11 @@ test.each([64, 120])(
     // Oldest first, "(current)" last.
     expect(frame.indexOf("Add the parser")).toBeLessThan(frame.indexOf("Rename the helper"))
     expect(frame.indexOf("Rename the helper")).toBeLessThan(frame.indexOf("(current)"))
-    // Each prompt's stats come from its own range, not the turn's.
+    // A command the person ran with `!` is a row of its own, in its place and behind its `!`.
+    expect(frame).toContain("! ls -la")
+    expect(frame.indexOf("Rename the helper")).toBeLessThan(frame.indexOf("! ls -la"))
+    expect(frame.indexOf("! ls -la")).toBeLessThan(frame.indexOf("(current)"))
+    // Each prompt's stats come from its own range, not the turn's; a shell command asks for none.
     expect(setup.statsSent().sort()).toEqual(["prompt msg_0001", "prompt msg_0003", "prompt msg_0005"])
     // Opening the list rewinds nothing and runs no dry run.
     expect(setup.actions()).toEqual([])
@@ -53,15 +66,16 @@ test.each([64, 120])(
   "a repository file name and a stored prompt are drawn with their control characters written out, at %i columns",
   async (width) => {
     await using state = await tmpdir()
-    await using setup = await rewindApp({ state: state.path, width })
+    await using setup = await rewindApp({ state: state.path, width, messages: withShell(hostileCommand) })
     await openPicker(setup)
 
     // The hostile file name reaches the screen only through the picker's stats line.
     const frame = await setup.waitForFrame((frame) => frame.includes("evil\\x1b[2K"))
     expect(controlFree(frame)).toBe(true)
     expect(frame).toContain("+1 -1")
-    // Its stored prompt is written out on its row too.
+    // Its stored prompt is written out on its row too, and so is a stored shell command on its own row.
     expect(frame).toContain("Fix the \\x1b]0;pwned\\x07 title")
+    expect(frame).toContain("! echo \\x1b]0;pwned\\x07 hi")
 
     // And in step 2, where the file is named in the effect line.
     await selectPrompt(setup, 1)
@@ -163,6 +177,35 @@ test.each(options)("$option acts through its route and closes the picker", async
     { maxPasses: 200 },
   )
   expect(linesWith(frame, "Rename the helper")).toBe(row.refilled ? 2 : 1)
+})
+
+// A command the person ran with `!` has no checkpoint of its own, so the server's dry run answers `canRewind: false`
+// and step 2 offers only the conversation. Rewinding it puts the command back in the input, in shell mode.
+test("a shell command is a row whose conversation rewind puts the command back in shell mode", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path, messages: withShell("ls -la") })
+  await openPicker(setup)
+
+  // Up from "(current)": the newest prompt, then the shell command.
+  await selectPrompt(setup, 2)
+  const confirm = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(setup.dryRunsSent()).toEqual(["msg_0004a"])
+  expect(confirm).toContain("Rewind the conversation to just before this prompt:")
+  expect(confirm).toContain("! ls -la")
+  expect(confirm).not.toContain("Code only")
+  expect(setup.statsSent()).not.toContain("prompt msg_0004a")
+
+  setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(setup.actions().filter((action) => action !== "interrupt" && action !== "wait")).toEqual([
+    `stage ${JSON.stringify({ messageID: "msg_0004a", files: false })}`,
+  ])
+  // The transcript draws the command behind `$`; the input draws it behind `!`, with shell mode's own hint.
+  const frame = await setup.waitForFrame(
+    (frame) => !frame.includes("Never mind") && frame.includes("! ls -la") && frame.includes("exit shell mode"),
+    { maxPasses: 200 },
+  )
+  expect(frame).toContain("$ ls -la")
 })
 
 // The server answers no dry run while the session runs (409), so choosing a prompt stops the session first; the code

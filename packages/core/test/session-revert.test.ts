@@ -349,9 +349,6 @@ describe("Session.revert files", () => {
   )
 })
 
-// A recorded name is the spelling of the folder its step ran in. Once the session has moved, the same name in the
-// folder it is in now is another file, which a file tool there never touched: a rewind and an undo leave it, and
-// still put back what a file tool changed in the folder they restore.
 // clients-ux-5 part 2: the rewind picker's "Conversation only" stages a revert without its files. When a revert with
 // files is already staged (the picker's "Code and conversation", or /undo), moving the boundary earlier without files
 // must leave the files as the staged revert left them, as a conversation rewind in the reference never touches code,
@@ -390,6 +387,9 @@ describe("Session.revert conversation only over a staged revert", () => {
   )
 })
 
+// A recorded name is the spelling of the folder its step ran in. Once the session has moved, the same name in the
+// folder it is in now is another file, which a file tool there never touched: a rewind and an undo leave it, and
+// still put back what a file tool changed in the folder they restore.
 describe("Session.revert names from another folder", () => {
   it.live(
     "leaves a shell edit after a session move to another repository, and rewinds a Write made there",

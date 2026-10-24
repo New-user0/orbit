@@ -1862,28 +1862,32 @@ which one of those folders is a link.
 ### A rewind picker in the terminal UI, and Rewind in the message dialog
 
 `/rewind` (also `/checkpoint`) opens a picker that lists your prompts, oldest first, each with the files its own file
-tools changed (`<name> +A -D` or `N files +A -D`), and a `(current)` row. Choosing a prompt asks the server what a code
-rewind would change on disk now and offers `Code and conversation`, `Conversation only` and `Code only` when at least one
-file would change, or only `Conversation only` otherwise; `Never mind` goes back. The server answers that question only
-for a session that is not running, so choosing a prompt while the session runs interrupts it and waits for it first.
-Every option also interrupts the session and waits for it before acting. A conversation rewind is staged as `/undo`
-stages one, so `/redo` brings it back until your next prompt, and puts the prompt back in the input; `Code only` puts the
-files back at once, with no redo, and leaves the input alone. While a chosen rewind runs the picker shows `Rewinding…`
-and Esc does nothing; a refused rewind keeps the picker open with a line naming what failed. If the picker was closed
-another way meanwhile (ctrl+c or a click outside it), a refusal is shown as a notice instead.
+tools changed (`<name> +A -D` or `N files +A -D`), and a `(current)` row. A command you ran with `!` is a row too, drawn
+as `! <command>` without a file line; it offers only `Conversation only`, which puts the command back in the input in
+shell mode. Choosing a prompt asks the server what a code rewind would change on disk now and offers
+`Code and conversation`, `Conversation only` and `Code only` when at least one file would change, or only
+`Conversation only` otherwise; `Never mind` goes back. The server answers that question only for a session that is not
+running, so choosing a prompt while the session runs interrupts it and waits for it first. Every option also interrupts
+the session and waits for it before acting. A conversation rewind is staged as `/undo` stages one, so `/redo` brings it
+back until your next prompt, and puts the prompt back in the input; `Code only` puts the files back at once, with no
+redo, and leaves the input alone. While a chosen rewind runs the picker shows `Rewinding…` and Esc does nothing; a
+refused rewind keeps the picker open with a line naming what failed. If the picker was closed another way meanwhile
+(ctrl+c or a click outside it), a refusal is shown as a notice instead.
 
 Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. While a session runs, Esc
 keeps interrupting it as before.
 
 The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
-confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only replies with nothing in them follow the prompt
-and no file would change, it rewinds the conversation at once and puts the prompt back in the input, without asking.
+confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only
+replies with nothing in them follow the prompt and no file would change, it rewinds the conversation at once and puts
+the prompt back in the input, without asking.
 
 Interrupting a prompt (Esc twice while it runs) before its reply holds any text or tool call, with nothing typed and
 nothing queued, now rewinds the conversation to before that prompt and puts it back in the input; the prompt-history
 entry it added is dropped. Files are not touched.
 
-**Affects:** people who use the terminal UI's message dialog or press Esc on an idle prompt.
+**Affects:** people who use the terminal UI's message dialog or press Esc on an idle prompt, or interrupt a prompt with
+Esc twice before its reply holds anything.
 
 **What to do:** Nothing. Use `Rewind`, then `Code and conversation`, where you used `Revert`.
 
