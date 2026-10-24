@@ -4,6 +4,7 @@
 // (class 4); and a command that left the foreground is killed once its file passes the background limit. Each test
 // names what it does on the base.
 import { expect } from "bun:test"
+import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Duration, Effect, Schema } from "effect"
@@ -48,8 +49,7 @@ const floodCommand = isWindows
 
 const smallCommand = isWindows ? "[Console]::Out.Write('small')" : "printf small"
 
-const document = (info: object) =>
-  new Document({ type: "document", info: Schema.decodeUnknownSync(Info)(info) })
+const document = (info: object) => new Document({ type: "document", info: Schema.decodeUnknownSync(Info)(info) })
 
 const withShell = <A, E>(
   body: (shell: Shell.Interface, run: (command: string) => Effect.Effect<Shell.Info, unknown>) => Effect.Effect<A, E>,
@@ -71,11 +71,15 @@ const withShell = <A, E>(
   )
 
 const waitForOutput = (shell: Shell.Interface, id: Shell.ID): Effect.Effect<void, Shell.NotFoundError> =>
-  shell.output(id, { cursor: Number.MAX_SAFE_INTEGER }).pipe(
-    Effect.flatMap((latest) =>
-      latest.size > 0 ? Effect.void : Effect.sleep(Duration.millis(20)).pipe(Effect.andThen(waitForOutput(shell, id))),
-    ),
-  )
+  shell
+    .output(id, { cursor: Number.MAX_SAFE_INTEGER })
+    .pipe(
+      Effect.flatMap((latest) =>
+        latest.size > 0
+          ? Effect.void
+          : Effect.sleep(Duration.millis(20)).pipe(Effect.andThen(waitForOutput(shell, id))),
+      ),
+    )
 
 // Fails on the base: it reads the tail (the last 51,200 bytes), so the text starts in the middle and ends with
 // `output-end`, and 40,000 bytes fit whole.
@@ -101,18 +105,16 @@ it.live(
   "reads the configured head limit and caps it at 150,000",
   () =>
     Effect.gen(function* () {
-      const small = yield* withShell(
-        (shell, run) => run(overflowCommand(40_000)).pipe(Effect.flatMap(shell.result)),
-        { config: { tool_output: { max_bytes: 1_000 } } },
-      )
+      const small = yield* withShell((shell, run) => run(overflowCommand(40_000)).pipe(Effect.flatMap(shell.result)), {
+        config: { tool_output: { max_bytes: 1_000 } },
+      })
       expect(small.capture?.output).toStartWith("output-start")
       expect(small.capture?.output.length).toBeLessThanOrEqual(1_000)
       expect(small.capture?.output.length).toBeGreaterThan(990)
 
-      const large = yield* withShell(
-        (shell, run) => run(overflowCommand(160_000)).pipe(Effect.flatMap(shell.result)),
-        { config: { tool_output: { max_bytes: 200_000 } } },
-      )
+      const large = yield* withShell((shell, run) => run(overflowCommand(160_000)).pipe(Effect.flatMap(shell.result)), {
+        config: { tool_output: { max_bytes: 200_000 } },
+      })
       expect(large.capture?.output).toStartWith("output-start")
       expect(large.capture?.output.length).toBeLessThanOrEqual(150_000)
       expect(large.capture?.output.length).toBeGreaterThan(149_000)
@@ -163,9 +165,20 @@ it.live(
   { timeout: 30_000 },
 )
 
-// Class 4. Fails on the base, which reads through the link and shows the marker's text. A link cannot be made unelevated
-// on Windows, so this runs on Linux (CI and the Docker gate).
-if (!isWindows)
+// Whether this process can make a file link: Windows refuses one unelevated without Developer Mode (`EPERM`).
+const canLink = await (async () => {
+  await using tmp = await tmpdir()
+  await fs.writeFile(path.join(tmp.path, "target"), "")
+  return fs.symlink(path.join(tmp.path, "target"), path.join(tmp.path, "link"), "file").then(
+    () => true,
+    () => false,
+  )
+})()
+
+// Class 4. Fails on the base, which reads through the link and shows the marker's text. On Linux the open refuses the
+// link (`O_NOFOLLOW`); Windows has no such flag, so there the `lstat` before the open refuses it. Runs where a file link
+// can be made: Linux, Windows CI (elevated) and Windows with Developer Mode.
+if (canLink)
   it.live(
     "does not follow a link planted at the output file",
     () =>
@@ -194,6 +207,43 @@ if (!isWindows)
     { timeout: 30_000 },
   )
 
+// Class 4, the write side: the command's output file is opened without following a link, so a link at its path is never
+// written through. The file's name cannot be guessed before it is made, so the open's flags are read back from the
+// kernel's record of the descriptor that writes it. Fails when the stream is opened without `O_NOFOLLOW`. `/proc` is
+// Linux's, so this runs there (CI and the Docker gate).
+if (process.platform === "linux")
+  it.live(
+    "opens the output file without following a link",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          withShell((shell, run) =>
+            Effect.gen(function* () {
+              const release = path.join(tmp.path, "release")
+              const info = yield* run(releaseCommand(release))
+              yield* waitForOutput(shell, info.id)
+              const flags = yield* Effect.promise(async () => {
+                for (const fd of await fs.readdir("/proc/self/fd")) {
+                  const target = await fs.readlink(`/proc/self/fd/${fd}`).catch(() => "")
+                  if (target !== info.file) continue
+                  const record = await fs.readFile(`/proc/self/fdinfo/${fd}`, "utf8").catch(() => "")
+                  const line = record.split("\n").find((entry) => entry.startsWith("flags:"))
+                  if (line) return Number.parseInt(line.slice("flags:".length).trim(), 8)
+                }
+              })
+              yield* Effect.promise(() => fs.writeFile(release, ""))
+              yield* shell.wait(info.id)
+              expect(flags).toBeDefined()
+              expect((flags ?? 0) & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW)
+              expect((flags ?? 0) & constants.O_WRONLY).toBe(constants.O_WRONLY)
+            }),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ),
+    { timeout: 30_000 },
+  )
+
 // Class 12, the person's own `!` command. Fails on the base, whose notification carries the tail.
 it.live(
   "gives the person's command the head too",
@@ -214,9 +264,7 @@ it.live("watches a moved command at 5 GB every five seconds by default", () =>
   Effect.sync(() => {
     expect(Shell.BACKGROUND_LIMIT).toBe(5 * 1024 ** 3)
     expect(Duration.toMillis(Shell.WATCH_INTERVAL)).toBe(5_000)
-    expect(ShellResult.sizeNotice(Shell.BACKGROUND_LIMIT)).toBe(
-      "Background command killed: output file exceeded 5 GB.",
-    )
+    expect(ShellResult.sizeNotice(Shell.BACKGROUND_LIMIT)).toBe("Background command killed: output file exceeded 5 GB.")
     expect(ShellResult.sizeNotice(256 * 1024)).toBe("Background command killed: output file exceeded 256 KB.")
   }),
 )

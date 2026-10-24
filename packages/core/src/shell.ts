@@ -338,19 +338,19 @@ const layer = (options: Options) =>
         const command = yield* require(id)
         if (command.info.status !== "running" || command.watched) return
         command.watched = true
-        // The bytes the command has written are what reaches the file.
+        // The bytes the command has written are what reaches the file. The check runs until the command passes the limit
+        // or its end settles `done`, which stops it.
         const passed = Effect.sync(() => command.info.status === "running" && command.size > backgroundLimit)
         runFork(
           Effect.raceFirst(
             passed.pipe(
               Effect.delay(watchInterval),
-              Effect.repeat({ until: (over) => over || command.info.status !== "running" }),
-              Effect.flatMap((over) =>
-                over && command.kill
-                  ? Effect.sync(() => {
-                      command.capped = true
-                    }).pipe(Effect.andThen(command.kill))
-                  : Effect.void,
+              Effect.repeat({ until: (over) => over }),
+              Effect.andThen(
+                Effect.suspend(() => {
+                  command.capped = true
+                  return command.kill ?? Effect.void
+                }),
               ),
             ),
             Deferred.await(command.done).pipe(Effect.ignore),

@@ -161,8 +161,9 @@ export const openFile = async (file: string, flags: number) => {
 }
 
 // The saved copy of an adopted file: a hard link to it, or a copy where a link cannot be made (another volume), made only
-// where nothing is. The file is cut to 64 MB first, through the handle that was opened without following a link, and the
-// size it had is returned.
+// where nothing is: a link onto an existing name fails, and so does the copy that follows it, which keeps the first file.
+// The file is cut to 64 MB first, through the handle that was opened without following a link, and the size it had is
+// returned.
 const copyAdopted = async (file: string, target: string) => {
   const handle = await openFile(file, constants.O_RDWR)
   const size = await handle
@@ -172,12 +173,11 @@ const copyAdopted = async (file: string, target: string) => {
       return stat.size
     })
     .finally(() => handle.close())
-  await fs.link(file, target).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "EEXIST") return
-    return fs.copyFile(file, target, constants.COPYFILE_EXCL).catch((error: NodeJS.ErrnoException) => {
+  await fs.link(file, target).catch(() =>
+    fs.copyFile(file, target, constants.COPYFILE_EXCL).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "EEXIST") throw error
-    })
-  })
+    }),
+  )
   return size
 }
 

@@ -5,6 +5,7 @@
 // keeps every command in the foreground. Each test names what it does on the base; the class of a security row is in
 // its comment (docs/untrusted-repositories.md).
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Deferred, Duration, Effect, Fiber, Layer, Scope, Stream } from "effect"
@@ -160,9 +161,7 @@ const overflowCommand = (bytes: number) =>
     ? `[Console]::Out.Write('output-start' + ('x' * ${bytes}) + 'output-' + 'end')`
     : `printf output-start; head -c ${bytes} /dev/zero | tr '\\0' 'x'; printf 'output-''end'`
 const overflowBytes = (bytes: number) => "output-start".length + bytes + "output-end".length
-const startThenWait = isWindows
-  ? "[Console]::Out.Write('start'); Start-Sleep -Seconds 30"
-  : "printf start; sleep 30"
+const startThenWait = isWindows ? "[Console]::Out.Write('start'); Start-Sleep -Seconds 30" : "printf start; sleep 30"
 const startThenDone = isWindows
   ? "[Console]::Out.Write('start'); Start-Sleep -Seconds 1; [Console]::Out.Write('done')"
   : "printf start; sleep 1; printf done"
@@ -170,7 +169,11 @@ const floodCommand = isWindows
   ? "while ($true) { [Console]::Out.Write('x' * 10000); Start-Sleep -Milliseconds 10 }"
   : "line=$(head -c 10000 /dev/zero | tr '\\0' 'x'); while :; do printf '%s' \"$line\"; sleep 0.01; done"
 
-const call = (input: Record<string, unknown>, id = "call-cap", messageID: SessionMessage.ID = SessionMessage.ID.create()) => ({
+const call = (
+  input: Record<string, unknown>,
+  id = "call-cap",
+  messageID: SessionMessage.ID = SessionMessage.ID.create(),
+) => ({
   sessionID,
   ...toolIdentity,
   messageID,
@@ -181,7 +184,10 @@ const text = (result: { content?: ReadonlyArray<{ type: string; text?: string }>
   (result.content ?? []).map((part) => part.text ?? "").join("\n")
 
 /** A session in a scratch folder whose orbit.json holds `config`. */
-const inFolder = <A, E, R>(config: object | undefined, body: (registry: Tool.Interface, folder: string) => Effect.Effect<A, E, R>) =>
+const inFolder = <A, E, R>(
+  config: object | undefined,
+  body: (registry: Tool.Interface, folder: string) => Effect.Effect<A, E, R>,
+) =>
   Effect.acquireUseRelease(
     Effect.promise(() => tmpdir()),
     (tmp) =>
@@ -245,7 +251,12 @@ describe("ShellTool output cap", () => {
           expect(head).toStartWith("output-start")
           expect(head).not.toContain("output-end")
           expect(head.length).toBeLessThanOrEqual(30_000)
-          expect(result.persisted).toMatchObject({ session: sessionID, parts: 1, size: overflowBytes(40_000), format: 1 })
+          expect(result.persisted).toMatchObject({
+            session: sessionID,
+            parts: 1,
+            size: overflowBytes(40_000),
+            format: 1,
+          })
           const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
           expect(saved).toStartWith("output-start")
           expect(saved).toEndWith("output-end")
@@ -384,6 +395,49 @@ describe("ShellTool output cap", () => {
     { timeout: 180_000 },
   )
 
+  // A replay of the same call keeps the copy saved first: the link onto that name fails, and so does the copy after it.
+  // Fails when the copy's refusal of an existing name is taken for a failure, which sends the head whole.
+  shellIt.live(
+    "keeps the first saved copy when the same call is settled again",
+    () =>
+      inFolder(undefined, (registry) =>
+        Effect.gen(function* () {
+          const messageID = SessionMessage.ID.create()
+          const first = yield* settled(registry, call({ command: overflowCommand(40_000) }, "call-replay", messageID))
+          const second = yield* settled(registry, call({ command: overflowCommand(45_000) }, "call-replay", messageID))
+          expect(first.persisted?.parts).toBe(1)
+          expect(second.persisted?.name).toBe(first.persisted?.name ?? "")
+          expect((yield* Effect.promise(() => fs.stat(second.saved ?? ""))).size).toBe(overflowBytes(40_000))
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  // Class 7: neither a link nor a copy can be made in a session folder nobody may write to, so the head goes whole and
+  // nothing is marked. Fails when a failed copy is ignored, which marks a file that is not there. Permissions do not
+  // bind root, and Windows has no mode bits, so this runs on Linux as a person who is not root (CI and the Docker gate).
+  if (!isWindows && process.getuid?.() !== 0)
+    shellIt.live(
+      "sends the head whole when the saved copy cannot be made",
+      () =>
+        inFolder(undefined, (registry) =>
+          Effect.gen(function* () {
+            const toolOutput = yield* ToolOutput.Service
+            const folder = path.join(toolOutput.root, sessionID)
+            yield* Effect.promise(() => fs.mkdir(folder, { recursive: true }))
+            yield* Effect.promise(() => fs.chmod(folder, 0o500))
+            const result = yield* settled(registry, call({ command: overflowCommand(40_000) })).pipe(
+              Effect.ensuring(Effect.promise(() => fs.chmod(folder, 0o700))),
+            )
+            expect(result.persisted).toBeUndefined()
+            expect(text(result.outcome)).toStartWith("output-start")
+            expect(text(result.outcome)).not.toContain("output-end")
+            expect(yield* Effect.promise(() => fs.readdir(folder))).toEqual([])
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+
   // Fails on the base, which always writes "When output is large ..." without a number.
   const advertised = (config: object | undefined) =>
     inFolder(config, () =>
@@ -399,7 +453,10 @@ describe("ShellTool output cap", () => {
           tools: {
             Bash: {
               description: "",
-              input: { type: "object", properties: { timeout: { type: "integer" }, run_in_background: { type: "boolean" } } },
+              input: {
+                type: "object",
+                properties: { timeout: { type: "integer" }, run_in_background: { type: "boolean" } },
+              },
             },
             Agent: {
               description: SubagentTool.description,
@@ -409,7 +466,10 @@ describe("ShellTool output cap", () => {
         } as never)
         const shell = event.tools.Bash ?? event.tools.PowerShell
         return {
-          shell: { description: shell?.description ?? "", properties: Object.keys((shell?.input as { properties: object }).properties) },
+          shell: {
+            description: shell?.description ?? "",
+            properties: Object.keys((shell?.input as { properties: object }).properties),
+          },
           agent: {
             description: event.tools.Agent?.description ?? "",
             properties: Object.keys((event.tools.Agent?.input as { properties: object }).properties),
@@ -483,7 +543,8 @@ describe("ShellTool output cap", () => {
           const started = yield* Deferred.make<void>()
           const running = yield* executeTool(registry, {
             ...call({ command: startThenDone }),
-            progress: (update) => (typeof update.shellID === "string" ? Deferred.succeed(started, undefined) : Effect.void),
+            progress: (update) =>
+              typeof update.shellID === "string" ? Deferred.succeed(started, undefined) : Effect.void,
           }).pipe(Effect.forkIn(scope, { startImmediately: true }))
           yield* Deferred.await(started)
           yield* Effect.sleep(Duration.millis(200))
@@ -584,6 +645,81 @@ describe("ShellTool output cap", () => {
     { timeout: 30_000 },
   )
 })
+
+// A folder on another volume than the test's temporary folder, where the machine has one: tmpfs on Linux, or on Windows
+// the drive of the checkout (its ignored `tmp` folder).
+const otherVolume = await (async () => {
+  const device = (await fs.stat(os.tmpdir())).dev
+  const candidate = isWindows ? path.join(import.meta.dir, "..", "tmp") : "/dev/shm"
+  if (isWindows) await fs.mkdir(candidate, { recursive: true })
+  const stat = await fs.stat(candidate).catch(() => undefined)
+  return stat?.isDirectory() && stat.dev !== device ? candidate : undefined
+})()
+
+/** The temporary data folder of `tempGlobalLayer`, with its `shell` folder linked to a folder on `volume`. */
+const linkedShellGlobal = (volume: string) =>
+  Layer.unwrap(
+    Effect.acquireRelease(
+      Effect.promise(async () => {
+        const tmp = await tmpdir()
+        const shells = await fs.mkdtemp(path.join(volume, "orbit-core-volume-"))
+        await fs.mkdir(path.join(tmp.path, "data"), { recursive: true })
+        await fs.symlink(shells, path.join(tmp.path, "data", Shell.DIRECTORY), "junction")
+        return { tmp, shells }
+      }),
+      (made) =>
+        Effect.promise(async () => {
+          await made.tmp[Symbol.asyncDispose]()
+          await fs.rm(made.shells, { recursive: true, force: true })
+        }),
+    ).pipe(
+      Effect.map((made) => {
+        const data = path.join(made.tmp.path, "data")
+        return Global.layerWith({
+          data,
+          cache: path.join(made.tmp.path, "cache"),
+          config: path.join(made.tmp.path, "config"),
+          state: path.join(made.tmp.path, "state"),
+          tmp: path.join(made.tmp.path, "tmp"),
+          bin: path.join(made.tmp.path, "cache", "bin"),
+          log: path.join(data, "log"),
+          repos: path.join(data, "repos"),
+        })
+      }),
+    ),
+  )
+
+// The shell file is on another volume than the session's tool-output folder, so no hard link can be made and the saved
+// copy is a copy. Fails when a failed link saves nothing, which sends the head whole. Runs where the machine has a second
+// volume: Linux CI, the Docker gate and Windows CI (the checkout's drive is not the temporary folder's).
+if (otherVolume !== undefined)
+  it.live(
+    "copies the output to the session's folder when the shell file is on another volume",
+    () =>
+      inFolder(undefined, (registry) =>
+        Effect.gen(function* () {
+          const result = yield* settled(registry, call({ command: overflowCommand(40_000) }))
+          expect(text(result.outcome)).toStartWith("output-start")
+          expect(result.persisted).toMatchObject({ parts: 1, size: overflowBytes(40_000) })
+          const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
+          expect(saved).toStartWith("output-start")
+          expect(saved).toEndWith("output-end")
+          // A copy, not a link: the shell's own file is on the other volume.
+          expect((yield* Effect.promise(() => fs.stat(result.saved ?? ""))).nlink).toBe(1)
+        }),
+      ).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(nodes, [
+            SessionExecution.node.replace(executionNode),
+            Permission.node.replace(permissionLayer({ assert: () => Effect.void })),
+            Global.node.replace(linkedShellGlobal(otherVolume)),
+            offlineModels,
+            PluginSupervisor.node.replace(shellPluginSupervisor),
+          ]),
+        ),
+      ),
+    { timeout: 60_000 },
+  )
 
 // FU-M3-152, class 12: a moved command is watched. Fails on the base, which has no `Shell.nodeWith` (and no watchdog).
 // The harness is built inside the test, with a background limit of 256 KiB checked every 50 ms.
