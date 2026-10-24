@@ -98,6 +98,18 @@ const HeadlessParams = {
     ),
     Flag.optional,
   ),
+  toolLabels: Flag.boolean("tool-labels").pipe(
+    Flag.withDescription(
+      'Opt-in, with --input-format stream-json: after each finished batch of tool calls, ask the side model for a short label and print it as a {"type":"tool_label","messageID","toolIDs","label"} line before the result. Each label is a model call and spends tokens',
+    ),
+    Flag.withDefault(false),
+  ),
+  promptSuggestions: Flag.boolean("prompt-suggestions").pipe(
+    Flag.withDescription(
+      'Opt-in, with --input-format stream-json: after each result, ask the session\'s model what you might type next and print it as a {"type":"prompt_suggestion","suggestion"} line. Each suggestion sends the conversation to the model and spends tokens',
+    ),
+    Flag.withDefault(false),
+  ),
 }
 
 // The flags that only `orb -p` takes, which the root command lists so that --help shows them.
@@ -105,7 +117,7 @@ const PrintParams = {
   ...HeadlessParams,
   outputFormat: Flag.choice("output-format", ["text", "json", "stream-json"]).pipe(
     Flag.withDescription(
-      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} (a run that fails before its prompt is sent prints only the result line) and ending with the result line. The result object has type "result", sessionID, is_error, subtype, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents',
+      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} (a run that fails before its prompt is sent prints only the result line) and ending with the result line. The result object has type "result", sessionID, is_error, subtype, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents. --tool-labels and --prompt-suggestions add tool_label and prompt_suggestion lines',
     ),
     Flag.optional,
   ),
@@ -1009,6 +1021,8 @@ export const PrintBooleanFlags: Readonly<Record<string, string | undefined>> = {
   bare: undefined,
   thinking: undefined,
   "include-partial-messages": undefined,
+  "tool-labels": undefined,
+  "prompt-suggestions": undefined,
   verbose: undefined,
   "print-logs": undefined,
 }
