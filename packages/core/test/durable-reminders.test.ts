@@ -1939,6 +1939,48 @@ describe("the rebuild after a restart", () => {
     40_000,
   )
 
+  // Review fix loop 8: the rebuild's reads and the watched files' checks each start while their budget lasts and keep
+  // their whole share past it. Each read here takes most of a share, so with eight at a time a third round of reads
+  // starts just before each budget ends: the rebuild's reads of the edited files take about 1.35 budgets, and the
+  // checks of the written files as long again, longer than two budgets and the comparisons' time. The producer's
+  // deadline covers one share past each budget, so every written file is still reported.
+  it.live("the producer's deadline covers a rebuild and checks that each run one share past their budget", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const budget = 12_000
+      const edited = Array.from({ length: 17 }, (_, index) => h.inside(`edited-${index}.txt`))
+      const written = Array.from({ length: 17 }, (_, index) => h.inside(`written-${index}.txt`))
+      yield* Effect.promise(() => Promise.all([...edited, ...written].map((file) => fs.writeFile(file, text(["now"])))))
+      const real = yield* ReadToolFileSystem.Service
+      const run = yield* producer(
+        h,
+        (file, resource, page) => Effect.sleep(budget * 0.45).pipe(Effect.andThen(real.read(file, resource, page))),
+        undefined,
+        budget,
+      )
+      const started = Date.now()
+      const found = yield* run(
+        history([
+          assistant("msg_0000000001", [
+            ...edited.map((file, index) =>
+              toolPart(`e${index}`, "Edit", { file_path: file, old_string: "a", new_string: "b" }, {}, T(60)),
+            ),
+            ...written.map((file, index) =>
+              toolPart(`w${index}`, "Write", { file_path: file, content: text(["then"]) }, {}, T(60)),
+            ),
+          ]),
+        ]),
+      )
+      expect(Date.now() - started).toBeGreaterThan(2 * budget + 5_500)
+      expect(
+        Option.getOrElse(found, () => [])
+          .map((entry) => entry.data?.label)
+          .toSorted(),
+      ).toEqual(written.toSorted().map((file) => `Changed lines of ${file}`))
+    }),
+    60_000,
+  )
+
   it.live("refuses a device or pipe spelling in history before it opens anything", () =>
     Effect.gen(function* () {
       const h = yield* setup()
