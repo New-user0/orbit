@@ -445,6 +445,33 @@ describe("MemoryStore.scan", () => {
       }),
     )
 
+  // Class 6: the folder itself is asked about before its real path is read, since resolving a folder that is a link to a
+  // share connects to the host. The plain folder in the same run is the control.
+  if (process.platform === "win32" && canLinkFile)
+    it.live(
+      "lists nothing, and touches no share, for a memory folder that is a link to a share",
+      () =>
+        Effect.gen(function* () {
+          const root = (yield* tmpdirScoped()).path
+          const linked = path.join(root, "linked")
+          yield* Effect.promise(async () => {
+            await write(path.join(root, "plain", "kept.md"), typed("control"), 1_000_000)
+            await fs.symlink("\\\\203.0.113.173\\share\\mem", linked, "dir")
+          })
+          const recorded = recordedFileSystem()
+          const started = Date.now()
+          const headers = yield* MemoryStore.scan(linked).pipe(Effect.provide(recorded.layer))
+          expect(Date.now() - started).toBeLessThan(15_000)
+          expect(headers).toEqual([])
+          const named = recorded.calls.filter((call) => call.toLowerCase().includes(` ${linked.toLowerCase()}`))
+          expect(named.length).toBeGreaterThan(0)
+          expect(named.filter((call) => !call.startsWith("readLink "))).toEqual([])
+          const control = yield* MemoryStore.scan(path.join(root, "plain")).pipe(Effect.provide(recorded.layer))
+          expect(control.map((item) => item.file)).toEqual(["kept.md"])
+        }),
+      { timeout: 60_000 },
+    )
+
   // Class 4: the file read is the real path that was checked, so a link changed after the check cannot point the read
   // elsewhere. The header still names the file as the folder spells it.
   if (canLinkFile)

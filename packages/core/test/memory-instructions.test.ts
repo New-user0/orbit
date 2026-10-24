@@ -399,6 +399,76 @@ describe("the memory guide source", () => {
       expect(out.text).not.toContain("DEFAULT-INDEX")
     }),
   )
+
+  // Classes 4 and 6: resolving a configured folder whose path crosses a link to a share connects to the host the link
+  // names, so such a folder is refused before it is resolved and the default folder is used, as for any refused value.
+  // The recorded file system is the oracle: no call but a readLink names the link or a path below it. A plain configured
+  // folder, which the guide names and creates, is the control.
+  if (process.platform === "win32" && canLinkFile)
+    it.live(
+      "keeps the default folder, and touches no share, when memory.directory leads through a link to a share",
+      () =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          const linked = path.join(l.root, "memlink")
+          yield* Effect.promise(() => fs.symlink("\\\\203.0.113.170\\share\\mem", linked, "dir"))
+          const recorded = recordedFileSystem()
+          const started = Date.now()
+          const out = yield* Effect.gen(function* () {
+            yield* sessions(l)
+            return yield* readInitial(yield* load(first))
+          }).pipe(provide(l, [configured("local", { directory: linked })], undefined, recorded.layer))
+          expect(Date.now() - started).toBeLessThan(15_000)
+          const named = recorded.calls.filter((call) => call.toLowerCase().includes(` ${linked.toLowerCase()}`))
+          expect(named.length).toBeGreaterThan(0)
+          expect(named.filter((call) => !call.startsWith("readLink "))).toEqual([])
+          expect(out.text).toContain(l.memory)
+          expect(out.text).not.toContain(linked)
+          const plain = path.join(l.root, "plain-memory")
+          const control = yield* Effect.gen(function* () {
+            yield* sessions(l)
+            return yield* readInitial(yield* load(first))
+          }).pipe(provide(l, [configured("local", { directory: plain })], undefined, recordedFileSystem().layer))
+          expect(control.text).toContain(plain)
+          expect(yield* exists(plain)).toBe(true)
+        }),
+      { timeout: 60_000 },
+    )
+
+  // The same question when the guide creates the folder: a link to a share made on the folder's way after the Location
+  // started is not followed to make it. The guide is still given, as for any folder that cannot be made. The recorded file
+  // system notes a call when its effect is made, so the whole record is searched for the folder's creation.
+  if (process.platform === "win32" && canLinkFile)
+    it.live(
+      "creates no memory folder through a link to a share made after the Location started",
+      () =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          const later = path.join(l.root, "later")
+          const chosen = path.join(later, "memory")
+          const recorded = recordedFileSystem()
+          const out = yield* Effect.gen(function* () {
+            yield* sessions(l)
+            yield* Effect.promise(() => fs.symlink("\\\\203.0.113.170\\share", later, "dir"))
+            const started = Date.now()
+            const value = yield* readInitial(yield* load(first))
+            return { value, elapsed: Date.now() - started }
+          }).pipe(provide(l, [configured("local", { directory: chosen })], undefined, recorded.layer))
+          expect(out.elapsed).toBeLessThan(15_000)
+          expect(recorded.calls.filter((call) => call.toLowerCase() === `readlink ${later.toLowerCase()}`)).not.toEqual(
+            [],
+          )
+          expect(recorded.calls.filter((call) => call.startsWith("makeDirectory "))).toEqual([])
+          expect(out.value.text).toContain(chosen)
+          const plain = path.join(l.root, "plain-later", "memory")
+          yield* Effect.gen(function* () {
+            yield* sessions(l)
+            return yield* readInitial(yield* load(first))
+          }).pipe(provide(l, [configured("local", { directory: plain })], undefined, recordedFileSystem().layer))
+          expect(yield* exists(plain)).toBe(true)
+        }),
+      { timeout: 60_000 },
+    )
 })
 
 describe("memory switched off", () => {

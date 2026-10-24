@@ -6,6 +6,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Hash } from "@orbit/util/hash"
+import { LinkShare } from "@orbit/util/link-share"
 import { heading, neutralize } from "@orbit/util/reminder-text"
 import { Bus } from "../bus.js"
 import { ConfigInstructionFile } from "../config/instruction-file.js"
@@ -84,7 +85,12 @@ const layer = Layer.effect(
     yield* discovery.addRescan(Effect.sync(() => frozen.clear()))
 
     let warned = false
-    const ensureFolder = fs.makeDirectory(store.folder, { recursive: true }).pipe(
+    // A folder whose path has come to cross a link to a share since the Location started is not made, since making it
+    // would connect to the host (class 6); that counts as a folder that cannot be made.
+    const ensureFolder = LinkShare.blocked(fs, store.folder).pipe(
+      Effect.flatMap((stop) =>
+        stop ? Effect.fail("its path leads to a share") : fs.makeDirectory(store.folder, { recursive: true }),
+      ),
       Effect.catchCause((cause) =>
         warned
           ? Effect.void

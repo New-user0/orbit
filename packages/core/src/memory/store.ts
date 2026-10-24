@@ -161,18 +161,19 @@ export interface Header {
  * The memory files below `folder`, newest first and at most `MAX_SCAN_FILES`, each with the description and type of the
  * front matter in its first `FRONT_MATTER_LINES` lines. Every `MEMORY.md` and every file that is not Markdown is left
  * out, and so is a file whose real path is not in the folder's real path, since a link inside the folder can lead
- * anywhere (class 4), and a link that leads to a share, which is left unresolved (class 6): a link entry is asked about
- * before it is resolved, since resolving a link to a share connects to its host, and one set of link answers serves the
- * whole scan, so the parts above the folder are read once. Each file is read at the real path that was checked, not at
+ * anywhere (class 4), and a link that leads to a share, which is left unresolved (class 6): the folder and each link
+ * entry are asked about before they are resolved, since resolving a link to a share connects to its host, and one set of
+ * link answers serves the whole scan, so the parts above the folder are read once. Each file is read at the real path that was checked, not at
  * the spelled one, which a link could lead elsewhere. A file that cannot be read is left out; a folder that is not there
  * gives none.
  */
 export const scan = Effect.fn("MemoryStore.scan")(function* (folder: string) {
   const fs = yield* FSUtil.Service
+  const reads: LinkShare.Reads = new Map()
+  if (yield* LinkShare.blocked(fs, folder, reads)) return []
   const root = yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => undefined))
   if (root === undefined) return []
   const listed = yield* walk(fs, folder, [])
-  const reads: LinkShare.Reads = new Map()
   const dated = yield* Effect.forEach(
     listed,
     (item) =>
@@ -271,7 +272,10 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const fs = yield* FSUtil.Service
     const entries = yield* config.entries()
-    const chosen = directorySetting(entries, global.home)
+    const valid = directorySetting(entries, global.home)
+    // A folder whose path crosses a link to a share is refused like an invalid value, before anything resolves it, since
+    // resolving it would connect to the host (class 6).
+    const chosen = valid !== undefined && !(yield* LinkShare.blocked(fs, valid)) ? valid : undefined
     const raw = directoryRaw(entries)
     if (raw !== undefined && chosen === undefined)
       yield* Effect.logWarning("memory.directory not used: it must be an absolute local folder", { directory: raw })
