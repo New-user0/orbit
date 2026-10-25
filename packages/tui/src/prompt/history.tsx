@@ -177,6 +177,8 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
     let fileBytes = 0
     // Appends and rewrites run one after another: an append that lands after a rewrite started would restore a trimmed entry.
     let writes: Promise<unknown> = Promise.resolve()
+    // The entry this process's newest append added; a skipped repeat added none. Only this entry can be forgotten.
+    let added: PromptInfo | undefined
     const enqueue = (write: () => Promise<unknown>) => {
       writes = writes.then(write).catch(() => {})
     }
@@ -215,9 +217,11 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         const entry = { ...structuredClone(unwrap(item)), directory, time: Date.now() }
         // Time is not part of what makes a prompt a repeat.
         if (isDuplicateEntry(store.history.at(-1), entry)) {
+          added = undefined
           setStore("index", 0)
           return
         }
+        added = entry
         let trimmed = false
         setStore(
           produce((draft) => {
@@ -238,16 +242,33 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         }
         enqueue(() => appendText(historyPath, line))
       },
-      /** Drops the newest entry when it is `text`: an interrupted prompt that went back into the input. */
+      /**
+       * Drops the entry the newest append added when it is `text`: an interrupted prompt that went back into the input.
+       * A repeat that append skipped added nothing, so the older entry it matched is never forgotten.
+       */
       forget(text: string) {
-        if (store.history.at(-1)?.text !== text) return
+        const entry = added
+        if (entry?.text !== text) return
+        added = undefined
         setStore(
           produce((draft) => {
-            draft.history.pop()
+            draft.history = draft.history.filter((item) => item.time !== entry.time || item.text !== entry.text)
             draft.index = 0
           }),
         )
-        rewrite(store.history)
+        // The file is shared with other TUI processes, so it is read again and only this entry's line is removed;
+        // lines they appended since this process loaded the file stay.
+        const line = JSON.stringify(savedEntry(entry))
+        enqueue(async () => {
+          const lines = (await readText(historyPath)).split("\n").filter(Boolean)
+          const index = lines.lastIndexOf(line)
+          const content = lines
+            .filter((_, at) => at !== index)
+            .map((kept) => kept + "\n")
+            .join("")
+          fileBytes = Buffer.byteLength(content)
+          await writeText(historyPath, content)
+        })
       },
     }
   },

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
-import { conversation, linesWith, listHeading, rewindApp, until } from "./fixture/rewind"
+import { conversation, linesWith, listHeading, rewindApp, sessionID, until } from "./fixture/rewind"
 
 // clients-ux-5 part 2: every way into the rewind picker (class 12). `/rewind` and its alias `/checkpoint`, Esc pressed
 // twice on an empty prompt of an idle session, and the message dialog's Rewind, which opens step 2 for that prompt or,
@@ -227,31 +227,62 @@ test("Never mind on a picker opened from the message dialog closes it", async ()
   expect(setup.actions()).toEqual([])
 })
 
-// The interrupted prompt goes back into the input, so the history entry it added is dropped and Up does not offer it
-// twice; the entries before it stay.
+// The interrupted prompt goes back into the input, so the history entry its submit added is dropped and Up does not
+// offer it twice; the entries before it stay. The prompt is sent from this window, as only its own entry is dropped.
 test("interrupting a prompt whose reply has nothing in it drops the prompt's history entry", async () => {
   await using state = await tmpdir()
-  const entry = (text: string) => JSON.stringify({ text, files: [], agents: [], pasted: [] }) + "\n"
   const history = Bun.file(`${state.path}/prompt-history.jsonl`)
-  await Bun.write(history, entry("Earlier") + entry("Quick question"))
+  await Bun.write(history, JSON.stringify({ text: "Earlier", files: [], agents: [], pasted: [] }) + "\n")
   await using setup = await rewindApp({
     state: state.path,
-    running: true,
-    messages: [...conversation, quick, reply([], false)],
+    answer: (request) => {
+      if (request.method !== "POST" || !request.path.endsWith("/prompt")) return undefined
+      const item = { type: "user", payload: { text: request.body.text }, delivery: "steer" }
+      return json({ data: { id: request.body.id, sessionID, time: { created: Date.now() }, ...item } })
+    },
   })
-  // Esc interrupts only once the app knows the session runs, which its interrupt hint shows.
-  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+  await setup.waitForFrame(loaded)
+  await setup.mockInput.typeText("Quick question")
+  setup.mockInput.pressEnter()
+  await until(() => setup.requests.some((request) => request.path.endsWith("/prompt")), "the prompt request")
+  const sent = setup.requests.find((request) => request.path.endsWith("/prompt"))!
+  // The server delivers it and starts working on it: the prompt leaves the inbox and becomes the newest message, with
+  // no reply yet. Events are handled in order, so the interrupt hint shows only once the delivery is in too.
+  setup.events.emit({
+    id: "evt_quick_delivered",
+    created: Date.now(),
+    type: "session.inbox.delivered",
+    durable: { aggregateID: sessionID, seq: 1, version: 1 },
+    data: { sessionID, inboxID: sent.body.id },
+  })
+  setup.events.emit({
+    id: "evt_quick_started",
+    created: Date.now(),
+    type: "session.execution.started",
+    durable: { aggregateID: sessionID, seq: 2, version: 1 },
+    data: { sessionID },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("esc interrupt"), {
     maxPasses: 200,
   })
-  setup.mockInput.pressEscape()
-  setup.mockInput.pressEscape()
-  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
-  await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
   const texts = async () =>
     (await history.text())
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line).text)
+  // The file is written in the background, so it is read until it holds the submit's entry.
+  for (const _ of Array.from({ length: 200 })) {
+    if ((await texts()).join() === "Earlier,Quick question") break
+    await Bun.sleep(20)
+  }
+  expect(await texts()).toEqual(["Earlier", "Quick question"])
+  setup.mockInput.pressEscape()
+  setup.mockInput.pressEscape()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([
+    `stage ${JSON.stringify({ messageID: sent.body.id, files: false })}`,
+  ])
+  await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
   // The file is rewritten in the background, so it is read until it holds the result.
   let saved: string[] = []
   for (const _ of Array.from({ length: 200 })) {
