@@ -18,6 +18,17 @@ import { serve } from "./fixture/serve"
 
 setDefaultTimeout(120_000)
 
+// What part 2 adds to the controller, its updates and its items. The tests reach them through these widened types, so the
+// file typechecks before the build (when the calls fail) and after it.
+type Spec = {
+  reply(id: string, decision: "once" | "always" | "reject", content?: string): Promise<boolean>
+  folder(sessionID: string): Promise<string | undefined>
+  changes(messageID: string): Promise<ReadonlyArray<Record<string, unknown>> | undefined>
+  restore(messageID: string, confirm: (question: unknown) => Promise<boolean>): Promise<void>
+}
+type SpecUpdate = Update | { readonly type: "prompt" }
+type SpecItem = Item & { readonly messageID?: string; readonly revisable?: boolean }
+
 // The scripted model: a prompt `CALL {"name":…,"arguments":…}` makes it call that tool once; anything else, and a tool
 // result, ends the step with a line of text.
 const llm = Bun.serve({
@@ -289,8 +300,8 @@ async function repo() {
 }
 
 async function open(directory: string, answer: TrustAnswer) {
-  const updates: Update[] = []
-  const items = new Map<string, Item>()
+  const updates: SpecUpdate[] = []
+  const items = new Map<string, SpecItem>()
   const questions: unknown[] = []
   const requests: { method: string; path: string; body?: string }[] = []
   const client = Orbit.make({
@@ -323,7 +334,7 @@ async function open(directory: string, answer: TrustAnswer) {
   // The event stream must be connected before the prompt so no event is missed.
   await Bun.sleep(500)
   return {
-    controller,
+    controller: controller as unknown as Omit<Controller, "reply"> & Spec,
     updates,
     items,
     questions,
@@ -331,7 +342,7 @@ async function open(directory: string, answer: TrustAnswer) {
     async pending() {
       const found = await until(() =>
         [...items.values()].find(
-          (item): item is Extract<Item, { type: "permission" }> =>
+          (item): item is Extract<SpecItem, { type: "permission" }> =>
             item.type === "permission" && item.status === "pending",
         ),
       )

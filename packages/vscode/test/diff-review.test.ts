@@ -12,17 +12,44 @@ import os from "node:os"
 import path from "node:path"
 import { permissionItem } from "../src/controller"
 import type { FileChange } from "../src/protocol"
-import {
-  changes,
-  disk,
-  notice,
-  restoreQuestion,
-  review,
-  Reviews,
-  tabName,
-  type Disk,
-  type Folders,
-} from "../src/review"
+
+// The contract of `src/review.ts`, which part 2 adds. Until it exists the import below fails and so does every test here;
+// typed through this contract, the file typechecks before and after the build. The build may replace the dynamic import
+// with a plain one.
+type Disk = {
+  realpath(file: string): Promise<string>
+  lstat(file: string): Promise<unknown>
+  readFile(file: string): Promise<string>
+}
+type Folders = { readonly session: string | undefined; readonly roots: ReadonlyArray<string> }
+type Review =
+  | { kind: "diff"; file: string; before: string; after: string; editable: boolean }
+  | { kind: "text"; file: string; patch: string; reason: "untrusted" | "outside" | "changed" }
+type Answer = { sessionID: string; requestID: string; decision: "once" | "reject"; content?: string }
+type Rewind = { canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number }
+type Contract = {
+  disk: Disk
+  review(item: ReturnType<typeof permissionItem>, folders: Folders, disk?: Disk): Promise<Review[]>
+  notice(review: Extract<Review, { kind: "text" }>): string
+  tabName(file: string, suffix?: string): string
+  Reviews: new () => {
+    open(input: { file: string; request?: { id: string; sessionID: string }; editable: boolean }): string
+    saved(name: string, text: string): Answer | undefined
+    closed(name: string): Answer | undefined
+    rejected(name: string): Answer | undefined
+    answered(requestID: string): string[]
+    closeAll(): string[]
+  }
+  changes(
+    diffs: ReadonlyArray<{ file: string; status: string; patch: string }>,
+  ): Array<
+    { file: string; status: string; before: string; after: string } | { file: string; status: string; patch: string }
+  >
+  restoreQuestion(dryRun: Rewind): { ok: true; message: string; detail: string } | { ok: false; text: string }
+}
+const { changes, disk, notice, restoreQuestion, review, Reviews, tabName }: Contract = await import(
+  `../src/${"review"}`
+)
 
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-vscode-diff-review-")))
 const session = path.join(root, "session")
@@ -77,14 +104,16 @@ function recorded() {
 }
 
 function item(files: ReadonlyArray<unknown>, revisable = true) {
-  return permissionItem({
+  // The request as the server lists it, `revisable` included (part 1).
+  const request = {
     id: "per_review",
     sessionID: "ses_review",
     action: "Edit",
     resources: ["a.txt"],
     revisable,
     metadata: { files },
-  })
+  }
+  return permissionItem(request)
 }
 
 const folders: Folders = { session, roots: [root] }
@@ -196,8 +225,8 @@ test.skipIf(process.platform !== "win32")(
 
 describe("containment needs the session's folder and a workspace root", () => {
   for (const row of [
-    { name: "second root", roots: [other, session], expect: "diff" },
-    { name: "no root", roots: [other], expect: "text" },
+    { name: "second root", roots: [other, session], expect: "diff" as const },
+    { name: "no root", roots: [other], expect: "text" as const },
   ])
     test(row.name, async () => {
       const disk = recorded()
