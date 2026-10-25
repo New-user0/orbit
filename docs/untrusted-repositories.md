@@ -896,10 +896,26 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/permission-tool-output.test.ts` (other sessions of a lineage, the flat files of earlier builds, `..`, a sibling
   prefix, a link out, a crafted session ID, Windows letter case) and the `saved tool results` rows of
   `test/session-runner.test.ts`.
+- The message budget (`SessionMessageBudget`, `packages/core/src/session/runner/message-budget.ts`, run by
+  `SessionRunnerLLM` before each request for every client and subagent): when the newest step's results pass
+  `tool_output.max_message_chars`, the largest are saved through the same door as a saved result (`ToolOutput.persist`,
+  so the same ID shapes, `lstat` refusal of a linked folder and exclusive create apply, classes 4 and 5) and recorded as
+  `session.tool.overridden` with the session, the one-segment file name and the format, never a path. It reads nothing
+  that a folder supplies, and an untrusted folder cannot set the key (class 8). The projected `override` is data once a
+  session is imported or forked: it is stored as any JSON so one bad entry costs only its own result, and lowering
+  decodes it strictly and renders the wrapper from the stored content without reading the disk, so a session or name
+  that climbs out, a device name, an unknown format or a string sends the stored result and names no path (classes 5
+  and 7); a look-alike of the wrapper in the preview is escaped (class 9). A sanitized export drops the override along
+  with the content it described (classes 7 and 9). Side queries lower overrides and record none (class 12), and the
+  refusal of a request that no longer fits measures the request as it is sent (class 3). Proof: the `message budget`
+  rows of `test/session-runner.test.ts` (an imported `../../.ssh/id_rsa` with a marker file, a linked session folder,
+  automatic compaction off), the `override` rows of `test/tool-output-lowering.test.ts`,
+  `test/session-message-budget.test.ts`, the override rows of `test/session-compaction.test.ts`, the sanitized export
+  row of `test/session-create.test.ts` and `test/config/trust.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,
-  written when a session is deleted) that no live session, scratchpad or stored saved-result marker names. Every
+  written when a session is deleted) that no live session, scratchpad, stored saved-result marker or message-budget override names. Every
   database on the machine shares those roots, so a folder this database never removed stays at any age. A family whose
   stats cannot be folded (message data that is not JSON) stays with one log line (class 7). It reads nothing a folder
   supplies; the period comes from the config of the server's own folder, where an untrusted project's file is not read
@@ -911,7 +927,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   a row whose ID cannot name a folder or whose clock does not decode keeps its family with one log line (classes 5 and
   7). A config document of any scope (user, home, project, local, the flag file, `ORBIT_CONFIG_CONTENT`, remote and the
   managed settings files) that does not parse, or one rejected while the period is set, skips the pass, on a reload as on the first load; a value set twice of which one is kept is not a rejection (class 7). A source whose content could not be obtained counts as one that does not parse and skips the pass too: a remote document whose fetch fails, a well-known list that cannot be read, and a file that is there but cannot be read (class 7, error and timeout). A row whose clock is ahead of now, or stored as text, does not put the pass off. Proof:
-  `test/session-retention.test.ts` (the folder, link, case, other-database, decode and fold rows, each with a control,
+  `test/session-retention.test.ts` (the folder, override, link, case, other-database, decode and fold rows, each with a control,
   and the table of link spellings in both roots), `test/config/cleanup-period.test.ts` (with its table of scopes) and the
   `cleanup_period_days` row of `test/config/trust.test.ts`; in `packages/cli`, the bare row of
   `test/server-process.test.ts`.

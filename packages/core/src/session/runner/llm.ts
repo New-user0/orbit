@@ -39,6 +39,7 @@ import { llmClient } from "../../effect/app-node-platform.js"
 import { StepFailedError } from "../error.js"
 import { SessionRunnerRetry } from "./retry.js"
 import { SessionStep } from "./step.js"
+import { SessionMessageBudget } from "./message-budget.js"
 import { ToolOutput } from "../../tool-output.js"
 import { Plugin } from "../../plugin.js"
 import { ToolNames } from "../../tool/names.js"
@@ -105,6 +106,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
+    const config = yield* Config.Service
     const lifecycle = yield* LocationLifecycle.Service
     const store = yield* SessionStore.Service
     const context = yield* SessionContext.Service
@@ -117,6 +119,9 @@ const layer = Layer.effect(
     const turnEnd = yield* SessionTurnEnd.Service
     const reminders = yield* SessionReminders.Service
     const toolOutput = yield* ToolOutput.Service
+    // Every context check measures what the request carries: a result the message budget replaced counts as its wrapper.
+    const estimate = (loaded: SessionContext.Loaded) =>
+      SessionCompaction.estimateContext(loaded, reminders.minimal, toolOutput.root)
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -442,16 +447,28 @@ const layer = Layer.effect(
       while (true) {
         const current = yield* SessionTurn.current(db, sessionID)
         // Reuse boundary preparation once; retries refresh context without delivering more input.
-        const before =
+        let before =
           initial ??
           (yield* Effect.gen(function* () {
             selection = yield* prepareContext(sessionID)
             return yield* loadSelected(selection, current.fallback)
           }))
         initial = undefined
+        // Before automatic compaction, so its estimate measures the wrappers the request will carry. A result that carries
+        // an override is skipped, so a later pass of the step (a retry, a fallback switch, a compaction) keeps the choice.
+        if (
+          yield* SessionMessageBudget.apply({
+            bus,
+            toolOutput,
+            loaded: before,
+            limit:
+              Config.latest(yield* config.entries(), "tool_output")?.max_message_chars ?? ToolOutput.MAX_MESSAGE_CHARS,
+          })
+        )
+          before = yield* loadSelected(selection, current.fallback)
         if (compacted) {
           compacted = false
-          yield* report(before, SessionCompaction.estimateContext(before, reminders.minimal), true, breaker)
+          yield* report(before, estimate(before), true, breaker)
         }
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
         const limit = yield* turnLimit(before, current.options)
@@ -496,7 +513,7 @@ const layer = Layer.effect(
         if (
           !window.auto &&
           window.thresholds &&
-          SessionCompaction.estimateContext(loaded, reminders.minimal) >= window.thresholds.blocking
+          estimate(loaded) >= window.thresholds.blocking
         )
           return yield* new StepFailedError({
             error: {
@@ -680,7 +697,7 @@ const layer = Layer.effect(
     ) {
       const selected = yield* context.select(sessionID)
       const loaded = yield* loadSelected(selected, (yield* SessionTurn.current(db, sessionID)).fallback)
-      yield* report(loaded, SessionCompaction.estimateContext(loaded, reminders.minimal), true, breaker)
+      yield* report(loaded, estimate(loaded), true, breaker)
     }, (effect, sessionID) =>
       effect.pipe(
         Effect.catchCause((cause) =>

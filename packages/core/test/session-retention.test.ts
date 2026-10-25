@@ -633,6 +633,59 @@ describe("SessionRetention.prune: the folders that sessions name", () => {
     ),
   )
 
+  // A fork carries its source's message-budget overrides, which name the source's folder: that folder stays while the
+  // fork lives, as it does for a saved-result marker, and goes once nothing names it.
+  it.live("keeps a removed session's folder that a live result's override names", () =>
+    scenario((l) =>
+      Effect.gen(function* () {
+        const now = Date.now()
+        yield* row({ id: "ses_ret_oroot", updated: now })
+        yield* row({ id: "ses_ret_olive", updated: later() - DAY })
+        const database = yield* Database.Service
+        yield* database.db
+          .insert(SessionMessageTable)
+          .values(
+            messageRow(
+              "ses_ret_olive",
+              1,
+              assistant("msg_ret_olive", later() - DAY, [
+                SessionMessage.AssistantTool.make({
+                  type: "tool",
+                  id: "call_budget",
+                  name: "Grep",
+                  override: { session: "ses_ret_oroot", name: "msg_retbudget-call_budget-0123abcd.txt", format: 1 },
+                  state: SessionMessage.ToolStateCompleted.make({
+                    status: "completed",
+                    input: {},
+                    content: [{ type: "text", text: "large" }],
+                  }),
+                  time: { created: DateTime.makeUnsafe(later() - DAY) },
+                }),
+              ]),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        yield* folder(path.join(l.outputs, "ses_ret_oroot"))
+        yield* folder(path.join(l.outputs, "ses_ret_olive"))
+
+        yield* prune({ days: 30, now: later() })
+
+        expect(yield* remaining).toEqual(["ses_ret_olive"])
+        expect(yield* exists(path.join(l.outputs, "ses_ret_oroot", "keep.txt"))).toBe(true)
+        expect(yield* records).toEqual(["ses_ret_oroot"])
+
+        // Control: once the session that names it is gone, the folder goes.
+        const sessions = yield* Session.Service
+        yield* sessions.remove(SessionSchema.ID.make("ses_ret_olive"))
+        yield* prune({ days: 30, now: later() })
+
+        expect(yield* exists(path.join(l.outputs, "ses_ret_oroot"))).toBe(false)
+        expect(yield* records).toEqual([])
+      }),
+    ),
+  )
+
   // The roots are shared by every database on the machine: each channel (a source build is `local`) and `ORBIT_DB` have
   // their own. A pass in one database removes only the folders of sessions it removed itself, at any period, so another
   // database's shared session, and its session still inside the upgrade grace, keep their folders however old they are.

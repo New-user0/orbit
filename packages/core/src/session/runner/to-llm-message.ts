@@ -195,7 +195,10 @@ const toolResult = (
   toolOutput: string | undefined,
 ) => {
   if (tool.state.status === "completed") {
-    const saved = toolOutput === undefined ? undefined : savedOutput(tool.id, tool.state, toolOutput)
+    const saved =
+      toolOutput === undefined
+        ? undefined
+        : (savedOutput(tool.id, tool.state, toolOutput) ?? overriddenOutput(tool, tool.state, toolOutput))
     if (saved !== undefined)
       return ToolResultPart.make({
         id: tool.id,
@@ -219,6 +222,8 @@ const toolResult = (
     })
   }
   if (tool.state.status === "error") {
+    // The budget never replaces a failure, so an override on one comes from a history someone else wrote.
+    if (toolOutput !== undefined && tool.override !== undefined) refuseOverride(tool.id)
     return ToolResultPart.make({
       id: tool.id,
       name: toolName(tool),
@@ -266,6 +271,39 @@ const savedOutput = (id: string, state: SessionMessage.ToolStateCompleted, root:
     more: head.more,
   })
   return parts === texts.length ? wrapper : `${wrapper}\n${neutralizeToolText(texts.slice(parts).join("\n"))}`
+}
+
+const decodeOverride = Schema.decodeUnknownOption(ToolOutput.Override)
+
+/**
+ * The wrapper for a result the message budget saved, byte for byte the one a `persisted` marker gives, from the stored
+ * override and content alone: the size is the length of the text the file holds, so nothing reads the disk and every
+ * later request, a fork and a replay lower it alike. An override that does not decode, or that sits beside a file part,
+ * comes from a history someone else wrote; the result then goes as stored (classes 5 and 7).
+ */
+const overriddenOutput = (
+  tool: SessionMessage.AssistantTool,
+  state: SessionMessage.ToolStateCompleted,
+  root: string,
+) => {
+  if (tool.override === undefined) return undefined
+  const override = Option.getOrUndefined(decodeOverride(tool.override))
+  const texts = state.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+  if (override === undefined || texts.length !== state.content.length) return refuseOverride(tool.id)
+  const head = ToolOutput.savedPreview(texts)
+  return ToolOutput.wrapper({
+    file: path.join(root, override.session, override.name),
+    size: ToolOutput.savedText(texts).text.length,
+    preview: neutralizeToolText(head.text),
+    more: head.more,
+  })
+}
+
+const refuseOverride = (id: string) => {
+  if (!reported.has(id))
+    console.warn("a tool result's override does not apply, so the result is sent as stored", { id })
+  reported.add(id)
+  return undefined
 }
 
 const assistant = (
