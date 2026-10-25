@@ -897,6 +897,26 @@ describe("EditTool", () => {
     }),
   )
 
+  it.live("keeps a byte order mark that the replacement puts at the start of the file", () =>
+    withTempDir((tmp) => {
+      const target = path.join(tmp.path, "plain.txt")
+      return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, makeEditFixture(), (registry) =>
+            executeTool(registry, call({ file_path: "plain.txt", old_string: "before", new_string: "\uFEFFafter" })),
+          ),
+        ),
+        Effect.andThen(() => Effect.promise(() => fs.readFile(target))),
+        Effect.tap((bytes) =>
+          Effect.sync(() => {
+            expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+            expect(bytes.subarray(3).toString("utf8")).toBe("after\n")
+          }),
+        ),
+      )
+    }),
+  )
+
   it.live("serializes concurrent edit transactions", () =>
     withTempDir((tmp) => {
       const edit = makeEditFixture()

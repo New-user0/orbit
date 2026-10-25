@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { OrbitEvent } from "@orbit/client/promise"
 import { ACPTranslate } from "../../src/acp/translate"
 import {
+  assistantMessage,
   childCreated,
   delivered,
   durableEvent,
@@ -14,6 +15,7 @@ import {
   toolCalled,
   toolProgress,
   toolStarted,
+  toolSucceeded,
 } from "./wire-fixture"
 
 const root = "ses_root"
@@ -262,6 +264,84 @@ describe("acp turn translation", () => {
     ])
     expect(ACPTranslate.abandonTools(abandoned.state, ctx).outputs).toEqual([])
   })
+})
+
+// An approval can be answered with the person's own version of the file, which the tool writes instead of the model's
+// proposal. The completed call then shows the diff the tool recorded of what it wrote, live and when a loaded session
+// replays it, never one rebuilt from the model's input (class 8).
+describe("acp shows a completed Edit or Write as what ran", () => {
+  const place = "/workspace/a.txt"
+  const rows: ReadonlyArray<{
+    readonly name: string
+    readonly tool: string
+    readonly input: Record<string, string>
+    readonly files?: Array<{ file: string; patch: string }>
+    readonly shown?: { readonly oldText: string; readonly newText: string }
+  }> = [
+    {
+      name: "an Edit whose approval carried the person's version",
+      tool: "Edit",
+      input: { file_path: "a.txt", old_string: "beta", new_string: "BETA" },
+      files: [{ file: "a.txt", patch: "--- a.txt\n+++ a.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+REVISED\n" }],
+      shown: { oldText: "alpha\nbeta", newText: "alpha\nREVISED" },
+    },
+    {
+      name: "a Write whose approval carried the person's version",
+      tool: "Write",
+      input: { file_path: "a.txt", content: "proposed\n" },
+      files: [{ file: "a.txt", patch: "--- a.txt\n+++ a.txt\n@@ -0,0 +1,1 @@\n+revised\n" }],
+      shown: { oldText: "", newText: "revised" },
+    },
+    {
+      name: "an Edit that recorded no diff",
+      tool: "Edit",
+      input: { file_path: "a.txt", old_string: "beta", new_string: "BETA" },
+    },
+  ]
+  const diffs = (content: ReadonlyArray<{ readonly type: string }> | null | undefined) =>
+    (content ?? []).filter((item) => item.type === "diff")
+  const expected = (row: (typeof rows)[number]) => (row.shown ? [{ type: "diff", path: place, ...row.shown }] : [])
+
+  for (const row of rows) {
+    const metadata = { places: [place], ...(row.files ? { files: row.files } : {}) }
+
+    test(`${row.name}, live`, () => {
+      const result = started(
+        toolStarted(root, "call_ran", row.tool),
+        toolCalled(root, "call_ran", row.input),
+        toolProgress(root, "call_ran", { places: [place] }),
+        toolSucceeded(root, "call_ran", metadata, "done"),
+      )
+      const completed = updates(result.outputs).flatMap((update) =>
+        update.sessionUpdate === "tool_call_update" && update.status === "completed" ? [update] : [],
+      )
+      expect(completed).toHaveLength(1)
+      expect(diffs(completed[0]?.content)).toEqual(expected(row))
+    })
+
+    test(`${row.name}, replayed`, () => {
+      const replayed = [
+        ...ACPTranslate.replayMessage(
+          assistantMessage("msg_ran", {
+            content: [
+              {
+                type: "tool",
+                id: "call_ran",
+                name: row.tool,
+                time: { created: 1, completed: 2 },
+                state: { status: "completed", input: row.input, metadata, content: [{ type: "text", text: "done" }] },
+              },
+            ],
+          }),
+          "/workspace",
+        ),
+      ].flatMap((update) =>
+        update.sessionUpdate === "tool_call_update" && update.status === "completed" ? [update] : [],
+      )
+      expect(replayed).toHaveLength(1)
+      expect(diffs(replayed[0]?.content)).toEqual(expected(row))
+    })
+  }
 })
 
 // clients-ux-27: the away summary is drawn only by the interactive terminal clients, as the reference draws it only in

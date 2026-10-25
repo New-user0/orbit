@@ -54,6 +54,7 @@ import {
   primitiveInputSummary,
   toolDisplayContent,
   toolDisplayMetadata,
+  writtenFile,
   type ExecuteCall,
 } from "../../util/tool-display"
 import { DialogExecute } from "./dialog-execute"
@@ -3088,32 +3089,67 @@ function ShellDisplay(props: {
   )
 }
 
-function Write(props: ToolProps) {
+export function Write(props: ToolProps) {
+  const ctx = use()
   const theme = useTheme()
   const { currentSyntax: syntax } = useThemes()
   const pathFormatter = usePathFormatter()
-  const code = createMemo(() => {
-    return stringValue(props.input.content) ?? ""
+  // Drawn from the diff the tool recorded, so a Write approved with the person's own version shows that version; the
+  // model's input names the file only while the call has not finished (class 8).
+  const written = createMemo(() => (props.part.state.status === "completed" ? writtenFile(props.metadata) : undefined))
+  const view = createMemo(() => {
+    const diffView = ctx.config.diffs?.view
+    if (diffView === "unified" || diffView === "split") return diffView
+    return ctx.width > 120 ? "split" : "unified"
   })
 
   return (
     <Switch>
-      <Match when={props.part.state.status === "completed"}>
-        <BlockTool
-          path={{ label: "# Wrote", value: pathFormatter.format(displayValue(props.input.path)) }}
-          part={props.part}
-        >
-          <line_number fg={theme.text.muted} minWidth={3} paddingRight={1}>
-            <code
-              conceal={false}
-              fg={theme.text.base}
-              filetype={filetype(displayValue(props.input.path))}
-              syntaxStyle={syntax()}
-              content={bodyText(code())}
-            />
-          </line_number>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.path) ?? ""} />
-        </BlockTool>
+      <Match when={written()}>
+        {(item) => (
+          <BlockTool path={{ label: "# Wrote", value: bodyText(pathFormatter.format(item().file)) }} part={props.part}>
+            <Show
+              when={item().text}
+              fallback={
+                <box paddingLeft={1}>
+                  <PatchDiff
+                    diff={bodyText(item().patch)}
+                    hunkFg={theme.diff.text.hunkHeader}
+                    view={view()}
+                    filetype={filetype(item().file)}
+                    syntaxStyle={syntax()}
+                    showLineNumbers={true}
+                    width="100%"
+                    wrapMode={ctx.diffWrapMode()}
+                    fg={theme.text.base}
+                    addedBg={theme.diff.background.added}
+                    removedBg={theme.diff.background.removed}
+                    contextBg={theme.diff.background.context}
+                    addedSignColor={theme.diff.highlight.added}
+                    removedSignColor={theme.diff.highlight.removed}
+                    lineNumberFg={theme.diff.lineNumber.text}
+                    lineNumberBg={theme.diff.background.context}
+                    addedLineNumberBg={theme.diff.lineNumber.background.added}
+                    removedLineNumberBg={theme.diff.lineNumber.background.removed}
+                  />
+                </box>
+              }
+            >
+              {(text) => (
+                <line_number fg={theme.text.muted} minWidth={3} paddingRight={1}>
+                  <code
+                    conceal={false}
+                    fg={theme.text.base}
+                    filetype={filetype(item().file)}
+                    syntaxStyle={syntax()}
+                    content={bodyText(text())}
+                  />
+                </line_number>
+              )}
+            </Show>
+            <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.path) ?? ""} />
+          </BlockTool>
+        )}
       </Match>
       <Match when={true}>
         <InlineTool icon="◇" pending="Preparing write…" complete={displayValue(props.input.path)} part={props.part}>

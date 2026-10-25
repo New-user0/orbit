@@ -497,7 +497,6 @@ function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info
   return {
     ...diff,
     file: moved?.resource ?? change.target.resource,
-    patch: trimDiff(diff.patch),
     ...(moved ? { from: change.target.resource } : {}),
   }
 }
@@ -506,36 +505,7 @@ function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info
 function replacedFile(change: Prepared, after?: string): ReadonlyArray<typeof FileDiff.Info.Type> {
   if (change.type !== "update" || !change.moveTarget || change.replaced === undefined) return []
   const diff = fileDiff(change.moveTarget.place, change.replaced, after ?? change.after, "modified")
-  return [{ ...diff, file: change.moveTarget.resource, patch: trimDiff(diff.patch) }]
-}
-
-function trimDiff(diff: string) {
-  const lines = diff.split("\n")
-  const content = lines.filter(
-    (line) =>
-      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-      !line.startsWith("---") &&
-      !line.startsWith("+++"),
-  )
-  if (content.length === 0) return diff
-  const indent = content.reduce((result, line) => {
-    const value = line.slice(1)
-    if (value.trim().length === 0) return result
-    return Math.min(result, value.match(/^(\s*)/)?.[1].length ?? result)
-  }, Infinity)
-  if (indent === Infinity || indent === 0) return diff
-  return lines
-    .map((line) => {
-      if (
-        (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-        !line.startsWith("---") &&
-        !line.startsWith("+++")
-      ) {
-        return line[0] + line.slice(1 + indent)
-      }
-      return line
-    })
-    .join("\n")
+  return [{ ...diff, file: change.moveTarget.resource }]
 }
 
 // The lines a chunk adds: its new side less one copy of each line on its old side. A context line is on both sides and
