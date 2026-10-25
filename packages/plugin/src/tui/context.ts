@@ -71,6 +71,7 @@ export interface Data {
     get(sessionID: string): SessionInfo | undefined
     root(sessionID: string): string
     family(sessionID: string): string[]
+    context(sessionID: string): Extract<OrbitEvent, { type: "session.context.updated" }>["data"] | undefined
     cost(sessionID: string): number
     status(sessionID: string): "idle" | "running"
     readonly pending: {
