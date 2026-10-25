@@ -1907,6 +1907,11 @@ refused rewind keeps the picker open with a line naming what failed. If the pick
 queued through the rewind; steering it, or sending a new prompt, commits the rewind first, so it runs in the rewound
 conversation.
 
+The list moves with the dialog keys every picker uses (up and down, ctrl+p and ctrl+n, Home and End, Enter to choose),
+so keys you set for `dialog.select.prev`, `next`, `home`, `end` and `submit` apply to it too, and also with j and k.
+Ctrl, shift or alt with up, or shift+k, selects the oldest prompt; the same with down, or shift+j, selects `(current)`.
+The confirm step numbers its options, and pressing a digit chooses that option at once.
+
 Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. It opens nothing when the
 session shows no message, including when a staged revert has taken back every prompt. While a session runs, Esc keeps
 interrupting it as before.
@@ -1914,7 +1919,9 @@ interrupting it as before.
 The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
 confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only
 replies with nothing in them follow the prompt and no file would change, it rewinds the conversation at once and puts
-the prompt back in the input, without asking. A reply that holds only reasoning, is waiting to retry or shows only that
+the prompt back in the input, without asking. While it finds that out (stopping a running session first) the picker
+already replaces the dialog and shows `Checking files…`; Esc then gives the rewind up, and a session it stopped stays
+stopped. A reply that holds only reasoning, is waiting to retry or shows only that
 it was interrupted has nothing in it; a reply that failed with an error does not, since the error is drawn, so it opens
 the confirm step. Notices, compaction summaries and prompts still waiting to be sent do not count as something after
 the prompt; a command run with `!` or a skill does. A prompt still waiting in the inbox (queued or steering) is no row
