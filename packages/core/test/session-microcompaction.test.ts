@@ -1033,6 +1033,18 @@ describe("estimatePrompt and a clearing", () => {
   })
 
   // The mutation cells of the pure selection that the runner rows cannot reach.
+  // The hour runs from the end of the response, so a tool that waits (a permission prompt) still counts toward it.
+  test("select measures idle time from the end of the response, not from the end of its tools", () => {
+    const calls = ["x1", "x2", "x3"].map((call) => [call, body(call)] as const)
+    const base = assistant("msg_x", calls)
+    const time = { ...base.time, streamed: DateTime.makeUnsafe(0), completed: DateTime.makeUnsafe(90 * MINUTE) }
+    const history = [{ ...base, time }]
+    const select = (now: number) =>
+      SessionMicrocompaction.select({ messages: history, freed: () => 1, keep: 1, pressure: false, now })
+    expect(select(61 * MINUTE)?.trigger).toBe("idle")
+    expect(select(59 * MINUTE)).toBeUndefined()
+  })
+
   test("select keeps at least one call and lets an idle trigger win over pressure", () => {
     const calls = ["x1", "x2", "x3"].map((call) => [call, body(call)] as const)
     const history = [assistant("msg_x", calls)]

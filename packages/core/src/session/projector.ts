@@ -293,7 +293,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
  * them was copied. Every other row is copied as it is, apart from an escalation notice.
  */
 function copiedData(row: typeof SessionMessageTable.$inferSelect, copiedIDs: ReadonlyMap<string, SessionMessage.ID>) {
-  if (!("tools" in row.data)) return replacedToCopy(row, copiedIDs)
+  if (row.type !== "context-cleared" || !("tools" in row.data)) return replacedToCopy(row, copiedIDs)
   const [first, ...rest] = row.data.tools.flatMap((tool) => {
     const copy = copiedIDs.get(tool.assistantMessageID)
     return copy ? [{ ...tool, assistantMessageID: copy }] : []

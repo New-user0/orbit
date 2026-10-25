@@ -31,7 +31,7 @@ const COMPACTABLE = new Set<string>([
 
 /**
  * The old results to leave out of the next requests, or undefined when there are none or no reason to: the trigger is
- * `idle` when the newest assistant message ended an hour or more ago, else `pressure` when the caller says automatic
+ * `idle` when the newest assistant message's response ended an hour or more ago (time spent in its tools counts), else `pressure` when the caller says automatic
  * compaction is due. The newest `KEEP` calls of the tools above stay; an older call that has settled and that no earlier
  * clearing named goes. A hosted call never does (the provider replays its own state), and neither does a call still
  * running. `freed` is the saving of a set of calls in tokens, and a pass that saves none is not recorded.
@@ -48,7 +48,7 @@ export const select = (input: {
   const newest = messages.findLast((message) => message.type === "assistant")
   const idle =
     newest?.type === "assistant" &&
-    input.now - DateTime.toEpochMillis(newest.time.completed ?? newest.time.created) >= IDLE_GAP_MS
+    input.now - DateTime.toEpochMillis(newest.time.streamed ?? newest.time.completed ?? newest.time.created) >= IDLE_GAP_MS
   if (!idle && !input.pressure) return undefined
 
   const cleared = clearedCalls(messages)

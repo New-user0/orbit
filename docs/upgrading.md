@@ -4746,8 +4746,11 @@ output is bulky and rarely needed again are replaced, in what the model receives
   and `Patch`, under the names they were recorded with as well. Notebook edits, language-server calls, MCP tools,
   agents, task output, todo lists and skills are never cleared, nor is a result that the provider ran itself. A failed
   call is cleared like a finished one. The call itself, with its input, stays.
-- **When.** On the first request after the newest assistant message is an hour old (the provider's prompt cache has
-  expired by then), and when automatic compaction is due: the clearing runs first and the compaction only follows if the
+- **When.** On the first request after the newest assistant message's response ended an hour ago (the provider's prompt cache has
+  expired by then; time spent waiting for its tools, such as an open permission prompt, counts). This applies to every main
+  session, whether the prompt came from the terminal UI, `orb run`, ACP or the SDK: unlike the reference, which skips the
+  time trigger outside its interactive thread, the runner has no per-prompt source and one session moves between those
+  clients, and when automatic compaction is due: the clearing runs first and the compaction only follows if the
   context is still over its threshold. A subagent's session clears nothing, and neither do `/compact` and the
   compaction that recovers from a provider rejection as too long.
 - **What stays.** The transcript, the stored results, exports and every client keep the full output; only the request
@@ -4760,7 +4763,7 @@ output is bulky and rarely needed again are replaced, in what the model receives
 - **The footer.** The context report is `stale` after a clearing until the next response, and the terminal UI hides its
   warning until then.
 
-Set `compaction.clear` to `false` in your own config to turn it off. A project's `orbit.json` cannot set it, as with the
+Set `compaction.clear` to `false` in your own config to turn it off. An untrusted folder's `orbit.json` cannot set it, as with the
 rest of `compaction`.
 
 **Affects:** people with long sessions, and scripts that compare a request with the stored history. The model may ask
