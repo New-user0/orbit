@@ -29,6 +29,10 @@ const COMPACTABLE = new Set<string>([
   ToolNames.tools.patch,
 ])
 
+// Sessions migrated from the first version keep the names `bash` and `apply_patch` on their recorded calls, and the name
+// table does not map them.
+const MIGRATED = new Set(["bash", "apply_patch"])
+
 /**
  * The old results to leave out of the next requests, or undefined when there are none or no reason to: the trigger is
  * `idle` when the newest assistant message's response ended an hour or more ago (time spent in its tools counts), else `pressure` when the caller says automatic
@@ -56,7 +60,7 @@ export const select = (input: {
     message.type !== "assistant"
       ? []
       : message.content.flatMap((part) =>
-          part.type === "tool" && part.executed !== true && COMPACTABLE.has(ToolNames.canonical(part.name))
+          part.type === "tool" && part.executed !== true && (COMPACTABLE.has(ToolNames.canonical(part.name)) || MIGRATED.has(part.name))
             ? [
                 {
                   assistantMessageID: message.id,

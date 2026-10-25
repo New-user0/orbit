@@ -317,6 +317,9 @@ describe("clearing old tool results", () => {
       "edit",
       "write",
       "patch",
+      // Names a session migrated from the first version still carries.
+      "bash",
+      "apply_patch",
     ]
     const kept = [
       "NotebookEdit",
@@ -476,6 +479,26 @@ describe("clearing old tool results", () => {
     expect(clearedIn(s.requests[before])).toEqual(["b1", "b2", "b3"])
     expect(clearedIn(s.requests[before + 1])).toEqual(["b1", "b2", "b3"])
     expect((yield* clearings(s, exact)).map((event) => event.trigger)).toEqual(["idle"])
+  })
+
+  scenario("counts the hour from the newest assistant message, not the first", function* (s) {
+    // A first step over an hour old, then a recent one whose calls push older ones past the newest five.
+    const history = (name: string) =>
+      Effect.gen(function* () {
+        const id = yield* newSession(s, name)
+        yield* seedStep(s.bus, id, { id: `msg_${name}_old`, calls: reads(`${name}o`, 8) })
+        yield* TestClock.adjust(61 * MINUTE)
+        yield* seedStep(s.bus, id, { id: `msg_${name}_new`, calls: reads(`${name}n`, 3) })
+        return id
+      })
+    const active = yield* history("active")
+    yield* TestClock.adjust(MINUTE)
+    expect(clearedIn(yield* ask(s, active))).toEqual([])
+    expect(yield* clearings(s, active)).toEqual([])
+    // Control: the same history an hour after the recent step clears.
+    const quiet = yield* history("quiet")
+    yield* TestClock.adjust(61 * MINUTE)
+    expect(clearedIn(yield* ask(s, quiet))).toEqual(["quieto1", "quieto2", "quieto3", "quieto4", "quieto5", "quieto6"])
   })
 
   scenario("does not clear in a session that gives no reason to", function* (s) {
@@ -1022,6 +1045,60 @@ describe("estimatePrompt and a clearing", () => {
     expect(prompt([...before, small, marker("msg_m8", ["msg_a", "a1"]), after]).measured).toBe(0)
   })
 
+  test("estimatePrompt takes a saved result off by what the request carried, not by what is stored", () => {
+    const root = "/data/tool-output"
+    const huge = body("saved", 100_000)
+    const savedPart = {
+      type: "tool",
+      id: "s1",
+      name: "Read",
+      override: { session: "ses_mc_estimate", name: "msg_sv-s1-0a1b2c3d.txt", format: 1 },
+      state: { status: "completed", input: {}, content: [{ type: "text", text: huge }] },
+      time: { created: 0, completed: 0 },
+    }
+    const history = (...rest: ReadonlyArray<SessionMessage.Info>) => [
+      user("msg_u1"),
+      decode({
+        id: "msg_sv",
+        type: "assistant",
+        agent: "build",
+        model: { id: "test-model", providerID: "test-provider" },
+        content: [savedPart],
+        time: { created: 0, completed: 0 },
+      }),
+      user("msg_u2"),
+      anchor,
+      ...rest,
+      after,
+    ]
+    const estimate = (messages: ReadonlyArray<SessionMessage.Info>, toolOutput?: string) =>
+      SessionCompaction.estimatePrompt(
+        {
+          session,
+          model: resolved,
+          messages,
+          agent: { id: Agent.defaultID, info: Agent.Info.default(Agent.defaultID) },
+          initial: "",
+          tools: stubSnapshot({ definitions: [], execute: () => Effect.die("unused") }),
+        } as unknown as SessionContext.Loaded,
+        undefined,
+        toolOutput,
+      )
+    const named = history(marker("msg_m1", ["msg_sv", "s1"]))
+    const saved = history()[1]!
+    const carried = toLLMMessages([saved], fakeModel, "fake", [], { toolOutput: root })
+      .flatMap((message) => message.content)
+      .find((item) => item.type === "tool-result")
+    if (carried?.type !== "tool-result" || carried.result.type !== "text") throw new Error("expected a wrapper")
+    const drop = estimate(history(), root).measured - estimate(named, root).measured
+    // The wrapper is a few dozen tokens, so the saving is far below the stored text's.
+    expect(drop).toBe(Token.estimate(String(carried.result.value)) - Token.estimate(CLEARED_RESULT))
+    // Without the root the same history is lowered as stored, so the saving is the stored text's.
+    const stored = estimate(history()).measured - estimate(named).measured
+    expect(stored).toBe(freed(huge))
+    expect(drop).not.toBe(stored)
+  })
+
   const toolPart = (id: string, executed: boolean, state: Record<string, unknown>) => ({
     type: "tool",
     id,
@@ -1091,6 +1168,19 @@ describe("estimatePrompt and a clearing", () => {
       SessionMicrocompaction.select({ messages: history, freed: () => 1, keep: 1, pressure: false, now })
     expect(select(61 * MINUTE)?.trigger).toBe("idle")
     expect(select(59 * MINUTE)).toBeUndefined()
+  })
+
+  test("select counts the hour from the newest assistant message", () => {
+    const old = assistant("msg_old", [["x1", body("x1")], ["x2", body("x2")]])
+    const base = assistant("msg_recent", [["x3", body("x3")]])
+    const recent = {
+      ...base,
+      time: { ...base.time, streamed: DateTime.makeUnsafe(61 * MINUTE), completed: DateTime.makeUnsafe(61 * MINUTE) },
+    }
+    const select = (now: number) =>
+      SessionMicrocompaction.select({ messages: [old, recent], freed: () => 1, keep: 1, pressure: false, now })
+    expect(select(62 * MINUTE)).toBeUndefined()
+    expect(select(121 * MINUTE)?.trigger).toBe("idle")
   })
 
   test("select keeps at least one call and lets an idle trigger win over pressure", () => {
