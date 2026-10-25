@@ -4679,6 +4679,41 @@ In YAML an alias names a value that an anchor wrote earlier, and Orbit's readers
 **What to do:** Nothing. A buffer you set still sets how far below the window compaction starts, measured from the
 window less the summary's room instead of the whole window; lower it if compaction now starts earlier than you want.
 
+## Summary compaction writes a handoff from everything since the last checkpoint
+
+- **One prompt, no verbatim tail.** Every summary compaction, automatic or manual, now sends the same prompt: the
+  conversation since the newest checkpoint (that checkpoint's summary included, and the latest exchange too), then a
+  request to think in an `<analysis>` block and write a nine-section `<handoff>`. The earlier seven-heading template,
+  its "update" variant and the retry that asked again for a missing heading are gone, and a summary no longer keeps
+  the newest 15,000 tokens as text beside it. `compaction.keep.tokens` now shapes native compaction only. A checkpoint
+  stored with recent text keeps its wrapper and renders as before; one stored without recent text now reaches the model as the resume message below
+  (`session-compaction.test.ts`; `session-runner-message.test.ts`, "checkpoint resume message").
+- **What is stored.** The `<analysis>` block is never stored: every closed block is removed, and so is one that was cut
+  off, through to the end of the reply. The handoff block is the first one that opens outside an analysis, so an analysis that names the `<handoff>` tag is not mistaken for it. The `<handoff>` block is stored under a `Summary:` heading, and runs of blank
+  lines collapse to one. A handoff that quotes an `<analysis>` tag is stored whole, with its later sections. A summary that a `compaction` hook supplies is formatted the same way, on a native-compaction model too, and one with nothing left outside the analysis fails as "Compaction produced no summary". A reply that is only an
+  unfinished analysis fails as "Compaction produced no summary". A reply that stopped at the output limit is stored as
+  it is, where it used to fail (`session-compaction.test.ts`, "analysis never stored").
+- **The next request.** A summary checkpoint reaches the model as one user message that says earlier messages
+  were replaced by the summary because the conversation outgrew the context window, followed by the summary. An automatic compaction adds a line telling the
+  model to carry on without asking the user anything; a manual one does not
+  (`session-runner-message.test.ts`).
+- **A reply with no text gets one more request.** The first request shares the main request's system prompt, tools and
+  settings; any text it returns is used, and a tool call in it is never run. When it returns no text, or fails, one
+  fallback request follows, with a one-line system prompt, no media (an image or a document becomes `[image]` or
+  `[document]`), no reasoning options from hooks, the session model without its reasoning variant (a model whose own defaults reason still reasons), only the `Read` tool and at most 20,000 output tokens. A second reply without text fails
+  as "Compaction produced no summary" (`session-compaction.test.ts`, "a reply with no text gets one fallback request").
+  The summary request asks for output sized for the room that request leaves in the window, never less than 3,000 tokens (`session-compaction.test.ts`, "sized for the room it leaves"). A reply with text and a tool call uses the text (same file, "a reply with text and a tool call").
+- **Too long to summarize.** A summary request is no longer shortened to fit before it is sent. When the fallback is
+  rejected as too long, the oldest round groups are dropped (those that cover the gap the provider reports, or a fifth
+  of them), and the request is sent again, at most three times. Then the compaction fails with "The conversation is too
+  long to compact. Go back a few messages and try again." (`session-compaction.test.ts`, "prompt-too-long").
+
+**Affects:** people who read the stored summary of a compaction, plugins and SDK callers that read
+`session.compaction.ended` or the compaction hook's summary, and anyone who relied on the text tail beside a summary.
+
+**What to do:** Nothing. A conversation that is too long to summarize in one request now asks you to go back a few
+messages, where it used to shrink the request in steps.
+
 ## The terminal UI warns when the context is almost full
 
 The full-screen terminal UI now draws the latest `session.context.updated` report of the session in view in the prompt's

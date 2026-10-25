@@ -49,6 +49,11 @@ export interface Loaded {
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
   readonly tools: Tool.Snapshot
+  /**
+   * Resolves the session model again with the variant that reasons least; nothing when the session selected no
+   * variant. Only a request that must not think, such as the compaction fallback, runs it, so a step pays nothing.
+   */
+  readonly unreasoned?: Effect.Effect<SessionRunnerModel.Resolved | undefined>
   /** The configured `output_token_cap`, when set. */
   readonly outputTokenCap?: number
 }
@@ -64,6 +69,11 @@ export interface Interface {
   readonly select: (sessionID: SessionSchema.ID) => Effect.Effect<Selection, AgentNotFoundError>
   /** Resolves the model and active history for that selection. */
   readonly load: (selection: Selection) => Effect.Effect<Loaded, SessionRunnerModel.Error>
+  /** The session model again without its reasoning variant; nothing when the session selected no variant. */
+  readonly unreasoned: (
+    session: SessionSchema.Info,
+    resolved: SessionRunnerModel.Resolved,
+  ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
   readonly resolveModel: (
     session: SessionSchema.Info,
   ) => Effect.Effect<SessionRunnerModel.Resolved, SessionRunnerModel.Error>
@@ -126,6 +136,24 @@ const layer = Layer.effect(
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
+    // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
+    const leastReasoning = (session: SessionSchema.Info, info: Model.Info | undefined, pinned?: Model.VariantID) =>
+      Effect.gen(function* () {
+        if (!info) return
+        const variant = pinned ?? MINIMAL_REASONING_VARIANTS.find((id) => info.variants.some((item) => item.id === id))
+        return yield* resolveModel({
+          ...session,
+          model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
+        }).pipe(Effect.orElseSucceed(() => undefined))
+      })
+
+    const unreasonedFor = (session: SessionSchema.Info, resolved: SessionRunnerModel.Resolved) =>
+      resolved.ref.variant && resolved.ref.variant !== "default"
+        ? model
+            .get(resolved.ref.providerID, resolved.ref.id)
+            .pipe(Effect.flatMap((info) => leastReasoning(session, info)))
+        : Effect.succeed(undefined)
+
     const selectAuxiliary = Effect.fn("SessionContext.selectAuxiliary")(function* (
       session: SessionSchema.Info,
       agentID: Agent.ID,
@@ -133,21 +161,11 @@ const layer = Layer.effect(
       const agent = yield* agents.get(agentID)
       if (!agent) return
       const sessionModel = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
-      // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
-      const leastReasoning = (info: Model.Info | undefined, pinned?: Model.VariantID) =>
-        Effect.gen(function* () {
-          if (!info) return
-          const variant = pinned ?? MINIMAL_REASONING_VARIANTS.find((id) => info.variants.some((item) => item.id === id))
-          return yield* resolveModel({
-            ...session,
-            model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
-          }).pipe(Effect.orElseSucceed(() => undefined))
-        })
       const pinned = agent.model ? yield* model.get(agent.model.providerID, agent.model.id) : undefined
       const small = pinned ?? (sessionModel ? yield* model.small(sessionModel.ref.providerID) : undefined)
-      const preferred = yield* leastReasoning(small, pinned ? agent.model?.variant : undefined)
+      const preferred = yield* leastReasoning(session, small, pinned ? agent.model?.variant : undefined)
       const primary = sessionModel
-        ? ((yield* leastReasoning(yield* model.get(sessionModel.ref.providerID, sessionModel.ref.id))) ?? sessionModel)
+        ? ((yield* leastReasoning(session, yield* model.get(sessionModel.ref.providerID, sessionModel.ref.id))) ?? sessionModel)
         : undefined
       const selected = preferred ?? primary
       if (!selected) return
@@ -271,6 +289,7 @@ const layer = Layer.effect(
         session: selection.session,
         agent: selection.agent,
         model,
+        unreasoned: unreasonedFor(selection.session, model),
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
         tools: selection.tools,
@@ -278,7 +297,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ select, load, resolveModel, selectAuxiliary, resolveFallback, request })
+    return Service.of({ select, load, resolveModel, unreasoned: unreasonedFor, selectAuxiliary, resolveFallback, request })
   }),
 )
 
