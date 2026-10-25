@@ -489,8 +489,8 @@ const layer = Layer.effect(
             messages: before.messages,
             model: before.model.ref,
             toolOutput: toolOutput.root,
-            // Where an automatic compaction would start: still open for this request, on, not paused, and due.
-            pressure: !autoChecked && breaker.failures < SessionContextWindow.BREAKER_LIMIT && compaction.due(before),
+            // Where an automatic compaction would start: on, not paused, and due.
+            pressure: breaker.failures < SessionContextWindow.BREAKER_LIMIT && compaction.due(before),
           }))
         ) {
           before = yield* loadSelected(selection, current.fallback)

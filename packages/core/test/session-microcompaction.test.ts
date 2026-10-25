@@ -985,6 +985,53 @@ describe("estimatePrompt and a clearing", () => {
     expect(taken.measured).toBe(base.measured)
   })
 
+  const toolPart = (id: string, executed: boolean, state: Record<string, unknown>) => ({
+    type: "tool",
+    id,
+    name: "Read",
+    ...(executed ? { executed } : {}),
+    state,
+    time: { created: 0 },
+  })
+  const withParts = (id: string, content: ReadonlyArray<unknown>) =>
+    decode({
+      id,
+      type: "assistant",
+      agent: "build",
+      model: { id: "test-model", providerID: "test-provider" },
+      content,
+      time: { created: 0, completed: 0 },
+    })
+  const completedState = (text: string) => ({ status: "completed", input: {}, content: [{ type: "text", text }] })
+
+  test("select leaves a call that has not settled where it is, however old", () => {
+    // The running call is the oldest, outside the newest one that stays; only the settled one after it goes.
+    const history = [
+      withParts("msg_run", [toolPart("run1", false, { status: "running", input: {}, metadata: {} })]),
+      assistant("msg_done", [
+        ["x1", body("x1")],
+        ["x2", body("x2")],
+      ]),
+    ]
+    expect(
+      SessionMicrocompaction.select({ messages: history, freed: () => 1, keep: 1, pressure: true, now: 0 })?.tools.map(
+        (tool) => tool.id,
+      ),
+    ).toEqual(["x1"])
+  })
+
+  test("estimateFreed counts a hosted result for nothing and a local one for what it saves", () => {
+    const calls = new Map([["msg_h", new Set(["h1"])]])
+    const freedBy = (executed: boolean) =>
+      SessionCompaction.estimateFreed(
+        [withParts("msg_h", [toolPart("h1", executed, completedState(older))])],
+        calls,
+        resolved.ref,
+      )
+    expect(freedBy(false)).toBe(freed(older))
+    expect(freedBy(true)).toBe(0)
+  })
+
   // The mutation cells of the pure selection that the runner rows cannot reach.
   test("select keeps at least one call and lets an idle trigger win over pressure", () => {
     const calls = ["x1", "x2", "x3"].map((call) => [call, body(call)] as const)
