@@ -1883,7 +1883,9 @@ which one of those folders is a link.
 `/rewind` (also `/checkpoint`) opens a picker that lists your prompts, oldest first, each with the files its own file
 tools changed (`<name> +A -D` or `N files +A -D`), and a `(current)` row. A command you ran with `!` is a row too, drawn
 as `! <command>` without a file line; it offers only `Conversation only`, which puts the command back in the input in
-shell mode. Choosing a prompt asks the server what a code rewind would change on disk now and offers
+shell mode, because the server keeps no checkpoint for a shell command. To undo a command's file edits, use `Code only`
+on the row of the prompt after it. Sending the put-back command commits the staged rewind first, as sending a prompt
+does, so the command and its output stay in the conversation. Choosing a prompt asks the server what a code rewind would change on disk now and offers
 `Code and conversation`, `Conversation only` and `Code only` when at least one file would change, or only
 `Conversation only` otherwise; `Never mind` goes back. The server answers that question only for a session that is not
 running, so choosing a prompt while the session runs interrupts it and waits for it first. Every option also interrupts
@@ -1903,7 +1905,8 @@ the prompt back in the input, without asking.
 
 Interrupting a prompt (Esc twice while it runs) before its reply holds any text or tool call, with nothing typed and
 nothing queued, now rewinds the conversation to before that prompt and puts it back in the input; the prompt-history
-entry it added is dropped. Files are not touched.
+entry that this submit added is dropped. A prompt that repeated the newest entry added none, so nothing is dropped, and
+entries that other terminal UI windows saved meanwhile stay. Files are not touched.
 
 **Affects:** people who use the terminal UI's message dialog or press Esc on an idle prompt, or interrupt a prompt with
 Esc twice before its reply holds anything.
@@ -3168,6 +3171,18 @@ revert's list of files, so `/redo` still puts back everything the staged reverts
 **Affects:** SDK callers that stage a revert with `files: false`, and the terminal UI's `Conversation only`.
 
 **What to do:** Nothing.
+
+### A shell command commits a staged revert, as a prompt does
+
+A command a person runs with `!` (`POST /api/session/:id/shell`) while a revert is staged now commits that revert
+before the command starts, as a prompt and a compaction already did. Before, the command and its output landed after
+the staged boundary, so the terminal UI drew them nowhere and the next prompt's commit deleted them
+(`session-owned.test.ts`, "commits a staged revert before a person's shell command, and keeps the command"). After a
+`!` command, `/redo` no longer brings the reverted messages back.
+
+**Affects:** SDK callers and terminal UI users who run a `!` command after `/undo` or a rewind.
+
+**What to do:** Run `/redo` before the command if you want the reverted messages back.
 
 ## Prompts and instructions
 
