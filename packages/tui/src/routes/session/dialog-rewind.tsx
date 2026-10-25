@@ -12,6 +12,7 @@ import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 import { bodyText } from "../../util/renderer"
+import type { SessionMessageInfo } from "@orbit/client"
 
 /**
  * A person's prompt, or with `shell` a command they ran with `!`, whose text is then the command. `revision` changes
@@ -468,4 +469,53 @@ export function DialogRewind(props: {
       </Switch>
     </box>
   )
+}
+
+/**
+ * The picker's rows for a conversation, oldest first: each person's prompt, and each command they ran with `!` (the
+ * server's dry run offers no code rewind for one).
+ *
+ * A row's revision is what its own edits depend on, for the picker to ask again when it changes: each message up to and
+ * including the next prompt, with the time a reply or command completed and how many tool calls of a reply finished,
+ * and every folder switch after that range. Streamed text changes none of it. The range ends where the server's
+ * `scope=prompt` diff ends it, at the next user message: a `!` command run during a reply does not end it, so the
+ * reply's later steps still count. The rows are rebuilt on every change while the picker is open, so they are built in
+ * one walk from the end rather than with a scan of the rest of the list per message.
+ */
+export function rewindPrompts(list: readonly SessionMessageInfo[]) {
+  const tokens = list.map(revisionToken)
+  const rows: RewindPrompt[] = []
+  // The range of a row at the walk's position ends before `end`, just after the next user message.
+  let end = list.length
+  // The folder switches after that range, oldest first.
+  let switches: string[] = []
+  for (let position = list.length - 1; position >= 0; position--) {
+    const message = list[position]
+    if (message.type === "user" || message.type === "shell") {
+      const revision = [...tokens.slice(position + 1, end), ...switches].join(" ")
+      rows.push(
+        message.type === "shell"
+          ? { id: message.id, text: message.command, created: message.time.created, shell: true, revision }
+          : { id: message.id, text: message.text, created: message.time.created, revision },
+      )
+    }
+    if (message.type !== "user") continue
+    switches = [
+      ...list.slice(position + 1, end).flatMap((later) => (later.type === "location-switched" ? [later.id] : [])),
+      ...switches,
+    ]
+    end = position + 1
+  }
+  return rows.toReversed()
+}
+
+function revisionToken(message: SessionMessageInfo) {
+  if (message.type === "assistant")
+    return `${message.id}:${message.time.completed ?? ""}:${
+      message.content.filter(
+        (part) => part.type === "tool" && (part.state.status === "completed" || part.state.status === "error"),
+      ).length
+    }`
+  if (message.type === "shell") return `${message.id}:${message.time.completed ?? ""}`
+  return message.id
 }
