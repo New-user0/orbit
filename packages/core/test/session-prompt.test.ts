@@ -353,6 +353,28 @@ describe("Session.prompt", () => {
     }),
   )
 
+  // Only a person's item settles a staged revert when it is delivered; a notice is not new work, so /redo stays.
+  it.effect("delivers a waiting notice over a staged revert and keeps the revert staged", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const boundary = yield* session.prompt({ sessionID, text: "boundary", resume: false })
+      yield* SessionInbox.promote(db, bus, sessionID, "steer")
+      yield* bus.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID,
+        revert: { messageID: boundary.id, files: [] },
+      })
+      const completion = yield* session.synthetic({ sessionID, text: "stale completion" })
+
+      expect(yield* SessionInbox.promote(db, bus, sessionID, "steer")).toBe(1)
+
+      expect(yield* SessionInbox.find(db, completion.id)).toBeUndefined()
+      expect((yield* session.get(sessionID)).revert?.messageID).toBe(boundary.id)
+    }),
+  )
+
   it.effect("resolves attachment MIME before admission", () =>
     Effect.gen(function* () {
       yield* setup
