@@ -7,7 +7,6 @@ import { Database } from "../database/database.js"
 import { Instance } from "../instance/service.js"
 import { Plugin } from "../plugin/service.js"
 import type { Instructions } from "../instructions/index.js"
-import { SessionCompaction } from "./compaction.js"
 import { SessionContext } from "./context.js"
 import type { AgentNotFoundError } from "./error.js"
 import { SessionHistory } from "./history.js"
@@ -18,6 +17,7 @@ import type { SessionRunnerModel } from "./runner/model.js"
 import { toLLMMessages } from "./runner/to-llm-message.js"
 import { SessionEvent } from "./event.js"
 import type { SessionSchema } from "./schema.js"
+import { SessionToolText } from "./tool-text.js"
 import { SessionUsage } from "./usage.js"
 import { ToolOutput } from "../tool-output.js"
 
@@ -86,7 +86,7 @@ export const recent = Effect.fn("SessionGenerate.recent")(function* (
   // as user text below; cutting it would hide the work before a short prompt such as "continue" from the recap.
   const start = window.findIndex((message) => message.role === "user" || message.role === "tool")
   // The window goes out with no tool definitions, so its tool calls and results go as text.
-  return start === -1 ? [] : window.slice(start).map(SessionCompaction.withoutToolBlocks)
+  return start === -1 ? [] : window.slice(start).map(SessionToolText.withoutToolBlocks)
 })
 
 /** Generates text from current Session context without mutating the Session. */

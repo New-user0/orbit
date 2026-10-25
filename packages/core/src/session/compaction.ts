@@ -34,6 +34,7 @@ import { SessionHistory } from "./history.js"
 import type { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionReminders } from "./reminders.js"
+import { SessionToolText } from "./tool-text.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
 import { toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
@@ -111,7 +112,6 @@ const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", m
 const SHRINK_STEPS = [0.7, 0.5, 0.35]
 /** A common window size, assumed for the compaction request when the model's window is unknown. */
 const UNKNOWN_WINDOW = 200_000
-const TOOL_OUTPUT_MAX_CHARS = 1_250
 const IMAGE_TOKEN_ESTIMATE = 1_500
 const PDF_TOKEN_ESTIMATE = 2_000
 
@@ -908,21 +908,6 @@ const covered = (message: SessionMessage.Info) => {
   }
 }
 
-const truncateToolOutput = (value: string) => {
-  if (value.length <= TOOL_OUTPUT_MAX_CHARS) return value
-
-  // Count code points so a surrogate pair is never split.
-  let end = 0
-  let kept = 0
-  for (const char of value) {
-    if (kept === TOOL_OUTPUT_MAX_CHARS) break
-    end += char.length
-    kept++
-  }
-  if (end === value.length) return value
-  return `${value.slice(0, end)}\n[truncated]`
-}
-
 /** One request message as a flattened transcript line. Empty for what the transcript leaves out. */
 const flattenMessage = (message: Message) => {
   if (message.role === "system") return ""
@@ -931,47 +916,11 @@ const flattenMessage = (message: Message) => {
       if (part.type === "text")
         return part.text ? [`[${message.role === "user" ? "User" : "Assistant"}]: ${part.text}`] : []
       if (part.type === "media") return [`[${part.media.mediaType} omitted]`]
-      if (part.type === "tool-call" || part.type === "tool-result") return [toolPartText(part)]
+      if (part.type === "tool-call" || part.type === "tool-result") return [SessionToolText.toolPartText(part)]
       return []
     })
     .join("\n")
 }
-
-/**
- * A request message with its tool calls and results written out as transcript text, so that a request that sends no
- * tool definitions can carry it: some providers refuse tool blocks without the definitions. A tool message becomes a
- * user message, the side that providers put a tool result on.
- */
-export const withoutToolBlocks = (message: Message) => {
-  if (!message.content.some((part) => part.type === "tool-call" || part.type === "tool-result")) return message
-  return Message.make({
-    id: message.id,
-    role: message.role === "tool" ? "user" : message.role,
-    content: message.content.map((part) =>
-      part.type === "tool-call" || part.type === "tool-result" ? Message.text(toolPartText(part)) : part,
-    ),
-  })
-}
-
-const toolPartText = (part: Extract<ContentPart, { type: "tool-call" | "tool-result" }>) => {
-  if (part.type === "tool-call") return `[Assistant tool call]: ${part.name}(${JSON.stringify(part.input) ?? ""})`
-  const result = part.result
-  const output =
-    result.type === "content"
-      ? serializeToolContent(result.value)
-      : typeof result.value === "string"
-        ? result.value
-        : (JSON.stringify(result.value) ?? "")
-  return `[${result.type === "error" ? "Tool error" : "Tool result"}]: ${truncateToolOutput(output)}`
-}
-
-const serializeToolContent = (content: ReadonlyArray<SessionMessage.ToolStateCompleted["content"][number]>) =>
-  content
-    .map((item) => {
-      if (item.type === "text") return item.text
-      return `[Attached ${item.mime}${item.name === undefined ? "" : `: ${item.name}`}]`
-    })
-    .join("\n")
 
 /** The newest whole, real user messages within `keep` tokens: no synthetic guidance, no half of an attachment. */
 export const recentUserMessages = (
