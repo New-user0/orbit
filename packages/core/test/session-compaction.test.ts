@@ -1,5 +1,16 @@
 import { expect, test } from "bun:test"
-import { GenerationOptions, LLMClient, LLMEvent, LanguageModel, Message, ToolDefinition, type LLMRequest } from "@orbit/ai"
+import {
+  AIError,
+  CompactionCheckpointResponse,
+  GenerationOptions,
+  InvalidRequestError,
+  LLMClient,
+  LLMEvent,
+  LanguageModel,
+  Message,
+  ToolDefinition,
+  type LLMRequest,
+} from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { OpenAI } from "@orbit/ai/providers"
 import { Database } from "@orbit/core/database/database"
@@ -29,7 +40,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { Money } from "@orbit/schema/money"
 import { Skill } from "@orbit/schema/skill"
 import { Shell } from "@orbit/schema/shell"
-import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Context, DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { stubSnapshot } from "./lib/tool"
@@ -54,7 +65,14 @@ const cost = [
 let override: (() => Stream.Stream<LLMEvent>) | undefined
 // When not empty, each request takes the next scripted answer, ahead of `override`.
 let replies: Array<() => Stream.Stream<LLMEvent>> = []
+// Each native compaction call takes the next of these.
+let checkpoints: Array<() => Effect.Effect<CompactionCheckpointResponse, AIError>> = []
 const client = Layer.mock(LLMClient.Service)({
+  // Only the trigger form is scripted; an arrow function cannot spell the overloads, hence the cast.
+  compact: ((request: LLMRequest) => {
+    requests.push(request)
+    return checkpoints.shift()?.() ?? Effect.die("no scripted native compaction")
+  }) as unknown as Context.Service.Shape<typeof LLMClient.Service>["compact"],
   stream: (request: LLMRequest) => {
     requests.push(request)
     const scripted = replies.shift()
@@ -1859,6 +1877,49 @@ it.effect("a summary that a compaction hook supplies on the native path is forma
     expect(run.sent).toEqual([])
     expect(run.summary).toBe("Summary:\n## Objective\n- native")
     expect(JSON.stringify(run.events)).not.toContain("DRAFT-")
+  }),
+)
+
+// A summary compaction sends a rejected request to its fallback; a native one still resends its history as transcript
+// text, and the transcript leaves reasoning out.
+it.effect("a native compaction rejected as too large resends its history as text without the assistant's reasoning", () =>
+  Effect.gen(function* () {
+    const endpoint = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:1" }).responses("gpt-5.4-mini")
+    checkpoints = [
+      () =>
+        Effect.fail(
+          new AIError({ reason: new InvalidRequestError({ message: "Too large", classification: "payload-too-large" }) }),
+        ),
+      () =>
+        Effect.succeed(
+          CompactionCheckpointResponse.make({
+            responseID: "resp_cm2_native_text",
+            checkpoint: { type: "compaction", provider: endpoint.provider, encrypted: "native-text" },
+          }),
+        ),
+    ]
+    const reasoned = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.create(),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [
+        { type: "reasoning", text: "Private reasoning" },
+        { type: "text", text: "Answer 0" },
+      ],
+      time: { created: 0, completed: 0 },
+    })
+    const run = yield* scripted("ses_cm2_native_text", [userText("Request 0"), reasoned], [], {
+      context: (context) => ({ ...context, model: { ...context.model, model: endpoint, compaction: { type: "native" } } }),
+    }).pipe(Effect.ensuring(Effect.sync(() => (checkpoints = []))))
+
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(2)
+    // The first send carries the reasoning as a part of its own; the transcript text leaves it out.
+    expect(run.sent[0]?.messages.some((message) => message.content.some((part) => part.type === "reasoning"))).toBe(true)
+    const transcript = textOf(run.sent[1]?.messages.at(-1))
+    expect(transcript).toContain("[Assistant]: Answer 0")
+    expect(transcript).not.toContain("Private reasoning")
   }),
 )
 
