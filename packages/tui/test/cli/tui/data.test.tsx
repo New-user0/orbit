@@ -1,19 +1,22 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import type { OrbitEvent } from "@orbit/client"
 import { SessionMessage } from "@orbit/core/session/message"
 import { Bus } from "@orbit/core/bus"
 import { Event } from "@orbit/schema/event"
 import { Expected } from "../../../../core/test/lib/session-message"
-import { createEffect, onMount, type ParentProps } from "solid-js"
+import { createEffect, createSignal, onMount, type ParentProps } from "solid-js"
+import type { CapturedSpan, RGBA } from "@opentui/core"
+import type { Context } from "@orbit/plugin/tui/context"
 import { ConfigProvider } from "../../../src/config"
 import { ClientProvider, useClient } from "../../../src/context/client"
 import { DataProvider as DataProviderBase, useData } from "../../../src/context/data"
 import { Keymap } from "../../../src/context/keymap"
 import { LocationProvider, useLocation } from "../../../src/context/location"
 import { RouteProvider } from "../../../src/context/route"
-import { ThemeProvider } from "../../../src/context/theme"
+import { ThemeProvider, useTheme } from "../../../src/context/theme"
+import { PromptFooter } from "../../../src/feature-plugins/prompt/footer"
 import { Composer } from "../../../src/routes/session/composer"
 import { DialogProvider } from "../../../src/ui/dialog"
 import { ToastProvider } from "../../../src/ui/toast"
@@ -3626,4 +3629,396 @@ test("a retry under the same client-minted ID cannot duplicate rows", async () =
   } finally {
     app.renderer.destroy()
   }
+})
+
+// context-memory-1 part 2. The data store keeps the latest `session.context.updated` of each session it knows, and the
+// prompt's footer draws it as the reference draws its context warning: nothing while the report is stale (a compaction
+// or a clearing happened since the last measured response) or below the warning band; a muted "N% left before
+// auto-compaction" with automatic compaction on; and, with it off, "Context almost full (N% left) · run /compact" in the
+// warning or error feedback color by the report's state. Each row draws the real footer from the real store.
+describe("context report", () => {
+  type Report = Extract<OrbitEvent, { type: "session.context.updated" }>["data"]
+  const sessionID = "ses_context"
+
+  // 175,000 of a 180,000-token window (200,000 less the summary's 20,000) with automatic compaction off: 3% left, inside
+  // the reference's 20,000-token band.
+  const report = (input: Partial<Report> = {}): Report => ({
+    sessionID,
+    used: 175_000,
+    window: 180_000,
+    threshold: 167_000,
+    auto: false,
+    percentLeft: 3,
+    state: "error",
+    blocking: 177_000,
+    paused: false,
+    stale: false,
+    ...input,
+  })
+  // With automatic compaction on, percent left is of the threshold and there is no blocking limit.
+  const auto = (input: Partial<Report> = {}): Report => ({
+    sessionID,
+    used: 160_000,
+    window: 180_000,
+    threshold: 167_000,
+    auto: true,
+    percentLeft: 4,
+    state: "error",
+    paused: false,
+    stale: false,
+    ...input,
+  })
+  const full = (percent: number) => `Context almost full (${percent}% left) · run /compact`
+  const before = (percent: number) => `${percent}% left before auto-compaction`
+
+  async function renderFooter(input: { width?: number; mode?: "normal" | "shell"; showDetails?: () => boolean } = {}) {
+    const events = createEventStream()
+    const calls = createFetch((url) => {
+      const info = /^\/api\/session\/(ses_[a-z_]+)$/.exec(url.pathname)
+      if (info)
+        return json({
+          data: {
+            id: info[1],
+            projectID: "proj_test",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            time: { created: 0, updated: 0 },
+            title: "Context",
+            location: { directory },
+            agent: "build",
+            model: { providerID: "provider", id: "model" },
+          },
+        })
+    }, events)
+    const [viewed, setViewed] = createSignal(sessionID)
+    let data!: ReturnType<typeof useData>
+    let client!: ReturnType<typeof useClient>
+    let theme!: ReturnType<typeof useTheme>
+
+    function Footer() {
+      data = useData()
+      client = useClient()
+      theme = useTheme()
+      const context = {
+        location: { directory },
+        theme,
+        data,
+        keymap: { shortcuts: () => [], dispatch: () => {} },
+      } as unknown as Context
+      return (
+        <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
+          <text>footer</text>
+          <PromptFooter
+            context={context}
+            sessionID={viewed()}
+            mode={input.mode ?? "normal"}
+            showDetails={input.showDetails?.() ?? true}
+          />
+        </box>
+      )
+    }
+
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ClientProvider api={createApi(calls.fetch)}>
+            <DataProvider>
+              <Keymap.Provider>
+                <ThemeProvider mode="dark" source={emptyThemeSource}>
+                  <Footer />
+                </ThemeProvider>
+              </Keymap.Provider>
+            </DataProvider>
+          </ClientProvider>
+        </TestTuiContexts>
+      ),
+      { width: input.width ?? 120, height: 2 },
+    )
+    app.renderer.start()
+    // The footer mounts once the theme has loaded.
+    await wait(() => client?.connection.status() === "connected")
+    await data.session.sync(sessionID)
+    let marks = 0
+
+    return {
+      app,
+      events,
+      data,
+      client,
+      theme,
+      view: setViewed,
+      emit: (data: Report) =>
+        emitEvent(events, { id: `evt_context_${data.percentLeft}`, created: 1, type: "session.context.updated", data }),
+      // Events are handled in order, so once a later cost change is drawn every event before it has been handled.
+      async settle(id = sessionID) {
+        const cost = ++marks
+        emitEvent(events, {
+          id: `evt_mark_${cost}`,
+          created: 2,
+          type: "session.usage.updated",
+          data: { sessionID: id, cost, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+        })
+        return app.waitForFrame((frame) => frame.includes(`$${cost}.00`))
+      },
+      async [Symbol.asyncDispose]() {
+        app.renderer.destroy()
+      },
+    }
+  }
+
+  // The colors of the drawn cells that hold `text`, on the line that holds it.
+  function colorsOf(app: Awaited<ReturnType<typeof testRender>>, text: string) {
+    const joined = (spans: CapturedSpan[]) => spans.reduce((result, span) => result + span.text, "")
+    const line = app.renderer.currentRenderBuffer.getSpanLines().find((line) => joined(line.spans).includes(text))
+    if (!line) return []
+    const start = joined(line.spans).indexOf(text)
+    const end = start + text.length
+    return line.spans.reduce<{ offset: number; colors: RGBA[] }>(
+      (result, span) => ({
+        offset: result.offset + span.text.length,
+        colors:
+          result.offset < end && result.offset + span.text.length > start && span.text.trim()
+            ? [...result.colors, span.fg]
+            : result.colors,
+      }),
+      { offset: 0, colors: [] },
+    ).colors
+  }
+
+  test("draws the newest report of the session in view", async () => {
+    await using setup = await renderFooter()
+    setup.emit(report({ percentLeft: 9, used: 164_000 }))
+    await setup.app.waitForFrame((frame) => frame.includes(full(9)))
+
+    setup.emit(report())
+    const frame = await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    expect(frame).not.toContain(full(9))
+  })
+
+  test.each([
+    { name: "a stale report (a compaction since the last measured response)", next: report({ stale: true }) },
+    { name: "a report below the warning band", next: report({ percentLeft: 30, used: 126_000, state: "ok" }) },
+    {
+      name: "a report in a state this client does not know",
+      next: report({ state: "critical" as Report["state"] }),
+    },
+  ])("draws nothing for $name", async (row) => {
+    await using setup = await renderFooter()
+    setup.emit(report())
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    setup.emit(row.next)
+    const frame = await setup.settle()
+
+    expect(frame).not.toContain("Context almost full")
+  })
+
+  test("draws nothing for another session's report", async () => {
+    await using setup = await renderFooter()
+    await setup.data.session.sync("ses_other")
+    setup.emit(report({ sessionID: "ses_other" }))
+    const frame = await setup.settle()
+
+    expect(frame).not.toContain("Context almost full")
+    // Control: the other session's report is kept and drawn when that session is in view.
+    setup.view("ses_other")
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+  })
+
+  test("keeps no report for a session it has not loaded", async () => {
+    await using setup = await renderFooter()
+    setup.emit(report({ sessionID: "ses_late" }))
+    await setup.settle()
+    await setup.data.session.sync("ses_late")
+    setup.view("ses_late")
+    const frame = await setup.settle("ses_late")
+
+    expect(frame).not.toContain("Context almost full")
+    // Control: a report that arrives once the session is known is drawn.
+    setup.emit(report({ sessionID: "ses_late", percentLeft: 2 }))
+    await setup.app.waitForFrame((frame) => frame.includes(full(2)))
+  })
+
+  test.each([
+    {
+      name: "the session is deleted and loaded again",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        emitEvent(setup.events, {
+          id: "evt_context_deleted",
+          created: 3,
+          type: "session.deleted",
+          durable: durable(sessionID, 3, 2),
+          data: { sessionID },
+        })
+        await wait(() => setup.data.session.get(sessionID) === undefined)
+        await setup.data.session.sync(sessionID)
+      },
+    },
+    {
+      name: "another model is selected",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        emitEvent(setup.events, {
+          id: "evt_context_model",
+          created: 3,
+          type: "session.model.selected",
+          durable: durable(sessionID, 3),
+          data: { sessionID, model: { providerID: "provider", id: "smaller" } },
+        })
+      },
+    },
+    {
+      name: "a revert is committed",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        emitEvent(setup.events, {
+          id: "evt_context_revert",
+          created: 3,
+          type: "session.revert.committed",
+          durable: durable(sessionID, 3),
+          data: { sessionID, to: "msg_revert" },
+        })
+      },
+    },
+    {
+      name: "the configuration changes",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        emitEvent(setup.events, {
+          id: "evt_context_config",
+          created: 3,
+          type: "config.updated",
+          data: {},
+        })
+      },
+    },
+    {
+      name: "the session moves to another location",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        emitEvent(setup.events, {
+          id: "evt_context_moved",
+          created: 3,
+          type: "session.moved",
+          durable: durable(sessionID, 3),
+          data: { sessionID, location: { directory: `${directory}-moved` }, projectID: "proj_test", subpath: "" },
+        })
+        await wait(() => setup.data.session.get(sessionID)?.location.directory === `${directory}-moved`)
+      },
+    },
+    {
+      name: "the event stream reconnects",
+      run: async (setup: Awaited<ReturnType<typeof renderFooter>>) => {
+        setup.events.disconnect()
+        await wait(() => setup.client.connection.status() === "reconnecting")
+        await wait(() => setup.client.connection.status() === "connected", 4000)
+      },
+    },
+  ])("forgets the report when $name", async (row) => {
+    await using setup = await renderFooter()
+    setup.emit(report())
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    await row.run(setup)
+    const frame = await setup.settle()
+
+    expect(frame).not.toContain("Context almost full")
+  })
+
+  test("keeps the report when another location's configuration changes", async () => {
+    await using setup = await renderFooter()
+    setup.emit(report())
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    // emitEvent stamps the default location; this event belongs to another one.
+    setup.events.emit({
+      id: "evt_context_other_config",
+      created: 3,
+      type: "config.updated",
+      location: { directory: `${directory}-elsewhere` },
+      data: {},
+    })
+
+    expect(await setup.settle()).toContain(full(3))
+  })
+
+  test("hides the line while a revert is staged, draws it when the revert is cleared and forgets it when committed", async () => {
+    await using setup = await renderFooter()
+    setup.emit(report())
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    emitEvent(setup.events, {
+      id: "evt_context_staged",
+      created: 3,
+      type: "session.revert.staged",
+      durable: durable(sessionID, 3),
+      data: { sessionID, revert: { messageID: "msg_revert" } },
+    })
+    await wait(() => setup.data.session.get(sessionID)?.revert?.messageID === "msg_revert")
+    expect(await setup.settle()).not.toContain("Context almost full")
+
+    emitEvent(setup.events, {
+      id: "evt_context_cleared",
+      created: 4,
+      type: "session.revert.cleared",
+      durable: durable(sessionID, 4),
+      data: { sessionID },
+    })
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    emitEvent(setup.events, {
+      id: "evt_context_committed",
+      created: 5,
+      type: "session.revert.committed",
+      durable: durable(sessionID, 5),
+      data: { sessionID, to: "msg_revert" },
+    })
+    expect(await setup.settle()).not.toContain("Context almost full")
+  })
+
+  test.each([
+    { name: "on", paused: false },
+    // The reference shows nothing about the pause; the line reads the same.
+    { name: "on and paused by repeated failures", paused: true },
+  ])("draws a muted line with automatic compaction $name", async (row) => {
+    await using setup = await renderFooter()
+    setup.emit(auto({ paused: row.paused }))
+    await setup.app.waitForFrame((frame) => frame.includes(before(4)))
+
+    const colors = colorsOf(setup.app, before(4))
+    expect(colors.length).toBeGreaterThan(0)
+    expect(colors.every((color) => color.equals(setup.theme.text.muted))).toBe(true)
+  })
+
+  test.each([
+    { state: "warning" as const, token: "warning" as const },
+    { state: "error" as const, token: "error" as const },
+  ])("draws the $state feedback color with automatic compaction off", async (row) => {
+    await using setup = await renderFooter()
+    setup.emit(report({ state: row.state }))
+    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    const colors = colorsOf(setup.app, full(3))
+    expect(colors.length).toBeGreaterThan(0)
+    expect(colors.every((color) => color.equals(setup.theme.text.feedback[row.token].base))).toBe(true)
+  })
+
+  test("draws the line in shell mode too", async () => {
+    await using setup = await renderFooter({ mode: "shell" })
+    setup.emit(report())
+    const frame = await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+
+    expect(frame).toContain("esc")
+  })
+
+  test("hides the line while a narrow footer hides its details for the interrupt hint", async () => {
+    const [details, setDetails] = createSignal(true)
+    await using setup = await renderFooter({ width: 60, showDetails: details })
+    setup.emit(report())
+    await setup.app.waitForFrame((frame) => frame.includes("Context almost full (3% left)"))
+
+    setDetails(false)
+    const frame = await setup.app.waitForFrame((frame) => !frame.includes("Context almost full"))
+
+    expect(frame).not.toContain("Context almost full")
+    setDetails(true)
+    await setup.app.waitForFrame((frame) => frame.includes("Context almost full (3% left)"))
+  })
 })

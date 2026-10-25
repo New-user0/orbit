@@ -4549,3 +4549,25 @@ In YAML an alias names a value that an anchor wrote earlier, and Orbit's readers
 
 **What to do:** Nothing. A buffer you set still sets how far below the window compaction starts, measured from the
 window less the summary's room instead of the whole window; lower it if compaction now starts earlier than you want.
+
+## The terminal UI warns when the context is almost full
+
+The full-screen terminal UI now draws the latest `session.context.updated` report of the session in view in the prompt's
+footer row, after the model and location, on one line. The line replaces the context bar and gives the footer shortcuts
+their place when the row cannot hold both; a very short row cuts it at its end, keeping its start and percent.
+
+- **When it shows.** Only for a report whose state is `warning` or `error` and that is not `stale`. Before any report,
+  below the warning band, after a compaction, and for a state this client does not know, the footer is as before.
+- **Words.** With automatic compaction on, a muted `N% left before auto-compaction`, also while repeated failures have
+  paused it. With it off, `Context almost full (N% left) · run /compact` in the warning or error feedback color.
+- **When it hides.** It is hidden while a revert is staged (`/undo`) and drawn again when the revert is cleared. The
+  report is forgotten when the session is deleted, another model is selected, the configuration changes, the
+  session moves to another location, a revert is
+  committed or the event stream reconnects, and the line stays hidden until the next measured response. It is hidden
+  too while a narrow footer hides its details for the interrupt hint, and drawn in shell mode as in normal mode.
+- **Plugins.** `context.data.session.context(sessionID)` returns the latest report of a loaded session, or `undefined`.
+- Mini, ACP, VS Code and SDK hosts draw nothing.
+
+**Affects:** people who use the full-screen terminal UI and run long sessions.
+
+**What to do:** Nothing. Run `/compact` when the line asks for it.
