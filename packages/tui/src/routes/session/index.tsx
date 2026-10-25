@@ -771,7 +771,7 @@ export function Session(props: {
         preselected={preselected}
       />
     ))
-  /** Whether nothing a person would miss follows the prompt: no prompt, and no reply with text or a tool call. */
+  /** Whether nothing a person would miss follows the prompt: no prompt, and no reply with text, a tool or an error. */
   const onlyEmptyAfter = (messageID: string) => {
     const list = rewindable()
     const index = list.findIndex((message) => message.id === messageID)
@@ -1667,11 +1667,13 @@ export function Session(props: {
 
 /**
  * Whether a message is one a person would miss after a rewind: a prompt, shell command or skill, or a reply holding
- * text or a tool call. Notices, switches, idle markers and replies with nothing in them are not.
+ * text, a tool call or the error it failed with. Notices, switches, idle markers, compaction checkpoints and replies
+ * with nothing in them are not; neither is a reply that only shows it was interrupted (its error is `aborted`).
  */
 function meaningful(message: SessionMessageInfo) {
   if (message.type === "user" || message.type === "shell" || message.type === "skill") return true
   if (message.type !== "assistant") return false
+  if (message.error && message.error.type !== "aborted") return true
   return message.content.some((part) => part.type === "tool" || (part.type === "text" && part.text.trim() !== ""))
 }
 

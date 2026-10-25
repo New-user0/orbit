@@ -597,6 +597,34 @@ const shellCommand = "make build"
 const prompts = ["Add the parser", "Rename the helper", "Fix the", "(current)"]
 // The newest prompt with a reply that has nothing in it (still running when the session runs), then `after`.
 const emptyReply = (after: unknown[], running = false) => [...conversation, quick, reply([], !running), ...after]
+// The kinds of reply the newest prompt can get, each checked against the reference's rule that only messages a person
+// would not miss may follow (fix loop 8). A reply that failed with a provider error draws that error, as the
+// reference's error reply (a text block holding it) does, so it counts; so does a reply holding only a tool call, and a
+// `!` command whose output is drawn. A reply that shows only that it was interrupted (its error is `aborted`), one
+// still waiting to retry, and one holding only reasoning do not.
+const replyOf = (fields: Record<string, unknown>, running = false) => [
+  ...conversation,
+  quick,
+  { ...reply([], !running), ...fields },
+]
+const failed = { finish: "error", error: { type: "api", message: "Rate limit reached for this model" } }
+const interrupted = { finish: "error", error: { type: "aborted", message: "Step interrupted" } }
+const retrying = {
+  retry: { attempt: 1, at: Date.now() - 58_000, error: { type: "api", message: "Overloaded, trying again" } },
+}
+const reasoningOnly = { content: [{ type: "reasoning", text: "Weighing the options" }] }
+const toolOnly = {
+  content: [
+    {
+      type: "tool",
+      id: "call-read",
+      name: "read",
+      state: { status: "running", input: {}, metadata: {} },
+      time: { created: 1 },
+    },
+  ],
+}
+const ranWithOutput = { ...ranAfter, output: { output: "built\n", cursor: 6, size: 6, truncated: false } }
 
 type Cell = {
   entry: "Esc twice" | "/rewind" | "/checkpoint" | "the message dialog" | "the skip-picker shortcut" | "an interrupt"
@@ -814,6 +842,48 @@ const matrix: Cell[] = [
   },
   {
     entry: "the skip-picker shortcut",
+    row: "a reply that failed with a provider error",
+    messages: replyOf(failed),
+    target: "Quick question",
+    expect: "step 2",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "an interrupted reply",
+    messages: replyOf(interrupted),
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a reply waiting to retry",
+    messages: replyOf(retrying),
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a reply holding only reasoning",
+    messages: replyOf(reasoningOnly),
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a reply holding only a tool call",
+    messages: replyOf(toolOnly),
+    target: "Quick question",
+    expect: "step 2",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a shell row with output after it",
+    messages: emptyReply([ranWithOutput]),
+    target: "Quick question",
+    expect: "step 2",
+  },
+  {
+    entry: "the skip-picker shortcut",
     row: "rows behind a staged revert",
     messages: emptyReply([]),
     revert: "msg_0007",
@@ -870,6 +940,51 @@ const matrix: Cell[] = [
   },
   {
     entry: "an interrupt",
+    row: "a reply that failed with a provider error",
+    running: true,
+    messages: replyOf(failed, true),
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+  {
+    entry: "an interrupt",
+    row: "an interrupted reply",
+    running: true,
+    messages: replyOf(interrupted, true),
+    expect: "restored",
+  },
+  {
+    entry: "an interrupt",
+    row: "a reply waiting to retry",
+    running: true,
+    messages: replyOf(retrying, true),
+    expect: "restored",
+  },
+  {
+    entry: "an interrupt",
+    row: "a reply holding only reasoning",
+    running: true,
+    messages: replyOf(reasoningOnly, true),
+    expect: "restored",
+  },
+  {
+    entry: "an interrupt",
+    row: "a reply holding only a tool call",
+    running: true,
+    messages: replyOf(toolOnly, true),
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+  {
+    entry: "an interrupt",
+    row: "a shell row with output after the empty reply",
+    running: true,
+    messages: emptyReply([ranWithOutput], true),
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+  {
+    entry: "an interrupt",
     row: "rows behind a staged revert",
     running: true,
     messages: emptyReply([], true),
@@ -904,11 +1019,12 @@ test.each(matrix)("$entry on $row", async (cell) => {
     revert: cell.revert,
     answer: (request) => (request.path.endsWith("/inbox") ? json({ data: cell.inbox ?? [] }) : undefined),
   })
-  // A running session is ready once its interrupt hint shows; a waiting prompt once the transcript draws it.
+  // A running session is ready once its interrupt hint shows (an interrupted reply's footer also says "interrupted"); a
+  // waiting prompt once the transcript draws it.
   await setup.waitForFrame(
     (frame) =>
       frame.includes("Rewind fixture") &&
-      (!cell.running || frame.includes("interrupt")) &&
+      (!cell.running || frame.includes("esc interrupt")) &&
       (!cell.inbox?.length || frame.includes("Waiting prompt")),
     { maxPasses: 200 },
   )
@@ -952,6 +1068,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
   if (cell.expect === "step 2") {
     const frame = await setup.waitForFrame((frame) => frame.includes("Never mind"))
     expect(frame).toContain("just before this prompt:")
+    expect(frame).toContain("Conversation only")
     expect(frame).toContain(cell.target!)
     expect(setup.actions()).toEqual([])
     return
