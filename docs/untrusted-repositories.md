@@ -2237,9 +2237,10 @@ no command to paste") and the `holderRefusal` rows of `packages/cli/test/trust.t
   and reads token counts with `Number`.
 - The rewind picker (`packages/tui/src/routes/session/dialog-rewind.tsx`) draws four values a clone or the store can
   choose: a file name from a prompt's `scope=prompt` diff on its list row and one from the dry run's `filesChanged` in
-  its confirm step, each as `plain(basename)`; the stored prompt, or the stored command of a `!` shell row, on its row
-  and in the confirm step, through `bodyText` with line breaks turned to spaces; and the server's message in its error
-  line, through `plain`. The storybook's `rewind` story draws the same component with a hostile fixture. Tests:
+  its confirm step, each as `plain(basename)`; the stored prompt, or the stored command of a `!` shell row, through
+  `bodyText` on its list row, which turns line breaks into spaces, and in the confirm step, which quotes up to its first
+  four lines and 500 characters and keeps their line breaks; and the server's message in its error line, through
+  `plain`. The storybook's `rewind` story draws the same component with a hostile fixture. Tests:
   `packages/tui/test/rewind-picker.test.tsx` ("a repository file name and a stored prompt are drawn with their control
   characters written out", which also draws a hostile shell command, and "a refused rewind's message is drawn with its
   control characters written out") and `packages/tui/test/cli/tui/rewind-story.test.tsx`, with ordinary names and an
