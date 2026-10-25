@@ -80,7 +80,7 @@ import { usePromptRef } from "../../context/prompt"
 import { projectedPromptInput } from "../../prompt/codec"
 import { appendPrompt, usePromptHistory } from "../../prompt/history"
 import { useLog } from "../../context/log"
-import { DialogRewind, type RewindDryRun, type RewindOption } from "./dialog-rewind"
+import { DialogRewind, REWIND_GONE, type RewindDryRun, type RewindOption } from "./dialog-rewind"
 import { deduplicateVisibleImages } from "../../prompt/attachment"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
@@ -790,15 +790,25 @@ export function Session(props: {
   // (still in the inbox, or taken back by a staged revert) is not in `rewindable()`, so it opens the picker, which
   // closes at once without a dry run: nothing is interrupted, asked or changed.
   // The picker replaces the message dialog at once and shows `Checking files…` while a running session stops and the
-  // dry run answers, so the dialog cannot be chosen twice. It goes on to step 2 only when a file would change; otherwise
-  // the clear below removes it first, unless the person closed it already: this await resumes on the dry run's answer
-  // before the picker's own continuation, which waits one more step behind its `.catch`.
+  // dry run answers, so the dialog cannot be chosen twice. It goes on to step 2 when a file would change, or when the
+  // prompt is no longer followed only by empty replies once the dry run answers; otherwise the clear below removes it
+  // first, unless the person closed it already: this await resumes on the dry run's answer before the picker's own
+  // continuation, which waits one more step behind its `.catch`.
   const rewindMessage = async (messageID: string) => {
     if (!onlyEmptyAfter(messageID)) return openRewind(messageID)
     const checked = rewindDryRun(messageID)
     const key = Symbol("rewind")
     openRewind(messageID, checked, key)
     if (changesFiles(await checked) || dialog.key !== key) return
+    // The conversation can change while the dry run runs, and while a running session stops before it. Staging at a
+    // prompt another client's revert took back would move that revert and put back what it hid, so nothing is sent and
+    // the refusal is shown (class 13). A reply that gained something leaves the picker to go on to step 2.
+    if (!rewindable().some((message) => message.id === messageID)) {
+      dialog.clear()
+      toast.show({ message: REWIND_GONE, variant: "error", duration: 5000 })
+      return
+    }
+    if (!onlyEmptyAfter(messageID)) return
     dialog.clear()
     await rewind("conversation", messageID).catch((error) =>
       toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }),
@@ -1693,12 +1703,14 @@ function meaningful(message: SessionMessageInfo) {
 
 /**
  * What a prompt's own edits depend on, for the rewind picker to ask again when it changes: each message up to and
- * including the next prompt or `!` command, with the time a reply or command completed and how many tool calls of a
- * reply finished, and every folder switch after the prompt. Streamed text changes none of it.
+ * including the next prompt, with the time a reply or command completed and how many tool calls of a reply finished,
+ * and every folder switch after the prompt. Streamed text changes none of it. The range ends where the server's
+ * `scope=prompt` diff ends it, at the next user message: a `!` command run during a reply does not end it, so the
+ * reply's later steps still count.
  */
 function promptRevision(list: readonly SessionMessageInfo[], position: number) {
   const after = list.slice(position + 1)
-  const next = after.findIndex((message) => message.type === "user" || message.type === "shell")
+  const next = after.findIndex((message) => message.type === "user")
   const range = next === -1 ? after : after.slice(0, next + 1)
   return [
     ...range.map((message) => {

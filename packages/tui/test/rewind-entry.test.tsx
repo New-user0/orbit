@@ -538,6 +538,90 @@ test("the message dialog's Rewind on a prompt that left the conversation while t
   expect(setup.actions()).toEqual([])
 })
 
+// The shortcut decides again once its dry run answers, because the conversation can change while the dry run runs (and
+// while a running session is stopped before it). A prompt another client's revert took back is not staged at: that
+// would move the other revert and put back what it hid. The refusal is shown, and nothing more is sent after the hide.
+test.each([{ running: false }, { running: true }])(
+  "the message dialog's shortcut sends nothing for a prompt another client's revert hid during its dry run (running: $running)",
+  async (row) => {
+    await using state = await tmpdir()
+    const held = Promise.withResolvers<void>()
+    await using setup = await rewindApp({
+      state: state.path,
+      running: row.running,
+      messages: [...conversation, quick, reply([], !row.running)],
+      answer: (request) => {
+        if (!(request.path.endsWith("/revert/files") && request.body?.dryRun)) return undefined
+        return held.promise.then(() =>
+          json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } }),
+        )
+      },
+    })
+    await setup.waitForFrame((frame) => frame.includes("Quick question"))
+    await openFromTimeline(setup, "Quick question")
+    await until(() => setup.dryRunsSent().length === 1, "the dry run")
+    await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+    const before = setup.actions()
+    setup.events.emit({
+      id: "evt_staged_elsewhere",
+      created: Date.now(),
+      type: "session.revert.staged",
+      durable: { aggregateID: sessionID, seq: 200, version: 1 },
+      data: { sessionID, revert: { messageID: "msg_0003", files: [] } },
+    })
+    // The event reaches the client over its event stream, behind the picker that covers the transcript: give it time.
+    await Bun.sleep(300)
+    held.resolve()
+
+    // The refusal is a toast, which wraps the sentence after "in the".
+    const frame = await setup.waitForFrame(
+      (frame) => frame.includes("Could not rewind: that prompt is no longer in the") && frame.includes("conversation."),
+      { maxPasses: 200 },
+    )
+    expect(frame).not.toContain("Checking files…")
+    await Bun.sleep(200)
+    expect(setup.actions()).toEqual(before)
+    expect(before).toEqual(row.running ? ["interrupt", "wait"] : [])
+  },
+)
+
+// The same recheck reads the conversation as it is after the stop: a reply that gained text while the running session
+// stopped is something a person would miss, so the picker goes on to step 2 instead of rewinding at once.
+test("the message dialog's shortcut opens step 2 when the reply gained text before its dry run answered", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<void>()
+  await using setup = await rewindApp({
+    state: state.path,
+    running: true,
+    messages: [...conversation, quick, reply([], false)],
+    answer: (request) => {
+      if (!(request.path.endsWith("/revert/files") && request.body?.dryRun)) return undefined
+      return held.promise.then(() => json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } }))
+    },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Quick question"))
+  await openFromTimeline(setup, "Quick question")
+  await until(() => setup.dryRunsSent().length === 1, "the dry run")
+  const event = (type: string, data: Record<string, unknown>, seq: number) =>
+    setup.events.emit({
+      id: `evt_text_${seq}`,
+      created: Date.now(),
+      type,
+      durable: { aggregateID: sessionID, seq, version: 1 },
+      data: { sessionID, assistantMessageID: "msg_0008", ordinal: 1, ...data },
+    } as never)
+  event("session.text.started", {}, 300)
+  event("session.text.delta", { delta: "Half an answer" }, 301)
+  // The picker covers the transcript, so the text cannot be waited for in the frame: give the event stream time.
+  await Bun.sleep(300)
+  held.resolve()
+
+  const frame = await setup.waitForFrame((frame) => frame.includes("Conversation only"), { maxPasses: 200 })
+  expect(frame).toContain("Rewind the conversation to just before this prompt:")
+  await Bun.sleep(200)
+  expect(setup.actions()).toEqual(["interrupt", "wait"])
+})
+
 // Class 13: a conversation rewind the server refuses, on the shortcut or after an interrupt, is shown as an error.
 test.each([
   { label: "the message dialog's shortcut", running: false },

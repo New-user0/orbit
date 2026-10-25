@@ -1454,6 +1454,72 @@ test("the newest prompt's file line follows its reply's edits", async () => {
   expect(askedFor(setup, "msg_0003")).toBe(1)
 })
 
+// The server's `scope=prompt` range runs to the next user message, so a `!` command the person runs while a reply is
+// running does not end it: the reply's next step, after that command, still counts for the prompt. The row asks again
+// when that step ends, as it does without the command (the control).
+const shellMidReply = {
+  id: "msg_0006a",
+  type: "shell",
+  shellID: "sh_mid",
+  command: "ls",
+  status: "exited",
+  exit: 0,
+  output: { output: "done\n", cursor: 5, size: 5, truncated: false },
+  time: { created: Date.now() - 60_000, completed: Date.now() - 60_000 + 100 },
+}
+const laterStep = {
+  id: "msg_0007",
+  type: "assistant",
+  agent: "build",
+  model: { providerID: "provider", id: "model" },
+  time: { created: Date.now() - 30_000 },
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  content: [
+    {
+      type: "tool",
+      id: "call_write",
+      name: "write",
+      state: { status: "completed", input: { filePath: "src/c.ts" }, content: [], metadata: {} },
+      time: { created: 1, completed: 2 },
+    },
+  ],
+}
+test.each([
+  { label: "after a `!` command run during the reply", messages: [...conversation, shellMidReply, laterStep] },
+  { label: "with no command before it (control)", messages: [...conversation, laterStep] },
+])("a reply step that ends $label asks the prompt's stats again", async (row) => {
+  await using state = await tmpdir()
+  let newest = 0
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: row.messages,
+    answer: (request) => {
+      const query = new URLSearchParams(request.search)
+      if (!request.path.endsWith("/diff") || query.get("from") !== "msg_0005") return undefined
+      return json({
+        data: newest++ === 0 ? [] : [{ file: "src/c.ts", patch: "", additions: 4, deletions: 0, status: "added" }],
+      })
+    },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Fixed the title."))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => listHas(frame, "No file edits") === 1)
+  live(setup, "session.step.ended", {
+    assistantMessageID: "msg_0007",
+    finish: "stop",
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "c.ts +4 -0") === 1, { maxPasses: 200 })
+  const [prompt, line] = rowOrder(frame, ["Fix the", "c.ts +4 -0"])
+  expect(line - prompt).toBe(1)
+  expect(listHas(frame, "No file edits")).toBe(0)
+  expect(askedFor(setup, "msg_0005")).toBe(2)
+})
+
 // A tool call that only starts or runs has written nothing yet, so it asks nothing; the moment it finishes, while the
 // reply is still running, the newest prompt's file line is asked again.
 test("a tool call of a running reply asks the stats again when it finishes, not when it starts", async () => {

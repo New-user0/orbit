@@ -39,6 +39,9 @@ const labels: Record<RewindOption | "never", string> = {
   never: "Never mind",
 }
 
+/** The refusal when the chosen prompt left the conversation (another client's revert took it back) before acting. */
+export const REWIND_GONE = "Could not rewind: that prompt is no longer in the conversation."
+
 const failures: Record<RewindOption, string> = {
   both: "Could not rewind the code and conversation",
   conversation: "Could not rewind the conversation",
@@ -179,8 +182,7 @@ export function DialogRewind(props: {
     if (current === "never") return back()
     // Another client's revert can take the prompt out of the conversation while step 2 is open. Staging at it then
     // would move that revert and put back what it hid, so nothing is sent.
-    if (!prompts().some((item) => item.id === prompt.id))
-      return setState({ step: "error", error: "Could not rewind: that prompt is no longer in the conversation." })
+    if (!prompts().some((item) => item.id === prompt.id)) return setState({ step: "error", error: REWIND_GONE })
     setState({ acting: true, chosen: mark ? index : undefined })
     props.act(current, prompt.id).then(
       () => mounted && close(),
