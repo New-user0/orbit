@@ -2003,7 +2003,12 @@ runs" is a permission.
   is the added lines of the recorded diff, a file that was there shows that diff, and a call that recorded no diff
   shows no text (the terminal UI names its file, Mini says it completed); the model's `content` is never drawn (rows in
   `packages/tui/test/cli/tui/write-ran.test.tsx` and `packages/tui/test/mini/scrollback.surface.test.ts`). Their
-  completed Edit already drew the recorded diff.
+  completed Edit already drew the recorded diff. The terminal UI's completed Write header writes out a control or bidi
+  character in the recorded file name through `bodyText`, as Edit's does (class 9; the bidi and escape rows of
+  `write-ran.test.tsx`). Only a person answers with their own version: the plugin context's `permission.reply` has no
+  `content` field, and `PluginHost` refuses a reply that carries one with `Permission.RevisionError`, because the
+  promise adapter decodes a plugin's reply against the route's payload, which has the field (classes 7, 12 and 13;
+  `packages/sdk/test/permission-revise.test.ts`, whose `@ts-expect-error` also pins the type).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

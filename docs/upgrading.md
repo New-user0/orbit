@@ -2378,7 +2378,11 @@ the Write completed.
 `content` with an `always` or `reject` decision, or on any other question (Patch, NotebookEdit, shell, search, web,
 MCP), is refused with a 400 `InvalidRequestError` whose `field` is `content`, and the question stays pending.
 
-**Affects:** clients and SDK callers that answer approvals; listeners of `permission.replied`; ACP clients; the terminal UI and Mini.
+A plugin cannot answer with its own version: the plugin context's `permission.reply` has no `content` field, and a
+reply that carries one anyway is refused with `Permission.RevisionError`, leaving the question pending and the file as
+it was.
+
+**Affects:** clients, SDK callers and plugins that answer approvals; listeners of `permission.replied`; ACP clients; the terminal UI and Mini.
 
 **What to do:** Nothing. Send `content` only for a request marked `revisable`, with a `once` decision.
 

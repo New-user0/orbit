@@ -440,16 +440,25 @@ export const make = Effect.fn("PluginHost.make")(function* (
                 : Effect.fail(new Error(`Permission request not found: ${input.requestID}`)),
             ),
           ),
+      // The plugin type has no `content`, but the promise adapter decodes the reply against the route's payload, which
+      // does; a plugin that sends one is refused rather than having its version dropped (class 7, class 12).
       reply: (input) =>
-        permission
-          .get(input.requestID)
-          .pipe(
-            Effect.flatMap((request) =>
-              request?.sessionID === input.sessionID
-                ? permission.reply({ requestID: input.requestID, reply: input.decision, message: input.message })
-                : Effect.fail(new Error(`Permission request not found: ${input.requestID}`)),
-            ),
-          ),
+        "content" in input && input.content !== undefined
+          ? Effect.fail(
+              new Permission.RevisionError({
+                requestID: input.requestID,
+                reason: "A plugin cannot answer an approval with revised content",
+              }),
+            )
+          : permission
+              .get(input.requestID)
+              .pipe(
+                Effect.flatMap((request) =>
+                  request?.sessionID === input.sessionID
+                    ? permission.reply({ requestID: input.requestID, reply: input.decision, message: input.message })
+                    : Effect.fail(new Error(`Permission request not found: ${input.requestID}`)),
+                ),
+              ),
     },
     plugin: {
       list: () => response(plugin.list()),
