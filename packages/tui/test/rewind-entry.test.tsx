@@ -200,6 +200,13 @@ test.each([
     shortcut: true,
   },
   {
+    label: "the dry run names its files in a string",
+    canRewind: true,
+    filesChanged: "/tmp/orbit/packages/tui/src/quick.ts",
+    after: [],
+    shortcut: true,
+  },
+  {
     label: "a file would change",
     canRewind: true,
     filesChanged: ["/tmp/orbit/packages/tui/src/quick.ts"],

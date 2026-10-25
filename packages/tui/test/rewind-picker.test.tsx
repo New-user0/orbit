@@ -681,7 +681,8 @@ test("Enter while the dry run runs asks it once, and Esc then closes the picker 
   expect(setup.actions()).toEqual([])
 })
 
-// Enter again while a rewind is under way sends nothing more.
+// Enter or a digit again while a rewind is under way sends nothing more, and the digit does not move the focus off the
+// option that runs.
 test("Enter while a rewind runs sends it once", async () => {
   await using state = await tmpdir()
   const held = Promise.withResolvers<Response>()
@@ -695,7 +696,11 @@ test("Enter while a rewind runs sends it once", async () => {
   setup.mockInput.pressEnter()
   await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
   setup.mockInput.pressEnter()
+  setup.mockInput.pressKey("3")
   await Bun.sleep(300)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("› 1. Code and conversation")
+  expect(setup.actions().filter((action) => action.startsWith("files"))).toEqual([])
   held.resolve(json({ data: { messageID: "msg_0003", files: [] } }))
   await setup.waitForFrame((frame) => !frame.includes("Code and conversation"))
   expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([
@@ -818,4 +823,27 @@ test("a person's own keys for the dialog moves reach the picker", async () => {
   setup.mockInput.pressEnter()
   await setup.waitForFrame((frame) => frame.includes("Never mind"))
   expect(setup.dryRunsSent()).toEqual(["msg_0005"])
+})
+
+// Once a rewind is refused, the picker shows only its error line: a digit there chooses nothing.
+test("a digit on the error line sends nothing", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) =>
+      request.path.endsWith("/revert/stage")
+        ? json({ _tag: "SessionBusyError", sessionID, message: "Session is busy" }, { status: 409 })
+        : undefined,
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressKey("1")
+  await setup.waitForFrame((frame) => frame.includes("Could not rewind the code and conversation:"))
+  setup.mockInput.pressKey("3")
+  setup.mockInput.pressKey("1")
+  await Bun.sleep(300)
+  expect(setup.actions().filter((action) => action !== "interrupt" && action !== "wait")).toEqual([
+    `stage ${JSON.stringify({ messageID: "msg_0003" })}`,
+  ])
 })
