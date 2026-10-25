@@ -1256,7 +1256,8 @@ const pointerLines = (frame: string) => listLines(frame).filter((line) => line.i
 // Where each text is drawn in the list, top to bottom.
 const rowOrder = (frame: string, texts: string[]) =>
   texts.map((text) => listLines(frame).findIndex((line) => line.includes(text)))
-const inOrder = (order: number[]) => order.every((line, index) => line !== -1 && (index === 0 || line > order[index - 1]))
+const inOrder = (order: number[]) =>
+  order.every((line, index) => line !== -1 && (index === 0 || line > order[index - 1]))
 
 test.each([64, 120])(
   "a prompt that arrives while the list is open is one new row, and the pointer stays at its position, at %i columns",

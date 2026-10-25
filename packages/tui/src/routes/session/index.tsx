@@ -1711,9 +1711,7 @@ function promptRevision(list: readonly SessionMessageInfo[], position: number) {
       if (message.type === "shell") return `${message.id}:${message.time.completed ?? ""}`
       return message.id
     }),
-    ...after
-      .slice(range.length)
-      .flatMap((message) => (message.type === "location-switched" ?[message.id] : [])),
+    ...after.slice(range.length).flatMap((message) => (message.type === "location-switched" ? [message.id] : [])),
   ].join(" ")
 }
 
