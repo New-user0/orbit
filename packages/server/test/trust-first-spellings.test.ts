@@ -297,7 +297,17 @@ it.live(
             spelling,
             started: true,
           })
-        // The others wait, naming the folder they wait for, and leave nothing there.
+        // The others wait, naming the folder they wait for, and leave nothing there. A reload adds the servers one at a
+        // time, so the statuses are read once each of these has been placed.
+        const named = [
+          ...fixture.spellings("other").map(([spelling]) => `other-${spelling.replaceAll(" ", "-")}`),
+          "null-byte",
+        ]
+        const placed = async () => {
+          const current = await statuses()
+          return named.every((name) => current[name] !== undefined && current[name].status !== "pending")
+        }
+        expect(await settle(placed)).toBe(true)
         const waiting = await statuses()
         for (const [spelling] of fixture.spellings("other"))
           expect({ spelling, status: waiting[`other-${spelling.replaceAll(" ", "-")}`] }).toEqual({
