@@ -3172,17 +3172,20 @@ revert's list of files, so `/redo` still puts back everything the staged reverts
 
 **What to do:** Nothing.
 
-### A shell command commits a staged revert, as a prompt does
+### A shell command or a skill commits a staged revert, as a prompt does
 
-A command a person runs with `!` (`POST /api/session/:id/shell`) while a revert is staged now commits that revert
-before the command starts, as a prompt and a compaction already did. Before, the command and its output landed after
-the staged boundary, so the terminal UI drew them nowhere and the next prompt's commit deleted them
-(`session-owned.test.ts`, "commits a staged revert before a person's shell command, and keeps the command"). After a
-`!` command, `/redo` no longer brings the reverted messages back.
+A command a person runs with `!` (`POST /api/session/:id/shell`) and a skill activated through
+`POST /api/session/:id/skill` while a revert is staged now commit that revert first, as a prompt (and so a slash
+command) and a compaction already did. Before, the command and its output, or the skill's message, landed after the
+staged boundary, so the terminal UI drew them nowhere and the next prompt's commit deleted them (`session-owned.test.ts`, "commits a staged revert
+before a person's shell command, and keeps the shell command" and "... skill, and keeps the skill", rows of one table
+with the prompt and the compaction). After a `!` command or a skill, `/redo` no longer brings the reverted messages
+back.
 
-**Affects:** SDK callers and terminal UI users who run a `!` command after `/undo` or a rewind.
+**Affects:** SDK callers, plugins that activate a skill, and terminal UI users who run a `!` command after `/undo` or a
+rewind. The terminal UI sends a skill as a prompt, so it already committed.
 
-**What to do:** Run `/redo` before the command if you want the reverted messages back.
+**What to do:** Run `/redo` before the command or the skill if you want the reverted messages back.
 
 ## Prompts and instructions
 
