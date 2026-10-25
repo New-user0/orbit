@@ -130,27 +130,48 @@ test("the message dialog's Rewind opens step 2 for that prompt, and Esc closes t
 
 // The skip-picker shortcut: a prompt followed only by a reply with nothing in it, whose rewind would change no file,
 // goes straight back into the input with its conversation rewound, as does one whose dry run lists files it cannot
-// put back (no checkpoint). The control is the same prompt when the dry run says a file would change: step 2 opens
-// and nothing is rewound yet.
+// put back (no checkpoint). The controls are the same prompt when the dry run says a file would change, and when a
+// command the person ran with `!` or a skill follows the empty reply: step 2 opens and nothing is rewound yet.
+const ranAfter = {
+  id: "msg_0009",
+  type: "shell",
+  shellID: "sh_after",
+  command: "ls",
+  status: "exited",
+  exit: 0,
+  output: { output: "", cursor: 0, size: 0, truncated: false },
+  time: { created: Date.now() - 57_000, completed: Date.now() - 56_000 },
+}
+const skillAfter = {
+  id: "msg_0009",
+  type: "skill",
+  skill: "review",
+  name: "review",
+  time: { created: Date.now() - 57_000 },
+}
 test.each([
-  { label: "no file would change", canRewind: true, filesChanged: [], shortcut: true },
+  { label: "no file would change", canRewind: true, filesChanged: [], after: [], shortcut: true },
   {
     label: "the dry run cannot rewind the files it lists",
     canRewind: false,
     filesChanged: ["/tmp/orbit/packages/tui/src/quick.ts"],
+    after: [],
     shortcut: true,
   },
   {
     label: "a file would change",
     canRewind: true,
     filesChanged: ["/tmp/orbit/packages/tui/src/quick.ts"],
+    after: [],
     shortcut: false,
   },
+  { label: "a shell command follows", canRewind: true, filesChanged: [], after: [ranAfter], shortcut: false },
+  { label: "a skill follows", canRewind: true, filesChanged: [], after: [skillAfter], shortcut: false },
 ])("the message dialog rewinds at once when only an empty reply follows and $label", async (row) => {
   await using state = await tmpdir()
   await using setup = await rewindApp({
     state: state.path,
-    messages: [...conversation, quick, reply([], true)],
+    messages: [...conversation, quick, reply([], true), ...row.after],
     answer: (request) =>
       request.path.endsWith("/revert/files") && request.body?.dryRun && request.body.messageID === "msg_0007"
         ? json({ data: { canRewind: row.canRewind, filesChanged: row.filesChanged, insertions: 0, deletions: 1 } })
@@ -161,7 +182,8 @@ test.each([
   await openFromTimeline(setup, "Quick question")
 
   if (!row.shortcut) {
-    const frame = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+    const frame = await setup.waitForFrame((frame) => frame.includes("Never mind"))
+    expect(frame).toContain(row.filesChanged.length ? "Code and conversation" : "Conversation only")
     expect(frame).toContain("Quick question")
     expect(setup.actions()).toEqual([])
     return
