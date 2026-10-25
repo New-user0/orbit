@@ -785,16 +785,13 @@ export function Session(props: {
   // closes at once without a dry run: nothing is interrupted, asked or changed.
   // The picker replaces the message dialog at once and shows `Checking files…` while a running session stops and the
   // dry run answers, so the dialog cannot be chosen twice. It goes on to step 2 only when a file would change; otherwise
-  // it stays on `Checking files…` until the conversation rewind below closes it, unless the person closed it first.
+  // the clear below removes it first, unless the person closed it already: this await resumes on the dry run's answer
+  // before the picker's own continuation, which waits one more step behind its `.catch`.
   const rewindMessage = async (messageID: string) => {
     if (!onlyEmptyAfter(messageID)) return openRewind(messageID)
     const checked = rewindDryRun(messageID)
     const key = Symbol("rewind")
-    openRewind(
-      messageID,
-      checked.then((result) => (changesFiles(result) ? result : new Promise<never>(() => {}))),
-      key,
-    )
+    openRewind(messageID, checked, key)
     if (changesFiles(await checked) || dialog.key !== key) return
     dialog.clear()
     await rewind("conversation", messageID).catch((error) =>
