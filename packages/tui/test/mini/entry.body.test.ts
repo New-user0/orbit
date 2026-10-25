@@ -137,7 +137,15 @@ describe("run entry body", () => {
             path: "src/a.ts",
             content: "const x = 1\n",
           },
-          metadata: {},
+          metadata: {
+            files: [
+              {
+                file: "src/a.ts",
+                status: "added",
+                patch: "--- src/a.ts\n+++ src/a.ts\n@@ -0,0 +1,1 @@\n+const x = 1\n",
+              },
+            ],
+          },
           content: [{ type: "text", text: "" }],
         },
       }),

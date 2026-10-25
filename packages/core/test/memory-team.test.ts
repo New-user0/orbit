@@ -108,7 +108,7 @@ type Layout = Effect.Success<typeof layout>
 const record = () => {
   const asked: string[] = []
   const written: string[] = []
-  const permission = permissionLayer({ assert: (input) => Effect.sync(() => asked.push(input.action)) })
+  const permission = permissionLayer({ assert: (input) => Effect.sync(() => void asked.push(input.action)) })
   return { asked, written, permission }
 }
 
