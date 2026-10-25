@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, type Schema } from "effect"
 import { Bus } from "@orbit/core/bus"
 import { Agent } from "@orbit/core/agent"
 import { Model } from "@orbit/core/model"
@@ -21,6 +21,8 @@ export interface SeededCall {
   readonly hosted?: boolean
   /** Left running: the call has no result yet. */
   readonly running?: boolean
+  /** Metadata stored with the result, such as the marker of a saved output. */
+  readonly metadata?: Record<string, Schema.Json>
 }
 
 export const fakeModel = { id: Model.ID.make("fake-model"), providerID: Provider.ID.make("fake") }
@@ -76,6 +78,7 @@ export const seedStep = (
           assistantMessageID,
           id: call.id,
           content: call.content ?? [{ type: "text", text: call.text ?? `result of ${call.id}` }],
+          ...(call.metadata === undefined ? {} : { metadata: call.metadata }),
           executed,
         })
     }

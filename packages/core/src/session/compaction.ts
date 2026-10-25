@@ -965,12 +965,10 @@ export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean
   // are lowered as the placeholder below, so only the calls before it are taken off, and only the ones no earlier
   // clearing took (the response already counts those as left out).
   const taken = clearedCalls(messages.slice(0, Math.max(0, anchorIndex)))
-  const newer = clearedCalls(messages.slice(anchorIndex + 1))
   const pending = new Map(
-    [...newer].flatMap(([messageID, ids]) => {
-      const fresh = new Set([...ids].filter((id) => !taken.get(messageID)?.has(id)))
-      return fresh.size === 0 ? [] : [[messageID, fresh] as const]
-    }),
+    [...clearedCalls(messages)].map(
+      ([messageID, ids]) => [messageID, new Set([...ids].filter((id) => !taken.get(messageID)?.has(id)))] as const,
+    ),
   )
   const base = transcript(context, messages.slice(Math.max(0, anchorIndex)), minimal, toolOutput)
   // TODO: Pass compaction history the runner has already shaped. This and `recentUserMessages` repeat the
@@ -1017,7 +1015,7 @@ export const estimateFreed = (
   const placeholder = Token.estimate(CLEARED_RESULT)
   return messages
     .flatMap((message) => {
-      const ids = message.type === "assistant" ? calls.get(message.id) : undefined
+      const ids = calls.get(message.id)
       if (ids === undefined) return []
       return toLLMMessages([message], model, model.providerID, [], { toolOutput })
         .flatMap((lowered) => lowered.content)

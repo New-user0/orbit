@@ -219,6 +219,39 @@ const pressured = (s: Scenario, id: Session.ID, measured: number) =>
 const OVER = 170_000
 
 describe("clearing old tool results", () => {
+  // The saving of a result is what the request carries for it: a saved output is sent as a wrapper that names its file,
+  // which is longer than the placeholder even when its text is short.
+  scenario("counts a saved output as the wrapper the request carries", function* (s) {
+    const id = yield* newSession(s, "saved")
+    yield* seedStep(s.bus, id, {
+      id: "msg_saved",
+      calls: Array.from({ length: 8 }, (_, index) => ({
+        id: `call_s${index + 1}`,
+        name: "Read",
+        text: "ok",
+        metadata: {
+          persisted: { session: id, name: `msg_0123abc-call_s${index + 1}-1a2b3c4d.txt`, size: 60_000, format: 1 },
+        },
+      })),
+    })
+    yield* TestClock.adjust(61 * MINUTE)
+    yield* ask(s, id)
+    expect(callsOf(yield* clearings(s, id))).toEqual([["call_s1", "call_s2", "call_s3"]])
+  })
+
+  scenario("apply answers false and records nothing when there is nothing to clear", function* (s) {
+    const recorded = yield* SessionMicrocompaction.apply({
+      bus: s.bus,
+      sessionID,
+      messages: [],
+      model: fakeModel,
+      pressure: true,
+      toolOutput: "",
+    })
+    expect(recorded).toBe(false)
+    expect(yield* clearings(s)).toEqual([])
+  })
+
   scenario("clears the 3 oldest of 8 compactable results and keeps the newest 5", function* (s) {
     // Row 1: eight calls in one step.
     yield* seedStep(s.bus, sessionID, { id: "msg_one", calls: reads("one", 8) })
@@ -983,6 +1016,10 @@ describe("estimatePrompt and a clearing", () => {
       after,
     ])
     expect(taken.measured).toBe(base.measured)
+
+    // A count smaller than what the clearing frees does not go below zero.
+    const small = assistant("msg_s", [["s1", own]], 10)
+    expect(prompt([...before, small, marker("msg_m8", ["msg_a", "a1"]), after]).measured).toBe(0)
   })
 
   const toolPart = (id: string, executed: boolean, state: Record<string, unknown>) => ({
@@ -1030,6 +1067,17 @@ describe("estimatePrompt and a clearing", () => {
       )
     expect(freedBy(false)).toBe(freed(older))
     expect(freedBy(true)).toBe(0)
+  })
+
+  test("estimateFreed never counts a result shorter than the placeholder as a loss", () => {
+    const calls = new Map([["msg_h", new Set(["h1"])]])
+    expect(
+      SessionCompaction.estimateFreed(
+        [withParts("msg_h", [toolPart("h1", false, completedState("ok"))])],
+        calls,
+        resolved.ref,
+      ),
+    ).toBe(0)
   })
 
   // The mutation cells of the pure selection that the runner rows cannot reach.

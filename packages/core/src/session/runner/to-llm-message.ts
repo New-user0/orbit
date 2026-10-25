@@ -214,15 +214,14 @@ const toolResult = (
   toolOutput: string | undefined,
   cleared = false,
 ) => {
-  // Only a settled result that ran here is left out; a running call has no result yet and a hosted one is replayed as
-  // received. The stored part keeps its output.
+  // Only a settled result that ran here is left out; a running call has no result yet. A hosted result never reaches
+  // here (the caller lowers only what ran locally). The stored part keeps its output.
   if (cleared && (tool.state.status === "completed" || tool.state.status === "error"))
     return ToolResultPart.make({
       id: tool.id,
       name: toolName(tool),
       result: CLEARED_RESULT,
       resultType: tool.state.status === "error" ? "error" : "text",
-      providerExecuted: tool.executed,
       providerMetadata,
     })
   if (tool.state.status === "completed") {
