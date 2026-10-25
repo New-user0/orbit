@@ -91,6 +91,40 @@ const rows = [
     shows: ["Write a.txt"],
     hides: ["PROPOSED", "# Wrote"],
   },
+  // The recorded file name can come from the model or the repository, so the completed header writes out a control or
+  // bidi character instead of drawing it (class 9). Without `bodyText` on the header the frame holds the raw character.
+  {
+    name: "a completed call whose file name holds a bidi override",
+    status: "completed",
+    path: "ab‮txt.exe",
+    files: [
+      {
+        file: "ab‮txt.exe",
+        status: "added",
+        patch: "--- x\n+++ x\n@@ -0,0 +1,1 @@\n+REVISED\n",
+        additions: 1,
+        deletions: 0,
+      },
+    ],
+    shows: ["# Wrote", "ab\\u{202e}txt.exe", "REVISED"],
+    hides: ["‮"],
+  },
+  {
+    name: "a completed call whose file name holds an escape",
+    status: "completed",
+    path: "ab\u001b[2Jc.txt",
+    files: [
+      {
+        file: "ab\u001b[2Jc.txt",
+        status: "added",
+        patch: "--- x\n+++ x\n@@ -0,0 +1,1 @@\n+REVISED\n",
+        additions: 1,
+        deletions: 0,
+      },
+    ],
+    shows: ["# Wrote", "REVISED"],
+    hides: ["\u001b"],
+  },
 ] as const
 
 for (const row of rows)
@@ -98,7 +132,7 @@ for (const row of rows)
     addDefaultParsers(parsers.parsers)
     await using temporary = await tmpdir()
     const metadata: Record<string, JsonValue> = row.files ? { files: row.files.map((file) => ({ ...file })) } : {}
-    const input = { path: "a.txt", content: "PROPOSED\n" }
+    const input = { path: "path" in row ? row.path : "a.txt", content: "PROPOSED\n" }
     const part: SessionMessageAssistantTool =
       row.status === "completed"
         ? {

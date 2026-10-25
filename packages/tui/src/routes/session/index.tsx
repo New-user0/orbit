@@ -2967,7 +2967,7 @@ export function Write(props: ToolProps) {
     <Switch>
       <Match when={written()}>
         {(item) => (
-          <BlockTool path={{ label: "# Wrote", value: pathFormatter.format(item().file) }} part={props.part}>
+          <BlockTool path={{ label: "# Wrote", value: bodyText(pathFormatter.format(item().file)) }} part={props.part}>
             <Show
               when={item().text}
               fallback={
