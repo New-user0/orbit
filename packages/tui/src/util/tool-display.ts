@@ -155,5 +155,21 @@ export function nonEmptyToolContent<T>(content: ReadonlyArray<T> | undefined): [
   const [first, ...rest] = content
   return first === undefined ? undefined : [first, ...rest]
 }
+
+/**
+ * What a completed Write wrote, read from the diff the tool recorded and never from the model's `content`: an approval
+ * answered with the person's own version writes that version instead (class 8). A new file comes with its whole text, the
+ * added lines of its diff; a file that was there comes with the diff alone. A call that recorded no diff gives nothing.
+ */
+export function writtenFile(metadata: Record<string, unknown>) {
+  const item: unknown = Array.isArray(metadata.files) ? metadata.files[0] : undefined
+  if (!isRecord(item) || typeof item.file !== "string" || item.file === "" || typeof item.patch !== "string") return
+  const lines = item.patch.split("\n")
+  const start = lines.findIndex((line) => line.startsWith("@@"))
+  const body = start === -1 ? [] : lines.slice(start)
+  const added = body.filter((line) => line.startsWith("+")).map((line) => line.slice(1))
+  const end = added.length === 0 || body.includes("\\ No newline at end of file") ? "" : "\n"
+  return { file: item.file, patch: item.patch, text: item.status === "added" ? added.join("\n") + end : undefined }
+}
 import type { SessionMessageAssistantTool } from "@orbit/client/promise"
 import { isRecord } from "./record"

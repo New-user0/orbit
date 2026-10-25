@@ -105,7 +105,9 @@ const settle = Effect.fn(function* (run: Parameters<Tool.Snapshot["execute"]>[0]
   const tools = yield* Tool.Service
   const permission = yield* Permission.Service
   const fiber = yield* (yield* tools.snapshot()).execute(run).pipe(Effect.forkScoped)
-  const drive = (asked: Settled["asked"]): Effect.Effect<Settled, Permission.NotFoundError> =>
+  const drive = (
+    asked: Settled["asked"],
+  ): Effect.Effect<Settled, Permission.NotFoundError | Permission.RevisionError> =>
     Effect.gen(function* () {
       const done = fiber.pollUnsafe()
       if (done) return { asked, exit: done }
