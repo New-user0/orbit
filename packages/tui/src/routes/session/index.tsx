@@ -700,14 +700,16 @@ export function Session(props: {
     ))
   // The rewind picker (/rewind, /checkpoint, Esc twice, the message dialog). It sends only this session's ID and a
   // message ID read from its own message list; the server resolves the folder and decides trust when it acts.
+  // The conversation the picker works on: what comes before a staged revert, without the prompts still waiting in the
+  // inbox. The client draws those in the transcript, but they are no messages yet, so they are no rows and do not count
+  // as something after a prompt.
+  const rewindable = () => messagesBeforeRevert().filter((message) => !pendingDeliveries().has(message.id))
   // A command the person ran with `!` is a row too; the server's dry run offers no code rewind for it.
   const rewindPrompts = () =>
-    messagesBeforeRevert().flatMap((message) => {
+    rewindable().flatMap((message) => {
       if (message.type === "shell")
         return [{ id: message.id, text: message.command, created: message.time.created, shell: true }]
-      return message.type === "user" && !pendingDeliveries().has(message.id)
-        ? [{ id: message.id, text: message.text, created: message.time.created }]
-        : []
+      return message.type === "user" ? [{ id: message.id, text: message.text, created: message.time.created }] : []
     })
   const rewindStats = (messageID: string) =>
     client.api.session
@@ -771,12 +773,14 @@ export function Session(props: {
     ))
   /** Whether nothing a person would miss follows the prompt: no prompt, and no reply with text or a tool call. */
   const onlyEmptyAfter = (messageID: string) => {
-    const list = messagesBeforeRevert()
+    const list = rewindable()
     const index = list.findIndex((message) => message.id === messageID)
     return index !== -1 && !list.slice(index + 1).some(meaningful)
   }
   // The message dialog's Rewind: a prompt followed only by empty replies, whose code rewind would change no file, goes
-  // straight back into the input; any other opens the picker on its confirm step.
+  // straight back into the input; any other opens the picker on its confirm step. A prompt that is no row of the picker
+  // (still in the inbox, or taken back by a staged revert) is not in `rewindable()`, so it opens the picker, which
+  // closes at once without a dry run: nothing is interrupted, asked or changed.
   const rewindMessage = async (messageID: string) => {
     if (!onlyEmptyAfter(messageID)) return openRewind(messageID)
     const checked = await rewindDryRun(messageID)

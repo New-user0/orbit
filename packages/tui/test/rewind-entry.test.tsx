@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
-import { conversation, linesWith, listHeading, rewindApp, sessionID, until } from "./fixture/rewind"
+import { conversation, linesWith, listHeading, rewindApp, sessionID, until, withShell } from "./fixture/rewind"
 
 // clients-ux-5 part 2: every way into the rewind picker (class 12). `/rewind` and its alias `/checkpoint`, Esc pressed
 // twice on an empty prompt of an idle session, and the message dialog's Rewind, which opens step 2 for that prompt or,
@@ -559,4 +559,419 @@ test.each([
   expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([
     `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
   ])
+})
+
+// The class matrix (class 12, fix loop 7): every way to the picker or to a rewind, against every kind of row the
+// conversation can show, each cell decided by what the reference does. A person's prompt still waiting in the inbox
+// (steer or queue) is drawn in the transcript and listed by the timeline, but it is no message yet: it is no row of
+// the picker, its message dialog's Rewind interrupts, asks and changes nothing, and after another prompt it does not
+// count as something a person would miss (the reference's selector never lists queued commands, and its skip test
+// ignores them). Esc twice and the interrupt path still stand back while one waits, as the reference's do. Notices
+// and compaction checkpoints are no rows and do not count after a prompt; a `!` command is a row and does count. Rows
+// a staged revert took back are there for no entry point. The message dialog opens only on a person's prompt, so for
+// the other kinds its cell is the timeline listing no such row.
+const waiting = (delivery: "steer" | "queue") => ({
+  id: "msg_waiting",
+  sessionID,
+  type: "user",
+  delivery,
+  payload: { text: "Waiting prompt" },
+  time: { created: Date.now() },
+})
+const notice = {
+  id: "msg_0009",
+  type: "synthetic",
+  text: "Background job finished",
+  time: { created: Date.now() - 50_000 },
+}
+const checkpoint = {
+  id: "msg_0009",
+  type: "compaction",
+  status: "completed",
+  reason: "manual",
+  summary: "Summary of the earlier work",
+  recent: "",
+  time: { created: Date.now() - 50_000 },
+}
+const shellCommand = "make build"
+const prompts = ["Add the parser", "Rename the helper", "Fix the", "(current)"]
+// The newest prompt with a reply that has nothing in it (still running when the session runs), then `after`.
+const emptyReply = (after: unknown[], running = false) => [...conversation, quick, reply([], !running), ...after]
+
+type Cell = {
+  entry: "Esc twice" | "/rewind" | "/checkpoint" | "the message dialog" | "the skip-picker shortcut" | "an interrupt"
+  row: string
+  messages?: unknown[]
+  inbox?: unknown[]
+  revert?: string
+  running?: boolean
+  /** The prompt the message dialog is opened on, or what the timeline is filtered by. */
+  target?: string
+  /**
+   * `list`: the picker's list, showing `shows` and not `hides`; `nothing`: the picker says there is nothing to rewind;
+   * `step 2`: the confirm step for `target`; `restored`: the newest prompt's conversation rewound with no picker;
+   * `none`: no picker and no request but `actions`; `no timeline row`: the timeline lists nothing for `target`.
+   */
+  expect: "list" | "nothing" | "step 2" | "restored" | "none" | "no timeline row"
+  shows?: string[]
+  hides?: string[]
+  actions?: string[]
+}
+
+const matrix: Cell[] = [
+  { entry: "Esc twice", row: "a delivered prompt", expect: "list", shows: prompts },
+  { entry: "Esc twice", row: "a prompt waiting to steer", inbox: [waiting("steer")], expect: "none" },
+  { entry: "Esc twice", row: "a prompt waiting in the queue", inbox: [waiting("queue")], expect: "none" },
+  {
+    entry: "Esc twice",
+    row: "a notice",
+    messages: [...conversation, notice],
+    expect: "list",
+    shows: prompts,
+    hides: ["Background job"],
+  },
+  {
+    entry: "Esc twice",
+    row: "a shell row",
+    messages: withShell(shellCommand),
+    expect: "list",
+    shows: [`! ${shellCommand}`, ...prompts],
+  },
+  {
+    entry: "Esc twice",
+    row: "a compaction checkpoint",
+    messages: [...conversation, checkpoint],
+    expect: "list",
+    shows: prompts,
+    hides: ["Summary of"],
+  },
+  {
+    entry: "Esc twice",
+    row: "rows behind a staged revert",
+    revert: "msg_0003",
+    expect: "list",
+    shows: ["Add the parser", "(current)"],
+    hides: ["Rename the helper", "Fix the"],
+  },
+  { entry: "Esc twice", row: "an empty visible conversation", revert: "msg_0001", expect: "none" },
+
+  { entry: "/rewind", row: "a delivered prompt", expect: "list", shows: prompts },
+  {
+    entry: "/rewind",
+    row: "a prompt waiting to steer",
+    inbox: [waiting("steer")],
+    expect: "list",
+    shows: prompts,
+    hides: ["Waiting prompt"],
+  },
+  {
+    entry: "/rewind",
+    row: "a prompt waiting in the queue",
+    inbox: [waiting("queue")],
+    expect: "list",
+    shows: prompts,
+    hides: ["Waiting prompt"],
+  },
+  {
+    entry: "/rewind",
+    row: "a notice",
+    messages: [...conversation, notice],
+    expect: "list",
+    shows: prompts,
+    hides: ["Background job"],
+  },
+  {
+    entry: "/rewind",
+    row: "a shell row",
+    messages: withShell(shellCommand),
+    expect: "list",
+    shows: [`! ${shellCommand}`, ...prompts],
+  },
+  {
+    entry: "/rewind",
+    row: "a compaction checkpoint",
+    messages: [...conversation, checkpoint],
+    expect: "list",
+    shows: prompts,
+    hides: ["Summary of"],
+  },
+  {
+    entry: "/rewind",
+    row: "rows behind a staged revert",
+    revert: "msg_0003",
+    expect: "list",
+    shows: ["Add the parser", "(current)"],
+    hides: ["Rename the helper", "Fix the"],
+  },
+  { entry: "/rewind", row: "an empty visible conversation", revert: "msg_0001", expect: "nothing" },
+  { entry: "/checkpoint", row: "a delivered prompt", expect: "list", shows: prompts },
+  {
+    entry: "/checkpoint",
+    row: "a prompt waiting to steer",
+    inbox: [waiting("steer")],
+    expect: "list",
+    shows: prompts,
+    hides: ["Waiting prompt"],
+  },
+  { entry: "/checkpoint", row: "an empty visible conversation", revert: "msg_0001", expect: "nothing" },
+
+  { entry: "the message dialog", row: "a delivered prompt", target: "Rename the helper", expect: "step 2" },
+  {
+    entry: "the message dialog",
+    row: "a prompt waiting to steer",
+    running: true,
+    inbox: [waiting("steer")],
+    target: "Waiting prompt",
+    expect: "none",
+  },
+  {
+    entry: "the message dialog",
+    row: "a prompt waiting in the queue",
+    running: true,
+    inbox: [waiting("queue")],
+    target: "Waiting prompt",
+    expect: "none",
+  },
+  {
+    entry: "the message dialog",
+    row: "a notice",
+    messages: [...conversation, notice],
+    target: "Background",
+    expect: "no timeline row",
+  },
+  {
+    entry: "the message dialog",
+    row: "a shell row",
+    messages: withShell(shellCommand),
+    target: shellCommand,
+    expect: "no timeline row",
+  },
+  {
+    entry: "the message dialog",
+    row: "a compaction checkpoint",
+    messages: [...conversation, checkpoint],
+    target: "Summary",
+    expect: "no timeline row",
+  },
+  {
+    entry: "the message dialog",
+    row: "rows behind a staged revert",
+    revert: "msg_0005",
+    target: "Fix the",
+    expect: "none",
+  },
+  {
+    entry: "the message dialog",
+    row: "an empty visible conversation",
+    revert: "msg_0001",
+    target: "Add the parser",
+    expect: "none",
+  },
+
+  {
+    entry: "the skip-picker shortcut",
+    row: "a delivered prompt with an empty reply",
+    messages: emptyReply([]),
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a prompt waiting to steer after it",
+    messages: emptyReply([]),
+    inbox: [waiting("steer")],
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a prompt waiting in the queue after it",
+    messages: emptyReply([]),
+    inbox: [waiting("queue")],
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a notice after it",
+    messages: emptyReply([notice]),
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a shell row after it",
+    messages: emptyReply([ranAfter]),
+    target: "Quick question",
+    expect: "step 2",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "a compaction checkpoint after it",
+    messages: emptyReply([checkpoint]),
+    target: "Quick question",
+    expect: "restored",
+  },
+  {
+    entry: "the skip-picker shortcut",
+    row: "rows behind a staged revert",
+    messages: emptyReply([]),
+    revert: "msg_0007",
+    target: "Quick question",
+    expect: "none",
+  },
+
+  {
+    entry: "an interrupt",
+    row: "a delivered prompt with an empty reply",
+    running: true,
+    messages: emptyReply([], true),
+    expect: "restored",
+  },
+  {
+    entry: "an interrupt",
+    row: "a prompt waiting to steer",
+    running: true,
+    messages: emptyReply([], true),
+    inbox: [waiting("steer")],
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+  {
+    entry: "an interrupt",
+    row: "a prompt waiting in the queue",
+    running: true,
+    messages: emptyReply([], true),
+    inbox: [waiting("queue")],
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+  {
+    entry: "an interrupt",
+    row: "a notice after the empty reply",
+    running: true,
+    messages: emptyReply([notice], true),
+    expect: "restored",
+  },
+  {
+    entry: "an interrupt",
+    row: "a shell row after the empty reply",
+    running: true,
+    messages: emptyReply([ranAfter], true),
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+  {
+    entry: "an interrupt",
+    row: "a compaction checkpoint after the empty reply",
+    running: true,
+    messages: emptyReply([checkpoint], true),
+    expect: "restored",
+  },
+  {
+    entry: "an interrupt",
+    row: "rows behind a staged revert",
+    running: true,
+    messages: emptyReply([], true),
+    revert: "msg_0007",
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+  {
+    entry: "an interrupt",
+    row: "an empty visible conversation",
+    running: true,
+    messages: [],
+    expect: "none",
+    actions: ["interrupt", "wait"],
+  },
+]
+
+/** The lines of a frame from the picker's list heading to its footer. */
+const listBlock = (frame: string) => {
+  const lines = frame.split("\n")
+  const start = lines.findIndex((line) => line.includes(listHeading))
+  const end = lines.findIndex((line, index) => index > start && line.includes("enter continue"))
+  return lines.slice(start, end + 1).join("\n")
+}
+
+test.each(matrix)("$entry on $row", async (cell) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    running: cell.running,
+    messages: cell.messages,
+    revert: cell.revert,
+    answer: (request) => (request.path.endsWith("/inbox") ? json({ data: cell.inbox ?? [] }) : undefined),
+  })
+  // A running session is ready once its interrupt hint shows; a waiting prompt once the transcript draws it.
+  await setup.waitForFrame(
+    (frame) =>
+      frame.includes("Rewind fixture") &&
+      (!cell.running || frame.includes("interrupt")) &&
+      (!cell.inbox?.length || frame.includes("Waiting prompt")),
+    { maxPasses: 200 },
+  )
+
+  if (cell.expect === "no timeline row") {
+    await setup.mockInput.typeText("/timeline")
+    setup.mockInput.pressEnter()
+    await setup.waitForFrame((frame) => frame.includes("Timeline"))
+    await Bun.sleep(50)
+    await setup.mockInput.typeText(cell.target!)
+    await setup.waitForFrame((frame) => frame.includes("No results found"))
+    expect(setup.actions()).toEqual([])
+    return
+  }
+  if (cell.entry === "Esc twice" || cell.entry === "an interrupt") {
+    setup.mockInput.pressEscape()
+    setup.mockInput.pressEscape()
+  }
+  if (cell.entry === "/rewind" || cell.entry === "/checkpoint") {
+    await setup.mockInput.typeText(cell.entry)
+    setup.mockInput.pressEnter()
+  }
+  if (cell.entry === "the message dialog" || cell.entry === "the skip-picker shortcut") {
+    await openFromTimeline(setup, cell.target!)
+    await setup.waitForFrame((frame) => !frame.includes("Message Actions"))
+  }
+  if (cell.entry === "an interrupt") await until(() => setup.actions().includes("wait"), "the wait after the interrupt")
+
+  if (cell.expect === "list") {
+    const block = listBlock(await setup.waitForFrame((frame) => frame.includes(listHeading), { maxPasses: 100 }))
+    for (const text of cell.shows ?? []) expect(block).toContain(text)
+    for (const text of cell.hides ?? []) expect(block).not.toContain(text)
+    expect(setup.actions()).toEqual([])
+    return
+  }
+  if (cell.expect === "nothing") {
+    await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+    expect(setup.actions()).toEqual([])
+    return
+  }
+  if (cell.expect === "step 2") {
+    const frame = await setup.waitForFrame((frame) => frame.includes("Never mind"))
+    expect(frame).toContain("just before this prompt:")
+    expect(frame).toContain(cell.target!)
+    expect(setup.actions()).toEqual([])
+    return
+  }
+  if (cell.expect === "restored") {
+    await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+    expect(setup.actions().filter((action) => action.startsWith("stage") || action.startsWith("files"))).toEqual([
+      `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
+    ])
+    const frame = await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
+    expect(frame).not.toContain("Never mind")
+    return
+  }
+  await Bun.sleep(500)
+  await setup.renderOnce()
+  const frame = setup.captureCharFrame()
+  expect(frame).not.toContain(listHeading)
+  expect(frame).not.toContain("Nothing to rewind yet.")
+  expect(frame).not.toContain("Checking files")
+  expect(frame).not.toContain("Never mind")
+  expect(setup.dryRunsSent()).toEqual([])
+  expect(setup.actions()).toEqual(cell.actions ?? [])
 })

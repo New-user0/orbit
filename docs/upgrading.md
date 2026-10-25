@@ -1904,7 +1904,9 @@ interrupting it as before.
 The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
 confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only
 replies with nothing in them follow the prompt and no file would change, it rewinds the conversation at once and puts
-the prompt back in the input, without asking.
+the prompt back in the input, without asking. Notices, compaction summaries and prompts still waiting to be sent do not
+count as something after the prompt. A prompt still waiting in the inbox (queued or steering) is no row of the picker,
+and `Rewind` on it closes the dialog without interrupting the session or changing anything.
 
 Interrupting a prompt (Esc twice while it runs) before its reply holds any text or tool call, with nothing typed and
 nothing queued, now rewinds the conversation to before that prompt and puts it back in the input; the prompt-history
