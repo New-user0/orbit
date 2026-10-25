@@ -340,6 +340,22 @@ export const Recap = Schema.Struct({
   text: Schema.String,
 }).annotate({ identifier: "Session.Message.Recap" })
 
+/**
+ * Old tool results were left out of what the model is sent from here on. Only the facts are stored: which calls, by
+ * the assistant message that holds them and the call's ID. The results themselves stay in their messages.
+ */
+export interface ContextClearedTool extends Schema.Schema.Type<typeof ContextClearedTool> {}
+export const ContextClearedTool = Schema.Struct({ assistantMessageID: ID, id: Schema.String }).annotate({
+  identifier: "Session.Message.ContextCleared.Tool",
+})
+export interface ContextCleared extends Schema.Schema.Type<typeof ContextCleared> {}
+export const ContextCleared = Schema.Struct({
+  ...Base,
+  type: Schema.tag("context-cleared"),
+  trigger: Schema.Literals(["idle", "pressure"]),
+  tools: Schema.NonEmptyArray(ContextClearedTool),
+}).annotate({ identifier: "Session.Message.ContextCleared" })
+
 export const Info = Schema.Union([
   AgentSelected,
   ModelSelected,
@@ -353,6 +369,7 @@ export const Info = Schema.Union([
   Compaction,
   Idle,
   Recap,
+  ContextCleared,
 ]).annotate({ identifier: "Session.Message.Info" })
 export type Info =
   | AgentSelected
@@ -367,4 +384,5 @@ export type Info =
   | Compaction
   | Idle
   | Recap
+  | ContextCleared
 export type Type = Info["type"]

@@ -217,7 +217,7 @@ export const ContextUpdated = Event.ephemeral({
     paused: Schema.Boolean.annotate({
       description: "Whether repeated failures paused automatic compaction for this turn.",
     }),
-    stale: Schema.Boolean.annotate({ description: "True after a compaction, until the next measured response." }),
+    stale: Schema.Boolean.annotate({ description: "True after a compaction or a clearing, until the next measured response." }),
   },
 })
 export type ContextUpdated = typeof ContextUpdated.Type
@@ -354,6 +354,19 @@ export const RecapRecorded = Event.durable({
   },
 })
 export type RecapRecorded = typeof RecapRecorded.Type
+
+// Old tool results stop being sent to the model. Only the facts are recorded; the placeholder is rendered when the
+// history is lowered, so the stored results, an export and every client's view keep the full output.
+export const ContextCleared = Event.durable({
+  type: "session.context.cleared",
+  ...options,
+  schema: {
+    ...Base,
+    trigger: Schema.Literals(["idle", "pressure"]),
+    tools: Schema.NonEmptyArray(SessionMessage.ContextClearedTool),
+  },
+})
+export type ContextCleared = typeof ContextCleared.Type
 
 export namespace Skill {
   export const Activated = Event.durable({
@@ -756,6 +769,7 @@ export const Definitions = Event.inventory(
   InstructionsUpdated,
   Synthetic,
   RecapRecorded,
+  ContextCleared,
   Skill.Activated,
   Shell.Started,
   Shell.Ended,

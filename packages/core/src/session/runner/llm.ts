@@ -40,6 +40,7 @@ import { StepFailedError } from "../error.js"
 import { SessionRunnerRetry } from "./retry.js"
 import { SessionStep } from "./step.js"
 import { SessionMessageBudget } from "./message-budget.js"
+import { SessionMicrocompaction } from "../microcompaction.js"
 import { ToolOutput } from "../../tool-output.js"
 import { Plugin } from "../../plugin.js"
 import { ToolNames } from "../../tool/names.js"
@@ -475,6 +476,26 @@ const layer = Layer.effect(
         const limit = yield* turnLimit(before, current.options)
         if (limit) return yield* new StepFailedError({ error: limit })
         const output = yield* outputFor(before, current)
+        // Old tool results go before the automatic check, so the check measures what the request will carry and a
+        // clearing that frees enough spares the compaction. Only a main session clears (a subagent's work is short and
+        // read once), and an overflow recovery or a manual compaction never does: they do not pass through here.
+        const clearing = compaction.thresholds(before)
+        if (
+          clearing.clear &&
+          before.session.parentID === undefined &&
+          (yield* SessionMicrocompaction.apply({
+            bus,
+            sessionID,
+            messages: before.messages,
+            model: before.model.ref,
+            toolOutput: toolOutput.root,
+            // Where an automatic compaction would start: still open for this request, on, not paused, and due.
+            pressure: !autoChecked && breaker.failures < SessionContextWindow.BREAKER_LIMIT && compaction.due(before),
+          }))
+        ) {
+          before = yield* loadSelected(selection, current.fallback)
+          yield* report(before, estimate(before), true, breaker)
+        }
         if (!autoChecked) {
           // A request that is not due leaves the check open: a later pass of the step may find it due.
           if (breaker.failures >= SessionContextWindow.BREAKER_LIMIT) autoChecked = true

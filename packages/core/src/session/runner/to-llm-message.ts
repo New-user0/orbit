@@ -189,11 +189,42 @@ const neutralizeError = <E extends { readonly message: string; readonly response
     : { response: { ...error.response, body: neutralizeToolText(error.response.body) } }),
 })
 
+/** What the model is sent in place of a tool result that a clearing left out. */
+export const CLEARED_RESULT = "[Earlier tool output cleared to free context space]"
+
+/**
+ * The calls the `context-cleared` rows of a history name, by the assistant message that holds them. Ids are only ever
+ * compared as keys, so an imported or edited row that names nothing real changes nothing (classes 5 and 7).
+ */
+export const clearedCalls = (messages: readonly SessionMessage.Info[]) => {
+  const cleared = new Map<string, Set<string>>()
+  messages.forEach((message) => {
+    if (message.type !== "context-cleared") return
+    message.tools.forEach((tool) => {
+      const ids = cleared.get(tool.assistantMessageID) ?? new Set<string>()
+      cleared.set(tool.assistantMessageID, ids.add(tool.id))
+    })
+  })
+  return cleared
+}
+
 const toolResult = (
   tool: SessionMessage.AssistantTool,
   providerMetadata: ProviderMetadata | undefined,
   toolOutput: string | undefined,
+  cleared = false,
 ) => {
+  // Only a settled result that ran here is left out; a running call has no result yet and a hosted one is replayed as
+  // received. The stored part keeps its output.
+  if (cleared && (tool.state.status === "completed" || tool.state.status === "error"))
+    return ToolResultPart.make({
+      id: tool.id,
+      name: toolName(tool),
+      result: CLEARED_RESULT,
+      resultType: tool.state.status === "error" ? "error" : "text",
+      providerExecuted: tool.executed,
+      providerMetadata,
+    })
   if (tool.state.status === "completed") {
     const saved =
       toolOutput === undefined
@@ -311,6 +342,7 @@ const assistant = (
   model: Model.Ref,
   providerMetadataKey: string,
   toolOutput: string | undefined,
+  cleared: ReadonlySet<string> | undefined,
 ) => {
   const sameProvider = String(message.model.providerID) === String(model.providerID)
   const sameModel = sameProvider && String(message.model.id) === String(model.id)
@@ -382,6 +414,7 @@ const assistant = (
           ? providerMetadata(providerMetadataKey, item.providerResultState ?? item.providerState)
           : undefined,
         toolOutput,
+        cleared?.has(item.id) === true,
       ),
     )
     .filter((message) => message !== undefined)
@@ -483,6 +516,8 @@ interface Lowering {
   readonly minimal: boolean
   /** `<data>/tool-output`, where saved results are; without it a saved result is lowered as stored. */
   readonly toolOutput?: string
+  /** The calls that `context-cleared` rows name, by assistant message. */
+  readonly cleared?: ReadonlyMap<string, ReadonlySet<string>>
 }
 
 function toLLMMessage(
@@ -496,6 +531,8 @@ function toLLMMessage(
     case "idle":
     // The away summary is written for the person, never for a model.
     case "recap":
+    // A clearing is applied to the results it names; the row itself is never sent.
+    case "context-cleared":
       return []
     case "model-switched":
       return modelSwitched(message, model)
@@ -598,7 +635,7 @@ function toLLMMessage(
         }),
       ]
     case "assistant":
-      return assistant(message, model, providerMetadataKey, lowering.toolOutput)
+      return assistant(message, model, providerMetadataKey, lowering.toolOutput, lowering.cleared?.get(message.id))
     case "compaction":
       if (message.status !== "completed") return []
       // History selection only keeps native windows the target model can replay.
@@ -715,7 +752,12 @@ export const toLLMMessages = (
   options: { readonly minimal?: boolean; readonly toolOutput?: string } = {},
 ) => {
   const history = withoutReplaced(messages)
-  const lowering = { queued: queuedInput(history), minimal: options.minimal === true, toolOutput: options.toolOutput }
+  const lowering = {
+    queued: queuedInput(history),
+    minimal: options.minimal === true,
+    toolOutput: options.toolOutput,
+    cleared: clearedCalls(history),
+  }
   if (insertions.length === 0 && !history.some(ReminderText.isReminder))
     return history.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, lowering))
 

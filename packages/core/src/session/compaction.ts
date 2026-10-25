@@ -37,7 +37,7 @@ import { SessionReminders } from "./reminders.js"
 import { SessionToolText } from "./tool-text.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
-import { toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
+import { CLEARED_RESULT, clearedCalls, toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
 import { isReminder } from "./reminder-text.js"
 import { toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
@@ -47,6 +47,8 @@ import COMPACTION_REMINDER from "./runner/prompt/compaction-reminder.txt"
 
 export type Settings = {
   auto: boolean
+  /** Whether old tool results are left out of the model's context after an hour idle or at the automatic threshold. */
+  clear: boolean
   /** Tokens kept free below the effective window before compacting. Unset keeps 13,000 free. */
   buffer?: number
   /** Tokens of the newest user messages that a native compaction keeps beside the provider's window. */
@@ -80,8 +82,12 @@ export interface Interface extends State.Transformable<Editor> {
   /** Whether automatic compaction is on, and where the loaded model's thresholds sit (undefined for an unknown window). */
   readonly thresholds: (context: SessionContext.Loaded) => {
     readonly auto: boolean
+    /** Whether old tool results may be cleared. */
+    readonly clear: boolean
     readonly thresholds: SessionContextWindow.Thresholds | undefined
   }
+  /** Whether an automatic compaction would start for this context now, as `compact({ reason: "auto" })` decides it. */
+  readonly due: (context: SessionContext.Loaded) => boolean
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/SessionCompaction") {}
@@ -191,7 +197,7 @@ export const layer = Layer.effect(
 
     const state = State.create<Settings, Editor>({
       name: "session-compaction",
-      initial: () => ({ auto: true, keep: 15_000 }),
+      initial: () => ({ auto: true, clear: true, keep: 15_000 }),
       editor: (settings) => ({
         configure: (update) => {
           Object.assign(settings, update)
@@ -751,7 +757,15 @@ export const layer = Layer.effect(
       transform: state.transform,
       reload: state.reload,
       // A manual compaction settles through its `/compact` inbox item, which the runner owns.
-      thresholds: (context) => ({ auto: state.get().auto, thresholds: thresholds(context, state.get()) }),
+      thresholds: (context) => ({
+        auto: state.get().auto,
+        clear: state.get().clear,
+        thresholds: thresholds(context, state.get()),
+      }),
+      due: (context) => {
+        const found = thresholds(context, state.get())
+        return state.get().auto && found !== undefined && due(context, found.threshold)
+      },
       compact: (trigger) =>
         compact(trigger).pipe(
           Effect.onInterrupt(() =>
@@ -947,6 +961,17 @@ export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean
   const messages = withoutReplaced(context.messages)
   const anchorIndex = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
   const anchor = messages[anchorIndex]
+  // A clearing recorded after the response left out results the response was measured with. Those of the response itself
+  // are lowered as the placeholder below, so only the calls before it are taken off, and only the ones no earlier
+  // clearing took (the response already counts those as left out).
+  const taken = clearedCalls(messages.slice(0, Math.max(0, anchorIndex)))
+  const newer = clearedCalls(messages.slice(anchorIndex + 1))
+  const pending = new Map(
+    [...newer].flatMap(([messageID, ids]) => {
+      const fresh = new Set([...ids].filter((id) => !taken.get(messageID)?.has(id)))
+      return fresh.size === 0 ? [] : [[messageID, fresh] as const]
+    }),
+  )
   const base = transcript(context, messages.slice(Math.max(0, anchorIndex)), minimal, toolOutput)
   // TODO: Pass compaction history the runner has already shaped. This and `recentUserMessages` repeat the
   // runner's unsupported-media and image-budget passes; here the image budget only sees images since the anchor,
@@ -965,9 +990,44 @@ export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean
 
   const tokens = anchor.tokens
   return {
-    measured: tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning,
+    measured: Math.max(
+      0,
+      tokens.input +
+        tokens.cache.read +
+        tokens.cache.write +
+        tokens.output +
+        tokens.reasoning -
+        estimateFreed(messages.slice(0, anchorIndex), pending, context.model.ref, toolOutput),
+    ),
     estimated: unmeasured.reduce((sum, message) => sum + estimateMessage(message), 0),
   }
+}
+
+/**
+ * What leaving out the results of these calls (by assistant message, then call) saves a request: each result as the
+ * request carries it, less the placeholder that stands in its place. Hosted results and calls the messages do not hold
+ * count for nothing.
+ */
+export const estimateFreed = (
+  messages: ReadonlyArray<SessionMessage.Info>,
+  calls: ReadonlyMap<string, ReadonlySet<string>>,
+  model: SessionContext.Loaded["model"]["ref"],
+  toolOutput?: string,
+) => {
+  const placeholder = Token.estimate(CLEARED_RESULT)
+  return messages
+    .flatMap((message) => {
+      const ids = message.type === "assistant" ? calls.get(message.id) : undefined
+      if (ids === undefined) return []
+      return toLLMMessages([message], model, model.providerID, [], { toolOutput })
+        .flatMap((lowered) => lowered.content)
+        .flatMap((part) =>
+          part.type === "tool-result" && part.providerExecuted !== true && ids.has(part.id)
+            ? [Math.max(0, estimatePart(part) - placeholder)]
+            : [],
+        )
+    })
+    .reduce((sum, freed) => sum + freed, 0)
 }
 
 /**

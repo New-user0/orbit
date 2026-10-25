@@ -67,8 +67,8 @@ export const MAX_BYTES = 25 * 1024 * 1024
  * recently used record is dropped first, freshness included.
  *
  * A second, separate memory holds what the last read of each file showed the model, so an identical repeat read can
- * be answered with a stub. A read never clears it; a write, a completed compaction, a committed revert and a deleted
- * or moved Session do. A completed compaction also forgets freshness and every watch.
+ * be answered with a stub. A read never clears it; a write, a completed compaction, a committed revert, a context
+ * clearing and a deleted or moved Session do. A completed compaction also forgets freshness and every watch.
  *
  * When a subagent's run ends (a child Session's busy period, however it ended), everything held for it goes, as the
  * reference releases a subagent's read-file cache when the subagent returns. A child that is continued later starts
@@ -181,8 +181,11 @@ const layer = Layer.effect(
       ),
       Effect.forkScoped({ startImmediately: true }),
     )
-    // A committed revert changes what the model remembers; a revert that restored files changed their time on disk.
-    yield* bus.subscribe([SessionEvent.RevertEvent.Committed]).pipe(
+    // A committed revert changes what the model remembers; a revert that restored files changed their time on disk. A
+    // clearing leaves old read results out of what the model is sent, so a repeat read must show the text again. The
+    // marks hold the path the read resolved and the result does not, so all of them go; freshness stays, since the
+    // file itself is unchanged.
+    yield* bus.subscribe([SessionEvent.RevertEvent.Committed, SessionEvent.ContextCleared]).pipe(
       Stream.runForEach((event) => Effect.sync(() => marks.delete(event.data.sessionID))),
       Effect.forkScoped({ startImmediately: true }),
     )

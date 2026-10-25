@@ -471,6 +471,15 @@ function normalizeCompaction(
     )
     if (value !== undefined) result.auto = value
   }
+  if (own(input.compaction, "clear")) {
+    const value = decodeEncoded(
+      ConfigCompaction.Info.fields.clear,
+      input.compaction.clear,
+      ["compaction", "clear"],
+      diagnostics,
+    )
+    if (value !== undefined) result.clear = value
+  }
   const legacyTokens = own(input.compaction, "preserve_recent_tokens")
     ? decodeEncoded(
         ConfigCompaction.Keep.fields.tokens,
