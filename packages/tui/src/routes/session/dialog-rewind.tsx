@@ -153,8 +153,15 @@ export function DialogRewind(props: {
     }
     if (state.step === "confirm") setState("focused", Math.max(0, Math.min(options().length - 1, state.focused + by)))
   }
+  // The list's own jumps to its oldest prompt and to "(current)"; the confirm step's options have none.
+  const jump = (by: number) => {
+    if (state.step === "list") move(by)
+  }
 
+  // The dialog keys every Orbit picker shares (rebindable, ctrl+p and ctrl+n by default), plus j and k and the list's
+  // top and bottom chords. In step 2 a digit chooses the option drawn with that number.
   Keymap.createLayer(() => ({
+    context: "dialog",
     mode: "modal",
     commands: [
       {
@@ -167,12 +174,36 @@ export function DialogRewind(props: {
           close()
         },
       },
-      { bind: "up", title: "Previous", group: "Dialog", run: () => move(-1) },
-      { bind: "down", title: "Next", group: "Dialog", run: () => move(1) },
-      { bind: "home", title: "First", group: "Dialog", run: () => move(-Infinity) },
-      { bind: "end", title: "Last", group: "Dialog", run: () => move(Infinity) },
+      { id: "dialog.select.prev", title: "Previous", group: "Dialog", run: () => move(-1) },
+      { id: "dialog.select.next", title: "Next", group: "Dialog", run: () => move(1) },
+      { id: "dialog.select.home", title: "First", group: "Dialog", run: () => move(-Infinity) },
+      { id: "dialog.select.end", title: "Last", group: "Dialog", run: () => move(Infinity) },
+      ...["ctrl+up", "shift+up", "meta+up", "shift+k"].map((bind) => ({
+        bind,
+        title: "Oldest prompt",
+        group: "Dialog",
+        run: () => jump(-Infinity),
+      })),
+      ...["ctrl+down", "shift+down", "meta+down", "shift+j"].map((bind) => ({
+        bind,
+        title: "Current",
+        group: "Dialog",
+        run: () => jump(Infinity),
+      })),
+      { bind: "k", title: "Previous", group: "Dialog", run: () => move(-1) },
+      { bind: "j", title: "Next", group: "Dialog", run: () => move(1) },
+      ...options().map((_, index) => ({
+        bind: String(index + 1),
+        title: `Option ${index + 1}`,
+        group: "Dialog",
+        run: () => {
+          if (state.step !== "confirm" || state.acting) return
+          setState("focused", index)
+          choose()
+        },
+      })),
       {
-        bind: "return",
+        id: "dialog.select.submit",
         title: "Choose",
         group: "Dialog",
         run: () => {
@@ -294,7 +325,7 @@ export function DialogRewind(props: {
                   {(item, index) => (
                     <text fg={index() === state.focused ? theme.text.formfield.focused : theme.text.formfield.base}>
                       {index() === state.focused ? "› " : "  "}
-                      {labels[item]}
+                      {index() + 1}. {labels[item]}
                     </text>
                   )}
                 </For>

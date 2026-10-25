@@ -702,3 +702,120 @@ test("Enter while a rewind runs sends it once", async () => {
     `stage ${JSON.stringify({ messageID: "msg_0003" })}`,
   ])
 })
+
+// The list's keys follow the reference's message selector and Orbit's own pickers. Each key is pressed from a known row,
+// then Enter, and the dry run names the row it landed on. The arrows are the control; ctrl+p and ctrl+n are the shared,
+// rebindable dialog keys; j and k are the reference's; its top chords reach the oldest prompt and its bottom chords
+// "(current)", where Enter closes the picker without asking anything.
+type Setup = Awaited<ReturnType<typeof rewindApp>>
+const press = {
+  up: (setup: Setup) => setup.mockInput.pressArrow("up"),
+  down: (setup: Setup) => setup.mockInput.pressArrow("down"),
+  "ctrl+p": (setup: Setup) => setup.mockInput.pressKey("p", { ctrl: true }),
+  "ctrl+n": (setup: Setup) => setup.mockInput.pressKey("n", { ctrl: true }),
+  k: (setup: Setup) => setup.mockInput.pressKey("k"),
+  j: (setup: Setup) => setup.mockInput.pressKey("j"),
+  "ctrl+up": (setup: Setup) => setup.mockInput.pressArrow("up", { ctrl: true }),
+  "shift+up": (setup: Setup) => setup.mockInput.pressArrow("up", { shift: true }),
+  "meta+up": (setup: Setup) => setup.mockInput.pressArrow("up", { meta: true }),
+  "shift+k": (setup: Setup) => setup.mockInput.pressKey("k", { shift: true }),
+  "ctrl+down": (setup: Setup) => setup.mockInput.pressArrow("down", { ctrl: true }),
+  "shift+down": (setup: Setup) => setup.mockInput.pressArrow("down", { shift: true }),
+  "meta+down": (setup: Setup) => setup.mockInput.pressArrow("down", { meta: true }),
+  "shift+j": (setup: Setup) => setup.mockInput.pressKey("j", { shift: true }),
+}
+test.each([
+  { key: "up", ups: 0, lands: ["msg_0005"] },
+  { key: "ctrl+p", ups: 0, lands: ["msg_0005"] },
+  { key: "k", ups: 0, lands: ["msg_0005"] },
+  { key: "down", ups: 2, lands: ["msg_0005"] },
+  { key: "ctrl+n", ups: 2, lands: ["msg_0005"] },
+  { key: "j", ups: 2, lands: ["msg_0005"] },
+  { key: "ctrl+up", ups: 0, lands: ["msg_0001"] },
+  { key: "shift+up", ups: 0, lands: ["msg_0001"] },
+  { key: "meta+up", ups: 0, lands: ["msg_0001"] },
+  { key: "shift+k", ups: 0, lands: ["msg_0001"] },
+  { key: "ctrl+down", ups: 2, lands: [] },
+  { key: "shift+down", ups: 2, lands: [] },
+  { key: "meta+down", ups: 2, lands: [] },
+  { key: "shift+j", ups: 2, lands: [] },
+] as const)("in the list, $key moves the selection as the reference's selector does", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  for (let index = 0; index < row.ups; index++) setup.mockInput.pressArrow("up")
+  press[row.key](setup)
+  setup.mockInput.pressEnter()
+  if (row.lands.length) await setup.waitForFrame((frame) => frame.includes("Never mind"))
+  if (!row.lands.length) await setup.waitForFrame((frame) => !frame.includes(listHeading))
+  expect(setup.dryRunsSent()).toEqual([...row.lands])
+  expect(setup.actions()).toEqual([])
+})
+
+// Step 2 draws its options numbered, as the reference's select does. Ctrl+n and j move as arrow down does (the
+// control), ctrl+p and k as arrow up, and a digit chooses the option with that number at once. The list's top chords
+// do not move the options, as the reference's select has none.
+const stageBoth = `stage ${JSON.stringify({ messageID: "msg_0003" })}`
+const stageConversation = `stage ${JSON.stringify({ messageID: "msg_0003", files: false })}`
+test.each([
+  { keys: ["down"], digit: "", action: stageConversation },
+  { keys: ["ctrl+n"], digit: "", action: stageConversation },
+  { keys: ["j", "j", "k"], digit: "", action: stageConversation },
+  { keys: ["down", "ctrl+p"], digit: "", action: stageBoth },
+  { keys: ["down", "shift+down", "meta+down", "ctrl+down", "shift+j"], digit: "", action: stageConversation },
+  { keys: [], digit: "3", action: `files ${JSON.stringify({ messageID: "msg_0003" })}` },
+  { keys: [], digit: "2", action: stageConversation },
+] as const)("in step 2, keys $keys then digit '$digit' choose through the options' keys", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  for (const [index, label] of ["Code and conversation", "Conversation only", "Code only", "Never mind"].entries())
+    expect(confirm).toContain(`${index + 1}. ${label}`)
+  for (const key of row.keys) press[key](setup)
+  if (row.digit) setup.mockInput.pressKey(row.digit)
+  if (!row.digit) setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => /^(stage|files) /.test(action)), "the rewind request")
+  expect(setup.actions().filter((action) => action !== "interrupt" && action !== "wait")).toEqual([row.action])
+})
+
+// A digit chooses Never mind as Enter does; a digit with no option, or one pressed in the list, does nothing.
+test("a digit for Never mind goes back to the list, and a digit with no option or in the list does nothing", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  setup.mockInput.pressArrow("up")
+  setup.mockInput.pressKey("1")
+  await Bun.sleep(150)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain(listHeading)
+  expect(setup.dryRunsSent()).toEqual([])
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("2. Never mind"))
+  setup.mockInput.pressKey("3")
+  await Bun.sleep(150)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("2. Never mind")
+  setup.mockInput.pressKey("2")
+  await setup.waitForFrame((frame) => frame.includes(listHeading))
+  expect(setup.actions()).toEqual([])
+})
+
+// The picker's moves are the shared dialog keys, so a person who rebinds them moves the picker with their own key, and
+// the default it replaced no longer moves it. Arrow up is the control, still bound alongside.
+test("a person's own keys for the dialog moves reach the picker", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    keybinds: { "dialog.select.prev": "up,f6", "dialog.select.next": "down,f7" },
+  })
+  await openPicker(setup)
+  setup.mockInput.pressKey("p", { ctrl: true })
+  setup.mockInput.pressKey("F6")
+  setup.mockInput.pressKey("F6")
+  setup.mockInput.pressKey("F7")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Never mind"))
+  expect(setup.dryRunsSent()).toEqual(["msg_0005"])
+})

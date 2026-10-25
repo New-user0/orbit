@@ -114,6 +114,8 @@ export async function rewindApp(input: {
   answer?: (request: Recorded) => Response | Promise<Response> | undefined
   /** A revert staged at this message: the session's own `revert` boundary. */
   revert?: string
+  /** The person's own keys, as the config's `keybinds` sets them. */
+  keybinds?: Record<string, string>
 }) {
   const requests: Recorded[] = []
   let running = !!input.running
@@ -122,7 +124,12 @@ export async function rewindApp(input: {
     width: input.width ?? 120,
     height: input.height ?? 40,
     state: input.state,
-    config: { animations: false, tabs: { mode: "off" }, session: { sidebar: "hide" } },
+    config: {
+      animations: false,
+      tabs: { mode: "off" },
+      session: { sidebar: "hide" },
+      ...(input.keybinds ? { keybinds: input.keybinds } : {}),
+    },
     args: { sessionID },
     fetch: async (url, request) => {
       const body =
