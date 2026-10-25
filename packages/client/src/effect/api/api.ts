@@ -1612,6 +1612,25 @@ export type SessionLogOutput =
             readonly content: ReadonlyArray<SessionMessage.AssistantContentEncoded>
           }
         }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.tool.overridden"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: {
+            readonly sessionID: Session.ID
+            readonly assistantMessageID: SessionMessage.ID
+            readonly id: string
+            readonly override: SessionMessage.ToolOverride
+          }
+        }
     )
   | EventLog.Synced
 export type SessionLogOperation<E = never> = (input: SessionLogInput) => Stream.Stream<SessionLogOutput, E>

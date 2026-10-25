@@ -713,6 +713,41 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   spellings), `test/formatter.test.ts`, and `test/tool-lsp.test.ts` (the `LSP` tool's new actions refused while the folder
   is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
+- The file-change reminder (`FileChangeReminder`, `packages/core/src/file-change-reminder.ts`) reads again, at each
+  logical step, a file the session wrote, and on the first step of a main session (one with no parent) in a process it
+  rebuilds what the session saw from the history it is given, which `orb session import` can bring from a file or URL. Both resolve a path once
+  with the read tool's resolver (`FileAccess.locate`: a share or device spelling is refused before any disk is read,
+  then a device or, outside Windows, anything but a file or folder), and check and read that same target. The re-read
+  (`FileChangeReminder.gate`) asks `ProjectTrust.reachable` on it at every step, skips a name in the project that the
+  resolver now finds leading out of it (even in a trusted project, where the read tool would ask), skips a file outside
+  the project whose real path is no longer the one its write resolved (`FileLedger.Seen.place`, kept by Write, Edit,
+  Patch and NotebookEdit), so a link or junction swapped in for the file, its folder or any folder above it cannot move
+  the read, and asks `Permission.denied` for `Read` on the
+  file and on where a link now leads, and for the `external_directory` request of a file outside the project; a refusal
+  skips the file silently and keeps it. An ask rule does not stop this re-read of a file the session wrote. The rebuild
+  treats every name in history as hostile (class 5): it keeps only a file inside the project that passes the same gate
+  and that `Permission.allowed` says the read tool would read with no question, so a file under an ask rule (the
+  built-in `.env` asks, a rule the person wrote, a link onto such a file) is neither seeded nor read. It reads from
+  disk only for an `Edit` in history and for each file a completed `Patch` adds, updates or moves a file to (the names
+  come from the Patch tool's own parser and pass the same gate and `Permission.allowed` check), and reads at most the
+  newest 100 files. The path and the changed lines go only in
+  the reminder's data block. The re-read changes no freshness record while it runs: each change is an entry's commit,
+  run after the rows are posted and only while the record is the one it checked (`FileLedger.settle`), so a deadline,
+  an interruption, a failed read, a refusal or a compaction meanwhile leaves every stale refusal in place (class 7;
+  the "collection that ends early" rows). A file that is slow to check or read, in the re-read or in the rebuild, is
+  left out on its own: files start within a budget, each with half of it to finish (past the budget's end if need be,
+  so no check is counted that the budget cut short), all below the producer's deadline, and the comparisons run
+  smallest first, so one slow or hung file costs only its share. When the budget covers only part of the files, the
+  re-read takes the newest first and goes on at the next step where the last one stopped (a scan the ledger keeps per
+  session), and the rebuild works from the newest call back, so it leaves out the oldest (class 7; the same rows and
+  the "budget smaller than one pass over the files" rows). Proof: the "re-read gate" and "rebuild after a restart" rows of
+  `test/durable-reminders.test.ts` (an outside file after a revoke, a project file swapped for a link out with and
+  without trust, a table of the file, its folder and a folder above it swapped for a link or junction into another
+  outside folder, for a file outside and inside the project, trusted and revoked, a dangling link, a deny on a link's
+  target, an `external_directory` deny, outside spellings in history including `~`, `..` and shares, ask-ruled names
+  from a failed write, a write, a read, an edit and a patch, outside spellings named in a patch, and a pipe marker server and device names that are never opened).
+  The rows that link a file need links, so they run on Linux or with Developer Mode; the rows that swap a folder use a
+  junction on Windows, which needs no privilege.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder. It skips an empty or relative `PATH` entry such as `.`, so the working folder is reached only through
@@ -893,10 +928,26 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/permission-tool-output.test.ts` (other sessions of a lineage, the flat files of earlier builds, `..`, a sibling
   prefix, a link out, a crafted session ID, Windows letter case) and the `saved tool results` rows of
   `test/session-runner.test.ts`.
+- The message budget (`SessionMessageBudget`, `packages/core/src/session/runner/message-budget.ts`, run by
+  `SessionRunnerLLM` before each request for every client and subagent): when the newest step's results pass
+  `tool_output.max_message_chars`, the largest are saved through the same door as a saved result (`ToolOutput.persist`,
+  so the same ID shapes, `lstat` refusal of a linked folder and exclusive create apply, classes 4 and 5) and recorded as
+  `session.tool.overridden` with the session, the one-segment file name and the format, never a path. It reads nothing
+  that a folder supplies, and an untrusted folder cannot set the key (class 8). The projected `override` is data once a
+  session is imported or forked: it is stored as any JSON so one bad entry costs only its own result, and lowering
+  decodes it strictly and renders the wrapper from the stored content without reading the disk, so a session or name
+  that climbs out, a device name, an unknown format or a string sends the stored result and names no path (classes 5
+  and 7); a look-alike of the wrapper in the preview is escaped (class 9). A sanitized export drops the override along
+  with the content it described (classes 7 and 9). Side queries lower overrides and record none (class 12), and the
+  refusal of a request that no longer fits measures the request as it is sent (class 3). Proof: the `message budget`
+  rows of `test/session-runner.test.ts` (an imported `../../.ssh/id_rsa` with a marker file, a linked session folder,
+  automatic compaction off), the `override` rows of `test/tool-output-lowering.test.ts`,
+  `test/session-message-budget.test.ts`, the override rows of `test/session-compaction.test.ts`, the sanitized export
+  row of `test/session-create.test.ts` and `test/config/trust.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,
-  written when a session is deleted) that no live session, scratchpad or stored saved-result marker names. Every
+  written when a session is deleted) that no live session, scratchpad, stored saved-result marker or message-budget override names. Every
   database on the machine shares those roots, so a folder this database never removed stays at any age. A family whose
   stats cannot be folded (message data that is not JSON) stays with one log line (class 7). It reads nothing a folder
   supplies; the period comes from the config of the server's own folder, where an untrusted project's file is not read
@@ -908,7 +959,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   a row whose ID cannot name a folder or whose clock does not decode keeps its family with one log line (classes 5 and
   7). A config document of any scope (user, home, project, local, the flag file, `ORBIT_CONFIG_CONTENT`, remote and the
   managed settings files) that does not parse, or one rejected while the period is set, skips the pass, on a reload as on the first load; a value set twice of which one is kept is not a rejection (class 7). A source whose content could not be obtained counts as one that does not parse and skips the pass too: a remote document whose fetch fails, a well-known list that cannot be read, and a file that is there but cannot be read (class 7, error and timeout). A row whose clock is ahead of now, or stored as text, does not put the pass off. Proof:
-  `test/session-retention.test.ts` (the folder, link, case, other-database, decode and fold rows, each with a control,
+  `test/session-retention.test.ts` (the folder, override, link, case, other-database, decode and fold rows, each with a control,
   and the table of link spellings in both roots), `test/config/cleanup-period.test.ts` (with its table of scopes) and the
   `cleanup_period_days` row of `test/config/trust.test.ts`; in `packages/cli`, the bare row of
   `test/server-process.test.ts`.

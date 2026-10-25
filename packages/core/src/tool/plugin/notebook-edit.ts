@@ -99,11 +99,10 @@ export const Plugin = {
                 yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.notebook_path, original)
                 return yield* Effect.gen(function* () {
                   const result = yield* fileMutation.write({ target, content: after })
-                  yield* ledger.recordWrite(
-                    context.sessionID,
-                    target.absolute,
-                    yield* FileMutation.readSnapshot(environment.files, target.absolute),
-                  )
+                  yield* ledger.recordWrite(context.sessionID, target.absolute, {
+                    ...(yield* FileMutation.readSnapshot(environment.files, target.absolute)),
+                    place: FileAccess.realPlace(target),
+                  })
                   return {
                     files: [fileDiff(result.resource, original.text, after)],
                     cells: NonNegativeInt.make(next.cells.length),

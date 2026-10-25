@@ -336,6 +336,8 @@ function sanitizeMessage(message: SessionMessage.Info): SessionMessage.Info {
           providerResultState: content.providerResultState
             ? { redacted: `tool-provider-result-state:${message.id}` }
             : undefined,
+          // The override describes the content redacted below, so an import of it would wrap a result it does not fit.
+          override: undefined,
           state: sanitizeToolState(message.id, content.state),
         }
       }),

@@ -180,6 +180,12 @@ export interface Interface {
    * a deny is not seen here; the later `assert` still honours it.
    */
   readonly denied: (input: AssertInput) => Effect.Effect<boolean, SessionErrors.NotFoundError>
+  /**
+   * Whether `ask` would allow this input at once, with no question: the configured rules, the saved approvals and the
+   * managed rules decide, as they do for `ask`. Like `denied` it asks nobody, creates no request, publishes nothing and
+   * runs no plugin hook, so a hook that would turn the question into an allow is not seen and the answer stays false.
+   */
+  readonly allowed: (input: AssertInput) => Effect.Effect<boolean, SessionErrors.NotFoundError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
@@ -482,7 +488,8 @@ const layer = Layer.effect(
       return rules.filter((rule) => actionMatches(input.action, rule.action))
     }
 
-    const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
+    // `hooked` false leaves the plugin hooks out, for a check that must not reach plugin code (`allowed`).
+    const evaluateInput = Effect.fnUntraced(function* (input: AssertInput, hooked = true) {
       const current = managed.current()
       const only = current.restrictions.managed_permissions_only === true
       const configuredRules = yield* configured(input.sessionID, input.agent)
@@ -500,16 +507,18 @@ const layer = Layer.effect(
       const explicit = decisions.some(
         (rule) => rule.effect === "ask" && !isFallthrough(rule) && !Agent.isDefaultAsk(rule),
       )
-      const event = yield* hooks.trigger("permission", "evaluate", {
-        sessionID: input.sessionID,
-        agent: input.agent,
-        action: input.action,
-        resources: input.resources,
-        aliases: input.aliases,
-        metadata: input.metadata,
-        source: input.source,
-        effect,
-      })
+      const event = hooked
+        ? yield* hooks.trigger("permission", "evaluate", {
+            sessionID: input.sessionID,
+            agent: input.agent,
+            action: input.action,
+            resources: input.resources,
+            aliases: input.aliases,
+            metadata: input.metadata,
+            source: input.source,
+            effect,
+          })
+        : { effect, message: undefined }
       // The managed layer runs last and in core, so no plugin hook (nor a later classifier) can override it. Order:
       // configured deny > managed rule > plugin hooks > grants and config rules > default ask.
       const layer = [
@@ -567,6 +576,10 @@ const layer = Layer.effect(
         ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
       ]
       return input.resources.some((resource) => managedEffect(folders, input, resource, layer) === "deny")
+    })
+
+    const allowed = Effect.fn("Permission.allowed")(function* (input: AssertInput) {
+      return (yield* evaluateInput(input, false)).effect === "allow"
     })
 
     function request(input: AssertInput, message?: string): Request {
@@ -749,7 +762,7 @@ const layer = Layer.effect(
       return pending.get(id)?.call
     })
 
-    return Service.of({ ask, assert, denied, reply, get, forSession, list, callOf, close })
+    return Service.of({ ask, assert, denied, allowed, reply, get, forSession, list, callOf, close })
   }),
 )
 

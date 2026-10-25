@@ -108,6 +108,13 @@ export interface Interface {
     context: Invocation,
     metadata?: Permission.AssertInput["metadata"],
   ) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
+  /**
+   * The part of `authorizeRead` that asks nobody: a share or device spelling is refused before any disk is read, then the
+   * path is resolved, and a target that is a device, or elsewhere than Windows anything but a file or folder, is refused.
+   * A caller that reads without a tool call (the file-change reminder) resolves with this, so it reads what the read tool
+   * would read, and checks the rules on the target itself.
+   */
+  readonly locate: (file: string, kind?: Kind) => Effect.Effect<Target, FSUtil.Error | ToolFailure | DeviceError>
   /** Resolve a read target and obtain external-directory approval before read approval. */
   readonly authorizeRead: (
     file: string,
@@ -180,6 +187,8 @@ export const leadsOf = (targets: readonly Target[]) => {
   )
   return entries.length === 0 ? {} : { leads: Object.fromEntries(entries) }
 }
+/** Where a target really is once its links, and the links of every folder above it, are followed. */
+export const realPlace = (target: Pick<Target, "place" | "leads">) => target.leads ?? target.place
 const slash = (value: string) => value.replaceAll("\\", "/")
 const invocation = (context: Invocation) => ({
   sessionID: context.sessionID,
@@ -446,18 +455,14 @@ const layer = Layer.effect(
         Effect.orElseSucceed(() => false),
       )
 
-    const authorizeRead = Effect.fn("FileAccess.authorizeRead")(function* (
-      file: string,
-      context: Invocation,
-      options?: ReadOptions,
-    ) {
+    const locate = Effect.fn("FileAccess.locate")(function* (file: string, kind?: Kind) {
       // Before any disk is read: resolving a path stats every part of it, and a stat of a device can block.
       // A share or device-namespace spelling (`\?\Volume{...}`) outside the project is refused as one first, with the
       // same code at every door, since the device list would otherwise answer for it with another message.
       const lexical = resolvePath(location.directory, file)
       if (isShare(lexical) && !folders.some((folder) => FSUtil.contains(folder, lexical))) return yield* shareFailure(file)
       if (DevicePath.blocked(lexical)) return yield* new DeviceError({ resource: file })
-      const target = yield* resolve({ path: file, kind: options?.kind ?? (options?.siblingOf ? "file" : undefined) })
+      const target = yield* resolve({ path: file, kind })
       // Before anything is asked or opened: a device is no place for a question. The listed names are the Windows rule;
       // elsewhere what the place really is decides, so a spelling the list lacks, a link to a device or a pipe is
       // refused too.
@@ -467,6 +472,15 @@ const layer = Layer.effect(
         (process.platform !== "win32" && (yield* isSpecial(target.place)))
       )
         return yield* new DeviceError({ resource: file })
+      return target
+    })
+
+    const authorizeRead = Effect.fn("FileAccess.authorizeRead")(function* (
+      file: string,
+      context: Invocation,
+      options?: ReadOptions,
+    ) {
+      const target = yield* locate(file, options?.kind ?? (options?.siblingOf ? "file" : undefined))
       const sibling =
         options?.siblingOf !== undefined && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
 
@@ -539,6 +553,7 @@ const layer = Layer.effect(
       resolve,
       externalRequest,
       authorizeExternal,
+      locate,
       authorizeRead,
       escaped,
       inMemory,

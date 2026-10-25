@@ -12,9 +12,12 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Global } from "@orbit/util/global"
 import { plain } from "@orbit/util/plain"
 import { SessionFolder } from "./session/folder.js"
+import { SessionMessage } from "./session/message.js"
 
 /** The ceiling on every finite result limit when the person sets neither `max_result_chars` nor `max_bytes`. */
 export const MAX_RESULT_CHARS = 50_000
+/** The most characters of tool results one step sends together when `max_message_chars` is not set. */
+export const MAX_MESSAGE_CHARS = 200_000
 export const DIRECTORY = "tool-output"
 /** The version of the wrapper a `persisted` marker asks for. */
 export const FORMAT = 1
@@ -25,7 +28,13 @@ export const ADOPTED_BYTES = 64 * 1024 * 1024
 const OFFERS = 256
 
 const MESSAGE = /^msg_[A-Za-z0-9]{1,64}$/
-const NAME = /^msg_[A-Za-z0-9]{1,64}-[A-Za-z0-9_-]{0,64}-[0-9a-f]{8}\.(txt|json)$/
+
+/**
+ * What the message budget records on a result it saved: the same session, name and format a `persisted` marker holds,
+ * without the size, which lowering takes from the stored content.
+ */
+export const Override = SessionMessage.ToolOverride
+export type Override = typeof Override.Type
 
 /**
  * What the step records on a saved result: the session whose folder holds the file, the file's one-segment name, the
@@ -35,10 +44,10 @@ const NAME = /^msg_[A-Za-z0-9]{1,64}-[A-Za-z0-9_-]{0,64}-[0-9a-f]{8}\.(txt|json)
  * forked history carries names a file only once it decodes (class 5).
  */
 export const Persisted = Schema.Struct({
-  session: Schema.String.check(Schema.isPattern(SessionFolder.KEY)),
-  name: Schema.String.check(Schema.isPattern(NAME)),
+  session: Override.fields.session,
+  name: Override.fields.name,
   size: NonNegativeInt,
-  format: Schema.Literal(FORMAT),
+  format: Override.fields.format,
   parts: Schema.optionalKey(PositiveInt),
 })
 export type Persisted = typeof Persisted.Type
@@ -134,6 +143,16 @@ export interface Interface {
     readonly result: Result
   }) => Effect.Effect<Result>
   /**
+   * Saves these text parts to the session's folder for the message budget, as `settle` saves a result above its limit,
+   * and answers where, or `undefined` when the file cannot be saved (the result is then sent whole).
+   */
+  readonly persist: (input: {
+    readonly sessionID: string
+    readonly messageID: string
+    readonly callID: string
+    readonly texts: ReadonlyArray<string>
+  }) => Effect.Effect<Override | undefined>
+  /**
    * Offers `file`, which holds the whole output behind the first text part of this call's result, as the saved copy of
    * that result. Settling the same call links the file into the session's folder, or copies it, cut to 64 MB, and marks
    * the result with `parts: 1` and the file's size before the cut. An offer that cannot be saved leaves the result whole.
@@ -175,6 +194,22 @@ const copyAdopted = async (file: string, target: string) => {
     }),
   )
   return size
+}
+
+// The saved file for these text parts, created only where nothing is, so a replay keeps the first one; the size recorded
+// is the length of the saved text.
+const writeSaved = (texts: ReadonlyArray<string>) => {
+  const saved = savedText(texts)
+  return {
+    extension: saved.extension,
+    write: (target: string) =>
+      fs
+        .writeFile(target, saved.text, { flag: "wx" })
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        })
+        .then(() => saved.text.length),
+  }
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ToolOutput") {}
@@ -268,23 +303,17 @@ const layer = Layer.effect(
       // An image, a PDF or any other file part goes whole, however large the text beside it.
       if (texts.length !== result.content.length) return result
       if (texts.reduce((sum, text) => sum + text.length, 0) <= input.limit) return result
-      const saved = savedText(texts)
-      const persisted = yield* save({
-        ...input,
-        extension: saved.extension,
-        write: (target) =>
-          fs
-            .writeFile(target, saved.text, { flag: "wx" })
-            .catch((error: unknown) => {
-              if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-            })
-            .then(() => saved.text.length),
-      })
+      const persisted = yield* save({ ...input, ...writeSaved(texts) })
       if (persisted === undefined) return result
       return { ...result, metadata: { ...metadata, persisted } }
     })
 
-    return Service.of({ root, settle, adopt })
+    const persist: Interface["persist"] = (input) =>
+      save({ ...input, ...writeSaved(input.texts) }).pipe(
+        Effect.map((saved) => saved && { session: saved.session, name: saved.name, format: saved.format }),
+      )
+
+    return Service.of({ root, settle, persist, adopt })
   }),
 )
 

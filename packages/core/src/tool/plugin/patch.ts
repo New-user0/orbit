@@ -392,6 +392,10 @@ export const Plugin = {
                   { discard: true },
                 )
                 const formatted = new Map<string, string>()
+                // Where each file really is, as resolved for the approval, kept with the record of the write.
+                const realPlaces = new Map<string, string>(
+                  targets.map((target) => [target.absolute, FileAccess.realPlace(target)]),
+                )
                 yield* Effect.forEach(
                   [...new Set(applied.filter((item) => item.type !== "delete").map((item) => item.target))],
                   (target) =>
@@ -406,7 +410,7 @@ export const Plugin = {
                           )
                         : written
                       formatted.set(target, final.text)
-                      yield* ledger.recordWrite(context.sessionID, target, final)
+                      yield* ledger.recordWrite(context.sessionID, target, { ...final, place: realPlaces.get(target) })
                     }),
                   { discard: true },
                 )

@@ -414,6 +414,107 @@ it.effect("summary compaction sends a saved tool result as its wrapper", () =>
   }),
 )
 
+// tool-runtime-9: a result the message budget replaced reaches every side query as its wrapper too, and a side query
+// decides no budget of its own: only the runner publishes replacements.
+const overriddenResult = (sessionID: Session.ID, tokens?: number) =>
+  Schema.decodeUnknownSync(SessionMessage.Assistant)({
+    id: SessionMessage.ID.create(),
+    type: "assistant",
+    agent: Agent.defaultID,
+    model: { id: "summary-model", providerID: "test" },
+    content: [
+      {
+        type: "tool",
+        id: "call_budget",
+        name: "Grep",
+        state: { status: "completed", input: {}, content: [{ type: "text", text: "r".repeat(60_000) }] },
+        override: { session: sessionID, name: "msg_0123abc-call_budget-1a2b3c4d.txt", format: 1 },
+        time: { created: 0 },
+      },
+    ],
+    ...(tokens === undefined ? {} : { tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }),
+    time: { created: 0, completed: 0 },
+  })
+
+it.effect("auto compaction measures an overridden tool result by its wrapper", () =>
+  Effect.gen(function* () {
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make("ses_override_estimate"))
+    const context = (message: SessionMessage.Info) => ({
+      ...loaded(session, [message]),
+      model: SessionRunnerModel.resolved(model, {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        cost: [],
+        limit: { context: 110_000, output: 10_000 },
+      }),
+    })
+    const overridden = overriddenResult(session.id, 80_000)
+    const due = (message: SessionMessage.Info) =>
+      compaction
+        .compact({ reason: "auto", context: context(message) })
+        .pipe(Effect.map((outcome) => outcome.status !== "skipped"))
+    // The whole text would pass the 87,000-token threshold; the wrapper stays under it.
+    expect(yield* due(overridden)).toBe(false)
+    const content = overridden.content.map((part) => {
+      if (part.type !== "tool") return part
+      const { override: _, ...rest } = part as typeof part & { override?: unknown }
+      return rest
+    })
+    expect(yield* due({ ...overridden, content } as SessionMessage.Info)).toBe(true)
+  }),
+)
+
+it.effect("summary compaction sends an overridden tool result as its wrapper", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_override_summary"))
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Search the code",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compactManually(session, [user, overriddenResult(session.id)])).toEqual({ status: "completed" })
+    const sent = JSON.stringify(requests[0]?.messages)
+    // Booleans, so a failure does not print 60,000 characters.
+    expect({
+      wrapped: sent.includes("<saved-output>"),
+      named: sent.includes("msg_0123abc-call_budget-1a2b3c4d.txt"),
+      whole: sent.includes("r".repeat(2_001)),
+    }).toEqual({ wrapped: true, named: true, whole: false })
+  }),
+)
+
+it.effect("summary compaction sends a fresh group over the budget whole", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_budget_side_query"))
+    const user = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Search the code",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    // Five results of 45,000 characters: over the 200,000 default, but only the runner decides a budget.
+    const group = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.create(),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: ["a", "b", "c", "d", "e"].map((letter) => ({
+        type: "tool",
+        id: `call_${letter}`,
+        name: "Grep",
+        state: { status: "completed", input: {}, content: [{ type: "text", text: letter.repeat(45_000) }] },
+        time: { created: 0 },
+      })),
+      time: { created: 0, completed: 0 },
+    })
+    expect(yield* compactManually(session, [user, group])).toEqual({ status: "completed" })
+    expect(JSON.stringify(requests[0]?.messages).includes("<saved-output>")).toBe(false)
+  }),
+)
+
 /** Seeds the global project plus one session row, returning the projected session. */
 const insertSession = (id: Session.ID, overrides?: Partial<typeof SessionTable.$inferInsert>) =>
   Effect.gen(function* () {

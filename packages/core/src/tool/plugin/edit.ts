@@ -323,7 +323,10 @@ export const Plugin = {
                 if (yield* formatter.file(target.absolute))
                   yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
                 const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
-                yield* ledger.recordWrite(context.sessionID, target.absolute, final)
+                yield* ledger.recordWrite(context.sessionID, target.absolute, {
+                  ...final,
+                  place: FileAccess.realPlace(target),
+                })
                 return {
                   files: [fileDiff(result.resource, source, final.text)],
                   replacements,
