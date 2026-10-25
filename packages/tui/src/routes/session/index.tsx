@@ -1641,7 +1641,7 @@ export function Session(props: {
                       return mutatePending("steer", next.id)
                     }}
                     rewind={{
-                      ready: () => pendingUsers().length === 0 && messages().length > 0,
+                      ready: () => pendingUsers().length === 0 && messagesBeforeRevert().length > 0,
                       open: () => openRewind(),
                       interrupted: () =>
                         void rewindInterrupted().catch((error) =>

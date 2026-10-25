@@ -84,17 +84,42 @@ test("Esc once, Esc twice slowly, or Esc twice over a typed prompt does not open
 })
 
 // Each condition on its own, in a fresh app so no earlier press arms the first Esc: a typed prompt, a session with no
-// messages, and one whose queued prompt waits in the inbox (Esc twice belongs to the picker only when none holds).
+// messages, one whose queued prompt waits in the inbox, and one whose every prompt a staged revert took back, so the
+// visible conversation is empty although its messages are still listed (Esc twice belongs to the picker only when
+// none holds).
 const queued = { id: "msg_queued", type: "user", delivery: "queue", payload: { text: "Later" }, time: { created: 5 } }
 test.each([
-  { label: "over a typed prompt", messages: undefined, inbox: [], typed: "draft", ready: "Renamed it." },
-  { label: "in a session with no messages", messages: [] as unknown[], inbox: [], typed: "", ready: "Rewind fixture" },
-  { label: "while a queued prompt waits", messages: undefined, inbox: [queued], typed: "", ready: "Renamed it." },
+  { label: "over a typed prompt", messages: undefined, inbox: [], typed: "draft", ready: "Renamed it.", revert: "" },
+  {
+    label: "in a session with no messages",
+    messages: [] as unknown[],
+    inbox: [],
+    typed: "",
+    ready: "Rewind fixture",
+    revert: "",
+  },
+  {
+    label: "while a queued prompt waits",
+    messages: undefined,
+    inbox: [queued],
+    typed: "",
+    ready: "Renamed it.",
+    revert: "",
+  },
+  {
+    label: "after a staged revert took back every prompt",
+    messages: undefined,
+    inbox: [],
+    typed: "",
+    ready: "/redo to restore",
+    revert: "msg_0001",
+  },
 ])("Esc twice $label does not open the picker", async (row) => {
   await using state = await tmpdir()
   await using setup = await rewindApp({
     state: state.path,
     messages: row.messages,
+    revert: row.revert || undefined,
     answer: (request) => (request.path.endsWith("/inbox") ? json({ data: row.inbox }) : undefined),
   })
   await setup.waitForFrame((frame) => frame.includes(row.ready))

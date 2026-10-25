@@ -1897,8 +1897,9 @@ refused rewind keeps the picker open with a line naming what failed. If the pick
 queued through the rewind; steering it, or sending a new prompt, commits the rewind first, so it runs in the rewound
 conversation.
 
-Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. While a session runs, Esc
-keeps interrupting it as before.
+Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. It opens nothing when the
+session shows no message, including when a staged revert has taken back every prompt. While a session runs, Esc keeps
+interrupting it as before.
 
 The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
 confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only
