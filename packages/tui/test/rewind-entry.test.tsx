@@ -388,6 +388,62 @@ test("the message dialog's Rewind on a running session stops it first and offers
   expect(setup.sequence()).toEqual(["interrupt", "wait", "dry run msg_0003"])
 })
 
+// The shortcut on a running session: the prompt's reply is still empty, so the dialog's Rewind stops the session, asks
+// the dry run and, with no file to change, rewinds the conversation at once. While the stop is under way the picker
+// already stands in for the message dialog with `Checking files…`, so the dialog cannot be chosen twice, Enter sends
+// nothing more, and Esc gives up the rewind (the stop it already asked for stays).
+test.each([
+  { label: "goes on to the conversation rewind", escape: false },
+  { label: "is given up by Esc", escape: true },
+])("the message dialog's shortcut on a running session shows Checking files while it stops, and $label", async (row) => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<void>()
+  await using setup = await rewindApp({
+    state: state.path,
+    running: true,
+    messages: [...conversation, quick, reply([], false)],
+    answer: (request) => {
+      if (request.path.endsWith("/wait")) return held.promise.then(() => new Response(null, { status: 204 }))
+      if (request.path.endsWith("/revert/files") && request.body?.dryRun)
+        return json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } })
+      return undefined
+    },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Quick question"))
+  await openFromTimeline(setup, "Quick question")
+  await until(() => setup.actions().includes("wait"), "the wait for the stop")
+  const checking = await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+  expect(checking).not.toContain("Message Actions")
+  setup.mockInput.pressEnter()
+  await Bun.sleep(200)
+  expect(setup.sequence()).toEqual(["interrupt", "wait"])
+
+  if (row.escape) {
+    setup.mockInput.pressEscape()
+    await setup.waitForFrame((frame) => !frame.includes("Checking files…"))
+    held.resolve()
+    await until(() => setup.dryRunsSent().length === 1, "the dry run")
+    await Bun.sleep(300)
+    expect(setup.actions()).toEqual(["interrupt", "wait"])
+    return
+  }
+  held.resolve()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(setup.sequence()).toEqual([
+    "interrupt",
+    "wait",
+    "dry run msg_0007",
+    "interrupt",
+    "wait",
+    `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
+  ])
+  const frame = await setup.waitForFrame(
+    (frame) => !frame.includes("Checking files…") && linesWith(frame, "Quick question") === 2,
+    { maxPasses: 200 },
+  )
+  expect(frame).not.toContain("Message Actions")
+})
+
 // A prompt at or after the staged revert's boundary is no longer in the conversation: the message dialog's Rewind
 // closes without asking anything.
 test("the message dialog's Rewind on a prompt a staged revert already took back closes without a dry run", async () => {

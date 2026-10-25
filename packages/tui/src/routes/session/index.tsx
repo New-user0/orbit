@@ -758,19 +758,21 @@ export function Session(props: {
     })
     refill(messageID)
   }
-  const openRewind = (preselected?: string, checked?: RewindDryRun) =>
-    dialog.replace(() => (
-      <DialogRewind
-        prompts={rewindPrompts()}
-        stats={rewindStats}
-        dryRun={(messageID) =>
-          checked && messageID === preselected ? Promise.resolve(checked) : rewindDryRun(messageID)
-        }
-        act={rewind}
-        onClose={() => dialog.clear()}
-        preselected={preselected}
-      />
-    ))
+  const openRewind = (preselected?: string, checked?: Promise<RewindDryRun | undefined>, key?: symbol) =>
+    dialog.replace(
+      () => (
+        <DialogRewind
+          prompts={rewindPrompts()}
+          stats={rewindStats}
+          dryRun={(messageID) => (checked && messageID === preselected ? checked : rewindDryRun(messageID))}
+          act={rewind}
+          onClose={() => dialog.clear()}
+          preselected={preselected}
+        />
+      ),
+      undefined,
+      { key },
+    )
   /** Whether nothing a person would miss follows the prompt: no prompt, and no reply with text, a tool or an error. */
   const onlyEmptyAfter = (messageID: string) => {
     const list = rewindable()
@@ -781,10 +783,19 @@ export function Session(props: {
   // straight back into the input; any other opens the picker on its confirm step. A prompt that is no row of the picker
   // (still in the inbox, or taken back by a staged revert) is not in `rewindable()`, so it opens the picker, which
   // closes at once without a dry run: nothing is interrupted, asked or changed.
+  // The picker replaces the message dialog at once and shows `Checking files…` while a running session stops and the
+  // dry run answers, so the dialog cannot be chosen twice. It goes on to step 2 only when a file would change; otherwise
+  // it stays on `Checking files…` until the conversation rewind below closes it, unless the person closed it first.
   const rewindMessage = async (messageID: string) => {
     if (!onlyEmptyAfter(messageID)) return openRewind(messageID)
-    const checked = await rewindDryRun(messageID)
-    if (checked?.canRewind && checked.filesChanged?.length) return openRewind(messageID, checked)
+    const checked = rewindDryRun(messageID)
+    const key = Symbol("rewind")
+    openRewind(
+      messageID,
+      checked.then((result) => (changesFiles(result) ? result : new Promise<never>(() => {}))),
+      key,
+    )
+    if (changesFiles(await checked) || dialog.key !== key) return
     dialog.clear()
     await rewind("conversation", messageID).catch((error) =>
       toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }),
@@ -1675,6 +1686,11 @@ function meaningful(message: SessionMessageInfo) {
   if (message.type !== "assistant") return false
   if (message.error && message.error.type !== "aborted") return true
   return message.content.some((part) => part.type === "tool" || (part.type === "text" && part.text.trim() !== ""))
+}
+
+/** Whether a dry run says a code rewind would change at least one file, as the picker reads it for its code options. */
+function changesFiles(result: RewindDryRun | undefined) {
+  return !!result?.canRewind && Array.isArray(result.filesChanged) && result.filesChanged.length > 0
 }
 
 type SessionRowViewProps = {
