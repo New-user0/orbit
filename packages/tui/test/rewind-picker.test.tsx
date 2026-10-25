@@ -1486,8 +1486,11 @@ const laterStep = {
   ],
 }
 test.each([
-  { label: "after a `!` command run during the reply", messages: [...conversation, shellMidReply, laterStep] },
-  { label: "with no command before it (control)", messages: [...conversation, laterStep] },
+  {
+    label: "after a `!` command run during the reply",
+    messages: [...conversation, shellMidReply, laterStep] as unknown[],
+  },
+  { label: "with no command before it (control)", messages: [...conversation, laterStep] as unknown[] },
 ])("a reply step that ends $label asks the prompt's stats again", async (row) => {
   await using state = await tmpdir()
   let newest = 0
