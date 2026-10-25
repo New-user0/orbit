@@ -132,11 +132,28 @@ export const Plugin = {
                 return yield* new ToolFailure({ message: "patch rejected: empty patch" })
               }
               // Every path is checked by FileAccess before the lock key resolves it on disk (a share would be opened).
-              const locked = yield* Effect.forEach(
-                hunks.flatMap((hunk) =>
+              // Each hunk's paths are resolved once, for the lock and for the scan below.
+              const named = yield* Effect.forEach(hunks, (hunk) =>
+                Effect.forEach(
                   hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
+                  (value) => access.resolve({ path: value, kind: "file" }),
                 ),
-                (value) => access.resolve({ path: value, kind: "file" }),
+              )
+              const locked = named.flat()
+              // A credential never reaches team memory (context-memory-11): what each hunk adds is scanned before anything
+              // is read or asked, as Write's content and Edit's replacement are. A file moved into the folder is scanned
+              // whole once its text is known, below. An update's context lines are already in the file, so a patch that
+              // takes a key out beside another one passes, as an Edit that takes one out does.
+              yield* Effect.forEach(
+                hunks,
+                (hunk, index) =>
+                  hunk.type === "delete"
+                    ? Effect.void
+                    : access.refuseTeamSecrets(
+                        named[index],
+                        hunk.type === "add" ? hunk.contents : hunk.chunks.flatMap(added).join("\n"),
+                      ),
+                { discard: true },
               )
               return yield* Effect.gen(function* () {
                 const prepared: Prepared[] = []
@@ -249,6 +266,7 @@ export const Plugin = {
                         new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                     })
                     const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                    if (moveTarget) yield* access.refuseTeamSecrets([moveTarget], update.content)
                     const moveID = moveTarget && hunk.movePath ? yield* identify(moveTarget, hunk.movePath) : undefined
                     // Writing the destination and then removing the source would delete a file moved onto itself.
                     if (moveID !== undefined && moveID === id)
@@ -518,4 +536,17 @@ function trimDiff(diff: string) {
       return line
     })
     .join("\n")
+}
+
+// The lines a chunk adds: its new side less one copy of each line on its old side. A context line is on both sides and
+// drops out; a line the chunk holds more often than the file did before is kept. Each old line is counted once and spent
+// as the new side reaches its copy, so the work stays linear in the chunk, which every Patch pays.
+const added = (chunk: Patch.UpdateFileChunk) => {
+  const left = new Map<string, number>()
+  chunk.oldLines.forEach((line) => left.set(line, (left.get(line) ?? 0) + 1))
+  return chunk.newLines.filter((line) => {
+    const remaining = (left.get(line) ?? 0) - 1
+    left.set(line, remaining)
+    return remaining < 0
+  })
 }
