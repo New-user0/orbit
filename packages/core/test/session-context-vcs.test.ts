@@ -502,5 +502,7 @@ describe.skipIf(process.platform !== "win32")("the git of the snapshot and decoy
       expect(yield* stored(ids.main)).toMatchObject({ branch: "main", user: "Test" })
       expect(yield* Effect.promise(ran)).toEqual([])
     }).pipe(Effect.scoped),
+    // It starts git several times, which took more than the default 5 s on a loaded Windows runner.
+    30_000,
   )
 })
