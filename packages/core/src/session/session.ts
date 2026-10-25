@@ -182,6 +182,9 @@ export const make = Effect.fn("Session.make")(function* () {
     input: { id?: SessionMessage.ID; command: string },
   ) {
     const session = yield* get(sessionID)
+    // A person's command is new work, so it settles a staged revert as a prompt does;
+    // otherwise its message and output land after the boundary and the next prompt drops them.
+    if (session.revert) yield* SessionRevert.commit(bus, session)
     // The server owns completion recording even if the submitting client disconnects.
     const running = yield* Effect.gen(function* () {
       const started = yield* SessionShell.start({ session, command: input.command }).pipe(
@@ -229,6 +232,8 @@ export const make = Effect.fn("Session.make")(function* () {
     const skill = yield* SessionSkill.get({ session, skill: input.skill }).pipe(
       Effect.provideService(Instance.Service, instances),
     )
+    // An activated skill is new work too: commit a staged revert once the skill is known, as a prompt does.
+    if (session.revert) yield* SessionRevert.commit(bus, session)
     yield* bus.publish(
       SessionEvent.Skill.Activated,
       {

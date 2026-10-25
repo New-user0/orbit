@@ -22,7 +22,7 @@ import { KeyedMutex } from "../effect/keyed-mutex.js"
 import { SessionEvent } from "./event.js"
 import { SessionMessage } from "./message.js"
 import { SessionSchema } from "./schema.js"
-import { SessionInboxTable, SessionMessageTable } from "./sql.js"
+import { SessionInboxTable, SessionMessageTable, SessionTable } from "./sql.js"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -453,6 +453,7 @@ const publish = Effect.fn("SessionInbox.publish")(function* (
   sessionID: SessionSchema.ID,
   rows: ReadonlyArray<typeof SessionInboxTable.$inferSelect>,
 ) {
+  if (rows.some((row) => row.type === "user") && (yield* settleRevert(db, bus, sessionID))) return undefined
   yield* Effect.forEach(
     rows,
     (row) => {
@@ -480,8 +481,31 @@ const publish = Effect.fn("SessionInbox.publish")(function* (
 })
 
 /**
+ * Commits a staged revert, and says whether there was one. A person's pending item is new work, so it settles a
+ * staged revert before it is delivered, as `Session.prompt` does when it admits one, and lands in the rewound
+ * conversation. Delivered behind the boundary instead, it would be drawn nowhere, the model would still see the
+ * rewound steps, and the next commit would delete it.
+ */
+export const settleRevert = Effect.fn("SessionInbox.settleRevert")(function* (
+  db: DatabaseService,
+  bus: Bus.Interface,
+  sessionID: SessionSchema.ID,
+) {
+  const session = yield* db
+    .select({ revert: SessionTable.revert })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!session?.revert) return false
+  yield* bus.publish(SessionEvent.RevertEvent.Committed, { sessionID, to: session.revert.messageID })
+  return true
+})
+
+/**
  * Promotes pending input into visible messages and returns the promoted count,
- * or undefined when the runner must first handle a pending control.
+ * or undefined when the runner must first handle a pending control, or must load
+ * the context again because delivering a person's item committed a staged revert.
  * Steered compaction takes priority over pending prompts, without crossing a move.
  * Only the "input" scope may fall through to one queued input.
  */
@@ -512,12 +536,16 @@ export const promote = Effect.fn("SessionInbox.promote")(function* (
       if (!queued) return 0
       if (queued.type === "compaction" || queued.type === "move") return undefined
       const promoted = yield* publish(db, bus, sessionID, [queued])
+      if (promoted === undefined) return undefined
       const arrivedSteers = yield* pendingSteers(db, sessionID)
       const control = arrivedSteers.findIndex((row) => row.type === "compaction" || row.type === "move")
-      return (
-        promoted +
-        (yield* publish(db, bus, sessionID, control === -1 ? arrivedSteers : arrivedSteers.slice(0, control)))
+      const arrived = yield* publish(
+        db,
+        bus,
+        sessionID,
+        control === -1 ? arrivedSteers : arrivedSteers.slice(0, control),
       )
+      return arrived === undefined ? undefined : promoted + arrived
     }),
   )
 })
