@@ -1201,3 +1201,26 @@ test.each([64, 120])("step 2 quotes up to four lines of a long prompt, at %i col
   )
   expect(block.join("\n")).not.toContain("fifth line")
 })
+
+// The quote stops at the prompt's 500th character, counted by code point, so an emoji there is drawn whole (half of it
+// would be a lone surrogate, a class 9 control-category character) and what follows is not drawn.
+test("step 2 quotes up to 500 characters of a long prompt and never half an emoji", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: [{ ...conversation[0], text: `${"a".repeat(499)}😀${"b".repeat(40)}` }, ...conversation.slice(1)],
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 3)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  const lines = frame.split("\n")
+  const block = lines
+    .slice(
+      lines.findIndex((line) => line.includes("Rewind the conversation to just before this prompt:")),
+      lines.findIndex((line) => line.includes("Never mind")),
+    )
+    .join("\n")
+  expect(block).toContain("😀")
+  expect(block).not.toContain("bb")
+  expect(controlFree(block)).toBe(true)
+})

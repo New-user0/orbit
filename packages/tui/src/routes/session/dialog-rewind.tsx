@@ -252,8 +252,9 @@ export function DialogRewind(props: {
   const own = (prompt: RewindPrompt) => (prompt.shell ? `! ${prompt.text}` : prompt.text)
   const quote = (prompt: RewindPrompt) =>
     Locale.truncate(bodyText(own(prompt)).replace(/\n/g, " "), width()) || "(empty prompt)"
+  // Cut by code point, so a cut never leaves half a surrogate pair to draw.
   const quoteLines = (prompt: RewindPrompt) =>
-    bodyText(own(prompt).slice(0, 500).split("\n").slice(0, 4).join("\n")) || "(empty prompt)"
+    bodyText(Array.from(own(prompt)).slice(0, 500).join("").split("\n").slice(0, 4).join("\n")) || "(empty prompt)"
 
   function Row(row: { index: number }) {
     const prompt = props.prompts[row.index]

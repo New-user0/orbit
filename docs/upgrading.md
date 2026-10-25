@@ -1910,7 +1910,15 @@ conversation.
 The list moves with the dialog keys every picker uses (up and down, ctrl+p and ctrl+n, Home and End, Enter to choose),
 so keys you set for `dialog.select.prev`, `next`, `home`, `end` and `submit` apply to it too, and also with j and k.
 Ctrl, shift or alt with up, or shift+k, selects the oldest prompt; the same with down, or shift+j, selects `(current)`.
-The confirm step numbers its options, and pressing a digit chooses that option at once.
+The list stops at its first and last rows, and page up and page down do nothing in it. Every row is three lines tall,
+so the list does not move when the file lines arrive. `n` closes the list, the `Nothing to rewind yet.` picker and the
+error line, as Esc does; Enter does nothing when there is nothing to rewind.
+
+The confirm step quotes up to the first four lines of the prompt. Its options wrap: up on the first reaches `Never
+mind`, down on `Never mind` reaches the first. Page up and page down (`dialog.select.page_up`, `page_down`) go to the
+first and the last option, and Home and End do the same. Pressing a digit (also a full-width one) chooses that option
+at once without moving the highlight; Enter chooses the highlighted option and marks it with `✓`. While a chosen rewind
+runs no key moves the options and none is highlighted. `n` does nothing in the confirm step.
 
 Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. It opens nothing when the
 session shows no message, including when a staged revert has taken back every prompt. While a session runs, Esc keeps
