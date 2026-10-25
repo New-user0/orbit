@@ -1951,8 +1951,11 @@ of the picker, and `Rewind` on it closes the dialog without interrupting the ses
 
 Interrupting a prompt (Esc twice while it runs) before its reply holds any text, tool call or error, with nothing typed
 and nothing queued, now rewinds the conversation to before that prompt and puts it back in the input; the prompt-history
-entry that this submit added is dropped. A prompt that repeated the newest entry added none, so nothing is dropped, and
-entries that other terminal UI windows saved meanwhile stay. Files are not touched.
+entry that this submit added is dropped, whatever the prompt held: plain text, a pasted block shown as
+`[Pasted ~N lines]`, or a mentioned file or agent. A prompt that repeated the newest entry added none, so nothing is
+dropped. Nothing is dropped either for a slash command, whose prompt is the command's text rather than what was typed,
+or when this window added another entry after the prompt's, such as a `!` command, and the entry of a `!` command is
+never dropped. Entries that other terminal UI windows saved meanwhile stay. Files are not touched.
 
 **Affects:** people who use the terminal UI's message dialog or press Esc on an idle prompt, or interrupt a prompt with
 Esc twice before its reply holds anything.

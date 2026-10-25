@@ -823,8 +823,7 @@ export function Session(props: {
     const last = messagesBeforeRevert().findLast((message) => message.type === "user")
     if (!last || !onlyEmptyAfter(last.id)) return
     await client.api.session.revert.stage({ sessionID, messageID: last.id, files: false })
-    const message = refill(last.id)
-    if (message) promptHistory.forget(message.text)
+    if (refill(last.id)) promptHistory.forget(last.id)
   }
   const unavailable = (feature: string) => {
     toast.show({ message: `${feature} is not implemented for V2 sessions yet`, variant: "error", duration: 5000 })

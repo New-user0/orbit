@@ -1,7 +1,17 @@
+import { SessionMessage } from "@orbit/schema/session-message"
 import { expect, test } from "bun:test"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
-import { conversation, linesWith, listHeading, rewindApp, sessionID, until, withShell } from "./fixture/rewind"
+import {
+  conversation,
+  linesWith,
+  listHeading,
+  location,
+  rewindApp,
+  sessionID,
+  until,
+  withShell,
+} from "./fixture/rewind"
 
 // clients-ux-5 part 2: every way into the rewind picker (class 12). `/rewind` and its alias `/checkpoint`, Esc pressed
 // twice on an empty prompt of an idle session, and the message dialog's Rewind, which opens step 2 for that prompt or,
@@ -330,41 +340,154 @@ test("Never mind on a picker opened from the message dialog closes it", async ()
 })
 
 // The interrupted prompt goes back into the input, so the history entry its submit added is dropped and Up does not
-// offer it twice; the entries before it stay. The prompt is sent from this window, as only its own entry is dropped.
-test("interrupting a prompt whose reply has nothing in it drops the prompt's history entry", async () => {
+// offer it twice; the entries before it stay. The entry is found by the message the prompt was sent as, not by its
+// text, so every form the composer stores is dropped alike: plain text, a summarised paste (the entry keeps the
+// placeholder, the message the pasted lines), a mentioned file and a mentioned agent, each recalled with Up. A `!`
+// command is no prompt, so its entry stays when the prompt sent after it is interrupted. A slash command becomes a
+// message the server writes from the command's template, which is what goes back into the input, so the entry holding
+// what was typed is no repeat of it and stays too. Every prompt is sent from this window, as only its own entry goes.
+const recalledFile = {
+  text: "Read @src/a.ts now",
+  files: [{ uri: "file:///src/a.ts", mention: { start: 5, end: 14, text: "@src/a.ts" } }],
+  agents: [],
+  pasted: [],
+}
+const recalledAgent = {
+  text: "Ask @build first",
+  files: [],
+  agents: [{ name: "build", mention: { start: 4, end: 10, text: "@build" } }],
+  pasted: [],
+}
+type Composer = Awaited<ReturnType<typeof rewindApp>>
+const recall = async (setup: Composer, text: string) => {
+  setup.mockInput.pressArrow("up")
+  await setup.waitForFrame((frame) => frame.includes(`› ${text}`), { maxPasses: 200 })
+}
+
+test.each([
+  {
+    label: "plain text",
+    compose: (setup: Composer) => setup.mockInput.typeText("Quick question"),
+    route: "/prompt",
+    shown: "Quick question",
+    before: ["Earlier", "Quick question"],
+    after: ["Earlier"],
+  },
+  {
+    label: "a summarised paste",
+    compose: async (setup: Composer) => {
+      await setup.mockInput.typeText("Look ")
+      await setup.mockInput.pasteBracketedText("one\ntwo\nthree")
+      await setup.waitForFrame((frame) => frame.includes("[Pasted ~3 lines]"), { maxPasses: 200 })
+    },
+    route: "/prompt",
+    shown: "Look one",
+    before: ["Earlier", "Look [Pasted ~3 lines] "],
+    after: ["Earlier"],
+  },
+  {
+    label: "a mentioned file",
+    seed: recalledFile,
+    compose: (setup: Composer) => recall(setup, recalledFile.text),
+    route: "/prompt",
+    shown: recalledFile.text,
+    before: ["Earlier", recalledFile.text, recalledFile.text],
+    after: ["Earlier", recalledFile.text],
+  },
+  {
+    label: "a mentioned agent",
+    seed: recalledAgent,
+    compose: (setup: Composer) => recall(setup, recalledAgent.text),
+    route: "/prompt",
+    shown: recalledAgent.text,
+    before: ["Earlier", recalledAgent.text, recalledAgent.text],
+    after: ["Earlier", recalledAgent.text],
+  },
+  {
+    label: "a `!` command before it",
+    compose: async (setup: Composer) => {
+      await setup.mockInput.typeText("!")
+      await setup.waitForFrame((frame) => frame.includes("Shell"))
+      await setup.mockInput.typeText("git status")
+      setup.mockInput.pressEnter()
+      await until(() => setup.requests.some((request) => request.path.endsWith("/shell")), "the shell request")
+      await setup.mockInput.typeText("Quick question")
+    },
+    route: "/prompt",
+    shown: "Quick question",
+    before: ["Earlier", "git status", "Quick question"],
+    after: ["Earlier", "git status"],
+  },
+  {
+    label: "a slash command",
+    compose: async (setup: Composer) => {
+      await setup.mockInput.typeText("/review now")
+      // The completion list is open over a typed command; Esc closes it and Enter then sends the command.
+      setup.mockInput.pressEscape()
+    },
+    route: "/command",
+    shown: "Review the input: now",
+    before: ["Earlier", "/review now"],
+    after: ["Earlier", "/review now"],
+  },
+])("interrupting a prompt whose reply has nothing in it drops the history entry of $label", async (row) => {
   await using state = await tmpdir()
   const history = Bun.file(`${state.path}/prompt-history.jsonl`)
-  await Bun.write(history, JSON.stringify({ text: "Earlier", files: [], agents: [], pasted: [] }) + "\n")
+  await Bun.write(
+    history,
+    [{ text: "Earlier", files: [], agents: [], pasted: [] }, ...(row.seed ? [row.seed] : [])]
+      .map((entry) => JSON.stringify(entry) + "\n")
+      .join(""),
+  )
   await using setup = await rewindApp({
     state: state.path,
     answer: (request) => {
-      if (request.method !== "POST" || !request.path.endsWith("/prompt")) return undefined
+      if (request.path === "/api/command")
+        return json({ location, data: [{ name: "review", description: "Review the input" }] })
+      if (request.method !== "POST") return undefined
+      if (request.path.endsWith("/shell") || request.path.endsWith("/command"))
+        return new Response(null, { status: 204 })
+      if (!request.path.endsWith("/prompt")) return undefined
       const item = { type: "user", payload: { text: request.body.text }, delivery: "steer" }
       return json({ data: { id: request.body.id, sessionID, time: { created: Date.now() }, ...item } })
     },
   })
   await setup.waitForFrame(loaded)
-  await setup.mockInput.typeText("Quick question")
+  await row.compose(setup)
   setup.mockInput.pressEnter()
-  await until(() => setup.requests.some((request) => request.path.endsWith("/prompt")), "the prompt request")
-  const sent = setup.requests.find((request) => request.path.endsWith("/prompt"))!
+  await until(() => setup.requests.some((request) => request.path.endsWith(row.route)), "the submit")
+  // A prompt is sent under the ID the composer minted for it; the server names the message a command becomes.
+  const messageID =
+    row.route === "/prompt"
+      ? setup.requests.find((request) => request.path.endsWith("/prompt"))!.body.id
+      : SessionMessage.ID.create()
+  // The server admits a command's message itself; a prompt's is already admitted by the client.
+  const delivered = row.route === "/command" ? 2 : 1
+  if (row.route === "/command")
+    setup.events.emit({
+      id: "evt_command_enqueued",
+      created: Date.now(),
+      type: "session.inbox.enqueued",
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      data: { sessionID, inboxID: messageID, item: { type: "user", payload: { text: row.shown }, delivery: "steer" } },
+    })
   // The server delivers it and starts working on it: the prompt leaves the inbox and becomes the newest message, with
   // no reply yet. Events are handled in order, so the interrupt hint shows only once the delivery is in too.
   setup.events.emit({
     id: "evt_quick_delivered",
     created: Date.now(),
     type: "session.inbox.delivered",
-    durable: { aggregateID: sessionID, seq: 1, version: 1 },
-    data: { sessionID, inboxID: sent.body.id },
+    durable: { aggregateID: sessionID, seq: delivered, version: 1 },
+    data: { sessionID, inboxID: messageID },
   })
   setup.events.emit({
     id: "evt_quick_started",
     created: Date.now(),
     type: "session.execution.started",
-    durable: { aggregateID: sessionID, seq: 2, version: 1 },
+    durable: { aggregateID: sessionID, seq: delivered + 1, version: 1 },
     data: { sessionID },
   })
-  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("esc interrupt"), {
+  await setup.waitForFrame((frame) => frame.includes(row.shown) && frame.includes("esc interrupt"), {
     maxPasses: 200,
   })
   const texts = async () =>
@@ -374,25 +497,28 @@ test("interrupting a prompt whose reply has nothing in it drops the prompt's his
       .map((line) => JSON.parse(line).text)
   // The file is written in the background, so it is read until it holds the submit's entry.
   for (const _ of Array.from({ length: 200 })) {
-    if ((await texts()).join() === "Earlier,Quick question") break
+    if ((await texts()).join() === row.before.join()) break
     await Bun.sleep(20)
   }
-  expect(await texts()).toEqual(["Earlier", "Quick question"])
+  expect(await texts()).toEqual([...row.before])
   setup.mockInput.pressEscape()
   setup.mockInput.pressEscape()
   await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
   expect(setup.actions().filter((action) => action.startsWith("stage"))).toEqual([
-    `stage ${JSON.stringify({ messageID: sent.body.id, files: false })}`,
+    `stage ${JSON.stringify({ messageID, files: false })}`,
   ])
-  await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
-  // The file is rewritten in the background, so it is read until it holds the result.
+  // The prompt is back in the input, below its own row in the transcript.
+  await setup.waitForFrame((frame) => linesWith(frame, row.shown) === 2, { maxPasses: 200 })
+  // The file is rewritten in the background, so it is read until it holds the result, after a pause that lets a wrong
+  // drop of an entry that stays reach the file first.
+  await Bun.sleep(300)
   let saved: string[] = []
   for (const _ of Array.from({ length: 200 })) {
     saved = await texts()
-    if (saved.join() === "Earlier") break
+    if (saved.join() === row.after.join()) break
     await Bun.sleep(20)
   }
-  expect(saved).toEqual(["Earlier"])
+  expect(saved).toEqual([...row.after])
 })
 
 // A click on a person's prompt in the transcript opens the same message dialog as the timeline, and its Rewind opens

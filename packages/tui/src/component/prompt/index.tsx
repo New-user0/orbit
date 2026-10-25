@@ -75,6 +75,7 @@ import { useInteractivity } from "../../context/interactivity"
 import { abbreviateHome } from "../../runtime"
 import { Slot } from "../../plugin/render"
 import type { SessionInbox } from "@orbit/schema/session-inbox"
+import { SessionMessage } from "@orbit/schema/session-message"
 import {
   deduplicatePromptImages,
   preserveMentionlessPromptAttachments,
@@ -1564,7 +1565,10 @@ export function Prompt(props: PromptProps) {
       })
       return true
     }
-    history.append(entry, historyDirectory())
+    // A prompt is sent under an ID minted here, so that the history entry it adds can be found again by the message it
+    // became. A `!` command and a slash command are sent without one: neither becomes a message of an ID chosen here.
+    const messageID = currentMode === "shell" || (slashHead && isCommand) ? undefined : SessionMessage.ID.create()
+    history.append(entry, historyDirectory(), messageID)
     if (currentMode === "shell") {
       move.startSubmit()
       // A command is new work too: settle a staged revert first, as a prompt does, so the command lands after the
@@ -1628,6 +1632,7 @@ export function Prompt(props: PromptProps) {
           sessionID: target,
           text: inputText,
           files: entry.files,
+          id: messageID,
           agents: entry.agents,
           skills: entry.skills?.length ? entry.skills : undefined,
           delivery,
