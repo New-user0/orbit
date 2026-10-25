@@ -114,6 +114,8 @@ type Store = {
     message: Record<string, SessionMessageInfo[]>
     messageCursor: Record<string, string | undefined>
     messageLoading: Record<string, boolean>
+    // The latest context report of each known session; forgotten whenever it can no longer describe the context.
+    context: Record<string, OrbitEventMap["session.context.updated"]["data"]>
     pending: Record<string, SessionInboxInfo[]>
     permission: Record<string, PermissionRequest[]>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
@@ -234,6 +236,7 @@ export function createData(config: CreateDataInput) {
       message: {},
       messageCursor: {},
       messageLoading: {},
+      context: {},
       pending: {},
       permission: {},
       form: {},
@@ -578,6 +581,7 @@ export function createData(config: CreateDataInput) {
         delete draft.message[sessionID]
         delete draft.messageCursor[sessionID]
         delete draft.messageLoading[sessionID]
+        delete draft.context[sessionID]
         delete draft.pending[sessionID]
         delete draft.permission[sessionID]
         delete draft.form[sessionID]
@@ -595,6 +599,8 @@ export function createData(config: CreateDataInput) {
       case "server.connected": {
         const updates = new Map<string, DataSessionStatus | undefined>()
         activeUpdates = updates
+        // A report may have been missed while disconnected.
+        setStore("session", "context", reconcile({}))
         refresh(() =>
           api()
             .session.active()
@@ -649,6 +655,9 @@ export function createData(config: CreateDataInput) {
             tokens: event.data.tokens,
           })
         return
+      case "session.context.updated":
+        if (store.session.info[event.data.sessionID]) setStore("session", "context", event.data.sessionID, event.data)
+        return
       case "session.agent.selected": {
         const previous = store.session.info[event.data.sessionID]?.agent
         if (store.session.info[event.data.sessionID])
@@ -663,6 +672,8 @@ export function createData(config: CreateDataInput) {
         return
       }
       case "session.model.selected":
+        // The report's thresholds belong to the previous model.
+        setStore("session", "context", produce((draft) => void delete draft[event.data.sessionID]))
         if (store.session.info[event.data.sessionID])
           setStore("session", "info", event.data.sessionID, "model", event.data.model)
         if (!store.session.message[event.data.sessionID]) return
@@ -709,6 +720,7 @@ export function createData(config: CreateDataInput) {
             projectID: current.projectID,
             subpath: current.subpath,
           }
+          setStore("session", "context", produce((draft) => void delete draft[event.data.sessionID]))
           setStore("session", "info", event.data.sessionID, "location", event.data.location)
           if (event.data.projectID) setStore("session", "info", event.data.sessionID, "projectID", event.data.projectID)
           setStore("session", "info", event.data.sessionID, "subpath", event.data.subpath)
@@ -1089,6 +1101,7 @@ export function createData(config: CreateDataInput) {
           setStore("session", "info", event.data.sessionID, "revert", undefined)
         return
       case "session.revert.committed":
+        setStore("session", "context", produce((draft) => void delete draft[event.data.sessionID]))
         if (store.session.info[event.data.sessionID]) {
           setStore("session", "info", event.data.sessionID, "revert", undefined)
         }
@@ -1288,6 +1301,16 @@ export function createData(config: CreateDataInput) {
         )
         break
       case "config.updated":
+        // The report carries the automatic-compaction mode from this location's config, so it can no longer be trusted.
+        setStore(
+          "session",
+          "context",
+          produce((draft) => {
+            Object.keys(draft)
+              .filter((id) => locationKey(store.session.info[id].location) === locationKey(location))
+              .forEach((id) => delete draft[id])
+          }),
+        )
         result.location.config.invalidate(location)
         if (result.location.config.list(location) !== undefined || sync.has(`location.config:${locationKey(location)}`))
           refresh(() => result.location.config.sync(location))
@@ -1380,6 +1403,9 @@ export function createData(config: CreateDataInput) {
         batch(() => {
           for (const id of new Set([root, sessionID, ...(store.session.family[root] ?? [])])) evictSession(id)
         })
+      },
+      context(sessionID: string) {
+        return store.session.context[sessionID]
       },
       cost(sessionID: string) {
         const session = store.session.info[sessionID]

@@ -633,6 +633,20 @@ export namespace Tool {
     },
   })
   export type Failed = typeof Failed.Type
+
+  /**
+   * The message budget sends this completed result as the wrapper of a saved copy from now on. Keyed by the message and
+   * the call, because a provider's call IDs need not be unique across messages. Internal: no client renders it.
+   */
+  export const Overridden = Event.durable({
+    type: "session.tool.overridden",
+    ...options,
+    schema: {
+      ...ToolBase,
+      override: SessionMessage.ToolOverride,
+    },
+  })
+  export type Overridden = typeof Overridden.Type
 }
 
 export const RetryScheduled = Event.durable({
@@ -778,6 +792,7 @@ export const DurableDefinitions = Event.inventory(
   UsageRecorded,
   SideQueryRecorded,
   MessageContentUpdated,
+  Tool.Overridden,
 )
 export const EphemeralDefinitions = Event.inventory(
   ...Definitions.filter((definition) => definition.durability === "ephemeral"),

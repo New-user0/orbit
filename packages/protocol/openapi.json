@@ -15955,6 +15955,10 @@
               "max_result_chars": {
                 "type": "integer",
                 "exclusiveMinimum": 0
+              },
+              "max_message_chars": {
+                "type": "integer",
+                "exclusiveMinimum": 0
               }
             },
             "additionalProperties": false
@@ -16037,6 +16041,9 @@
               },
               "directory": {
                 "type": "string"
+              },
+              "team": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false
@@ -21101,6 +21108,7 @@
           "providerResultState": {
             "$ref": "#/components/schemas/Session.Message.ProviderState_3"
           },
+          "override": {},
           "state": {
             "anyOf": [
               {

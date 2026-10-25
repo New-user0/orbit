@@ -35,6 +35,8 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Bus } from "@orbit/core/bus"
 import type { SessionContext } from "@orbit/core/session/context"
 import { LayerNode } from "@orbit/util/effect/layer-node"
+import { AbsolutePath } from "@orbit/core/schema"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
 import {
@@ -661,7 +663,13 @@ describe("the language-server reminder", () => {
         Effect.provide(
           AppNodeBuilder.build(LayerNode.group([Bus.node, SessionReminders.node]), [
             LspDiagnostics.node.replace(Layer.succeed(LspDiagnostics.Service, held.collector)),
-            Location.node.replace(Layer.succeed(Location.Service, { directory: "/project" } as Location.Interface)),
+            // A whole Location: the file-change and style producers of the node read the project's folders too.
+            Location.node.replace(
+              Layer.succeed(
+                Location.Service,
+                location(Location.Ref.make({ directory: AbsolutePath.make("/project") })),
+              ),
+            ),
           ]),
         ),
       )
