@@ -772,6 +772,8 @@ export const layer = (options?: Options) =>
           const name = ServerName.make(server)
           yield* Effect.gen(function* () {
             const target = yield* requireServer(name)
+            // A server turned off no longer waits for trust: a later grant leaves it off, and only `connect` starts it.
+            waiting.delete(name)
             yield* stopServer(name, target.entry)
             target.entry.status = { status: "disabled" }
             yield* bus.publish(McpEvent.StatusChanged, { server: name })

@@ -933,6 +933,51 @@ describe("a local MCP server waits for the project folder to be trusted", () => 
     )
   })
 
+  // A person who turns off a server that waits for trust has decided it stays off: the grant that comes later does not
+  // start it, and the server stays turned off until someone connects it.
+  test("a grant does not start a server that was turned off while it waited for trust", async () => {
+    const spawns: Array<ChildProcess.Command> = []
+    const state = { folder: false }
+    const updates = Effect.runSync(PubSub.unbounded<unknown>())
+    const config = new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: os.tmpdir() })
+    const entries = [
+      new Document({ type: "document", info: new Info({ mcp: new ConfigMCP.Info({ servers: { resources: config } }) }) }),
+    ]
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        expect((yield* settled(service))?.status).toBe("failed")
+        yield* service.disconnect("resources")
+        expect((yield* service.servers())[0]?.status).toEqual({ status: "disabled" })
+        state.folder = true
+        yield* PubSub.publish(updates, {})
+        yield* Effect.promise(() => Bun.sleep(1500))
+        expect({ spawns: spawns.length, status: (yield* service.servers())[0]?.status }).toEqual({
+          spawns: 0,
+          status: { status: "disabled" },
+        })
+        // Connecting it is the person's choice, and the folder is trusted now, so it starts.
+        yield* service.connect("resources")
+        expect({ spawns: spawns.length, status: (yield* service.servers())[0]?.status }).toEqual({
+          spawns: 1,
+          status: { status: "connected" },
+        })
+      }).pipe(
+        Effect.provide(
+          resourceMcpLayer(config, undefined, undefined, {
+            entries: () => Effect.succeed(entries),
+            environment: recordingEnvironmentLayer(spawns),
+            trust: Layer.mock(ProjectTrust.Service, {
+              trusted: () => Effect.succeed(true),
+              folder: (directory) => Effect.sync(() => ({ directory, trusted: state.folder, persistent: true })),
+            }),
+            subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+          }),
+        ),
+      ),
+    )
+  })
+
   // A grant can land while a server is being placed: the place read the trust before the grant, and the server joins
   // the waiting ones only after the grant's update has looked for them. The update still starts it. Seen on a loaded
   // Windows runner, where the server whose place straddled the second of two quick grants never started.

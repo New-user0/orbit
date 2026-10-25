@@ -810,6 +810,16 @@ sessions, stay where they are; delete them by hand if you no longer need them.
 
 **What to do:** set `cleanup_period_days` to a larger number in your own config to keep sessions longer.
 
+### A trust grant no longer starts an MCP server you turned off
+
+A local MCP server that waits for its folder to be trusted used to start when the grant came, even if you had
+disconnected it while it waited. It now stays disconnected until you connect it again. A server that was being started
+at the moment of the grant now starts as well; before, it kept waiting until the next grant.
+
+**Affects:** people who disconnect a local MCP server in a folder they have not yet trusted.
+
+**What to do:** connect the server when you want it, for example with `/mcp`.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
