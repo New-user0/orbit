@@ -2392,7 +2392,10 @@ records that diff as `files` on `permission.replied` with the question's place, 
 resolved before asking, after the usual check that the file has not changed since. The file's byte order mark is kept.
 When your text differs from the proposal, an Edit tells the model that you modified its proposal before approving it;
 the proposal itself, sent back unchanged, gets the usual result. Text equal to the file as it was read is taken as a
-reject. Before, a `content` field was dropped and the proposal was written.
+reject. Before, a `content` field was dropped and the proposal was written. A PostToolUse hook still gets the model's
+proposal as `tool_input` after a revised reply, so a hook that needs what was written reads an Edit's
+`tool_response.files`, the diff of the file as written (a Write's `tool_response` names only the file, so its hook
+reads the file).
 
 In an ACP client, a completed Edit or Write now shows the diff the tool recorded of what it wrote, live and when a
 session is loaded, instead of one built from the model's `old_string` and `new_string`. A completed Write shows a diff
