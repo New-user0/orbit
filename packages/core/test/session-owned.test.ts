@@ -831,6 +831,51 @@ describe("Session-owned handles", () => {
       }),
     )
 
+  // A person's steer can arrive while a queued notice is delivered at the idle boundary. Delivering that steer commits
+  // the staged revert, so the promotion answers that the drain must load the context again, not a count of delivered
+  // items, and the steer waits for the next promotion.
+  it.live("a steer that arrives while a queued notice is delivered commits a staged revert and asks for a reload", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup({
+        snapshot: () => Layer.mock(Snapshot.Service, { capture: () => Effect.undefined }),
+      })
+      const admission = yield* SessionInbox.Service
+      const handle = fixture.sessions.forSession(sessionID)
+      const boundary = yield* handle.synthetic({ text: "Revert boundary", resume: false })
+      yield* SessionInbox.promote(fixture.db, fixture.bus, sessionID, "steer")
+      yield* admission.admit({
+        id: notice,
+        sessionID,
+        item: { type: "synthetic", payload: { text: "Background job finished" }, delivery: "queue" },
+      })
+      yield* handle.revert.stage({ messageID: boundary.id, files: false })
+      // Admission is idempotent by ID, so admitting the steer on every delivery admits it once.
+      const steering: Bus.Interface = {
+        ...fixture.bus,
+        publish: (definition, data, options) =>
+          fixture.bus.publish(definition, data, options).pipe(
+            Effect.tap(() =>
+              definition.type === SessionEvent.InboxDelivered.type
+                ? admission
+                    .admit({
+                      id: queued,
+                      sessionID,
+                      item: { type: "user", payload: { text: "Steered meanwhile" }, delivery: "steer" },
+                    })
+                    .pipe(Effect.orDie)
+                : Effect.void,
+            ),
+          ),
+      }
+
+      expect(yield* SessionInbox.promote(fixture.db, steering, sessionID, "input")).toBeUndefined()
+
+      expect((yield* handle.get()).revert).toBeUndefined()
+      expect(yield* handle.inbox()).toContainEqual(expect.objectContaining({ id: queued, type: "user" }))
+      expect((yield* fixture.store.context(sessionID)).map((message) => message.id)).not.toContain(queued)
+    }),
+  )
+
   it.live("selects the destination's snapshot service after a move", () =>
     Effect.gen(function* () {
       const captures: Location.Ref[] = []
