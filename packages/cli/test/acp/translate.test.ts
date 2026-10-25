@@ -360,3 +360,50 @@ describe("acp away summary", () => {
     expect(ACPTranslate.step(ACPTranslate.initial, live, ctx).outputs).toEqual([])
   })
 })
+
+// context-memory-3: the clearing marker tells the model's request what to leave out; an editor draws the stored output
+// as it always did and gets no update for the marker, stored or live.
+describe("acp context clearing", () => {
+  test("translates a context-cleared row to no update", () => {
+    const marker: Parameters<typeof ACPTranslate.replayMessage>[0] = {
+      id: "msg_cleared",
+      type: "context-cleared",
+      trigger: "idle",
+      tools: [{ assistantMessageID: "msg_ran", id: "call_ran" }],
+      time: { created: 3 },
+    }
+    expect([...ACPTranslate.replayMessage(marker, "/workspace")]).toEqual([])
+
+    // The assistant message the marker names replays its tool call and result as before.
+    const replayed = [
+      ...ACPTranslate.replayMessage(
+        assistantMessage("msg_ran", {
+          content: [
+            {
+              type: "tool",
+              id: "call_ran",
+              name: "Read",
+              time: { created: 1, completed: 2 },
+              state: {
+                status: "completed",
+                input: { file_path: "notes.txt" },
+                metadata: {},
+                content: [{ type: "text", text: "the full output" }],
+              },
+            },
+          ],
+        }),
+        "/workspace",
+      ),
+    ]
+    expect(replayed.map((update) => update.sessionUpdate)).toContain("tool_call_update")
+    expect(JSON.stringify(replayed)).toContain("the full output")
+
+    const live = durableEvent("session.context.cleared", {
+      sessionID: root,
+      trigger: "idle",
+      tools: [{ assistantMessageID: "msg_ran", id: "call_ran" }],
+    })
+    expect(ACPTranslate.step(ACPTranslate.initial, live, ctx).outputs).toEqual([])
+  })
+})

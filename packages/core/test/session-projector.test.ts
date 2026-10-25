@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Logger, Option, Schema, Stream } from "effect"
-import { asc, eq, sql } from "drizzle-orm"
+import { and, asc, eq, sql } from "drizzle-orm"
 import { Database } from "@orbit/core/database/database"
 import { Agent } from "@orbit/core/agent"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -30,12 +30,20 @@ import {
   SessionTable,
 } from "@orbit/core/session/sql"
 import { testEffect } from "./lib/effect"
+import { seedStep } from "./lib/context-history"
 import { Snapshot } from "@orbit/core/snapshot"
 
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([Database.node, Bus.node, SessionProjector.node, SessionInbox.node, SessionStore.node]),
     [Bus.node.replace(Bus.configured({ persist: true }))],
+  ),
+)
+// A layer whose Session service forks through the projector of the same bus.
+const forking = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([Database.node, Bus.node, SessionProjector.node, SessionInbox.node, SessionStore.node, Session.node]),
+    [Bus.node.replace(Bus.configured({ persist: true })), SessionExecution.node.replace(SessionExecution.noopLayer)],
   ),
 )
 const sessionsLayer = AppNodeBuilder.build(Session.node, [SessionExecution.node.replace(SessionExecution.noopLayer)])
@@ -830,6 +838,62 @@ describe("SessionProjector tool overrides", () => {
         { ...original.content[0], override: override("call_done") },
         original.content[1],
       ])
+    }),
+  )
+// context-memory-3: the clearing marker is one row at its place in the history, and a fork names its copies.
+  forking.effect("projects session.context.cleared as one context-cleared row and remaps its IDs on a fork", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const bus = yield* Bus.Service
+      const sessions = yield* Session.Service
+      const first = yield* seedStep(bus, sessionID, { id: "msg_cleared_first", calls: [{ id: "call_1", name: "Read" }] })
+      const second = yield* seedStep(bus, sessionID, { id: "msg_cleared_second", calls: [{ id: "call_2", name: "Read" }] })
+
+      yield* bus.publish(SessionEvent.ContextCleared, {
+        sessionID,
+        trigger: "idle",
+        tools: [
+          { assistantMessageID: first, id: "call_1" },
+          { assistantMessageID: second, id: "call_2" },
+        ],
+      })
+      const rows = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "context-cleared")))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows).toHaveLength(1)
+      const marker = Schema.decodeUnknownSync(SessionMessage.Info)({ ...rows[0]!.data, id: rows[0]!.id, type: rows[0]!.type })
+      expect(marker).toMatchObject({
+        type: "context-cleared",
+        trigger: "idle",
+        tools: [
+          { assistantMessageID: first, id: "call_1" },
+          { assistantMessageID: second, id: "call_2" },
+        ],
+      })
+
+      // A fork past the marker copies it under the IDs its calls' messages were copied to.
+      const past = yield* sessions.fork({ sessionID })
+      const copied = yield* sessions.context(past.id)
+      const assistants = copied.filter((message) => message.type === "assistant").map((message) => message.id)
+      expect(assistants).toHaveLength(2)
+      expect(assistants).not.toContain(first)
+      const copiedMarkers = copied.filter((message) => message.type === "context-cleared")
+      expect(copiedMarkers).toHaveLength(1)
+      expect(copiedMarkers[0]).toMatchObject({
+        trigger: "idle",
+        tools: [
+          { assistantMessageID: assistants[0], id: "call_1" },
+          { assistantMessageID: assistants[1], id: "call_2" },
+        ],
+      })
+      expect(copiedMarkers[0]!.id).not.toBe(marker.id)
+
+      // A fork that stops before the marker has no row.
+      const before = yield* sessions.fork({ sessionID, before: marker.id })
+      expect((yield* sessions.context(before.id)).map((message) => message.type)).toEqual(["assistant", "assistant"])
     }),
   )
 })

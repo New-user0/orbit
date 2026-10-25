@@ -690,6 +690,9 @@ describe("ConfigTrust.stamp", () => {
     ["media", { image: { auto_resize: false } }, { image: { auto_resize: true } }],
     ["tool_output", { max_lines: 100 }, { max_lines: 5000 }],
     ["compaction", { auto: false, buffer: 100 }, { auto: true, buffer: 20000 }],
+    // context-memory-3: clearing old tool results shapes what each request carries, in either direction.
+    ["compaction", { clear: false }, { clear: true }],
+    ["compaction", { clear: true }, { clear: false }],
   ] as const)("keeps an untrusted folder from setting %s", (field, projectValue, userValue) => {
     const user = document("user", { [field]: userValue })
     const project = document("project", { [field]: projectValue })
