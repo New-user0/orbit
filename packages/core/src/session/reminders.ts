@@ -5,12 +5,22 @@ import { plain } from "@orbit/util/plain"
 import { Cause, Context, Duration, Effect, Layer, Option } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
+import { Config } from "../config.js"
 import { Database } from "../database/database.js"
+import { Environment } from "../environment/index.js"
+import { FileAccess } from "../file-access.js"
+import { FileChangeReminder } from "../file-change-reminder.js"
+import { FileLedger } from "../file-ledger.js"
 import { LspDiagnostics } from "../lsp/collector.js"
 import { LspReminder } from "../lsp/reminder.js"
 import { Location } from "../location.js"
+import { Permission } from "../permission.js"
 import { PlanReminders } from "../plan/reminders.js"
+import { OutputStylePlugin } from "../plugin/output-style.js"
+import { ProjectTrust } from "../project-trust.js"
+import { ReadToolFileSystem } from "../tool/read-filesystem.js"
 import { TodoReminders } from "../tool/todo-reminders.js"
+import { ContextUsageReminder } from "./context-usage-reminder.js"
 import type { SessionContext } from "./context.js"
 import { SessionEvent } from "./event.js"
 import type { SessionMessage } from "./message.js"
@@ -30,6 +40,7 @@ export {
   humanTurnsSince,
   newestPrompt,
   runs,
+  postedInRun,
 } from "./reminder-text.js"
 export type Anchor = ReminderText.Anchor
 
@@ -44,7 +55,16 @@ export type Anchor = ReminderText.Anchor
  *
  * The contract:
  * - Reminders appear in list order. Placement in the request comes from `toLLMMessages`.
- * - A durable entry is hidden from clients unless it sets a `description`. An entry with no text and no data is dropped.
+ * - A durable entry is hidden from clients unless it sets a `description`. An entry with no text and no data is not
+ *   published, but its `commit` still runs.
+ * - A producer changes no state while it runs. What it would change goes in an entry's `commit`, which runs only once
+ *   the collection's rows are published, so a deadline, an interruption or a failure leaves that state as it was. The
+ *   one exception is the file-change producer's rebuild after a restart: it claims the session and seeds the files'
+ *   records from history inside `run`, as the reference rebuilds its cache outside a collection. It fills only files
+ *   that have no record in this process, so it never changes a record a collection checked, and a rebuild cut short is
+ *   not tried again in that process. The same producer also notes each file whose check started in the step, whatever
+ *   it found (a check, once started, finishes or uses its whole share), so the next step goes on with the others; that
+ *   note counts nothing as seen.
  * - The envelope holds harness text only. Anything read from a file, a tool or an editor goes in `data`, which renders
  *   as a labelled fenced block after the envelope, and is neutralized there.
  * - Spacing (how many steps since the last one of mine) is read from history through the helpers, never from a counter
@@ -79,6 +99,8 @@ export interface Entry {
   /** Short text for clients; stored escaped. Without one the row is hidden. */
   readonly description?: string
   readonly metadata?: Readonly<Record<string, unknown>>
+  /** State the entry stands for, changed only after the collection's rows are published, together with them. */
+  readonly commit?: Effect.Effect<void>
 }
 
 export interface Durable {
@@ -118,8 +140,8 @@ export const DEFAULT_TIMEOUT = Duration.seconds(1)
 
 export interface Interface {
   /**
-   * Runs the durable producers for one logical step and publishes one `session.synthetic` per entry, together.
-   * Returns whether anything was published, so the caller reloads history only then.
+   * Runs the durable producers for one logical step, publishes one `session.synthetic` per entry, together, and then
+   * runs the entries' commits. Returns whether anything was published, so the caller reloads history only then.
    */
   readonly collect: (input: { readonly loaded: SessionContext.Loaded; readonly step: number }) => Effect.Effect<boolean>
   /** Runs the derived producers; the insertions merge in list order. */
@@ -158,9 +180,9 @@ export const configured = (lists: Lists) =>
   })
 
 /**
- * The production node. The language-server and turn-budget producers read services, and a producer's `run` has no
- * requirements, so they are built here from those services and appended to the durable list. `orb run --bare`
- * switches instruction files off, and a bare run adds nothing else to the conversation either.
+ * The production node. Most durable producers read services, and a producer's `run` has no requirements, so they are
+ * built here from those services and appended to the durable list. `orb run --bare` switches instruction files off,
+ * and a bare run adds nothing else to the conversation either.
  */
 export const node = makeLocationNode({
   service: Service,
@@ -171,19 +193,42 @@ export const node = makeLocationNode({
       const diagnostics = yield* LspDiagnostics.Service
       const location = yield* Location.Service
       const database = yield* Database.Service
-      // Diagnostics come before the budget report.
+      const config = yield* Config.Service
+      const ledger = yield* FileLedger.Service
+      const access = yield* FileAccess.Service
+      const reader = yield* ReadToolFileSystem.Service
+      const permission = yield* Permission.Service
+      const trust = yield* ProjectTrust.Service
+      const environment = yield* Environment.Service
+      // The reference's order: changed files, then the main conversation's style, diagnostics and context usage. The
+      // budget report comes last.
       const lists: Lists = {
         ...production,
         durable: [
           ...production.durable,
+          FileChangeReminder.durable({ ledger, access, reader, permission, trust, environment }),
+          OutputStylePlugin.durable(config),
           LspReminder.durable(diagnostics, location.directory),
+          ContextUsageReminder.durable,
           TurnReminder.durable(database.db),
         ],
       }
       return make(bus, process.env.ORBIT_DISABLE_INSTRUCTIONS === "1" ? minimal(lists) : lists)
     }),
   ),
-  deps: [Bus.node, LspDiagnostics.node, Location.node, Database.node],
+  deps: [
+    Bus.node,
+    LspDiagnostics.node,
+    Location.node,
+    Database.node,
+    Config.node,
+    FileLedger.node,
+    FileAccess.node,
+    ReadToolFileSystem.node,
+    Permission.node,
+    ProjectTrust.node,
+    Environment.node,
+  ],
 })
 
 const make = (bus: Bus.Interface, lists: Lists) => {
@@ -209,8 +254,8 @@ const make = (bus: Bus.Interface, lists: Lists) => {
       (producer) => guarded(producer, given),
       { concurrency: "unbounded" },
     )
-    const events = results
-      .flat()
+    const entries = results.flat()
+    const events = entries
       .filter((entry) => entry.text.length > 0 || entry.data !== undefined)
       .map(
         (entry) =>
@@ -227,10 +272,16 @@ const make = (bus: Bus.Interface, lists: Lists) => {
             },
           ] as const,
       )
-    const [first, ...rest] = events
-    if (first === undefined) return false
-    yield* bus.publishAll([first, ...rest])
-    return true
+    const commits = entries.flatMap((entry) => (entry.commit === undefined ? [] : [entry.commit]))
+    // An interruption lands before the rows and their commits or after both, never between them.
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const [first, ...rest] = events
+        if (first !== undefined) yield* bus.publishAll([first, ...rest])
+        yield* Effect.all(commits, { discard: true })
+        return first !== undefined
+      }),
+    )
   })
 
   const derive: Interface["derive"] = Effect.fnUntraced(function* (loaded, step) {

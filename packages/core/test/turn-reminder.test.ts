@@ -8,7 +8,8 @@ import type { SessionMessage } from "@orbit/core/session/message"
 import { SessionOutput } from "@orbit/core/session/output"
 import { SessionReminders } from "@orbit/core/session/reminders"
 import { TurnReminder } from "@orbit/core/session/turn-reminder"
-import { Effect, Fiber, Layer, Logger, Queue, Stream } from "effect"
+import { Effect, Fiber, Layer, Logger, Queue, Schema, Stream } from "effect"
+import { Document, Info } from "@orbit/schema/config"
 import { TestClock } from "effect/testing"
 import { AIError, TransportError } from "@orbit/ai"
 import { SessionTurnEnd } from "@orbit/core/session/turn-end"
@@ -395,6 +396,63 @@ describe("the production node", () => {
         : [],
     )
     expect(kinds).toEqual(["lsp-diagnostics", "turn-budget"])
+  })
+})
+
+// prompts-context-7: the reference's main-conversation order puts the output style before diagnostics, and the context
+// usage after them, before the budget figures.
+describe("the production node with the style and usage reminders", () => {
+  let pending = true
+  const diagnostics: LspDiagnostics.Interface = {
+    touch: () => Effect.void,
+    size: () => Effect.succeed(0),
+    drain: () =>
+      Effect.sync(() => {
+        const out = pending
+          ? [
+              {
+                file: "/project/src/late.ts",
+                diagnostics: [
+                  {
+                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+                    severity: 1 as const,
+                    message: "late problem",
+                  },
+                ],
+              },
+            ]
+          : []
+        pending = false
+        return out
+      }),
+  }
+  const production = scenarioOn(testEffect(makeLayer(true, diagnostics)))
+
+  production("publishes the style, diagnostics, context usage and budget rows in that order", function* (s) {
+    yield* s.configControl!.setEntries([
+      new Document({ type: "document", info: Schema.decodeUnknownSync(Info)({ output_style: "explanatory" }) }),
+    ])
+    const before = process.env.ORBIT_ENABLE_CONTEXT_USAGE_REMINDER
+    process.env.ORBIT_ENABLE_CONTEXT_USAGE_REMINDER = "1"
+    yield* Effect.gen(function* () {
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxSteps: 2 }, resume: false })
+      yield* s.llm.push(answer())
+      yield* s.resume
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (before === undefined) delete process.env.ORBIT_ENABLE_CONTEXT_USAGE_REMINDER
+          else process.env.ORBIT_ENABLE_CONTEXT_USAGE_REMINDER = before
+        }),
+      ),
+    )
+
+    const kinds = (yield* s.context).flatMap((message) =>
+      ReminderText.isReminder(message) && message.type === "synthetic"
+        ? [(message.metadata?.reminder as { kind: string }).kind]
+        : [],
+    )
+    expect(kinds).toEqual(["output-style", "lsp-diagnostics", "context-usage", "turn-budget"])
   })
 })
 
