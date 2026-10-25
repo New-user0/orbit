@@ -74,6 +74,8 @@ import type {
   SessionWaitOutput,
   SessionRevertStageInput,
   SessionRevertStageOutput,
+  SessionRevertFilesInput,
+  SessionRevertFilesOutput,
   SessionRevertClearInput,
   SessionRevertClearOutput,
   SessionRevertCommitInput,
@@ -98,6 +100,12 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionRecapInput,
+  SessionRecapOutput,
+  SessionAssistLabelInput,
+  SessionAssistLabelOutput,
+  SessionAssistSuggestionInput,
+  SessionAssistSuggestionOutput,
   SessionLogInput,
   SessionLogOutput,
   SessionInterruptInput,
@@ -653,6 +661,17 @@ const EndpointSessionRevertStage = (raw: RawClient["server.session"]) => (input:
     ),
   )
 
+const EndpointSessionRevertFiles = (raw: RawClient["server.session"]) => (input: SessionRevertFilesInput) =>
+  preserveEffect<SessionRevertFilesOutput>()(
+    raw["session.revert.files"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { messageID: input["messageID"], dryRun: input["dryRun"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointSessionRevertClear = (raw: RawClient["server.session"]) => (input: SessionRevertClearInput) =>
   preserveEffect<SessionRevertClearOutput>()(
     raw["session.revert.clear"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
@@ -675,7 +694,7 @@ const EndpointSessionDiff = (raw: RawClient["server.session"]) => (input: Sessio
   preserveEffect<SessionDiffOutput>()(
     raw["session.diff"]({
       params: { sessionID: input["sessionID"] },
-      query: { from: input["from"], to: input["to"], context: input["context"] },
+      query: { from: input["from"], to: input["to"], context: input["context"], scope: input["scope"] },
     }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
@@ -743,6 +762,30 @@ const EndpointSessionInstructionsEntryRemove =
 const EndpointSessionGenerate = (raw: RawClient["server.session"]) => (input: SessionGenerateInput) =>
   preserveEffect<SessionGenerateOutput>()(
     raw["session.generate"]({ params: { sessionID: input["sessionID"] }, payload: { prompt: input["prompt"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionRecap = (raw: RawClient["server.session"]) => (input: SessionRecapInput) =>
+  preserveEffect<SessionRecapOutput>()(
+    raw["session.recap"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointSessionAssistLabel = (raw: RawClient["server.session"]) => (input: SessionAssistLabelInput) =>
+  preserveEffect<SessionAssistLabelOutput>()(
+    raw["session.assist.label"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { messageID: input["messageID"], toolCallIDs: input["toolCallIDs"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionAssistSuggestion = (raw: RawClient["server.session"]) => (input: SessionAssistSuggestionInput) =>
+  preserveEffect<SessionAssistSuggestionOutput>()(
+    raw["session.assist.suggestion"]({ params: { sessionID: input["sessionID"] } }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
     ),
@@ -862,6 +905,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   wait: EndpointSessionWait(raw),
   revert: {
     stage: EndpointSessionRevertStage(raw),
+    files: EndpointSessionRevertFiles(raw),
     clear: EndpointSessionRevertClear(raw),
     commit: EndpointSessionRevertCommit(raw),
   },
@@ -881,6 +925,8 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
     },
   },
   generate: EndpointSessionGenerate(raw),
+  recap: EndpointSessionRecap(raw),
+  assist: { label: EndpointSessionAssistLabel(raw), suggestion: EndpointSessionAssistSuggestion(raw) },
   log: EndpointSessionLog(raw),
   interrupt: EndpointSessionInterrupt(raw),
   background: EndpointSessionBackground(raw),

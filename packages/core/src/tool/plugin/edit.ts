@@ -246,6 +246,8 @@ export const Plugin = {
               const refused = refusal(input)
               if (refused) return yield* refused
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
+              // Only the replacement is new text: an edit that takes a credential out of team memory is not refused.
+              yield* access.refuseTeamSecrets([target], input.new_string)
               if (target.externalDirectory) return
               yield* Effect.gen(function* () {
                 // An unread file is refused before any of it is loaded; the snapshot then tells a touched file from an edited one.
@@ -279,6 +281,7 @@ export const Plugin = {
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
+              yield* access.refuseTeamSecrets([target], input.new_string)
               yield* access.authorizeExternal([target], context)
               yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
               const original = yield* readOriginal(environment.files, target.absolute, input.file_path).pipe(
@@ -314,19 +317,31 @@ export const Plugin = {
               })
               const replacementBom = replaced.startsWith("\uFEFF")
               yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, original)
-              const result = yield* fileMutation.write({
-                target,
-                content: Bom.join(replaced, original.bom || replacementBom),
-              })
               const bom = original.bom || replacementBom
-              if (yield* formatter.file(target.absolute))
-                yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-              const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
-              yield* ledger.recordWrite(context.sessionID, target.absolute, final)
-              return {
-                files: [fileDiff(result.resource, source, final.text)],
-                replacements,
-              } satisfies Output
+              return yield* Effect.gen(function* () {
+                const result = yield* fileMutation.write({ target, content: Bom.join(replaced, bom) })
+                if (yield* formatter.file(target.absolute))
+                  yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
+                const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+                yield* ledger.recordWrite(context.sessionID, target.absolute, {
+                  ...final,
+                  place: FileAccess.realPlace(target),
+                })
+                return {
+                  files: [fileDiff(result.resource, source, final.text)],
+                  replacements,
+                } satisfies Output
+              }).pipe(
+                // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
+                Effect.mapError(
+                  (error) =>
+                    new ToolFailure({
+                      message: `Unable to edit ${input.file_path}`,
+                      error,
+                      metadata: { files: [{ file: target.resource }] },
+                    }),
+                ),
+              )
             }).pipe(
               fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]),
               Effect.map((output) => ({

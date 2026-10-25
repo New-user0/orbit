@@ -1,7 +1,9 @@
 import { Session } from "@orbit/core/session"
+import { SessionRecap } from "@orbit/core/session/recap"
 import { SessionStats } from "@orbit/core/session/stats"
 import { SessionTitle } from "@orbit/core/session/title"
 import { SessionTransfer } from "@orbit/core/session/transfer"
+import { SessionAssist } from "@orbit/core/session/assist"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
 import { Form } from "@orbit/core/form"
 import { DateTime, Effect, Stream } from "effect"
@@ -18,6 +20,7 @@ import {
   InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
+  RewindFilesError,
   ServiceUnavailableError,
   SessionBusyError,
   SkillNotFoundError,
@@ -40,6 +43,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
     // What decides whether a folder is trusted, for the routes that act on a folder other than the request's own.
     const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
     const transfer = yield* SessionTransfer.Service
+    const recap = yield* SessionRecap.Service
+    const assist = yield* SessionAssist.Service
     const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
       const form = yield* Form.Service
       const info = yield* form.get(formID).pipe(Effect.catchTag("Form.NotFoundError", () => missingForm(formID)))
@@ -510,6 +515,35 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.revert.files",
+        Effect.fn(function* (ctx) {
+          yield* Effect.log("session.revert.files", {
+            sessionID: ctx.params.sessionID,
+            messageID: ctx.payload.messageID,
+            dryRun: ctx.payload.dryRun,
+          })
+          // The busy and trust checks live in core, so an embedded host meets the same refusals (class 12).
+          return {
+            data: yield* session.revert.files({ ...ctx.params, ...ctx.payload }).pipe(
+              Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("Session.MessageNotFoundError", missingMessage),
+              Effect.catchTag("Session.BusyError", busySession),
+              Effect.catchTag("WorkspaceTrust.UntrustedError", (error) => Effect.fail(untrustedFolder(error))),
+              Effect.catchTag(
+                "Session.RewindError",
+                (error) =>
+                  new RewindFilesError({
+                    sessionID: error.sessionID,
+                    messageID: error.messageID,
+                    reason: error.reason,
+                    message: error.message,
+                  }),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
         "session.revert.clear",
         Effect.fn(function* (ctx) {
           yield* Effect.log("session.revert.clear", { sessionID: ctx.params.sessionID })
@@ -650,6 +684,40 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             )
           return { data: { text } }
+        }),
+      )
+      // Both assist routes ask the model about the folder's content (tool output, history and instruction files), so the
+      // folder is trusted first; the session's own Location is the one checked and the one asked in.
+      .handle(
+        "session.assist.label",
+        Effect.fn(function* (ctx) {
+          yield* requireTrusted()
+          const label = yield* assist
+            .label({ sessionID: ctx.params.sessionID, ...ctx.payload })
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { data: label }
+        }),
+      )
+      .handle(
+        "session.assist.suggestion",
+        Effect.fn(function* (ctx) {
+          yield* requireTrusted()
+          const suggestion = yield* assist
+            .suggestion(ctx.params.sessionID)
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { data: suggestion }
+        }),
+      )
+      .handle(
+        "session.recap",
+        Effect.fn(function* (ctx) {
+          // The recap reads the session's history into a model call, so the folder must still be trusted.
+          yield* requireTrusted()
+          // A client drops the request when the person comes back, which interrupts this and records nothing.
+          const recorded = yield* recap
+            .generate(ctx.params.sessionID)
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { recorded: recorded !== undefined }
         }),
       )
       .handle(

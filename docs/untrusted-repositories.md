@@ -255,6 +255,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     index, so the row runs on every platform; a rewrite a second later is the control). Mutations: giving the copy the
     current time fails the row; a plain copy fails it on Linux, where the copy is new, and not on Windows, where it keeps
     the time of the index it copies.
+  - Code-only rewind (`POST /api/session/:sessionID/revert/files`, `orb run --rewind-files` and `orb -p --rewind-files`,
+    `SessionRevert.files` in `packages/core/src/session/revert.ts`): it reads the folder's git and writes its files, so
+    core refuses it, dry run included, with `WorkspaceTrust.UntrustedError` (403 `UntrustedFolderError` on the route)
+    before any git or file access once the folder's trust has ended, and refuses a busy session (409), so an embedded
+    host meets the same gates as the route (classes 1, 12 and 13). The CLI flag runs the same trust door as a run first.
+    Proof: `packages/server/test/session-revert-files.test.ts` ("refuses a rewind once the folder's trust has ended, and
+    restores once it is trusted again", "refuses a busy session with 409 and writes nothing") and
+    `packages/cli/test/rewind-files.test.ts`. Mutations: taking the trust check or the busy check out of core fails the
+    matching row. The writes go through `Snapshot.restore`, whose containment is in class 4.
   - The `Git` service's read calls (`discover`, `remote`, `history`, `worktree.list`) run only behind a trust gate:
     `Project.resolve`, `WorktreeGit`, `Lsp.ignored`, `InstructionNotes` and `VcsInstructions` ask first, and a trusted
     folder runs them with its config in effect. `status.short` and `history.recent` reach `core.fsmonitor`, clean filters
@@ -420,6 +429,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `session-runner-tool-events.test.ts` ("tool input started carries the declared display name") and `server/test/session-import-display-name.test.ts`. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and
   `MCP hints and permissions` in `core/test/mcp.test.ts`.
+- A recap's text (the away summary), which a model writes from the session's history: `SessionRecap` stores it through
+  `body` (`@orbit/util/plain`), and `SessionTransfer.import` writes an imported `recap` message's text through `body`
+  too, so every reader gets it with its control and bidi characters written out. Proof: `core/test/session-recap.test.ts`
+  ("the stored recap has its control and bidi characters written out...") and `core/test/session-create.test.ts` ("an
+  imported away summary's text is stored with its control and bidi characters written out").
 - A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
   model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
   a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
@@ -706,6 +720,41 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   spellings), `test/formatter.test.ts`, and `test/tool-lsp.test.ts` (the `LSP` tool's new actions refused while the folder
   is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
+- The file-change reminder (`FileChangeReminder`, `packages/core/src/file-change-reminder.ts`) reads again, at each
+  logical step, a file the session wrote, and on the first step of a main session (one with no parent) in a process it
+  rebuilds what the session saw from the history it is given, which `orb session import` can bring from a file or URL. Both resolve a path once
+  with the read tool's resolver (`FileAccess.locate`: a share or device spelling is refused before any disk is read,
+  then a device or, outside Windows, anything but a file or folder), and check and read that same target. The re-read
+  (`FileChangeReminder.gate`) asks `ProjectTrust.reachable` on it at every step, skips a name in the project that the
+  resolver now finds leading out of it (even in a trusted project, where the read tool would ask), skips a file outside
+  the project whose real path is no longer the one its write resolved (`FileLedger.Seen.place`, kept by Write, Edit,
+  Patch and NotebookEdit), so a link or junction swapped in for the file, its folder or any folder above it cannot move
+  the read, and asks `Permission.denied` for `Read` on the
+  file and on where a link now leads, and for the `external_directory` request of a file outside the project; a refusal
+  skips the file silently and keeps it. An ask rule does not stop this re-read of a file the session wrote. The rebuild
+  treats every name in history as hostile (class 5): it keeps only a file inside the project that passes the same gate
+  and that `Permission.allowed` says the read tool would read with no question, so a file under an ask rule (the
+  built-in `.env` asks, a rule the person wrote, a link onto such a file) is neither seeded nor read. It reads from
+  disk only for an `Edit` in history and for each file a completed `Patch` adds, updates or moves a file to (the names
+  come from the Patch tool's own parser and pass the same gate and `Permission.allowed` check), and reads at most the
+  newest 100 files. The path and the changed lines go only in
+  the reminder's data block. The re-read changes no freshness record while it runs: each change is an entry's commit,
+  run after the rows are posted and only while the record is the one it checked (`FileLedger.settle`), so a deadline,
+  an interruption, a failed read, a refusal or a compaction meanwhile leaves every stale refusal in place (class 7;
+  the "collection that ends early" rows). A file that is slow to check or read, in the re-read or in the rebuild, is
+  left out on its own: files start within a budget, each with half of it to finish (past the budget's end if need be,
+  so no check is counted that the budget cut short), all below the producer's deadline, and the comparisons run
+  smallest first, so one slow or hung file costs only its share. When the budget covers only part of the files, the
+  re-read takes the newest first and goes on at the next step where the last one stopped (a scan the ledger keeps per
+  session), and the rebuild works from the newest call back, so it leaves out the oldest (class 7; the same rows and
+  the "budget smaller than one pass over the files" rows). Proof: the "re-read gate" and "rebuild after a restart" rows of
+  `test/durable-reminders.test.ts` (an outside file after a revoke, a project file swapped for a link out with and
+  without trust, a table of the file, its folder and a folder above it swapped for a link or junction into another
+  outside folder, for a file outside and inside the project, trusted and revoked, a dangling link, a deny on a link's
+  target, an `external_directory` deny, outside spellings in history including `~`, `..` and shares, ask-ruled names
+  from a failed write, a write, a read, an edit and a patch, outside spellings named in a patch, and a pipe marker server and device names that are never opened).
+  The rows that link a file need links, so they run on Linux or with Developer Mode; the rows that swap a folder use a
+  junction on Windows, which needs no privilege.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder. It skips an empty or relative `PATH` entry such as `.`, so the working folder is reached only through
@@ -797,6 +846,76 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   ID would name a folder, and a control), `test/permission-scratchpad.test.ts` (the sessions of a lineage, the hostile IDs,
   the links and the Windows spellings, with the plain file in the folder as the control),
   `test/session-scratchpad-baseline.test.ts` and the `scratchpad` rows of `test/session-runner.test.ts`.
+- The memory folder (`MemoryStore`, `packages/core/src/memory/store.ts`): `<data>/memory/<project ID>`, or the folder
+  `memory.directory` names. That key is read only from the user, local, flag and managed scopes, never from a project's
+  or a remote one, and `ConfigTrust` withholds all of `memory` from an untrusted folder as `permissions` (class 8). The
+  value is refused before any disk access when it is relative, a share or device spelling (two leading separators), a
+  root, shorter than 3 characters, holds a NUL, names home or a folder above it through `~/` (with or without trailing
+  separators, as in `~/./` or `~/../`), or on Windows has no drive letter (class 4); the default folder is kept then. A
+  valid value whose path crosses a link to a share is refused the same way, asked with `LinkShare.blocked` before it is
+  resolved, and the guide does not create a folder whose path has come to cross one since (class 6). The folder and its
+  real path are decided once for the Location.
+  The file tools write and read there without a question (`inMemory` in `Permission`): only for `Edit`, `Read` and
+  `external_directory`, only when the place is in the folder by one of its spellings and every real place it leads to is
+  in the real folder (a link inside the folder that points out is decided as the place it points to), never for a call
+  marked `escaped`. A deny of the person's, the session's, an agent's own or the managed policy decides there over any ask
+  and over a mode's deny, which do not reach the folder, and as elsewhere a later allow of the person's lifts it (class
+  8). A shell command is not covered: the folder question that `ShellGuard.prepare` asks is marked `shell`, and neither
+  the carve-out nor Orbit's own allow for the folder decides it, so the default agent's `external_directory * ask` still
+  asks (class 8). This is stricter than the reference, whose shell path check lets the memory folder through but which
+  still asks about a command that is not read-only: the default agent here allows every command, so the folder question
+  is the only gate a command meets. The guide goes only to a main thread whose base prompt is Orbit's (class 12); when it
+  goes in the middle of a session, the update tells the model that memory is off only when memory is switched off
+  (`test/session-context-memory.test.ts`, an agent switch and its `memory.enabled` control). The index reader
+  (`MemoryInstructions`, `packages/core/src/memory/instructions.ts`) loads `MEMORY.md` only when its real path is in the
+  real folder, and asks `LinkShare.blocked` before it resolves the file, so a link to a share is never opened (class 6);
+  the carry-over of notes saved before trust adds its lines only to a `MEMORY.md` that is not a link, one that leads
+  nowhere included (class 4). The reader takes front matter and comment blocks off through `ConfigInstructionFile.parse`, cuts it to 200 lines and
+  25,000 characters and escapes envelope look-alikes (class 9). The scan (`MemoryStore.scan`) asks `LinkShare.blocked` about the folder and each link entry before it
+  resolves it (class 6), lists only files whose real path is in the folder's, reads each at the real path it checked,
+  and reads front matter only through `ConfigMarkdown` (class 11). The Read tool's staleness note
+  asks the same real-path question (`FileAccess.inMemory`). Proof: `test/permission-memory.test.ts` (prompt-free rows,
+  the five places beside the folder, four link targets with a new and an existing file, the data folder and the
+  configured folder as links, Windows letter case, `escaped`, the person's ask and deny rules, a deny that names the
+  other spelling of the folder (linked or real data folder, absolute or relative configured folder, linked or
+  real configured folder in the person's and in a managed deny, an asker's aliases), a mode's deny, the
+  built-in agents, the shell with the default agent and after an "always" elsewhere, and the scope rows), `test/memory-store.test.ts` (validation with the trailing-separator
+  and deep-home `~` rows, scopes, the switch order, front matter with a marker file, the scan's links, a link to a share
+  with the recorded file system, the read at the checked real path), `test/memory-instructions.test.ts` (the index link to a marker, which
+  neither the reader, the carry-over nor the header rewrite goes through, an index link to a share with the recorded file
+  system, a dangling index link the carry-over does not write through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
+- Team memory (`MemoryTeam`, `packages/core/src/memory/team.ts`): `.orbit/team-memory/` at the project's root, which the
+  repository ships, so a clone chooses its files and its links. It is on only while memory is on, `memory.team` is set
+  (a key `ConfigTrust` withholds with the rest of `memory` from an untrusted folder, class 8) and `ProjectTrust.trusted()`
+  answers yes, which `current` asks before it resolves anything of the folder (class 1). The folder is then resolved
+  once for the Location: `LinkShare.blocked` is asked about it before anything resolves it (class 6), its real path is
+  the nearest existing part with links followed, and it must be exactly `.orbit/team-memory` of the real project
+  folder, compared with `FSUtil.contains` both ways on two real paths, so neither `.orbit` nor `team-memory` may be a
+  link. The nearest existing part keeps the name of a part it cannot follow, so an `.orbit` or `team-memory` that reads
+  as a link and has no real path (it points at nothing, or loops) is refused before that comparison: a folder that leads out of the project, or onto the project itself, `.orbit`, `.git` or any other folder of it,
+  would carry the carve-out, which drops every ask and every mode's deny, over the project's own files (classes 4, 8); a
+  refused folder turns team memory off with one log line and costs
+  nothing else, the private index included (class 7). That one value is what the guide's folder creation, the index
+  reader, the permission carve-out and the Read tool's staleness note use (class 3). The index reader
+  (`core/team-memory-index` in `MemoryInstructions`) reads `MEMORY.md` only at a real path inside the real team folder
+  (`MemoryStore.locate`, which asks `LinkShare.blocked` first), takes front matter off through
+  `ConfigInstructionFile.parse` (class 11) and escapes envelope and `<team-memory>` look-alikes (class 9). The carve-out
+  is the memory folder's (`inMemory` in `Permission`, given both folders), so a deny still decides and a shell command
+  is not covered (class 8). The secret guard (`FileAccess.refuseTeamSecrets`, rules in
+  `packages/util/src/secret-scan.ts`) needs no trust: Write, Edit and Patch refuse new text that matches a rule when
+  the target is in the team folder by name or when where it really leads is in the folder's real path, which the
+  guard takes even for a folder refused as a link to another folder below the project, but not for one that leads onto
+  the project or out of it (class 3); Patch scans the lines each hunk adds, not its context lines, and the whole of a
+  file it moves in; all before any question or write, as a tool error that names the rules and never the text (classes 9, 13); NotebookEdit and Bash
+  are not scanned. The config watch of a project or home `.orbit` leaves out only `team-memory` at its top
+  (`ConfigWatch.plan`). Proof: `test/memory-team-instructions.test.ts` (untrusted with a trusted control, the folder as a
+  link out, the folder as a link to the project, `.orbit`, `.git` or `src` and an `.orbit` that is a link, a folder or `.orbit` that links to a missing folder out of the project or in it and a folder in a link loop, a `MEMORY.md` link out, the folder as a link to a share with the recorded file system, front matter with a
+  marker file, the tag escape), `test/permission-team-memory.test.ts` (spellings, places beside the folder, the switches,
+  trust, deny, links in and out, the folder as a link into the project under ask rules and a mode's deny, a folder or
+  `.orbit` that links to a missing folder, the shell,
+  the config key), `test/memory-team.test.ts` (each tool, spellings, a link into the folder, a folder that leads onto
+  the project or out of it, a Patch that takes a line out beside a key, an untrusted project, the config watch),
+  `test/config/watch.test.ts` and `packages/util/test/secret-scan.test.ts`.
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and
@@ -816,6 +935,61 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/permission-tool-output.test.ts` (other sessions of a lineage, the flat files of earlier builds, `..`, a sibling
   prefix, a link out, a crafted session ID, Windows letter case) and the `saved tool results` rows of
   `test/session-runner.test.ts`.
+- The message budget (`SessionMessageBudget`, `packages/core/src/session/runner/message-budget.ts`, run by
+  `SessionRunnerLLM` before each request for every client and subagent): when the newest step's results pass
+  `tool_output.max_message_chars`, the largest are saved through the same door as a saved result (`ToolOutput.persist`,
+  so the same ID shapes, `lstat` refusal of a linked folder and exclusive create apply, classes 4 and 5) and recorded as
+  `session.tool.overridden` with the session, the one-segment file name and the format, never a path. It reads nothing
+  that a folder supplies, and an untrusted folder cannot set the key (class 8). The projected `override` is data once a
+  session is imported or forked: it is stored as any JSON so one bad entry costs only its own result, and lowering
+  decodes it strictly and renders the wrapper from the stored content without reading the disk, so a session or name
+  that climbs out, a device name, an unknown format or a string sends the stored result and names no path (classes 5
+  and 7); a look-alike of the wrapper in the preview is escaped (class 9). A sanitized export drops the override along
+  with the content it described (classes 7 and 9). Side queries lower overrides and record none (class 12), and the
+  refusal of a request that no longer fits measures the request as it is sent (class 3). Proof: the `message budget`
+  rows of `test/session-runner.test.ts` (an imported `../../.ssh/id_rsa` with a marker file, a linked session folder,
+  automatic compaction off), the `override` rows of `test/tool-output-lowering.test.ts`,
+  `test/session-message-budget.test.ts`, the override rows of `test/session-compaction.test.ts`, the sanitized export
+  row of `test/session-create.test.ts` and `test/config/trust.test.ts`.
+- Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
+  never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
+  the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,
+  written when a session is deleted) that no live session, scratchpad, stored saved-result marker or message-budget override names. Every
+  database on the machine shares those roots, so a folder this database never removed stays at any age. A family whose
+  stats cannot be folded (message data that is not JSON) stays with one log line (class 7). It reads nothing a folder
+  supplies; the period comes from the config of the server's own folder, where an untrusted project's file is not read
+  and the key is withheld (`settings`) from a folder that is not trusted (classes 1 and 8). The door deletes in Orbit's own two folders, worked out once from `Global`: each root is checked with `lstat`
+  and left alone when it is a link, each entry is `lstat`ed and removed at that joined path (a link as a link, dangling
+  or not), and nothing is `stat`ed or resolved before the decision, so a junction to a share is never opened (class 4).
+  A link inside a removed session's folder, at any depth, goes with the folder without being entered, and a link named
+  like a flat `tool_*` file stays. Only a name of the session-folder shape is touched, compared without letter case, and
+  a row whose ID cannot name a folder or whose clock does not decode keeps its family with one log line (classes 5 and
+  7). A config document of any scope (user, home, project, local, the flag file, `ORBIT_CONFIG_CONTENT`, remote and the
+  managed settings files) that does not parse, or one rejected while the period is set, skips the pass, on a reload as on the first load; a value set twice of which one is kept is not a rejection (class 7). A source whose content could not be obtained counts as one that does not parse and skips the pass too: a remote document whose fetch fails, a well-known list that cannot be read, and a file that is there but cannot be read (class 7, error and timeout). A row whose clock is ahead of now, or stored as text, does not put the pass off. Proof:
+  `test/session-retention.test.ts` (the folder, override, link, case, other-database, decode and fold rows, each with a control,
+  and the table of link spellings in both roots), `test/config/cleanup-period.test.ts` (with its table of scopes) and the
+  `cleanup_period_days` row of `test/config/trust.test.ts`; in `packages/cli`, the bare row of
+  `test/server-process.test.ts`.
+- Shell output files and their saved copies (`Shell.result`, `Shell.offer` and `ToolOutput.adopt`, in
+  `packages/core/src/shell.ts` and `packages/core/src/tool-output.ts`): a command writes its output to
+  `<data>/shell/<project ID>/<shell ID>.out`, Orbit's own folder and outside every sandbox write root, so it reads nothing
+  that a folder supplies. The head read opens the file without following a link (`O_NOFOLLOW` where the platform has one, which Windows does not; on
+  Windows an `lstat` refuses anything but a regular file first, and the 64 MB cut opens the file the same way), so a link planted at
+  its path is reported like a missing file and nothing is read through it (class 4); a file that cannot be read is named in
+  the result, never read as no output (class 7). A foreground result whose output did not fit offers the file to the step
+  of that call, which links it into the session's tool-output folder, creating a name only where none is, through the
+  same door and checks as saved tool results above: the same ID shapes (class 5), the same `lstat` on
+  `tool-output` and the session's folder (class 4), and a result sent whole with one log line when anything fails
+  (class 7). A head that is blank once trimmed keeps its part and still takes the offered file, so the output is never
+  reported as no output and `parts: 1` never names a note (class 7). Its marker carries `parts: 1`, and lowering ignores a `parts` that does not decode or names more parts than
+  the result has (classes 5 and 7) and escapes the parts after the wrapper like any tool text (class 9).
+  `tool_output.max_bytes` and the new `background_tasks` are withheld in an untrusted folder (class 8). Proof:
+  `test/shell-output-cap.test.ts` (a link planted at the output file, on Linux and on Windows where a file link can be
+  made; the writer's `O_NOFOLLOW`, read back from `/proc` on Linux; a vanished file), `test/tool-shell-output-cap.test.ts`
+  (the linked session folder, a message ID that cannot name a file, a hostile call ID, the 64 MB cut, a copy when the
+  shell file is on another volume, a replay that keeps the first copy, a copy that cannot be made on Linux, the withheld
+  keys with trusted controls, a blank head alone and before a timeout note), `test/tool-output.test.ts` (an offer used once, the bound on unsettled offers),
+  `test/tool-output-lowering.test.ts` (the `parts` that do not decode, a look-alike after the wrapper).
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 
@@ -862,7 +1036,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/acp/trust-first.subprocess.test.ts`, `packages/tui/test/mini/trust-first.shared.test.ts`.
 - Every server route that starts work, reads the folder's instruction files or runs something in a folder
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
-  the destination of `move`, `generate`, `update` when it clears the title for the model to write one,
+  the destination of `move`, `generate`, `recap` (the away summary, which reads the session's history into a call on
+  the small model, refused before that read), `assist.label` and `assist.suggestion` (both ask the model about the
+  folder's tool output or history; proof: `packages/server/test/session-assist.test.ts`, on a port and in process),
+  `update` when it clears the title for the model to write one,
   `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
   Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
   class 3), `worktree.create` (the project's folder and the folder it is asked to make the worktree in), `remove` and
@@ -871,7 +1048,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
-  `packages/sdk/test/trust-first.test.ts`.
+  `packages/sdk/test/trust-first.test.ts`, and for `recap` before the model call,
+  `packages/server/test/session-recap.test.ts`.
 - A plugin's session doors, which run in the server process without passing a route (`packages/core/src/plugin/host.ts`):
   `create` (the folder it names, or the parent's), `prompt`, `command`, `synthetic`, `compact` and `generate` (the
   session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not trusted, decided by
@@ -892,7 +1070,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   thinking lines of the default format are message content and still open (see Known gaps). The tool lines that
   `renderTool` and `renderToolError` draw in `run.ts` are closed: the title and the description of an inline tool, the
   title of a block, and the failed line go through `progress`, and a block body and the `--verbose` tool output go
-  through `body`. So do the init, result and delta lines (`jsonLine`), the usage line and the summary of auto-rejected
+  through `body`. So do the init, result, delta, `tool_label` and `prompt_suggestion` lines (`jsonLine`; the last two
+  carry model text, pinned by `packages/cli/test/run/stream-assist.test.ts` "label and suggestion text reaches the
+  output with its control and format characters written out (class 9)"), the usage line and the summary of auto-rejected
   requests (`progress`), and the schema text output (`jsonLine`). Proof:
   `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
   "a hostile tool name", "--verbose tool output"),
@@ -1495,9 +1675,30 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   `Git.clean` does this for `.orbit`, `.orbit/worktrees` and the run's folder and removes nothing, branches included,
   when one is a link (`packages/flow/test/git.test.ts`, "a run whose folder is reached through a link is left alone
   with everything it leads to", and the `orb flow clean` row in `packages/cli/test/flow.test.ts`).
+- Writing files back from a checkpoint is the same case at a later moment: a folder on the way, or the file's own name,
+  can have become a link after the checkpoint. `Snapshot.restore`, which `/undo`, `/redo` and the code-only rewind
+  share, asks `ProjectTrust.leads` for each path's folder when it writes, under the real work tree, and skips the path
+  with one log line unless that folder leads where its name says (`FSUtil.contains` of the name and the real place, so
+  a folder whose name changed case on Windows still counts). It also skips a path whose own name is now a link or a
+  folder: git writes a file there by removing what stands in its way, and git for Windows takes a junction for a folder
+  and removes the files it leads to. It skips a path, too, when a folder on its way is now a file: git makes the folder
+  by removing that file, which is the person's own. So nothing is written through a link, no folder is removed with
+  what it holds, and no file is removed to make room for a folder. A file that git fails to put back costs only itself:
+  the others still go back and the restore then fails (class 7). The rewind's dry run lists only the paths the same
+  decision lets through (`Snapshot.restorable`). A capture leaves out every path behind a link, and on Windows a path
+  that is a link, because git for Windows lists and adds the files a junction leads to; the ignore check
+  (`Git.index.ignored`, which `Lsp.ignored` uses) answers such a path by asking about the first linked folder on its
+  way, so an ignored result below a link stays hidden (`packages/core/test/lsp-ignored.test.ts`, "hides an ignored file
+  below a linked folder, and shows one below a link that is not ignored"). Rows:
+  `packages/core/test/snapshot-restore-links.test.ts`: a junction, a folder replaced by a link, a link to the project
+  itself, a dangling link, a link to a share, a grown folder, a file whose name became a link, a folder where the
+  checkpoint had a file, a file where the checkpoint had a folder ("does not remove a file that now stands where the
+  checkpoint had a folder"), a file git fails on, `.` and `../`, each beside a control that goes back, and "does not
+  capture the files a link leads to"; `packages/server/test/session-revert-files.test.ts`, "does not restore over a
+  file whose name became a link to an outside folder, and restores the control".
 - A name that becomes a file name is one plain name (the output style rule in
-  `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
-  `packages/core/src/tool/plugin/memory.ts`).
+  `packages/core/src/plugin/output-style.ts`). Where the model names the file itself, as it does in the memory folder,
+  the real place of the file decides, not its name (`inMemory` in `Permission`).
 - Check at the moment of reading, not once when the file is discovered.
 
 **How to test:**
@@ -1566,6 +1767,22 @@ the store.
   (`packages/flow/src/git.ts`). A `*` in an ID would otherwise become a ref pattern that matches other runs' branches.
   `Git.clean` then keeps the entries of `git worktree list` whose real path is inside the run's folder, compared with
   `path.relative`, and leaves the run alone when that folder is reached through a link (class 4).
+- A checkpoint ID in a session's steps reaches git as an argument, and an imported session's steps say whatever its file
+  says: `--output=<file>` made `git diff` write that file. `Snapshot.files`, `Snapshot.diff` and `Snapshot.restore`
+  refuse an ID that is not a tree ID (`Snapshot.isTree`: 40 or 64 lowercase hex digits) before git starts, and an import
+  drops such an ID, and a changed path that is not a plain name inside the work tree, with one log line, keeping the
+  rest of the step (`packages/core/test/snapshot-restore-links.test.ts`, "… refuses an option-shaped ID and writes no
+  file"; `packages/server/test/session-revert-files.test.ts`, "keeps a forged checkpoint ID of an imported session away
+  from git"). A rewind writes and deletes only paths that git reports as changed since the checkpoint, filtered by the
+  names the session's file tools recorded, so no stored name becomes a path by itself. A name counts only when its step
+  ran in the folder being restored, as the session's recorded moves place it, so a name recorded in another folder
+  never selects a file here (class 3, one resolved folder; `packages/core/test/session-revert.test.ts`,
+  "Session.revert names from another folder"). The same rule picks the trees: an undo plans its restore only from the
+  steps that ran in that folder, and a rewind finds no checkpoint in a step followed by a move, so no tree of another
+  folder's snapshot repository reaches git here. To keep the rule answerable, committing an undo keeps the records of
+  the moves it would otherwise remove, and a move commits a staged undo, whose tree and paths belong to the folder the
+  session leaves ("Session.revert across a folder switch": `/undo`, the rewind and its dry run to a prompt before
+  EnterWorktree, after ExitWorktree, after a session move, after a committed undo, and the move-and-back control).
 - For every identifier in a change, say where it comes from: the runner, the person, or a file that a clone can ship.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust

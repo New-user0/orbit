@@ -214,6 +214,14 @@ export const Info = Schema.Struct({
       permissions: Schema.optional(Schema.Literals(["prompt", "autoaccept"])).annotate({
         description: "Prompt for permission requests or accept them automatically",
       }),
+      recap: Schema.optional(
+        Schema.Struct({
+          after_minutes: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
+            description:
+              "Minutes the terminal stays unfocused before the session asks its small model for a short recap of where you left off (default 5); 0 turns the recap off, and a value above 35791 waits 35791 minutes",
+          }),
+        }),
+      ).annotate({ description: "The recap shown when you come back to a session" }),
     }),
   ).annotate({ description: "Session transcript presentation settings" }),
   tabs: Schema.optional(
@@ -307,9 +315,10 @@ export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader"
     style: "block" | "underline" | "line" | "default"
     blinking: boolean
   }
-  session: Omit<NonNullable<Info["session"]>, "new_location" | "permissions" | "tps"> & {
+  session: Omit<NonNullable<Info["session"]>, "new_location" | "permissions" | "recap" | "tps"> & {
     new_location: "launch" | "inherit"
     permissions: "prompt" | "autoaccept"
+    recap: { after_minutes: number }
     terminal: boolean
     tps: boolean
   }
@@ -379,6 +388,7 @@ export function resolve(
       ...input.session,
       new_location: input.session?.new_location ?? "launch",
       permissions: input.session?.permissions ?? "prompt",
+      recap: { after_minutes: input.session?.recap?.after_minutes ?? 5 },
       // Persistent terminal panes need the orbit-pty daemon, which does not ship Windows binaries.
       terminal: process.platform !== "win32",
       tps: input.session?.tps ?? true,

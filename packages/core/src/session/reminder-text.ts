@@ -127,6 +127,15 @@ export const runs = (messages: ReadonlyArray<SessionMessage.Info>): ReadonlyArra
   return out
 }
 
+/**
+ * Whether the newest run already holds a stored reminder of `kind`. A durable producer asks this first, because a drain
+ * that restarts between collection and the request runs it again for the same step.
+ */
+export const postedInRun = (messages: ReadonlyArray<SessionMessage.Info>, kind: string) =>
+  runs(messages)
+    .at(-1)!
+    .messages.some((message) => isReminder(message) && (message.metadata?.reminder as { kind: string }).kind === kind)
+
 /** The newest user message, and whether the current step is the first one since it (no assistant message follows). */
 export const newestPrompt = (messages: ReadonlyArray<SessionMessage.Info>) => {
   const index = messages.findLastIndex((message) => message.type === "user")

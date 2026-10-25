@@ -477,6 +477,16 @@ export type SessionRevertStageOperation<E = never> = (
   input: SessionRevertStageInput,
 ) => Effect.Effect<SessionRevertStageOutput, E>
 
+export type SessionRevertFilesInput = {
+  readonly sessionID: Session.ID
+  readonly messageID: SessionMessage.ID
+  readonly dryRun?: boolean | undefined
+}
+export type SessionRevertFilesOutput = Session.RewindFiles
+export type SessionRevertFilesOperation<E = never> = (
+  input: SessionRevertFilesInput,
+) => Effect.Effect<SessionRevertFilesOutput, E>
+
 export type SessionRevertClearInput = { readonly sessionID: Session.ID }
 export type SessionRevertClearOutput = void
 export type SessionRevertClearOperation<E = never> = (
@@ -498,6 +508,7 @@ export type SessionDiffInput = {
   readonly from?: SessionMessage.ID | undefined
   readonly to?: SessionMessage.ID | undefined
   readonly context?: number | undefined
+  readonly scope?: "turn" | "prompt" | undefined
 }
 export type SessionDiffOutput = ReadonlyArray<FileDiff.Info>
 export type SessionDiffOperation<E = never> = (input: SessionDiffInput) => Effect.Effect<SessionDiffOutput, E>
@@ -580,6 +591,59 @@ export type SessionGenerateOutput = { readonly text: string }
 export type SessionGenerateOperation<E = never> = (
   input: SessionGenerateInput,
 ) => Effect.Effect<SessionGenerateOutput, E>
+
+export type SessionRecapInput = { readonly sessionID: Session.ID }
+export type SessionRecapOutput = { readonly recorded: boolean }
+export type SessionRecapOperation<E = never> = (input: SessionRecapInput) => Effect.Effect<SessionRecapOutput, E>
+
+export type SessionAssistLabelInput = {
+  readonly sessionID: Session.ID
+  readonly messageID: SessionMessage.ID
+  readonly toolCallIDs: readonly [string, ...Array<string>]
+}
+export type SessionAssistLabelOutput =
+  | { readonly label: string }
+  | {
+      readonly label: null
+      readonly reason: "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
+    }
+export type SessionAssistLabelOperation<E = never> = (
+  input: SessionAssistLabelInput,
+) => Effect.Effect<SessionAssistLabelOutput, E>
+
+export type SessionAssistSuggestionInput = { readonly sessionID: Session.ID }
+export type SessionAssistSuggestionOutput =
+  | { readonly suggestion: string }
+  | {
+      readonly suggestion: null
+      readonly reason:
+        | "subagent"
+        | "early_conversation"
+        | "last_response_error"
+        | "cache_cold"
+        | "pending_permission"
+        | "elicitation_active"
+        | "plan_mode"
+        | "busy"
+        | "aborted"
+        | "unavailable"
+        | "empty"
+        | "done"
+        | "meta_text"
+        | "meta_wrapped"
+        | "error_message"
+        | "prefixed_label"
+        | "too_few_words"
+        | "too_many_words"
+        | "too_long"
+        | "multiple_sentences"
+        | "has_formatting"
+        | "evaluative"
+        | "assistant_voice"
+    }
+export type SessionAssistSuggestionOperation<E = never> = (
+  input: SessionAssistSuggestionInput,
+) => Effect.Effect<SessionAssistSuggestionOutput, E>
 
 export type SessionLogInput = {
   readonly sessionID: Session.ID
@@ -938,6 +1002,20 @@ export type SessionLogOutput =
             readonly description?: string | undefined
             readonly metadata?: { readonly [x: string]: unknown } | undefined
           }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.recap.recorded"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: { readonly sessionID: Session.ID; readonly text: string }
         }
       | {
           readonly id: Event.ID
@@ -1552,6 +1630,25 @@ export type SessionLogOutput =
             readonly content: ReadonlyArray<SessionMessage.AssistantContentEncoded>
           }
         }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.tool.overridden"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: {
+            readonly sessionID: Session.ID
+            readonly assistantMessageID: SessionMessage.ID
+            readonly id: string
+            readonly override: SessionMessage.ToolOverride
+          }
+        }
     )
   | EventLog.Synced
 export type SessionLogOperation<E = never> = (input: SessionLogInput) => Stream.Stream<SessionLogOutput, E>
@@ -1652,6 +1749,7 @@ export interface SessionApi<E = never> {
   readonly wait: SessionWaitOperation<E>
   readonly revert: {
     readonly stage: SessionRevertStageOperation<E>
+    readonly files: SessionRevertFilesOperation<E>
     readonly clear: SessionRevertClearOperation<E>
     readonly commit: SessionRevertCommitOperation<E>
   }
@@ -1671,6 +1769,11 @@ export interface SessionApi<E = never> {
     }
   }
   readonly generate: SessionGenerateOperation<E>
+  readonly recap: SessionRecapOperation<E>
+  readonly assist: {
+    readonly label: SessionAssistLabelOperation<E>
+    readonly suggestion: SessionAssistSuggestionOperation<E>
+  }
   readonly log: SessionLogOperation<E>
   readonly interrupt: SessionInterruptOperation<E>
   readonly background: SessionBackgroundOperation<E>

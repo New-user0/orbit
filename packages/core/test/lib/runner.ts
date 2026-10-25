@@ -106,6 +106,7 @@ import { Global } from "@orbit/util/global"
 import fs from "fs/promises"
 import path from "path"
 import { agentHost, modelHost, host, noProviders } from "../plugin/host"
+import { noMemory } from "./memory"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
 import { Token } from "@orbit/core/util/token"
 
@@ -506,6 +507,7 @@ const makeLayer = (persist: boolean, production?: LspDiagnostics.Interface) =>
         InstructionBuiltIns.node.replace(systemContext),
         InstructionDiscovery.node.replace(instructionContext),
         ...scratchpad,
+        noMemory,
         noVcsSnapshot,
         Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
         SkillInstructions.node.replace(skillInstructions),

@@ -1,44 +1,54 @@
 export * as ToolOutput from "./tool-output.js"
 
 import { createHash } from "crypto"
+import { constants } from "fs"
 import fs from "fs/promises"
 import path from "path"
 import type { Tool } from "./tool.js"
-import { Context, Duration, Effect, Layer, Schedule, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import type { ConfigToolOutput } from "@orbit/schema/config/tool-output"
-import { NonNegativeInt } from "@orbit/schema/schema"
-import { makeGlobalNode, makeLocationNode } from "@orbit/util/effect/app-node"
-import { FSUtil } from "@orbit/util/fs-util"
+import { NonNegativeInt, PositiveInt } from "@orbit/schema/schema"
+import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Global } from "@orbit/util/global"
 import { plain } from "@orbit/util/plain"
-import { FileRetention } from "./file-retention.js"
 import { SessionFolder } from "./session/folder.js"
+import { SessionMessage } from "./session/message.js"
 
-/** The shell's own capture limits (`Shell.result`). A saved result is decided by characters, not by these. */
-export const MAX_LINES = 2_000
-export const MAX_BYTES = 50 * 1024 // 50 KiB
 /** The ceiling on every finite result limit when the person sets neither `max_result_chars` nor `max_bytes`. */
 export const MAX_RESULT_CHARS = 50_000
-export const RETENTION = Duration.days(7)
+/** The most characters of tool results one step sends together when `max_message_chars` is not set. */
+export const MAX_MESSAGE_CHARS = 200_000
 export const DIRECTORY = "tool-output"
 /** The version of the wrapper a `persisted` marker asks for. */
 export const FORMAT = 1
 const PREVIEW_CHARS = 2_000
 const ERROR_CHARS = 10_000
+/** The most of an adopted file that its saved copy keeps. */
+export const ADOPTED_BYTES = 64 * 1024 * 1024
+const OFFERS = 256
 
 const MESSAGE = /^msg_[A-Za-z0-9]{1,64}$/
-const NAME = /^msg_[A-Za-z0-9]{1,64}-[A-Za-z0-9_-]{0,64}-[0-9a-f]{8}\.(txt|json)$/
+
+/**
+ * What the message budget records on a result it saved: the same session, name and format a `persisted` marker holds,
+ * without the size, which lowering takes from the stored content.
+ */
+export const Override = SessionMessage.ToolOverride
+export type Override = typeof Override.Type
 
 /**
  * What the step records on a saved result: the session whose folder holds the file, the file's one-segment name, the
- * length of the saved text and the wrapper's version. No path is stored: lowering works it out from the tool-output
- * folder, so a marker that an imported or forked history carries names a file only once it decodes (class 5).
+ * size of what was saved (the length of the saved text, or the bytes of an adopted file before any cut) and the
+ * wrapper's version. `parts`, when set, says the file stands for the first `parts` text parts only, and the rest follow
+ * the wrapper. No path is stored: lowering works it out from the tool-output folder, so a marker that an imported or
+ * forked history carries names a file only once it decodes (class 5).
  */
 export const Persisted = Schema.Struct({
-  session: Schema.String.check(Schema.isPattern(SessionFolder.KEY)),
-  name: Schema.String.check(Schema.isPattern(NAME)),
+  session: Override.fields.session,
+  name: Override.fields.name,
   size: NonNegativeInt,
-  format: Schema.Literal(FORMAT),
+  format: Override.fields.format,
+  parts: Schema.optionalKey(PositiveInt),
 })
 export type Persisted = typeof Persisted.Type
 
@@ -132,39 +142,115 @@ export interface Interface {
     readonly limit: number
     readonly result: Result
   }) => Effect.Effect<Result>
-  readonly cleanup: () => Effect.Effect<void>
+  /**
+   * Saves these text parts to the session's folder for the message budget, as `settle` saves a result above its limit,
+   * and answers where, or `undefined` when the file cannot be saved (the result is then sent whole).
+   */
+  readonly persist: (input: {
+    readonly sessionID: string
+    readonly messageID: string
+    readonly callID: string
+    readonly texts: ReadonlyArray<string>
+  }) => Effect.Effect<Override | undefined>
+  /**
+   * Offers `file`, which holds the whole output behind the first text part of this call's result, as the saved copy of
+   * that result. Settling the same call links the file into the session's folder, or copies it, cut to 64 MB, and marks
+   * the result with `parts: 1` and the file's size before the cut. An offer that cannot be saved leaves the result whole.
+   */
+  readonly adopt: (input: {
+    readonly sessionID: string
+    readonly messageID: string
+    readonly callID: string
+    readonly file: string
+  }) => Effect.Effect<void>
+}
+
+/**
+ * Opens a file without following a link (class 4). Where the platform has no `O_NOFOLLOW` (Windows), anything but a
+ * regular file at the path is refused before it is opened.
+ */
+export const openFile = async (file: string, flags: number) => {
+  if (constants.O_NOFOLLOW === undefined && !(await fs.lstat(file)).isFile())
+    throw Object.assign(new Error(`${file} is not a regular file`), { code: "ELOOP" })
+  return fs.open(file, flags | (constants.O_NOFOLLOW ?? 0))
+}
+
+// The saved copy of an adopted file: a hard link to it, or a copy where a link cannot be made (another volume), made only
+// where nothing is: a link onto an existing name fails, and so does the copy that follows it, which keeps the first file.
+// The file is cut to 64 MB first, through the handle that was opened without following a link, and the size it had is
+// returned.
+const copyAdopted = async (file: string, target: string) => {
+  const handle = await openFile(file, constants.O_RDWR)
+  const size = await handle
+    .stat()
+    .then(async (stat) => {
+      if (stat.size > ADOPTED_BYTES) await handle.truncate(ADOPTED_BYTES)
+      return stat.size
+    })
+    .finally(() => handle.close())
+  await fs.link(file, target).catch(() =>
+    fs.copyFile(file, target, constants.COPYFILE_EXCL).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error
+    }),
+  )
+  return size
+}
+
+// The saved file for these text parts, created only where nothing is, so a replay keeps the first one; the size recorded
+// is the length of the saved text.
+const writeSaved = (texts: ReadonlyArray<string>) => {
+  const saved = savedText(texts)
+  return {
+    extension: saved.extension,
+    write: (target: string) =>
+      fs
+        .writeFile(target, saved.text, { flag: "wx" })
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        })
+        .then(() => saved.text.length),
+  }
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ToolOutput") {}
 
-// The flat `tool_*` files of earlier versions; the session folders have no sweep of their own.
-const cleanup = Effect.fn("ToolOutput.cleanup")(function* (fs: FSUtil.Interface, directory: string) {
-  const entries = yield* fs.readDirectory(directory).pipe(
-    Effect.map((entries) => entries.filter((entry) => /^tool_[0-9a-f]{12}/.test(entry))),
-    Effect.orElseSucceed(() => []),
-  )
-  yield* FileRetention.cleanup(
-    fs,
-    entries.map((entry) => path.join(directory, entry)),
-    RETENTION,
-  )
-})
+/**
+ * Removes the flat `tool_*` files of earlier versions in `directory` whose last change is before `cutoff`; session
+ * retention calls it with its period. Nothing is followed: a `directory` that is a link is left alone, and only plain
+ * files go (class 4). A file that cannot be removed stays for the next pass.
+ */
+export const cleanup = (directory: string, cutoff: number) =>
+  Effect.tryPromise(async () => {
+    const info = await fs.lstat(directory).catch(() => undefined)
+    if (!info?.isDirectory()) return
+    await Promise.all(
+      (await fs.readdir(directory))
+        .filter((name) => /^tool_[0-9a-f]{12}/.test(name))
+        .map(async (name) => {
+          const file = path.join(directory, name)
+          const found = await fs.lstat(file)
+          if (found.isFile() && found.mtimeMs < cutoff) await fs.unlink(file)
+        })
+        .map((removal) => removal.catch(() => undefined)),
+    )
+  }).pipe(Effect.catch((error) => Effect.logWarning("flat tool results not cleaned", { directory, error })))
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const files = yield* FSUtil.Service
     const global = yield* Global.Service
     const root = path.join(global.data, DIRECTORY)
 
     // The session and call IDs come from a client, an import or the model, so each is checked or reduced to one plain
     // segment before it is joined (class 5). Nothing is followed: a link at `tool-output` or at the session's folder is
-    // refused, and the file is created only when no file is there, so a replay keeps the first one (class 4).
+    // refused, and `write` creates the file only when no file is there, so a replay keeps the first one (class 4).
     const save = Effect.fnUntraced(function* (input: {
       readonly sessionID: string
       readonly messageID: string
       readonly callID: string
-      readonly saved: { readonly text: string; readonly extension: string }
+      readonly extension: string
+      /** Creates the file at `target` unless one is there, and returns the size to record. */
+      readonly write: (target: string) => Promise<number>
     }) {
       if (!SessionFolder.KEY.test(input.sessionID) || !MESSAGE.test(input.messageID))
         return yield* Effect.logWarning("tool result not saved: its session or message ID cannot name a file", {
@@ -172,16 +258,14 @@ const layer = Layer.effect(
           messageID: plain(input.messageID).slice(0, 100),
         }).pipe(Effect.as(undefined))
       const folder = path.join(root, input.sessionID)
-      const name = `${input.messageID}-${input.callID.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64)}-${createHash("sha256").update(input.callID, "utf8").digest("hex").slice(0, 8)}.${input.saved.extension}`
+      const name = `${input.messageID}-${input.callID.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64)}-${createHash("sha256").update(input.callID, "utf8").digest("hex").slice(0, 8)}.${input.extension}`
       return yield* Effect.tryPromise(async () => {
         await fs.mkdir(root, { recursive: true })
         if (!(await fs.lstat(root)).isDirectory()) throw new Error("the tool-output folder is a link")
         await fs.mkdir(folder, { recursive: true, mode: 0o700 })
         if (!(await fs.lstat(folder)).isDirectory()) throw new Error("the session's folder is a link")
-        await fs.writeFile(path.join(folder, name), input.saved.text, { flag: "wx" }).catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-        })
-        return { session: input.sessionID, name, size: input.saved.text.length, format: FORMAT } satisfies Persisted
+        const size = await input.write(path.join(folder, name))
+        return { session: input.sessionID, name, size, format: FORMAT } satisfies Persisted
       }).pipe(
         Effect.catch((error) =>
           Effect.logWarning("tool result not saved; it is sent whole", { folder, error }).pipe(Effect.as(undefined)),
@@ -189,43 +273,52 @@ const layer = Layer.effect(
       )
     })
 
+    // Files offered by `adopt`, by call, until the step settles that call. Bounded, so an offer that is never settled
+    // costs at most its place here.
+    const offers = new Map<string, string>()
+    const key = (input: { readonly sessionID: string; readonly messageID: string; readonly callID: string }) =>
+      JSON.stringify([input.sessionID, input.messageID, input.callID])
+
+    const adopt: Interface["adopt"] = (input) =>
+      Effect.sync(() => {
+        offers.set(key(input), input.file)
+        if (offers.size > OFFERS) offers.delete(offers.keys().next().value!)
+      })
+
     const settle: Interface["settle"] = Effect.fnUntraced(function* (input) {
+      const offered = offers.get(key(input))
+      offers.delete(key(input))
       const { persisted: _, ...metadata } = input.result.metadata ?? {}
       const result = { ...input.result, ...(input.result.metadata === undefined ? {} : { metadata }) }
+      const texts = result.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+      // The offered file holds the whole output behind the first part; the parts after it follow the wrapper. It is
+      // saved before the empty check, so output whose head is blank still reaches the model as the wrapper and its path.
+      const adopted =
+        offered === undefined || texts.length !== result.content.length
+          ? undefined
+          : yield* save({ ...input, extension: "txt", write: (target) => copyAdopted(offered, target) })
+      if (adopted !== undefined) return { ...result, metadata: { ...metadata, persisted: { ...adopted, parts: 1 } } }
       if (result.content.every((part) => part.type === "text" && part.text.trim() === ""))
         return { ...result, content: [{ type: "text" as const, text: `(${input.tool} finished and returned no output)` }] }
-      const texts = result.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
       // An image, a PDF or any other file part goes whole, however large the text beside it.
       if (texts.length !== result.content.length) return result
       if (texts.reduce((sum, text) => sum + text.length, 0) <= input.limit) return result
-      const persisted = yield* save({ ...input, saved: savedText(texts) })
+      const persisted = yield* save({ ...input, ...writeSaved(texts) })
       if (persisted === undefined) return result
       return { ...result, metadata: { ...metadata, persisted } }
     })
 
-    return Service.of({ root, settle, cleanup: () => cleanup(files, root) })
+    const persist: Interface["persist"] = (input) =>
+      save({ ...input, ...writeSaved(input.texts) }).pipe(
+        Effect.map((saved) => saved && { session: saved.session, name: saved.name, format: saved.format }),
+      )
+
+    return Service.of({ root, settle, persist, adopt })
   }),
 )
-
-const cleanupLayer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const fs = yield* FSUtil.Service
-    const global = yield* Global.Service
-    yield* cleanup(fs, path.join(global.data, DIRECTORY)).pipe(
-      Effect.repeat(Schedule.spaced(Duration.hours(1))),
-      Effect.forkScoped,
-    )
-  }),
-)
-
-const cleanupNode = makeGlobalNode({
-  name: "tool-output-cleanup",
-  layer: cleanupLayer,
-  deps: [FSUtil.node, Global.node],
-})
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Global.node, cleanupNode],
+  deps: [Global.node],
 })

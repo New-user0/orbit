@@ -914,7 +914,8 @@ describe("search tools", () => {
           )
           expect(paged.metadata).toEqual({ matches: 1, truncated: false })
           expect(text(paged)).toContain("Line 6: needle a2")
-          expect(text(paged)).not.toContain("a1")
+          // The match line, not "a1" alone: the random temporary folder in the result's path can hold those letters.
+          expect(text(paged)).not.toContain("needle a1")
 
           const context = yield* executeTool(registry, call("Grep", { pattern: "needle", path: "a.ts", context: 1 }))
           expect(context.metadata).toEqual({ matches: 2, truncated: false })

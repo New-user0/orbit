@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector.js"
 
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import path from "path"
 import { Database } from "../database/database.js"
@@ -18,6 +18,7 @@ import {
   SessionAdmissionTable,
   SessionInboxTable,
   SessionMessageTable,
+  SessionRemovedTable,
   SessionTable,
   SessionUsageTable,
 } from "./sql.js"
@@ -610,7 +611,15 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* bus.project(SessionEvent.Deleted, (event) =>
-      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
+      Effect.gen(function* () {
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+        yield* db
+          .insert(SessionRemovedTable)
+          .values({ id: event.data.sessionID })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+      }),
     )
     yield* bus.project(SessionEvent.AgentSelected, (event) =>
       Effect.gen(function* () {
@@ -777,6 +786,7 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* bus.project(SessionEvent.Synthetic, (event) => run(db, event))
+    yield* bus.project(SessionEvent.RecapRecorded, (event) => run(db, event))
     yield* bus.project(SessionEvent.Skill.Activated, (event) => run(db, event))
     yield* bus.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* bus.project(SessionEvent.Shell.Ended, (event) => run(db, event))
@@ -802,6 +812,7 @@ const layer = Layer.effectDiscard(
     yield* bus.project(SessionEvent.Tool.Called, (event) => run(db, event))
     yield* bus.project(SessionEvent.Tool.Success, (event) => run(db, event))
     yield* bus.project(SessionEvent.Tool.Failed, (event) => run(db, event))
+    yield* bus.project(SessionEvent.Tool.Overridden, (event) => run(db, event))
     yield* bus.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* bus.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     yield* bus.project(SessionEvent.RetryScheduled, (event) => run(db, event))
@@ -846,10 +857,16 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!boundary) return yield* Effect.die(new Error(`Revert boundary message not found: ${event.data.to}`))
+        // A revert leaves the session in the folder it is in, so the record of each move stays: it is what tells which
+        // folder an earlier step ran in, and so which snapshot repository holds its trees.
         yield* db
           .delete(SessionMessageTable)
           .where(
-            and(eq(SessionMessageTable.session_id, event.data.sessionID), gte(SessionMessageTable.seq, boundary.seq)),
+            and(
+              eq(SessionMessageTable.session_id, event.data.sessionID),
+              gte(SessionMessageTable.seq, boundary.seq),
+              ne(SessionMessageTable.type, "location-switched"),
+            ),
           )
           .run()
           .pipe(Effect.orDie)

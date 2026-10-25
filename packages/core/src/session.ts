@@ -12,6 +12,7 @@ import { SessionMessage } from "./session/message.js"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { Bus } from "./bus.js"
 import { Instance } from "./instance/service.js"
+import { Shell } from "./shell.js"
 import { Database } from "./database/database.js"
 import { SessionProjector } from "./session/projector.js"
 import { SessionMessageTable } from "./session/sql.js"
@@ -37,6 +38,7 @@ import {
   NotFoundError,
   OutputSchemaError,
   PromptConflictError,
+  RewindError,
   SkillNotFoundError,
   SyntheticConflictError,
 } from "./session/error.js"
@@ -57,6 +59,7 @@ import {
 import { SessionModelTransport } from "./session/model-transport.js"
 import { llmClient } from "./effect/app-node-platform.js"
 import { Snapshot } from "./snapshot.js"
+import { WorkspaceTrust } from "./workspace-trust.js"
 import { Session } from "./session/session.js"
 import { SessionDiff, TurnRangeError } from "./session/diff.js"
 import { LocationServiceMap } from "./location-service-map.js"
@@ -116,6 +119,7 @@ export {
   NotFoundError,
   OutputSchemaError,
   PromptConflictError,
+  RewindError,
   SkillNotFoundError,
   SyntheticConflictError,
 }
@@ -155,6 +159,7 @@ export interface Interface {
     readonly from?: SessionMessage.ID
     readonly to?: SessionMessage.ID
     readonly context?: number
+    readonly scope?: "turn" | "prompt"
   }) => Effect.Effect<readonly FileDiff.Info[], NotFoundError | MessageNotFoundError | TurnRangeError | Snapshot.Error>
   /**
    * Durable admitted session work not yet visible in projected history,
@@ -224,6 +229,12 @@ export interface Interface {
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) => Effect.Effect<boolean>
+  /**
+   * Kills every shell command the Session still has running in its Location, for the end of the run that started them:
+   * none of them reports back, and every shell notice still waiting in the inbox is cancelled (the person's own `!`
+   * commands excepted).
+   */
+  readonly abandonShells: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly synthetic: (
     input: Parameters<Session.Handle["synthetic"]>[0] & { sessionID: SessionSchema.ID },
   ) => ReturnType<Session.Handle["synthetic"]>
@@ -235,6 +246,15 @@ export interface Interface {
     }) => Effect.Effect<SessionSchema.Revert, NotFoundError | MessageNotFoundError | BusyError | Snapshot.Error>
     readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error>
     readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
+    /** Code-only rewind to a prompt's checkpoint; see `SessionRevert.files`. */
+    readonly files: (input: {
+      sessionID: SessionSchema.ID
+      messageID: SessionMessage.ID
+      dryRun?: boolean
+    }) => Effect.Effect<
+      SessionSchema.RewindFiles,
+      NotFoundError | MessageNotFoundError | BusyError | RewindError | WorkspaceTrust.UntrustedError
+    >
   }
 }
 
@@ -428,6 +448,7 @@ const layer = Layer.effect(
           from: input.from,
           to: input.to,
           context: input.context,
+          scope: input.scope,
         })
       }),
       inbox: (sessionID) => sessions.forSession(sessionID).inbox(),
@@ -500,10 +521,29 @@ const layer = Layer.effect(
       resume: (sessionID) => sessions.forSession(sessionID).resume(),
       synthetic: (input) => sessions.forSession(input.sessionID).synthetic(input),
       interrupt: (sessionID, options) => sessions.forSession(sessionID).interrupt(options),
+      abandonShells: Effect.fn("Session.abandonShells")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        const shell = yield* Shell.Service.pipe(instances.provide(session))
+        yield* shell.abandon(sessionID)
+        // Every shell notice still waiting goes, not only those of the commands just killed: one that finished as the run
+        // ended would otherwise wake the Session outside any run. The person's own `!` command is their input and stays.
+        const pending = (yield* result.inbox(sessionID)).filter(
+          (item) =>
+            item.type === "synthetic" &&
+            item.payload.metadata?.source === "shell" &&
+            item.payload.metadata.origin !== "user",
+        )
+        yield* Effect.forEach(
+          pending,
+          (item) => result.cancelInbox({ sessionID, inboxID: item.id }).pipe(Effect.ignore),
+          { discard: true },
+        )
+      }),
       revert: {
         stage: (input) => sessions.forSession(input.sessionID).revert.stage(input),
         clear: (sessionID) => sessions.forSession(sessionID).revert.clear(),
         commit: (sessionID) => sessions.forSession(sessionID).revert.commit(),
+        files: (input) => sessions.forSession(input.sessionID).revert.files(input),
       },
     })
 

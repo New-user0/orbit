@@ -341,6 +341,20 @@ export const Synthetic = Event.durable({
 })
 export type Synthetic = typeof Synthetic.Type
 
+// The away summary: a short recap for a person returning to the session, written by a small model. Only its text is
+// recorded; where it falls in the history says which turn it summarizes.
+export const RecapRecorded = Event.durable({
+  type: "session.recap.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    text: Schema.String.annotate({
+      description: "The recap, with control and bidirectional characters already written out as escapes.",
+    }),
+  },
+})
+export type RecapRecorded = typeof RecapRecorded.Type
+
 export namespace Skill {
   export const Activated = Event.durable({
     type: "session.skill.activated",
@@ -619,6 +633,20 @@ export namespace Tool {
     },
   })
   export type Failed = typeof Failed.Type
+
+  /**
+   * The message budget sends this completed result as the wrapper of a saved copy from now on. Keyed by the message and
+   * the call, because a provider's call IDs need not be unique across messages. Internal: no client renders it.
+   */
+  export const Overridden = Event.durable({
+    type: "session.tool.overridden",
+    ...options,
+    schema: {
+      ...ToolBase,
+      override: SessionMessage.ToolOverride,
+    },
+  })
+  export type Overridden = typeof Overridden.Type
 }
 
 export const RetryScheduled = Event.durable({
@@ -727,6 +755,7 @@ export const Definitions = Event.inventory(
   Execution.Interrupted,
   InstructionsUpdated,
   Synthetic,
+  RecapRecorded,
   Skill.Activated,
   Shell.Started,
   Shell.Ended,
@@ -763,6 +792,7 @@ export const DurableDefinitions = Event.inventory(
   UsageRecorded,
   SideQueryRecorded,
   MessageContentUpdated,
+  Tool.Overridden,
 )
 export const EphemeralDefinitions = Event.inventory(
   ...Definitions.filter((definition) => definition.durability === "ephemeral"),

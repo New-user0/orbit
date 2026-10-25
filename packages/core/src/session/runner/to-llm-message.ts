@@ -195,7 +195,10 @@ const toolResult = (
   toolOutput: string | undefined,
 ) => {
   if (tool.state.status === "completed") {
-    const saved = toolOutput === undefined ? undefined : savedOutput(tool.id, tool.state, toolOutput)
+    const saved =
+      toolOutput === undefined
+        ? undefined
+        : (savedOutput(tool.id, tool.state, toolOutput) ?? overriddenOutput(tool, tool.state, toolOutput))
     if (saved !== undefined)
       return ToolResultPart.make({
         id: tool.id,
@@ -219,6 +222,8 @@ const toolResult = (
     })
   }
   if (tool.state.status === "error") {
+    // The budget never replaces a failure, so an override on one comes from a history someone else wrote.
+    if (toolOutput !== undefined && tool.override !== undefined) refuseOverride(tool.id)
     return ToolResultPart.make({
       id: tool.id,
       name: toolName(tool),
@@ -242,26 +247,63 @@ const reported = new Set<string>()
 /**
  * The wrapper for a result the step saved, from its stored marker and content alone: the path is the tool-output folder,
  * the marker's session and its name, so lowering never reads the disk and a replay lowers byte for byte. A marker that
- * does not decode (an imported or forked history can hold anything) is ignored and the result goes as stored (classes 5
- * and 7). Only a marker makes a wrapper, never text that looks like one.
+ * does not decode (an imported or forked history can hold anything), or whose `parts` names more parts than the result
+ * has, is ignored and the result goes as stored (classes 5 and 7). Only a marker makes a wrapper, never text that looks
+ * like one. A marker with `parts` stands for its leading parts: the parts after them follow the wrapper, escaped like
+ * any tool text (class 9).
  */
 const savedOutput = (id: string, state: SessionMessage.ToolStateCompleted, root: string) => {
   if (state.metadata?.persisted === undefined) return undefined
   const persisted = Option.getOrUndefined(decodePersisted(state.metadata.persisted))
   const texts = state.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
-  if (persisted === undefined || texts.length !== state.content.length) {
+  const parts = persisted?.parts ?? texts.length
+  if (persisted === undefined || texts.length !== state.content.length || parts > texts.length) {
     if (!reported.has(id))
       console.warn("a saved tool result's marker does not decode, so the result is sent as stored", { id })
     reported.add(id)
     return undefined
   }
-  const head = ToolOutput.savedPreview(texts)
-  return ToolOutput.wrapper({
+  const head = ToolOutput.savedPreview(texts.slice(0, parts))
+  const wrapper = ToolOutput.wrapper({
     file: path.join(root, persisted.session, persisted.name),
     size: persisted.size,
     preview: neutralizeToolText(head.text),
     more: head.more,
   })
+  return parts === texts.length ? wrapper : `${wrapper}\n${neutralizeToolText(texts.slice(parts).join("\n"))}`
+}
+
+const decodeOverride = Schema.decodeUnknownOption(ToolOutput.Override)
+
+/**
+ * The wrapper for a result the message budget saved, byte for byte the one a `persisted` marker gives, from the stored
+ * override and content alone: the size is the length of the text the file holds, so nothing reads the disk and every
+ * later request, a fork and a replay lower it alike. An override that does not decode, or that sits beside a file part,
+ * comes from a history someone else wrote; the result then goes as stored (classes 5 and 7).
+ */
+const overriddenOutput = (
+  tool: SessionMessage.AssistantTool,
+  state: SessionMessage.ToolStateCompleted,
+  root: string,
+) => {
+  if (tool.override === undefined) return undefined
+  const override = Option.getOrUndefined(decodeOverride(tool.override))
+  const texts = state.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+  if (override === undefined || texts.length !== state.content.length) return refuseOverride(tool.id)
+  const head = ToolOutput.savedPreview(texts)
+  return ToolOutput.wrapper({
+    file: path.join(root, override.session, override.name),
+    size: ToolOutput.savedText(texts).text.length,
+    preview: neutralizeToolText(head.text),
+    more: head.more,
+  })
+}
+
+const refuseOverride = (id: string) => {
+  if (!reported.has(id))
+    console.warn("a tool result's override does not apply, so the result is sent as stored", { id })
+  reported.add(id)
+  return undefined
 }
 
 const assistant = (
@@ -452,6 +494,8 @@ function toLLMMessage(
   switch (message.type) {
     case "agent-switched":
     case "idle":
+    // The away summary is written for the person, never for a model.
+    case "recap":
       return []
     case "model-switched":
       return modelSwitched(message, model)

@@ -75,6 +75,8 @@ export const Plugin = {
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
+              // A credential never reaches team memory, whatever a rule or a person would answer (context-memory-11).
+              yield* access.refuseTeamSecrets([target], input.content)
               yield* access.authorizeExternal([target], context)
               // Locked only now: the lock key resolves the path on disk, which FileAccess must have checked first.
               return yield* Effect.gen(function* () {
@@ -103,18 +105,40 @@ export const Plugin = {
                   source,
                 })
                 yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, current)
-                const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
-                const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
-                const final = (yield* formatter.file(target.absolute))
-                  ? yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom).pipe(
-                      Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
-                    )
-                  : written
-                yield* ledger.recordWrite(context.sessionID, target.absolute, final)
-                return result
+                return yield* Effect.gen(function* () {
+                  const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
+                  const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+                  const final = (yield* formatter.file(target.absolute))
+                    ? yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom).pipe(
+                        Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
+                      )
+                    : written
+                  yield* ledger.recordWrite(context.sessionID, target.absolute, {
+                    ...final,
+                    place: FileAccess.realPlace(target),
+                  })
+                  const files = [
+                    fileDiff(result.resource, current?.text ?? "", final.text, current ? "modified" : "added"),
+                  ]
+                  return { output: result, files }
+                }).pipe(
+                  // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
+                  Effect.mapError(
+                    (error) =>
+                      new ToolFailure({
+                        message: `Unable to write ${input.file_path}`,
+                        error,
+                        metadata: { files: [{ file: target.resource }] },
+                      }),
+                  ),
+                )
               }).pipe(fileMutation.withLock([target.absolute]))
             }).pipe(
-              Effect.map((output) => ({ output, content: toModelContent(output) })),
+              Effect.map((written) => ({
+                output: written.output,
+                content: toModelContent(written.output),
+                metadata: { files: written.files }, // by the project's spelling, so a code rewind knows it wrote it
+              })),
               Effect.mapError((error) =>
                 error instanceof ToolFailure
                   ? error

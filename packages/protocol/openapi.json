@@ -3616,6 +3616,142 @@
         }
       }
     },
+    "/api/session/{sessionID}/revert/files": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.revert.files",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Session.RewindFiles"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "MessageNotFoundError | SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MessageNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SessionBusyError | RewindFilesError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionBusyErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RewindFilesErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Put the files that the session's own file tools (Edit, Write, Patch, NotebookEdit) changed back as they were when a prompt's work began, leaving shell edits, other edits and the conversation as they are. Takes effect at once and cannot be undone. A dry run lists the files that would change with their line totals, and answers a rewind that cannot happen with `canRewind: false`; a real run refuses one with RewindFilesError.",
+        "summary": "Rewind session files",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string",
+                    "pattern": "^msg_",
+                    "description": "The prompt whose checkpoint the files go back to."
+                  },
+                  "dryRun": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Report what a rewind would change without changing it."
+                  }
+                },
+                "required": ["messageID"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/api/session/{sessionID}/revert": {
       "delete": {
         "tags": ["session"],
@@ -3911,6 +4047,23 @@
                 }
               ],
               "description": "Unchanged lines around each hunk. Omit for full-file patches."
+            },
+            "required": false
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["turn", "prompt"]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`turn` (the default) diffs whole turns. `prompt` diffs from `from` to the next user message and keeps only what the session's file tools changed, a steered prompt's own edits included; it takes no `to`."
             },
             "required": false
           }
@@ -4663,6 +4816,276 @@
           },
           "required": true
         }
+      }
+    },
+    "/api/session/{sessionID}/recap": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.recap",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionRecapResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRecapResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the small model for a short recap of the session for a person returning to it, at most once per turn of their input. Answers recorded: false when no recap was due, another request is writing one, no small model is available, or the call failed.",
+        "summary": "Record an away summary"
+      }
+    },
+    "/api/session/{sessionID}/assist/label": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.assist.label",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionAssistLabelResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionAssistLabelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the side model for a short label of a finished batch of the session's tool calls. Nothing is stored or sent to the session. The label is model text, so escape it before printing it. The session's folder must be trusted.",
+        "summary": "Label a batch of tool calls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string",
+                    "pattern": "^msg_",
+                    "description": "The assistant message that made the calls."
+                  },
+                  "toolCallIDs": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "description": "The tool calls of the finished batch, at most 64."
+                  }
+                },
+                "required": ["messageID", "toolCallIDs"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/session/{sessionID}/assist/suggestion": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.assist.suggestion",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionAssistSuggestionResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionAssistSuggestionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the session's model, with the session's history, what the person might type next. Nothing is stored or sent to the session; a newer request or a prompt admitted meanwhile cancels it. The suggestion is model text, so escape it before printing it. The session's folder must be trusted.",
+        "summary": "Suggest the next prompt"
       }
     },
     "/api/experimental/session/{sessionID}/log": {
@@ -15182,6 +15605,10 @@
             "type": "string",
             "enum": ["disable", "notify", "auto"]
           },
+          "cleanup_period_days": {
+            "type": "integer",
+            "minimum": 0
+          },
           "share": {
             "type": "string",
             "enum": ["manual", "auto", "disabled"]
@@ -15511,6 +15938,9 @@
             },
             "additionalProperties": false
           },
+          "background_tasks": {
+            "type": "boolean"
+          },
           "tool_output": {
             "type": "object",
             "properties": {
@@ -15523,6 +15953,10 @@
                 "exclusiveMinimum": 0
               },
               "max_result_chars": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "max_message_chars": {
                 "type": "integer",
                 "exclusiveMinimum": 0
               }
@@ -15595,6 +16029,21 @@
               "buffer": {
                 "type": "integer",
                 "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "directory": {
+                "type": "string"
+              },
+              "team": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false
@@ -19846,6 +20295,30 @@
           }
         ]
       },
+      "RewindFilesErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["RewindFilesError"]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["disabled", "no-checkpoint", "failed"]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "sessionID", "messageID", "reason", "message"],
+        "additionalProperties": false
+      },
       "Rpc.Input": {
         "type": "object",
         "properties": {
@@ -19964,6 +20437,96 @@
         },
         "required": ["_tag", "message"],
         "additionalProperties": false
+      },
+      "Session.Assist.Label": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": ["label"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "null"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/Session.Assist.LabelSkip"
+              }
+            },
+            "required": ["label", "reason"],
+            "additionalProperties": false
+          }
+        ],
+        "description": "A short label for a finished batch of tool calls, or null with the reason there is none. The label is model text: escape it before printing it."
+      },
+      "Session.Assist.LabelSkip": {
+        "type": "string",
+        "enum": ["subagent", "not_found", "unsettled", "aborted", "empty", "unavailable"],
+        "description": "Why there is no label: the session is a subagent's, the calls are not in the message, a call has not finished, the calls were interrupted, the model answered nothing, or the model could not be asked."
+      },
+      "Session.Assist.Suggestion": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "suggestion": {
+                "type": "string"
+              }
+            },
+            "required": ["suggestion"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "suggestion": {
+                "type": "null"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/Session.Assist.SuggestionSkip"
+              }
+            },
+            "required": ["suggestion", "reason"],
+            "additionalProperties": false
+          }
+        ],
+        "description": "What the person might type next, or null with the reason there is none. The suggestion is model text: escape it before printing it."
+      },
+      "Session.Assist.SuggestionSkip": {
+        "type": "string",
+        "enum": [
+          "subagent",
+          "early_conversation",
+          "last_response_error",
+          "cache_cold",
+          "pending_permission",
+          "elicitation_active",
+          "plan_mode",
+          "busy",
+          "aborted",
+          "unavailable",
+          "empty",
+          "done",
+          "meta_text",
+          "meta_wrapped",
+          "error_message",
+          "prefixed_label",
+          "too_few_words",
+          "too_many_words",
+          "too_long",
+          "multiple_sentences",
+          "has_formatting",
+          "evaluative",
+          "assistant_voice"
+        ],
+        "description": "Why there is no suggestion: a state of the session that rules one out, a request cancelled by a newer one or by a prompt, a model that could not be asked, or a filter that dropped the text the model wrote."
       },
       "Session.ForkBoundary": {
         "anyOf": [
@@ -20545,6 +21108,7 @@
           "providerResultState": {
             "$ref": "#/components/schemas/Session.Message.ProviderState_3"
           },
+          "override": {},
           "state": {
             "anyOf": [
               {
@@ -20804,6 +21368,9 @@
           },
           {
             "$ref": "#/components/schemas/Session.Message.Idle"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Message.Recap"
           }
         ]
       },
@@ -20918,6 +21485,37 @@
       },
       "Session.Message.ProviderState_5": {
         "type": "object"
+      },
+      "Session.Message.Recap": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^msg_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": ["created"],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": ["recap"]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "time", "type", "text"],
+        "additionalProperties": false
       },
       "Session.Message.Shell": {
         "type": "object",
@@ -21317,6 +21915,33 @@
         "required": ["messageID"],
         "additionalProperties": false
       },
+      "Session.RewindFiles": {
+        "type": "object",
+        "properties": {
+          "canRewind": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "filesChanged": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "insertions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deletions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["canRewind"],
+        "additionalProperties": false
+      },
       "Session.StructuredError": {
         "type": "object",
         "properties": {
@@ -21396,6 +22021,26 @@
           }
         },
         "required": ["type"],
+        "additionalProperties": false
+      },
+      "SessionAssistLabelResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Session.Assist.Label"
+          }
+        },
+        "required": ["data"],
+        "additionalProperties": false
+      },
+      "SessionAssistSuggestionResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Session.Assist.Suggestion"
+          }
+        },
+        "required": ["data"],
         "additionalProperties": false
       },
       "SessionBusyErrorEncoded": {
@@ -21544,6 +22189,16 @@
           }
         },
         "required": ["_tag", "sessionID", "message"],
+        "additionalProperties": false
+      },
+      "SessionRecapResponse": {
+        "type": "object",
+        "properties": {
+          "recorded": {
+            "type": "boolean"
+          }
+        },
+        "required": ["recorded"],
         "additionalProperties": false
       },
       "SessionStats.Activity": {

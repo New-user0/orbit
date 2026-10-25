@@ -56,6 +56,8 @@ type StreamInput = {
   onSessionTitle?: (title: string) => void
   /** Sees every live event of the session tree, for attention notifications. */
   onEvent?: (event: RunV2Event) => void
+  /** Whether the session is running a turn, each time the transport loads or reloads it. */
+  onActive?: (active: boolean) => void
   trace?: Trace
   signal?: AbortSignal
   onCatalogRefresh?: (signal?: AbortSignal) => unknown | Promise<unknown>
@@ -417,6 +419,11 @@ function skillCommits(messageID: string, skills: FooterQueuedPrompt["skills"] = 
   return Array.from(new Map(skills.map((skill) => [skill.id, skill])).values(), (skill) =>
     skillCommit(messageID, skill.name, skill.id),
   )
+}
+
+// The away summary, led by the reference mark the full TUI draws in its gutter.
+function recapCommit(messageID: string, text: string): StreamCommit {
+  return { kind: "system", source: "system", messageID, partID: "recap", text: `※ ${text}`, phase: "start" }
 }
 
 function compactionCommit(messageID: string): StreamCommit {
@@ -824,6 +831,12 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (completed && state.shellWait?.id === message.shellID) state.shellWait.resolve()
       return
     }
+    if (message.type === "recap") {
+      const visible = state.messageIDs.has(message.id)
+      state.messageIDs.add(message.id)
+      if (render && !visible) write([recapCommit(message.id, message.text)])
+      return
+    }
     if (message.type === "compaction") {
       const visible = state.messageIDs.has(message.id)
       state.messageIDs.add(message.id)
@@ -992,6 +1005,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       ? globals.data.filter((form) => form.sessionID === "global").map((form) => globalForm(form, globals.location))
       : []
     state.rootActive = input.sessionID in active
+    input.onActive?.(state.rootActive)
     syncBlockers()
     await subagents.hydrate({
       sdk: client,
@@ -1085,6 +1099,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     if (event.type === "session.step.started") {
       state.stepModel = { providerID: event.data.model.providerID, modelID: event.data.model.id }
       write([], { phase: "running", status: "assistant responding" })
+      return
+    }
+    if (event.type === "session.recap.recorded") {
+      const messageID = messageIDFromEvent(event.id)
+      if (state.messageIDs.has(messageID)) return
+      state.messageIDs.add(messageID)
+      write([recapCommit(messageID, event.data.text)])
       return
     }
     if (event.type === "session.skill.activated") {

@@ -14,8 +14,10 @@ import { SessionProviderContext } from "./provider-context.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionReminders } from "./reminders.js"
 import type { SessionRunnerModel } from "./runner/model.js"
+import { toLLMMessages } from "./runner/to-llm-message.js"
 import { SessionEvent } from "./event.js"
 import type { SessionSchema } from "./schema.js"
+import { SessionToolText } from "./tool-text.js"
 import { SessionUsage } from "./usage.js"
 import { ToolOutput } from "../tool-output.js"
 
@@ -51,6 +53,40 @@ export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
     system: base.system,
     messages: [...base.messages, ...(history.instructionUpdate ? [Message.system(history.instructionUpdate)] : [])],
   }
+})
+
+/**
+ * The last `count` messages of the settled Session history, lowered for `model` as the runner lowers them, with no
+ * system prompt, instructions or system message. Leading assistant replies are skipped, so the window opens on its
+ * first user message or tool result, and its tool calls and results are written out as text. A window of assistant
+ * replies alone is empty.
+ */
+export const recent = Effect.fn("SessionGenerate.recent")(function* (
+  sessionID: SessionSchema.ID,
+  model: SessionRunnerModel.Resolved,
+  count: number,
+) {
+  const database = yield* Database.Service
+  const messages = yield* SessionHistory.load(
+    database.db,
+    sessionID,
+    SessionProviderContext.provenance(model) ?? "local",
+  )
+  // An active assistant may hold a tool call that has no result yet, so only the settled prefix is sent.
+  const unsettled = messages.findIndex((message) => message.type === "assistant" && message.time.completed === undefined)
+  const window = toLLMMessages(
+    unsettled === -1 ? messages : messages.slice(0, unsettled),
+    model.ref,
+    model.model.route.providerMetadataKey ?? model.model.provider,
+  )
+    .filter((message) => message.role !== "system")
+    .slice(-count)
+  // Some providers refuse a conversation that does not open with a user message (Bedrock Converse), so the cut skips
+  // leading assistant replies. A tool result may open the window, even one whose call was cut off, because it goes
+  // as user text below; cutting it would hide the work before a short prompt such as "continue" from the recap.
+  const start = window.findIndex((message) => message.role === "user" || message.role === "tool")
+  // The window goes out with no tool definitions, so its tool calls and results go as text.
+  return start === -1 ? [] : window.slice(start).map(SessionToolText.withoutToolBlocks)
 })
 
 /** Generates text from current Session context without mutating the Session. */

@@ -108,10 +108,14 @@ export const Plugin = {
           execute: (input, context) => {
             const applied: Array<typeof Applied.Type> = []
             const parsed = Patch.parse(input.patchText)
+            // Each file is named here before the patch writes or removes it, and a failure carries the names in
+            // `metadata.files`, so that a code rewind puts back what the patch changed before it failed.
+            const touched: Array<{ file: string; from?: string }> = []
             const fail = (operation: string, error: unknown) => {
               const completed = applied.map((item) => item.resource).join(", ")
               return new ToolFailure({
                 message: `${operation}: ${errorMessage(error)}${completed ? `. Completed before failure: ${completed}` : ""}`,
+                metadata: { files: touched },
               })
             }
             return Effect.gen(function* () {
@@ -128,11 +132,28 @@ export const Plugin = {
                 return yield* new ToolFailure({ message: "patch rejected: empty patch" })
               }
               // Every path is checked by FileAccess before the lock key resolves it on disk (a share would be opened).
-              const locked = yield* Effect.forEach(
-                hunks.flatMap((hunk) =>
+              // Each hunk's paths are resolved once, for the lock and for the scan below.
+              const named = yield* Effect.forEach(hunks, (hunk) =>
+                Effect.forEach(
                   hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
+                  (value) => access.resolve({ path: value, kind: "file" }),
                 ),
-                (value) => access.resolve({ path: value, kind: "file" }),
+              )
+              const locked = named.flat()
+              // A credential never reaches team memory (context-memory-11): what each hunk adds is scanned before anything
+              // is read or asked, as Write's content and Edit's replacement are. A file moved into the folder is scanned
+              // whole once its text is known, below. An update's context lines are already in the file, so a patch that
+              // takes a key out beside another one passes, as an Edit that takes one out does.
+              yield* Effect.forEach(
+                hunks,
+                (hunk, index) =>
+                  hunk.type === "delete"
+                    ? Effect.void
+                    : access.refuseTeamSecrets(
+                        named[index],
+                        hunk.type === "add" ? hunk.contents : hunk.chunks.flatMap(added).join("\n"),
+                      ),
+                { discard: true },
               )
               return yield* Effect.gen(function* () {
                 const prepared: Prepared[] = []
@@ -245,6 +266,7 @@ export const Plugin = {
                         new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                     })
                     const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                    if (moveTarget) yield* access.refuseTeamSecrets([moveTarget], update.content)
                     const moveID = moveTarget && hunk.movePath ? yield* identify(moveTarget, hunk.movePath) : undefined
                     // Writing the destination and then removing the source would delete a file moved onto itself.
                     if (moveID !== undefined && moveID === id)
@@ -323,6 +345,7 @@ export const Plugin = {
                   (change) =>
                     Effect.gen(function* () {
                       if (change.type === "delete") {
+                        touched.push({ file: change.target.resource })
                         yield* environment.files
                           .remove(change.target.absolute)
                           .pipe(Effect.mapError((error) => fail(`Failed to delete ${change.target.resource}`, error)))
@@ -335,6 +358,7 @@ export const Plugin = {
                       }
                       if (change.type === "update" && change.moveTarget) {
                         const moveTarget = change.moveTarget
+                        touched.push({ file: moveTarget.resource, from: change.target.resource })
                         yield* environment.files
                           .write(moveTarget.absolute, new TextEncoder().encode(change.content))
                           .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
@@ -355,6 +379,7 @@ export const Plugin = {
                         })
                         return
                       }
+                      touched.push({ file: change.target.resource })
                       yield* environment.files
                         .write(change.target.absolute, new TextEncoder().encode(change.content))
                         .pipe(Effect.mapError((error) => fail(`Failed to write ${change.target.resource}`, error)))
@@ -367,6 +392,10 @@ export const Plugin = {
                   { discard: true },
                 )
                 const formatted = new Map<string, string>()
+                // Where each file really is, as resolved for the approval, kept with the record of the write.
+                const realPlaces = new Map<string, string>(
+                  targets.map((target) => [target.absolute, FileAccess.realPlace(target)]),
+                )
                 yield* Effect.forEach(
                   [...new Set(applied.filter((item) => item.type !== "delete").map((item) => item.target))],
                   (target) =>
@@ -381,7 +410,7 @@ export const Plugin = {
                           )
                         : written
                       formatted.set(target, final.text)
-                      yield* ledger.recordWrite(context.sessionID, target, final)
+                      yield* ledger.recordWrite(context.sessionID, target, { ...final, place: realPlaces.get(target) })
                     }),
                   { discard: true },
                 )
@@ -456,8 +485,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info.Type {
-  const target = (change.type === "update" ? change.moveTarget : undefined)?.resource ?? change.target.resource
+// A move's entry names its source in `from` as well, so that a code rewind knows the call removed that file too.
+function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info.Type & { readonly from?: string } {
+  const moved = change.type === "update" ? change.moveTarget : undefined
   const diff = fileDiff(
     change.target.place,
     change.before,
@@ -466,8 +496,9 @@ function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info
   )
   return {
     ...diff,
-    file: target,
+    file: moved?.resource ?? change.target.resource,
     patch: trimDiff(diff.patch),
+    ...(moved ? { from: change.target.resource } : {}),
   }
 }
 
@@ -505,4 +536,17 @@ function trimDiff(diff: string) {
       return line
     })
     .join("\n")
+}
+
+// The lines a chunk adds: its new side less one copy of each line on its old side. A context line is on both sides and
+// drops out; a line the chunk holds more often than the file did before is kept. Each old line is counted once and spent
+// as the new side reaches its copy, so the work stays linear in the chunk, which every Patch pays.
+const added = (chunk: Patch.UpdateFileChunk) => {
+  const left = new Map<string, number>()
+  chunk.oldLines.forEach((line) => left.set(line, (left.get(line) ?? 0) + 1))
+  return chunk.newLines.filter((line) => {
+    const remaining = (left.get(line) ?? 0) - 1
+    left.set(line, remaining)
+    return remaining < 0
+  })
 }

@@ -25,7 +25,8 @@ export interface Diagnostic {
   readonly source: string
   /** `$` for the file, or `$.managed.mcp.deny` style for a field or entry. */
   readonly path: string
-  readonly kind: "invalid" | "unsupported"
+  /** A `conflict` is a value the file set twice, of which one was kept; the file is still taken as written. */
+  readonly kind: "invalid" | "unsupported" | "conflict"
   readonly message: string
 }
 
@@ -192,7 +193,7 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, source: stri
   const restrictions = cleanRestrictions(managed)
   const normalized = ConfigNormalize.normalize(others)
   const reported: Problem[] = normalized.diagnostics.map((diagnostic) => ({
-    kind: diagnostic.kind === "unsupported" ? "unsupported" : "invalid",
+    kind: diagnostic.kind,
     path: `$.${diagnostic.path.join(".")}`,
     message: diagnostic.message,
   }))
