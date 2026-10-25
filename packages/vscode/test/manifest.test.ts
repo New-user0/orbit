@@ -19,7 +19,8 @@ test("every setting the extension contributes has a decision on who may set it",
   const decisions: Record<string, string> = {
     "orbit.executable": "machine: the program the extension runs and the terminal starts",
     "orbit.placement": "window: where the chat opens, which runs and chooses nothing",
-    "orbit.notifications": "window: whether the extension shows its own in-editor notices, which runs and chooses nothing",
+    "orbit.notifications":
+      "window: whether the extension shows its own in-editor notices, which runs and chooses nothing",
     "orbit.context.includeOpenFile":
       "application: user settings only, because it decides how much of the editor goes to the model",
     "orbit.ideBridge.enabled": "machine: opens a loopback listener, so only the person's own settings decide",
@@ -82,6 +83,8 @@ test("every command the extension contributes says what stands between it and wo
     "orbit.runs.watch": "starts orb flow watch in a terminal, which only reads",
     "orbit.mentionSelection":
       "starts nothing: sends a file reference to a connected terminal UI, which only inserts it into the prompt for the person to send",
+    "orbit.review.reject":
+      "answers the pending approval of the review tab in view with reject, through the server's permission reply; writes nothing",
   }
   const contributed: string[] = manifest.contributes.commands.map((item: { command: string }) => item.command)
 
@@ -118,4 +121,37 @@ test("a program is started in one place, and a session only by Controller.send",
   expect(send.indexOf("await this.gate()")).toBeGreaterThan(-1)
   expect(send.indexOf("await this.gate()")).toBeLessThan(send.indexOf("await this.create()"))
   expect(send.indexOf("await this.gate()")).toBeLessThan(send.indexOf("session.prompt("))
+})
+
+test("the Reject action shows only on Orbit's review tabs", () => {
+  const entries: Array<{ command: string; when?: string }> = manifest.contributes.menus["editor/title"]
+  const reject = entries.filter((entry) => entry.command === "orbit.review.reject")
+
+  expect(reject).toHaveLength(1)
+  expect(reject[0]?.when).toContain("resourceScheme == orbit-proposed")
+})
+
+// clients-ux-15 part 2 (class 4 door rule, class 12): the extension changes no file itself, since every button that
+// changes files is a server call, and the one place it reads a file the server named is the review module, behind its
+// containment check. Both sides of every diff are Orbit's own documents, so no `file:` URI is made from a path the server
+// sent, which VS Code would read again by name.
+test("the extension writes no file but its bridge locks, and reads one only behind the review's containment", async () => {
+  const sources = new Map<string, string>()
+  for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: path.join(root, "src") }))
+    sources.set(file.replaceAll("\\", "/"), await Bun.file(path.join(root, "src", file)).text())
+  const where = (pattern: RegExp) =>
+    [...sources]
+      .filter(([, text]) => pattern.test(text))
+      .map(([file]) => file)
+      .sort()
+
+  expect(
+    where(
+      /\bfs\.(?:writeFile|writeFileSync|appendFile|appendFileSync|rm|rmSync|unlink|unlinkSync|rename|renameSync|mkdir|mkdirSync|copyFile|copyFileSync|cp|cpSync|truncate|truncateSync|symlink|symlinkSync)\b|\bWorkspaceEdit\b|\bapplyEdit\b/,
+    ),
+  ).toEqual(["ide-bridge.ts"])
+  expect(where(/\bworkspace\.fs\b/)).toEqual([])
+  expect(where(/\bUri\.file\s*\(/)).toEqual([])
+  // The file system is reached by the bridge (its own lock files), the program lookup (PATH entries) and the review.
+  expect(where(/from "(?:node:)?fs(?:\/promises)?"/)).toEqual(["ide-bridge.ts", "program.ts", "review.ts"])
 })
