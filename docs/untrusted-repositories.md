@@ -3102,7 +3102,7 @@ The program-wide register of every follow-up, these gaps included, with each one
   with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
   `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
-  (branch, user, status and commit subjects), and a checkpoint's summary and recent text. The clients that send editor context as a hidden message escape it before
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text (a summary checkpoint without recent text is the resume message of `to-llm-message.ts`, which escapes the summary the same way; the `<analysis>` draft never reaches a stored summary, pinned by the "analysis never stored" rows of `session-compaction.test.ts`). The clients that send editor context as a hidden message escape it before
   they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat writes the selected text, and the terminal UI the path and the selection,
   into a fenced block after their envelope (VS Code keeps its escaped one-line file name, language and problem messages inside it), and ACP escapes the assistant-audience text it submits.
   Synthetic messages are
