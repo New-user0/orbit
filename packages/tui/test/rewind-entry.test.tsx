@@ -45,6 +45,19 @@ test("Esc twice on an empty prompt of an idle session opens the picker", async (
   expect(setup.actions()).toEqual([])
 })
 
+// The double-press window is wider than one burst of key events: a second Esc 400 ms after the first still opens it.
+test("Esc twice 400 ms apart on an empty prompt of an idle session opens the picker", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await setup.waitForFrame(loaded)
+  setup.mockInput.pressEscape()
+  await Bun.sleep(400)
+  setup.mockInput.pressEscape()
+  const frame = await setup.waitForFrame((frame) => frame.includes(listHeading), { maxPasses: 100 })
+  expect(frame).toContain("(current)")
+  expect(setup.actions()).toEqual([])
+})
+
 // The controls: one Esc, two Esc presses further apart than the double-press window, and two quick ones while the
 // prompt holds text, open nothing.
 test("Esc once, Esc twice slowly, or Esc twice over a typed prompt does not open the picker", async () => {
