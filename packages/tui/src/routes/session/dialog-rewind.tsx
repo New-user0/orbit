@@ -7,6 +7,7 @@ import { createStore } from "solid-js/store"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
 import { dialogWidth, useDialog } from "../../ui/dialog"
+import { moveSelection } from "../../ui/select-controller"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
@@ -24,6 +25,9 @@ export type RewindDryRun = {
 }
 
 const VISIBLE_ROWS = 7
+// How far page up and page down move in step 2, as far as the reference's select shows at once.
+const PAGE = 5
+const FULL_WIDTH_ONE = 0xff11
 
 const labels: Record<RewindOption | "never", string> = {
   both: "Code and conversation",
@@ -68,6 +72,8 @@ export function DialogRewind(props: {
     prompt: undefined as RewindPrompt | undefined,
     code: undefined as { files: readonly string[]; insertions: number; deletions: number } | undefined,
     focused: 0,
+    // The option Enter chose, marked while its rewind runs; a digit chooses without marking.
+    chosen: undefined as number | undefined,
   })
   const [stats, setStats] = createStore<Record<string, readonly RewindFileStat[] | "failed">>({})
   const asked = new Set<string>()
@@ -130,12 +136,12 @@ export function DialogRewind(props: {
     setState({ step: "list", prompt: undefined, code: undefined, focused: 0 })
   }
 
-  const choose = () => {
+  const choose = (index: number, mark: boolean) => {
     const prompt = state.prompt
-    const current = option()
+    const current = options()[index]
     if (!prompt || state.acting) return
     if (current === "never") return back()
-    setState("acting", true)
+    setState({ acting: true, chosen: mark ? index : undefined })
     props.act(current, prompt.id).then(
       () => mounted && close(),
       (error) => {
@@ -146,12 +152,14 @@ export function DialogRewind(props: {
     )
   }
 
-  const move = (by: number) => {
-    if (state.step === "list") {
-      setSelected((value) => Math.max(0, Math.min(props.prompts.length, value + by)))
-      return
-    }
-    if (state.step === "confirm") setState("focused", Math.max(0, Math.min(options().length - 1, state.focused + by)))
+  // The list clamps at both ends; step 2's options wrap one step at a time, while its page keys, Home and End clamp.
+  // Nothing moves while a chosen rewind runs, so the effect lines keep describing what was chosen.
+  const move = (by: number, policy: "clamp" | "wrap" = "wrap") => {
+    if (state.acting) return
+    if (state.step === "list")
+      setSelected((value) => moveSelection(value, { count: props.prompts.length + 1, delta: by, policy: "clamp" }))
+    if (state.step === "confirm")
+      setState("focused", moveSelection(state.focused, { count: options().length, delta: by, policy }))
   }
   // The list's own jumps to its oldest prompt and to "(current)"; the confirm step's options have none.
   const jump = (by: number) => {
@@ -159,7 +167,8 @@ export function DialogRewind(props: {
   }
 
   // The dialog keys every Orbit picker shares (rebindable, ctrl+p and ctrl+n by default), plus j and k and the list's
-  // top and bottom chords. In step 2 a digit chooses the option drawn with that number.
+  // top and bottom chords. In step 2 a digit, ASCII or full-width, chooses the option drawn with that number without
+  // moving the focus, and the page keys go to the first or last option. `n` closes the picker wherever Esc does.
   Keymap.createLayer(() => ({
     context: "dialog",
     mode: "modal",
@@ -176,8 +185,19 @@ export function DialogRewind(props: {
       },
       { id: "dialog.select.prev", title: "Previous", group: "Dialog", run: () => move(-1) },
       { id: "dialog.select.next", title: "Next", group: "Dialog", run: () => move(1) },
-      { id: "dialog.select.home", title: "First", group: "Dialog", run: () => move(-Infinity) },
-      { id: "dialog.select.end", title: "Last", group: "Dialog", run: () => move(Infinity) },
+      { id: "dialog.select.home", title: "First", group: "Dialog", run: () => move(-Infinity, "clamp") },
+      { id: "dialog.select.end", title: "Last", group: "Dialog", run: () => move(Infinity, "clamp") },
+      ...[
+        { id: "dialog.select.page_up", title: "Page up", by: -PAGE },
+        { id: "dialog.select.page_down", title: "Page down", by: PAGE },
+      ].map((page) => ({
+        id: page.id,
+        title: page.title,
+        group: "Dialog",
+        run: () => {
+          if (state.step === "confirm") move(page.by, "clamp")
+        },
+      })),
       ...["ctrl+up", "shift+up", "meta+up", "shift+k"].map((bind) => ({
         bind,
         title: "Oldest prompt",
@@ -192,23 +212,33 @@ export function DialogRewind(props: {
       })),
       { bind: "k", title: "Previous", group: "Dialog", run: () => move(-1) },
       { bind: "j", title: "Next", group: "Dialog", run: () => move(1) },
-      ...options().map((_, index) => ({
-        bind: String(index + 1),
-        title: `Option ${index + 1}`,
+      {
+        bind: "n",
+        title: "Close rewind",
         group: "Dialog",
         run: () => {
-          if (state.step !== "confirm" || state.acting) return
-          setState("focused", index)
-          choose()
+          if (state.step === "error" || !props.prompts.length) return close()
+          // A picker opened on step 2 stands in for that step while it checks files, where `n` does nothing.
+          if (state.step === "list" && !props.preselected) close()
         },
-      })),
+      },
+      ...options().flatMap((_, index) =>
+        [String(index + 1), String.fromCharCode(FULL_WIDTH_ONE + index)].map((bind) => ({
+          bind,
+          title: `Option ${index + 1}`,
+          group: "Dialog",
+          run: () => {
+            if (state.step === "confirm") choose(index, false)
+          },
+        })),
+      ),
       {
         id: "dialog.select.submit",
         title: "Choose",
         group: "Dialog",
         run: () => {
-          if (state.step === "confirm") return choose()
-          if (state.step !== "list" || state.checking) return
+          if (state.step === "confirm") return choose(state.focused, true)
+          if (state.step !== "list" || state.checking || !props.prompts.length) return
           const prompt = props.prompts[selected()]
           if (!prompt) return close()
           confirm(prompt.id)
@@ -217,9 +247,13 @@ export function DialogRewind(props: {
     ],
   }))
 
-  const line = (text: string) => Locale.truncate(bodyText(text).replace(/\n/g, " "), width())
-  // A shell command is drawn behind the `!` that ran it.
-  const quote = (prompt: RewindPrompt) => line(prompt.shell ? `! ${prompt.text}` : prompt.text) || "(empty prompt)"
+  // A shell command is drawn behind the `!` that ran it. A list row is one truncated line; step 2 quotes the prompt's
+  // first four lines and 500 characters, wrapped.
+  const own = (prompt: RewindPrompt) => (prompt.shell ? `! ${prompt.text}` : prompt.text)
+  const quote = (prompt: RewindPrompt) =>
+    Locale.truncate(bodyText(own(prompt)).replace(/\n/g, " "), width()) || "(empty prompt)"
+  const quoteLines = (prompt: RewindPrompt) =>
+    bodyText(own(prompt).slice(0, 500).split("\n").slice(0, 4).join("\n")) || "(empty prompt)"
 
   function Row(row: { index: number }) {
     const prompt = props.prompts[row.index]
@@ -227,8 +261,9 @@ export function DialogRewind(props: {
     // A shell command has no file-tool edits of its own to count: the prompt-scoped diff answers only for a prompt.
     if (prompt && !prompt.shell) ask(prompt.id)
     const files = () => (prompt ? stats[prompt.id] : undefined)
+    // Every row is three lines tall, its stats line kept before they load, so the window never shifts.
     return (
-      <box flexDirection="row" flexShrink={0}>
+      <box flexDirection="row" flexShrink={0} height={3}>
         <text fg={theme.text.formfield.focused} flexShrink={0}>
           {active() ? "› " : "  "}
         </text>
@@ -311,9 +346,7 @@ export function DialogRewind(props: {
                   : "Rewind the conversation to just before this prompt:"}
               </text>
               <box border={["left"]} borderColor={theme.border.base} paddingLeft={1} flexDirection="column">
-                <text fg={theme.text.base} wrapMode="none" overflow="hidden">
-                  {quote(prompt())}
-                </text>
+                <text fg={theme.text.base}>{quoteLines(prompt())}</text>
                 <text fg={theme.text.muted}>({Locale.ago(prompt().created)})</text>
               </box>
               <box flexDirection="column">
@@ -322,12 +355,26 @@ export function DialogRewind(props: {
               </box>
               <box flexDirection="column">
                 <For each={options()}>
-                  {(item, index) => (
-                    <text fg={index() === state.focused ? theme.text.formfield.focused : theme.text.formfield.base}>
-                      {index() === state.focused ? "› " : "  "}
-                      {index() + 1}. {labels[item]}
-                    </text>
-                  )}
+                  {(item, index) => {
+                    // While a rewind runs no option is pointed at; the one Enter chose carries the check mark.
+                    const pointed = () => index() === state.focused && !state.acting
+                    const chosen = () => index() === state.chosen && state.acting
+                    return (
+                      <text
+                        fg={
+                          chosen()
+                            ? theme.text.formfield.selected
+                            : pointed()
+                              ? theme.text.formfield.focused
+                              : theme.text.formfield.base
+                        }
+                      >
+                        {pointed() ? "› " : "  "}
+                        {index() + 1}. {labels[item]}
+                        {chosen() ? " ✓" : ""}
+                      </text>
+                    )
+                  }}
                 </For>
               </box>
               <Show when={state.acting}>

@@ -3,9 +3,11 @@ import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
 import {
   controlFree,
+  conversation,
   hostileCommand,
   linesWith,
   listHeading,
+  promptStats,
   rewindApp,
   sessionID,
   until,
@@ -30,6 +32,13 @@ const selectPrompt = async (setup: Awaited<ReturnType<typeof rewindApp>>, upPres
   for (let index = 0; index < upPresses; index++) setup.mockInput.pressArrow("up")
   setup.mockInput.pressEnter()
 }
+
+// Step 2's option lines that draw the focus pointer.
+const pointed = (frame: string) =>
+  frame
+    .split("\n")
+    .filter((line) => /\d\. (Code and conversation|Conversation only|Code only|Never mind)/.test(line))
+    .filter((line) => line.includes("›"))
 
 test.each([64, 120])(
   "/rewind lists every prompt with its own file edits and a current row, at %i columns",
@@ -699,7 +708,9 @@ test("Enter while a rewind runs sends it once", async () => {
   setup.mockInput.pressKey("3")
   await Bun.sleep(300)
   await setup.renderOnce()
-  expect(setup.captureCharFrame()).toContain("› 1. Code and conversation")
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("1. Code and conversation ✓")
+  expect(pointed(frame)).toEqual([])
   expect(setup.actions().filter((action) => action.startsWith("files"))).toEqual([])
   held.resolve(json({ data: { messageID: "msg_0003", files: [] } }))
   await setup.waitForFrame((frame) => !frame.includes("Code and conversation"))
@@ -846,4 +857,347 @@ test("a digit on the error line sends nothing", async () => {
   expect(setup.actions().filter((action) => action !== "interrupt" && action !== "wait")).toEqual([
     `stage ${JSON.stringify({ messageID: "msg_0003" })}`,
   ])
+})
+
+// The picker's keys in every step and state, as the reference's list and its confirm step's select behave (addendum
+// ref-specs/clients-ux-5-p2-picker.md). Page keys go in as their terminal sequences.
+const pageUp = (setup: Setup) => setup.mockInput.pressKey("\x1b[5~")
+const pageDown = (setup: Setup) => setup.mockInput.pressKey("\x1b[6~")
+const stageOldest = `stage ${JSON.stringify({ messageID: "msg_0001", files: false })}`
+
+// The rewinds sent, without the interrupt and wait that come before each.
+const rewinds = (setup: Setup) => setup.actions().filter((action) => action !== "interrupt" && action !== "wait")
+
+// Draws a frame once keys that should change nothing have had time to act.
+const settled = async (setup: Setup) => {
+  await Bun.sleep(150)
+  await setup.renderOnce()
+  return setup.captureCharFrame()
+}
+
+// Step 2's previous and next wrap at both ends: up on the first option reaches Never mind, down on the last reaches the
+// first again. Enter then acts on the option reached. `ups` picks the prompt: 2 has four options, 3 has two.
+test.each([
+  { key: "up", ups: 2, presses: 1, lands: "› 4. Never mind", action: undefined },
+  { key: "k", ups: 2, presses: 1, lands: "› 4. Never mind", action: undefined },
+  { key: "ctrl+p", ups: 2, presses: 1, lands: "› 4. Never mind", action: undefined },
+  { key: "down", ups: 2, presses: 4, lands: "› 1. Code and conversation", action: stageBoth },
+  { key: "j", ups: 2, presses: 4, lands: "› 1. Code and conversation", action: stageBoth },
+  { key: "ctrl+n", ups: 2, presses: 4, lands: "› 1. Code and conversation", action: stageBoth },
+  { key: "down", ups: 3, presses: 2, lands: "› 1. Conversation only", action: stageOldest },
+] as const)("in step 2, $key pressed $presses times from the first of $ups-up's options wraps", async (row) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  await selectPrompt(setup, row.ups)
+  await setup.waitForFrame((frame) => frame.includes("Never mind"))
+  // One press at a time, each drawn, so the last press starts from the last option.
+  for (let index = 0; index < row.presses; index++) {
+    press[row.key](setup)
+    await settled(setup)
+  }
+  await setup.waitForFrame((frame) => frame.includes(row.lands))
+  setup.mockInput.pressEnter()
+  if (!row.action) {
+    await setup.waitForFrame((frame) => frame.includes(listHeading))
+    expect(setup.actions()).toEqual([])
+    return
+  }
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(rewinds(setup)).toEqual([row.action])
+})
+
+// Control: the list clamps at both ends, as the reference's list does; step 2's wrap stays in step 2.
+test("in the list, up on the oldest prompt and down on (current) stay put", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  for (let index = 0; index < 4; index++) setup.mockInput.pressArrow("up")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(setup.dryRunsSent()).toEqual(["msg_0001"])
+
+  setup.mockInput.pressEscape()
+  await setup.waitForFrame((frame) => frame.includes(listHeading))
+  setup.mockInput.pressEscape()
+  await setup.waitForFrame((frame) => !frame.includes(listHeading))
+  await openPicker(setup)
+  setup.mockInput.pressArrow("down")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => !frame.includes(listHeading))
+  expect(setup.dryRunsSent()).toEqual(["msg_0001"])
+  expect(setup.actions()).toEqual([])
+})
+
+test("in step 2, page down lands on Never mind and page up on the first option, without wrapping", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("› 1. Code and conversation"))
+  pageDown(setup)
+  await setup.waitForFrame((frame) => frame.includes("› 4. Never mind"))
+  pageDown(setup)
+  expect(await settled(setup)).toContain("› 4. Never mind")
+  pageUp(setup)
+  await setup.waitForFrame((frame) => frame.includes("› 1. Code and conversation"))
+  pageUp(setup)
+  expect(await settled(setup)).toContain("› 1. Code and conversation")
+  setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(rewinds(setup)).toEqual([stageBoth])
+})
+
+// The page keys are the shared dialog ids, so a person's own key reaches step 2. (The default it replaced is then the
+// session's own page key, which scrolls the transcript and closes any dialog, as in every Orbit dialog.)
+test("a person's own page keys move step 2", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path, keybinds: { "dialog.select.page_down": "f8" } })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("› 1. Code and conversation"))
+  setup.mockInput.pressKey("F8")
+  await setup.waitForFrame((frame) => frame.includes("› 4. Never mind"))
+  pageUp(setup)
+  await setup.waitForFrame((frame) => frame.includes("› 1. Code and conversation"))
+})
+
+// The reference's list has no page keys, so they do nothing there: the picker takes them, and the session's own page
+// keys (which close any dialog) do not get them.
+test("in the list, page keys do nothing", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  pageUp(setup)
+  pageDown(setup)
+  expect(await settled(setup)).toContain(listHeading)
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => !frame.includes(listHeading))
+  expect(setup.dryRunsSent()).toEqual([])
+  expect(setup.actions()).toEqual([])
+})
+
+// While a chosen rewind runs, step 2's keys are off: no key moves the focus, no option is pointed at, and the effect
+// lines keep describing the option chosen. The refusal then names that option. "Conversation only" is chosen, the second
+// of four options, so that every key here, the first-option and last-option ones too, would move the focus elsewhere.
+const moves = {
+  ...press,
+  HOME: (setup: Setup) => setup.mockInput.pressKey("HOME"),
+  END: (setup: Setup) => setup.mockInput.pressKey("END"),
+  "page up": pageUp,
+  "page down": pageDown,
+}
+test.each(["down", "up", "j", "k", "ctrl+n", "ctrl+p", "HOME", "END", "page up", "page down"] as const)(
+  "while a rewind runs, %s moves no option and no option is pointed at",
+  async (key) => {
+    await using state = await tmpdir()
+    const held = Promise.withResolvers<Response>()
+    await using setup = await rewindApp({
+      state: state.path,
+      answer: (request) => (request.path.endsWith("/revert/stage") ? held.promise : undefined),
+    })
+    await openPicker(setup)
+    await selectPrompt(setup, 2)
+    await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+    setup.mockInput.pressArrow("down")
+    await setup.waitForFrame((frame) => frame.includes("› 2. Conversation only"))
+    setup.mockInput.pressEnter()
+    await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+    await setup.waitForFrame((frame) => frame.includes("Rewinding…"))
+    moves[key](setup)
+    const frame = await settled(setup)
+    expect(pointed(frame)).toEqual([])
+    expect(frame).toContain("2. Conversation only ✓")
+    expect(frame).toContain("The conversation goes back to this point.")
+    expect(frame).toContain("The code stays as it is.")
+    held.resolve(json({ _tag: "SessionBusyError", sessionID, message: "Session is busy" }, { status: 409 }))
+    await setup.waitForFrame((frame) => frame.includes("Could not rewind the conversation:"))
+    expect(rewinds(setup)).toEqual([stageConversation])
+  },
+)
+
+test.each([64, 120])("Enter marks the chosen option while it runs, at %i columns", async (width) => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    width,
+    answer: (request) => (request.path.endsWith("/revert/stage") ? held.promise : undefined),
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressEnter()
+  const frame = await setup.waitForFrame((frame) => frame.includes("Rewinding…"))
+  expect(frame).toContain("1. Code and conversation ✓")
+  expect(pointed(frame)).toEqual([])
+  held.resolve(json({ data: { messageID: "msg_0003", files: [] } }))
+  await setup.waitForFrame((frame) => !frame.includes("Rewinding…"))
+})
+
+// A digit acts on its option at once but leaves the focus, and so the effect lines, where they were, and marks nothing.
+test("a digit chooses its option without moving the focus", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) => (request.path.endsWith("/revert/files") && !request.body?.dryRun ? held.promise : undefined),
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("› 1. Code and conversation"))
+  setup.mockInput.pressKey("3")
+  await until(() => setup.actions().some((action) => action.startsWith("files")), "the files request")
+  const frame = await setup.waitForFrame((frame) => frame.includes("Rewinding…"))
+  expect(frame).toContain("The conversation goes back to this point.")
+  expect(frame).not.toContain("✓")
+  expect(pointed(frame)).toEqual([])
+  held.resolve(json({ data: { canRewind: true } }))
+  await setup.waitForFrame((frame) => !frame.includes("Rewinding…"))
+})
+
+test("a full-width digit chooses as its digit does", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  // In the list it does nothing.
+  setup.mockInput.pressKey("１")
+  expect(await settled(setup)).toContain(listHeading)
+  expect(setup.dryRunsSent()).toEqual([])
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressKey("２")
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(rewinds(setup)).toEqual([stageConversation])
+})
+
+// `n` is the reference's other close key: it closes the list (also while it checks files), the empty picker and the
+// error line, and does nothing in step 2.
+test.each(["the list", "the list while it checks files", "the empty picker", "the error line", "step 2"] as const)(
+  "n on %s",
+  async (place) => {
+    await using state = await tmpdir()
+    const held = Promise.withResolvers<Response>()
+    await using setup = await rewindApp({
+      state: state.path,
+      messages: place === "the empty picker" ? [] : undefined,
+      answer: (request) => {
+        if (place === "the list while it checks files" && request.path.endsWith("/revert/files")) return held.promise
+        if (place === "the error line" && request.path.endsWith("/revert/stage"))
+          return json({ _tag: "SessionBusyError", sessionID, message: "Session is busy" }, { status: 409 })
+        return undefined
+      },
+    })
+    if (place === "the empty picker") {
+      await setup.waitForFrame((frame) => frame.includes("Rewind fixture"))
+      await setup.mockInput.typeText("/rewind")
+      setup.mockInput.pressEnter()
+      await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+    }
+    if (place !== "the empty picker") await openPicker(setup)
+    if (place === "the list while it checks files") {
+      await selectPrompt(setup, 2)
+      await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+    }
+    if (place === "the error line" || place === "step 2") {
+      await selectPrompt(setup, 2)
+      await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+    }
+    if (place === "the error line") {
+      setup.mockInput.pressEnter()
+      await setup.waitForFrame((frame) => frame.includes("Could not rewind the code and conversation:"))
+    }
+    const before = setup.actions()
+    setup.mockInput.pressKey("n")
+    if (place === "step 2") {
+      expect(await settled(setup)).toContain("Code and conversation")
+      expect(setup.actions()).toEqual([])
+      return
+    }
+    await setup.waitForFrame(
+      (frame) =>
+        !frame.includes(listHeading) &&
+        !frame.includes("Nothing to rewind yet.") &&
+        !frame.includes("Could not rewind") &&
+        !frame.includes("Checking files…"),
+    )
+    // A dry run that answers after the picker closed opens nothing.
+    held.resolve(json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } }))
+    expect(await settled(setup)).not.toContain("Never mind")
+    expect(setup.actions()).toEqual(before)
+  },
+)
+
+test("Enter in a picker with nothing to rewind keeps it open", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path, messages: [] })
+  await setup.waitForFrame((frame) => frame.includes("Rewind fixture"))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+  setup.mockInput.pressEnter()
+  expect(await settled(setup)).toContain("Nothing to rewind yet.")
+  setup.mockInput.pressEscape()
+  await setup.waitForFrame((frame) => !frame.includes("Nothing to rewind yet."))
+})
+
+// The index of the first line at or below the list heading that holds `text`.
+const rowLine = (frame: string, text: string) => {
+  const lines = frame.split("\n")
+  const start = lines.findIndex((line) => line.includes(listHeading))
+  return lines.findIndex((line, index) => index > start && line.includes(text))
+}
+
+// Every row is three lines: its prompt, its stats line (kept empty until the stats answer) and a blank line, so the
+// window does not move when the stats arrive.
+test.each([64, 120])("every row keeps three lines while its stats load and after, at %i columns", async (width) => {
+  await using state = await tmpdir()
+  const gate = Promise.withResolvers<void>()
+  await using setup = await rewindApp({
+    state: state.path,
+    width,
+    answer: (request) => {
+      const query = new URLSearchParams(request.search)
+      if (!request.path.endsWith("/diff") || query.get("scope") !== "prompt") return undefined
+      return gate.promise.then(() => json({ data: promptStats[query.get("from") ?? ""] }))
+    },
+  })
+  const spacing = (frame: string) => {
+    const rows = ["Add the parser", "Rename the helper", "Fix the", "(current)"].map((text) => rowLine(frame, text))
+    return rows.slice(1).map((row, index) => row - rows[index])
+  }
+  await openPicker(setup)
+  await until(() => setup.statsSent().length === 3, "the rows' stats requests")
+  expect(spacing(await settled(setup))).toEqual([3, 3, 3])
+  gate.resolve()
+  const loaded = await setup.waitForFrame((frame) => frame.includes("parser.ts +12 -0") && frame.includes("+1 -1"))
+  expect(spacing(loaded)).toEqual([3, 3, 3])
+  expect(loaded.split("\n")[rowLine(loaded, "Add the parser") + 1]).toContain("parser.ts +12 -0")
+})
+
+// Step 2 quotes up to the prompt's first four lines, each on its own line, as the reference does.
+test.each([64, 120])("step 2 quotes up to four lines of a long prompt, at %i columns", async (width) => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    width,
+    messages: [
+      { ...conversation[0], text: "first line\nsecond line\nthird line\nfourth line\nfifth line" },
+      ...conversation.slice(1),
+    ],
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 3)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  const lines = frame.split("\n")
+  const block = lines.slice(
+    lines.findIndex((line) => line.includes("Rewind the conversation to just before this prompt:")),
+    lines.findIndex((line) => line.includes("Never mind")),
+  )
+  for (const text of ["first line", "second line", "third line", "fourth line"])
+    expect(block.filter((line) => line.includes(text))).toHaveLength(1)
+  expect(block.findIndex((line) => line.includes("fourth line"))).toBe(
+    block.findIndex((line) => line.includes("first line")) + 3,
+  )
+  expect(block.join("\n")).not.toContain("fifth line")
 })

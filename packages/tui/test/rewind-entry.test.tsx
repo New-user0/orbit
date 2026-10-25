@@ -169,6 +169,38 @@ test("the message dialog's Rewind opens step 2 for that prompt, and Esc closes t
   expect(setup.actions()).toEqual([])
 })
 
+// A picker opened from the message dialog stands in for the reference's step 2 while it checks files, and `n` does
+// nothing in that step: only Esc closes it.
+test("n does nothing while a picker opened from the message dialog checks files, and in its step 2", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<Response>()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) => (request.path.endsWith("/revert/files") && request.body?.dryRun ? held.promise : undefined),
+  })
+  await setup.waitForFrame(loaded)
+  await openFromTimeline(setup, "Rename the helper")
+  await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+  setup.mockInput.pressKey("n")
+  await Bun.sleep(150)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("Checking files…")
+
+  held.resolve(
+    json({
+      data: { canRewind: true, filesChanged: ["/tmp/orbit/src/a.ts"], insertions: 3, deletions: 5 },
+    }),
+  )
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressKey("n")
+  await Bun.sleep(150)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("Code and conversation")
+  setup.mockInput.pressEscape()
+  await setup.waitForFrame((frame) => !frame.includes("Code and conversation"))
+  expect(setup.actions()).toEqual([])
+})
+
 // The skip-picker shortcut: a prompt followed only by a reply with nothing in it, whose rewind would change no file,
 // goes straight back into the input with its conversation rewound, as does one whose dry run lists files it cannot
 // put back (no checkpoint). The controls are the same prompt when the dry run says a file would change, and when a
