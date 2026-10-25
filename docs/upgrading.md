@@ -4735,3 +4735,35 @@ their place when the row cannot hold both; a very short row cuts it at its end, 
 **Affects:** people who use the full-screen terminal UI and run long sessions.
 
 **What to do:** Nothing. Run `/compact` when the line asks for it.
+
+## Old tool results are left out of what the model is sent
+
+The model is no longer sent every old tool result for ever. Before a request, the oldest results of the tools whose
+output is bulky and rarely needed again are replaced, in what the model receives, by one line
+(`[Earlier tool output cleared to free context space]`), keeping the newest five results.
+
+- **Which results.** Those of `Read`, `Bash` (or `PowerShell`), `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Edit`, `Write`
+  and `Patch`, under the names they were recorded with as well. Notebook edits, language-server calls, MCP tools,
+  agents, task output, todo lists and skills are never cleared, nor is a result that the provider ran itself. A failed
+  call is cleared like a finished one. The call itself, with its input, stays.
+- **When.** On the first request after the newest assistant message is an hour old (the provider's prompt cache has
+  expired by then), and when automatic compaction is due: the clearing runs first and the compaction only follows if the
+  context is still over its threshold. A subagent's session clears nothing, and neither do `/compact` and the
+  compaction that recovers from a provider rejection as too long.
+- **What stays.** The transcript, the stored results, exports and every client keep the full output; only the request
+  changes. Unlike the reference, which shows the results again on the next prompt, the clearing is recorded
+  (`session.context.cleared`, with message and call IDs only) and lasts for the rest of the session, after a restart and
+  in forks made after it. A revert to a point before it brings the results back.
+- **Repeat reads.** A clearing makes the session forget which files it has already shown, so reading a file again after
+  a clearing returns its text and not the "unchanged" stub that pointed at the cleared result. A file read earlier can
+  still be edited without reading it again.
+- **The footer.** The context report is `stale` after a clearing until the next response, and the terminal UI hides its
+  warning until then.
+
+Set `compaction.clear` to `false` in your own config to turn it off. A project's `orbit.json` cannot set it, as with the
+rest of `compaction`.
+
+**Affects:** people with long sessions, and scripts that compare a request with the stored history. The model may ask
+for a file or command again that it can no longer see.
+
+**What to do:** Nothing. Set `compaction.clear` to `false` to keep every old result in the request.

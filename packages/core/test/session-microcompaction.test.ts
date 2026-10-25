@@ -149,19 +149,21 @@ const ask = (s: Scenario, id: Session.ID, text = "Next", reply = "Done") =>
   })
 
 const storedContent = (s: Scenario, id: Session.ID) =>
-  s.session.messages({ sessionID: id, order: "asc" }).pipe(
-    Effect.map((messages) =>
-      messages.flatMap((message) =>
-        message.type === "assistant"
-          ? message.content.flatMap((part) =>
-              part.type === "tool" && part.state.status === "completed"
-                ? [[part.id, part.state.content] as const]
-                : [],
-            )
-          : [],
+  s.session
+    .messages({ sessionID: id, order: "asc" })
+    .pipe(
+      Effect.map((messages) =>
+        messages.flatMap((message) =>
+          message.type === "assistant"
+            ? message.content.flatMap((part) =>
+                part.type === "tool" && part.state.status === "completed"
+                  ? [[part.id, part.state.content] as const]
+                  : [],
+              )
+            : [],
+        ),
       ),
-    ),
-  )
+    )
 
 // What a history lowers to, as a request would carry it.
 const lowered = (history: ReadonlyArray<SessionMessage.Info>) => ({
@@ -263,14 +265,45 @@ describe("clearing old tool results", () => {
   // The names a call is recorded under: the current ones, the ones before the rename, and the shell under PowerShell.
   scenario("counts a call by its current or old name", function* (s) {
     const counted = [
-      "Read", "Bash", "PowerShell", "Grep", "Glob", "WebSearch", "WebFetch", "Edit", "Write", "Patch",
-      "read", "shell", "grep", "glob", "websearch", "webfetch", "edit", "write", "patch",
+      "Read",
+      "Bash",
+      "PowerShell",
+      "Grep",
+      "Glob",
+      "WebSearch",
+      "WebFetch",
+      "Edit",
+      "Write",
+      "Patch",
+      "read",
+      "shell",
+      "grep",
+      "glob",
+      "websearch",
+      "webfetch",
+      "edit",
+      "write",
+      "patch",
     ]
     const kept = [
-      "NotebookEdit", "notebook_edit", "LSP", "lsp", "read_mcp_resource", "list_mcp_resources", "mcp__docs__search",
-      "Agent", "subagent", "TaskOutput", "shell_output", "TodoWrite", "Skill",
+      "NotebookEdit",
+      "notebook_edit",
+      "LSP",
+      "lsp",
+      "read_mcp_resource",
+      "list_mcp_resources",
+      "mcp__docs__search",
+      "Agent",
+      "subagent",
+      "TaskOutput",
+      "shell_output",
+      "TodoWrite",
+      "Skill",
     ]
-    for (const [name, clears] of [...counted.map((name) => [name, true] as const), ...kept.map((name) => [name, false] as const)]) {
+    for (const [name, clears] of [
+      ...counted.map((name) => [name, true] as const),
+      ...kept.map((name) => [name, false] as const),
+    ]) {
       const id = yield* newSession(s, `name_${name}`)
       // The oldest call is the one under test; the newest five are reads.
       yield* seedStep(s.bus, id, {
@@ -300,7 +333,9 @@ describe("clearing old tool results", () => {
         ? message.content.flatMap((part) => (part.type === "tool-result" && part.providerExecuted ? [part] : []))
         : [],
     )
-    expect(hosted.map((part) => [part.id, part.result])).toEqual([["hosted", { type: "text", value: "hosted results" }]])
+    expect(hosted.map((part) => [part.id, part.result])).toEqual([
+      ["hosted", { type: "text", value: "hosted results" }],
+    ])
     expect(clearedIn(request)).toEqual(["h1"])
   })
 
@@ -326,7 +361,11 @@ describe("clearing old tool results", () => {
       id: "msg_carried",
       calls: [
         { id: "saved", name: "Read", text: huge },
-        { id: "image", name: "Read", content: [{ type: "file", uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png" }] },
+        {
+          id: "image",
+          name: "Read",
+          content: [{ type: "file", uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png" }],
+        },
         ...reads("c", 5),
       ],
     })
@@ -512,7 +551,10 @@ describe("clearing old tool results", () => {
     // Row b: so far past it that clearing cannot bring it under, so the compaction follows the clearing.
     const compacted = yield* newSession(s, "compacted")
     yield* pressured(s, compacted, 400_000)
-    yield* s.llm.push(TestLLM.text("## Objective\n- summary", "pressure-summary"), TestLLM.text("Done", "pressure-done"))
+    yield* s.llm.push(
+      TestLLM.text("## Objective\n- summary", "pressure-summary"),
+      TestLLM.text("Done", "pressure-done"),
+    )
     yield* s.session.prompt({ sessionID: compacted, text: "Next", resume: false })
     yield* s.session.resume(compacted)
     expect((yield* clearings(s, compacted)).map((event) => event.trigger)).toEqual(["pressure"])
@@ -650,29 +692,32 @@ describe("clearing old tool results", () => {
     expect(yield* clearings(s, first.id)).toHaveLength(1)
   })
 
-  scenario("a fork after a clearing sends the same placeholders, and a fork before it sends the results whole", function* (s) {
-    const source = yield* idleCleared(s, "forked")
-    const marker = (yield* s.session.context(source.id)).find((message) => message.type === "context-cleared")
-    if (marker?.type !== "context-cleared") return yield* Effect.die(new Error("Expected the marker"))
+  scenario(
+    "a fork after a clearing sends the same placeholders, and a fork before it sends the results whole",
+    function* (s) {
+      const source = yield* idleCleared(s, "forked")
+      const marker = (yield* s.session.context(source.id)).find((message) => message.type === "context-cleared")
+      if (marker?.type !== "context-cleared") return yield* Effect.die(new Error("Expected the marker"))
 
-    // After: the copy names the fork's own copies of the messages, and the fork's request sends the same placeholders.
-    const after = yield* s.session.fork({ sessionID: source.id })
-    const copied = yield* s.session.context(after.id)
-    const assistants = copied.flatMap((message) => (message.type === "assistant" ? [message.id] : []))
-    const copiedMarker = copied.find((message) => message.type === "context-cleared")
-    if (copiedMarker?.type !== "context-cleared") return yield* Effect.die(new Error("Expected the copied marker"))
-    expect(copiedMarker.tools.map((tool) => tool.assistantMessageID)).toEqual(source.cleared.map(() => assistants[0]))
-    expect(assistants[0]).not.toBe("msg_forked")
-    expect(clearedIn(yield* ask(s, after.id, "In the fork"))).toEqual(source.cleared)
-    expect(yield* clearings(s, after.id)).toEqual([])
+      // After: the copy names the fork's own copies of the messages, and the fork's request sends the same placeholders.
+      const after = yield* s.session.fork({ sessionID: source.id })
+      const copied = yield* s.session.context(after.id)
+      const assistants = copied.flatMap((message) => (message.type === "assistant" ? [message.id] : []))
+      const copiedMarker = copied.find((message) => message.type === "context-cleared")
+      if (copiedMarker?.type !== "context-cleared") return yield* Effect.die(new Error("Expected the copied marker"))
+      expect(copiedMarker.tools.map((tool) => tool.assistantMessageID)).toEqual(source.cleared.map(() => assistants[0]))
+      expect(assistants[0]).not.toBe("msg_forked")
+      expect(clearedIn(yield* ask(s, after.id, "In the fork"))).toEqual(source.cleared)
+      expect(yield* clearings(s, after.id)).toEqual([])
 
-    // Before: the fork stops short of the marker, so its history sends the results whole.
-    const before = yield* s.session.fork({ sessionID: source.id, before: marker.id })
-    const history = yield* s.session.context(before.id)
-    expect(history.some((message) => message.type === "context-cleared")).toBe(false)
-    expect(clearedIn(lowered(history))).toEqual([])
-    expect(wholeIn(lowered(history))).toHaveLength(8)
-  })
+      // Before: the fork stops short of the marker, so its history sends the results whole.
+      const before = yield* s.session.fork({ sessionID: source.id, before: marker.id })
+      const history = yield* s.session.context(before.id)
+      expect(history.some((message) => message.type === "context-cleared")).toBe(false)
+      expect(clearedIn(lowered(history))).toEqual([])
+      expect(wholeIn(lowered(history))).toHaveLength(8)
+    },
+  )
 
   // A committed revert deletes every row from its boundary on, the marker with them.
   scenario("a committed revert to before the clearing brings the results back", function* (s) {
@@ -747,8 +792,20 @@ describe("clearing old tool results", () => {
         agent: "build",
         model: { id: "fake-model", providerID: "fake" },
         content: [
-          { type: "tool", id: "running", name: "Read", state: { status: "running", input: {}, metadata: {} }, time: { created: 0 } },
-          { type: "tool", id: "streaming", name: "Read", state: { status: "streaming", input: "{" }, time: { created: 0 } },
+          {
+            type: "tool",
+            id: "running",
+            name: "Read",
+            state: { status: "running", input: {}, metadata: {} },
+            time: { created: 0 },
+          },
+          {
+            type: "tool",
+            id: "streaming",
+            name: "Read",
+            state: { status: "streaming", input: "{" },
+            time: { created: 0 },
+          },
         ],
         time: { created: 0, completed: 0 },
       }),
@@ -953,7 +1010,14 @@ describe("a transferred session", () => {
   const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
   const transferIt = testEffect(
     AppNodeBuilder.build(
-      LayerNode.group([Database.node, Bus.node, SessionProjector.node, SessionStore.node, Session.node, SessionTransfer.node]),
+      LayerNode.group([
+        Database.node,
+        Bus.node,
+        SessionProjector.node,
+        SessionStore.node,
+        Session.node,
+        SessionTransfer.node,
+      ]),
       [
         Bus.node.replace(Bus.configured({ persist: true })),
         Project.node.replace(globalProjectNode),

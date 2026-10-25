@@ -150,6 +150,7 @@ describe("public event manifest", () => {
         "session.instructions.updated.2",
         "session.synthetic.1",
         "session.recap.recorded.1",
+        "session.context.cleared.1",
         "session.skill.activated.1",
         "session.shell.started.1",
         "session.shell.ended.1",

@@ -57,7 +57,13 @@ export const select = (input: {
       ? []
       : message.content.flatMap((part) =>
           part.type === "tool" && part.executed !== true && COMPACTABLE.has(ToolNames.canonical(part.name))
-            ? [{ assistantMessageID: message.id, id: part.id, settled: part.state.status === "completed" || part.state.status === "error" }]
+            ? [
+                {
+                  assistantMessageID: message.id,
+                  id: part.id,
+                  settled: part.state.status === "completed" || part.state.status === "error",
+                },
+              ]
             : [],
         ),
   )
@@ -69,7 +75,9 @@ export const select = (input: {
   if (first === undefined) return undefined
 
   const named = new Map<string, Set<string>>()
-  tools.forEach((tool) => named.set(tool.assistantMessageID, (named.get(tool.assistantMessageID) ?? new Set()).add(tool.id)))
+  tools.forEach((tool) =>
+    named.set(tool.assistantMessageID, (named.get(tool.assistantMessageID) ?? new Set()).add(tool.id)),
+  )
   const freed = input.freed(named)
   if (freed <= 0) return undefined
   return { trigger: idle ? ("idle" as const) : ("pressure" as const), tools: [first, ...rest] as const, freed }

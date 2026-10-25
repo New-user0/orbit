@@ -952,6 +952,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   automatic compaction off), the `override` rows of `test/tool-output-lowering.test.ts`,
   `test/session-message-budget.test.ts`, the override rows of `test/session-compaction.test.ts`, the sanitized export
   row of `test/session-create.test.ts` and `test/config/trust.test.ts`.
+- Clearing old tool results (`SessionMicrocompaction`, `packages/core/src/session/microcompaction.ts`, run by
+  `SessionRunnerLLM` before each request of a main session, for every client): it reads, spawns, fetches and deletes
+  nothing, and writes no file; its one output is `session.context.cleared`, which holds the trigger and pairs of
+  message ID and call ID. Those IDs are only ever compared as set keys against the history in hand and never joined into
+  a path, a ref or a title, so a marker from an import or an edited store that names nothing real, or names `../x` or
+  control characters, changes nothing, and one that names a hosted or a running call changes nothing for that call
+  (classes 5 and 7). Import decodes the row strictly with the rest of the history, and a fork copies the marker under the
+  copies' IDs and drops one whose calls were not copied. `compaction.clear` is part of `compaction`, which an untrusted
+  folder cannot set (class 8). The placeholder is fixed text and the marker carries none, so no new string reaches a
+  person (class 9); clients draw the stored output as before. Every client reaches the model through `runStep`, which
+  clears at one place; `/compact`, the recovery from an overflow and a subagent's session never clear (class 12).
+  Proof: `test/session-microcompaction.test.ts` (the hostile marker, the names, the hosted and error results, both
+  triggers, the retry, fork, revert, transfer and restart rows), `test/session-projector.test.ts`,
+  `test/tool-read-repeat.test.ts`, the `compaction.clear` rows of `test/config/trust.test.ts` and
+  `test/config/compaction.test.ts`; in `packages/tui`, `test/feature-plugins/context-cleared.test.tsx` (a drawn frame)
+  and the `context-cleared` row of `test/mini/stream-v2.transport.test.ts`; in `packages/cli`, the `context-cleared` row of
+  `test/acp/translate.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,

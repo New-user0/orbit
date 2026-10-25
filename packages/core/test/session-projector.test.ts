@@ -857,13 +857,30 @@ describe("SessionProjector tool overrides", () => {
           { assistantMessageID: second, id: "call_2" },
         ],
       })
+      // A marker from an import or an edited store can name messages the fork does not hold: one that names none it
+      // copied is not copied, and one that names some keeps only those.
+      const elsewhere = SessionMessage.ID.make("msg_elsewhere")
+      yield* bus.publish(SessionEvent.ContextCleared, {
+        sessionID,
+        trigger: "pressure",
+        tools: [{ assistantMessageID: elsewhere, id: "call_x" }],
+      })
+      yield* bus.publish(SessionEvent.ContextCleared, {
+        sessionID,
+        trigger: "pressure",
+        tools: [
+          { assistantMessageID: elsewhere, id: "call_y" },
+          { assistantMessageID: second, id: "call_2" },
+        ],
+      })
       const rows = yield* db
         .select()
         .from(SessionMessageTable)
         .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "context-cleared")))
+        .orderBy(asc(SessionMessageTable.seq))
         .all()
         .pipe(Effect.orDie)
-      expect(rows).toHaveLength(1)
+      expect(rows).toHaveLength(3)
       const marker = Schema.decodeUnknownSync(SessionMessage.Info)({ ...rows[0]!.data, id: rows[0]!.id, type: rows[0]!.type })
       expect(marker).toMatchObject({
         type: "context-cleared",
@@ -881,7 +898,7 @@ describe("SessionProjector tool overrides", () => {
       expect(assistants).toHaveLength(2)
       expect(assistants).not.toContain(first)
       const copiedMarkers = copied.filter((message) => message.type === "context-cleared")
-      expect(copiedMarkers).toHaveLength(1)
+      expect(copiedMarkers).toHaveLength(2)
       expect(copiedMarkers[0]).toMatchObject({
         trigger: "idle",
         tools: [
@@ -890,10 +907,12 @@ describe("SessionProjector tool overrides", () => {
         ],
       })
       expect(copiedMarkers[0]!.id).not.toBe(marker.id)
+      expect(copiedMarkers[1]).toMatchObject({ trigger: "pressure", tools: [{ assistantMessageID: assistants[1], id: "call_2" }] })
 
       // A fork that stops before the marker has no row.
       const before = yield* sessions.fork({ sessionID, before: marker.id })
       expect((yield* sessions.context(before.id)).map((message) => message.type)).toEqual(["assistant", "assistant"])
+
     }),
   )
 })
