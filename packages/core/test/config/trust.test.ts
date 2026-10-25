@@ -717,6 +717,22 @@ describe("ConfigTrust.stamp", () => {
     expect<unknown>(Config.latest([user, project], "tool_output")).toEqual({ max_result_chars: 100 })
   })
 
+  // tool-runtime-9: the message budget is a budget, so a repository cannot raise it to send more or lower it to make
+  // the model read files (class 8).
+  test("keeps an untrusted folder from setting tool_output.max_message_chars", () => {
+    const user = document("user", { tool_output: { max_message_chars: 400_000 } })
+    const project = document("project", { tool_output: { max_message_chars: 100 } })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info.tool_output).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["providers"])
+    expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "tool_output")).toEqual({
+      max_message_chars: 400_000,
+    })
+    // Control: trusted, the project's value stands.
+    expect<unknown>(Config.latest([user, project], "tool_output")).toEqual({ max_message_chars: 100 })
+  })
+
   // foundations-19: the period decides which of the person's sessions are deleted, so a folder that is not trusted
   // cannot set it (class 8); a trusted one can, as the reference's merged settings allow.
   test("keeps an untrusted folder from setting cleanup_period_days", () => {
