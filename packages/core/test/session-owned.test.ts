@@ -705,6 +705,44 @@ describe("Session-owned handles", () => {
     }),
   )
 
+  it.live("commits a staged revert before a person's shell command, and keeps the command", () =>
+    Effect.gen(function* () {
+      const started = Info.make({
+        id: ID.make("sh_over_revert"),
+        command: "ls -la",
+        cwd: source.directory,
+        shell: "sh",
+        file: "/project/shell.out",
+        status: "running",
+        metadata: { sessionID, background: true },
+        time: { started: 0 },
+      })
+      const fixture = yield* setup({
+        snapshot: () => Layer.mock(Snapshot.Service, { capture: () => Effect.undefined }),
+        shell: Layer.mock(Shell.Service, {
+          create: () => Effect.succeed(started),
+          result: () =>
+            Effect.succeed({
+              info: Info.make({ ...started, status: "exited", exit: 0, time: { started: 0, completed: 1 } }),
+              capture: { output: "listing", truncated: false },
+            }),
+          output: () => Effect.succeed(Output.make({ output: "listing", cursor: 7, size: 7, truncated: false })),
+        }),
+      })
+      const handle = fixture.sessions.forSession(sessionID)
+      const boundary = yield* handle.synthetic({ text: "Revert boundary", resume: false })
+      yield* SessionInbox.promote(fixture.db, fixture.bus, sessionID, "steer")
+      yield* handle.revert.stage({ messageID: boundary.id, files: false })
+
+      yield* handle.shell({ id: SessionMessage.ID.make("msg_shell_over_revert"), command: started.command })
+
+      expect((yield* handle.get()).revert).toBeUndefined()
+      const context = yield* fixture.store.context(sessionID)
+      expect(context.map((message) => message.id)).not.toContain(boundary.id)
+      expect(context[0]).toMatchObject({ id: "msg_shell_over_revert", type: "shell" })
+    }),
+  )
+
   it.live("selects the destination's snapshot service after a move", () =>
     Effect.gen(function* () {
       const captures: Location.Ref[] = []

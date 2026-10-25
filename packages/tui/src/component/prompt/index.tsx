@@ -1567,6 +1567,13 @@ export function Prompt(props: PromptProps) {
     history.append(entry, historyDirectory())
     if (currentMode === "shell") {
       move.startSubmit()
+      // A command is new work too: settle a staged revert first, as a prompt does, so the command lands after the
+      // rewind instead of behind the boundary, where it is drawn nowhere and the next prompt's commit drops it.
+      if (
+        session?.revert &&
+        !(await attempt("Failed to commit revert", () => client.api.session.revert.commit({ sessionID: target })))
+      )
+        return false
       const send = () => client.api.session.shell({ sessionID: target, command: inputText })
       void (newSession ? newSession.gate.then(send).catch(newSession.recover) : send())
       setStore("mode", "normal")

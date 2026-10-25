@@ -208,6 +208,60 @@ test("a shell command is a row whose conversation rewind puts the command back i
   expect(frame).toContain("$ ls -la")
 })
 
+// Running the put-back command again is new work, so the staged revert is committed first, as for a prompt; otherwise
+// the command would land after the boundary, be drawn nowhere and be dropped by the next prompt's commit. A refused
+// commit sends no command.
+test.each([
+  { commit: 204, sent: ["commit", "shell"] },
+  { commit: 409, sent: ["commit"] },
+])(
+  "running the command a shell row put back commits the staged revert before the command is sent (commit answers $commit)",
+  async (row) => {
+    await using state = await tmpdir()
+    await using setup = await rewindApp({
+      state: state.path,
+      messages: withShell("ls -la"),
+      answer: (request) => {
+        if (request.path === `/api/session/${sessionID}/revert/commit`)
+          return row.commit === 204
+            ? new Response(null, { status: 204 })
+            : json({ _tag: "SessionBusyError", sessionID, message: "Session is busy" }, { status: 409 })
+        if (request.path === `/api/session/${sessionID}/shell`) return new Response(null, { status: 204 })
+        return undefined
+      },
+    })
+    await openPicker(setup)
+    await selectPrompt(setup, 2)
+    await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+    setup.mockInput.pressEnter()
+    await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+    // The server's echo of the staged revert hides the command and everything after it from the transcript.
+    setup.events.emit({
+      id: "evt_rewind_shell_staged",
+      created: Date.now(),
+      type: "session.revert.staged",
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      data: { sessionID, revert: { messageID: "msg_0004a", files: [] } },
+    })
+    await setup.waitForFrame(
+      (frame) => !frame.includes("$ ls -la") && frame.includes("! ls -la") && frame.includes("exit shell mode"),
+      { maxPasses: 200 },
+    )
+
+    setup.mockInput.pressEnter()
+    const answered = (request: { path: string }) =>
+      request.path.endsWith("/revert/commit") || request.path.endsWith(`${sessionID}/shell`)
+    await until(() => setup.requests.filter(answered).length === row.sent.length, "the commit and shell requests")
+    if (row.commit !== 204) await setup.waitForFrame((frame) => frame.includes("Failed to commit revert"))
+    await Bun.sleep(100)
+    expect(setup.requests.filter(answered).map((request) => request.path.split("/").pop())).toEqual([...row.sent])
+    if (row.commit === 204)
+      expect(setup.requests.find((request) => request.path.endsWith("/shell"))?.body).toMatchObject({
+        command: "ls -la",
+      })
+  },
+)
+
 // The server answers no dry run while the session runs (409), so choosing a prompt stops the session first; the code
 // options then reflect the files on disk. The rewind itself interrupts and waits again, in case the session started
 // again meanwhile.
