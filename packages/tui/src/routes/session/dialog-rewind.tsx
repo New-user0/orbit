@@ -2,7 +2,7 @@ import path from "path"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { plain } from "@orbit/flow/plain"
-import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
@@ -13,8 +13,11 @@ import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 import { bodyText } from "../../util/renderer"
 
-/** A person's prompt, or with `shell` a command they ran with `!`, whose text is then the command. */
-export type RewindPrompt = { id: string; text: string; created: number; shell?: boolean }
+/**
+ * A person's prompt, or with `shell` a command they ran with `!`, whose text is then the command. `revision` changes
+ * when the prompt's own edits may have changed, and a drawn row then asks for its stats again.
+ */
+export type RewindPrompt = { id: string; text: string; created: number; shell?: boolean; revision?: string }
 export type RewindOption = "both" | "conversation" | "code"
 export type RewindFileStat = { file: string; additions: number; deletions: number }
 export type RewindDryRun = {
@@ -57,13 +60,19 @@ export function DialogRewind(props: {
   onClose: () => void
   /** Opens on step 2 for this prompt; Esc and Never mind then close instead of going back to the list. */
   preselected?: string
+  /** Whether the client reaches its server; a drawn row whose stats failed asks again when it comes back. */
+  connected?: boolean
 }) {
   const dialog = useDialog()
   const toast = useToast()
   const theme = useTheme().surface("dialog")
   const dimensions = useTerminalDimensions()
   const width = createMemo(() => Math.max(10, Math.min(dialogWidth("xlarge"), dimensions().width - 2) - 6))
-  const [selected, setSelected] = createSignal(props.prompts.length)
+  // The live conversation: rows follow it while the picker is open. The selection is a position in it, as in the
+  // reference, so a prompt that arrives while "(current)" is selected takes the pointer, and what is drawn at the
+  // pointer is always what Enter acts on. Rows that leave can put the position past the end, where no row is pointed.
+  const prompts = createMemo(() => props.prompts)
+  const [selected, setSelected] = createSignal(prompts().length)
   const [state, setState] = createStore({
     step: "list" as "list" | "confirm" | "error",
     checking: false,
@@ -76,21 +85,52 @@ export function DialogRewind(props: {
     chosen: undefined as number | undefined,
   })
   const [stats, setStats] = createStore<Record<string, readonly RewindFileStat[] | "failed">>({})
-  const asked = new Set<string>()
+  // Per prompt, the revision last asked for and whether that request still runs: one request per row at a time.
+  const asked = new Map<string, { revision?: string; running: boolean }>()
+  // Esc waits for a chosen rewind, but ctrl+c or a click outside still removes the picker. Its rewind's answer then
+  // must not clear whatever dialog came next, and a refusal goes to a toast in place of the error line.
+  let mounted = true
+  onCleanup(() => (mounted = false))
 
   onMount(() => {
     dialog.setSize("xlarge")
     if (props.preselected) confirm(props.preselected)
   })
 
-  const ask = (messageID: string) => {
-    if (asked.has(messageID)) return
-    asked.add(messageID)
-    props.stats(messageID).then(
-      (files) => setStats(messageID, Array.isArray(files) ? files : "failed"),
-      () => setStats(messageID, "failed"),
-    )
+  // The previous line stays drawn until the new answer replaces it. A range that changed while its request ran is
+  // asked once more when the request answers, if the row is still drawn.
+  const ask = (prompt: RewindPrompt, again = false) => {
+    const previous = asked.get(prompt.id)
+    if (previous?.running || (previous && !again && previous.revision === prompt.revision)) return
+    const request = { revision: prompt.revision, running: true }
+    asked.set(prompt.id, request)
+    props
+      .stats(prompt.id)
+      .then(
+        (files) => setStats(prompt.id, Array.isArray(files) ? files : "failed"),
+        () => setStats(prompt.id, "failed"),
+      )
+      .then(() => {
+        request.running = false
+        const drawn = mounted && drawnPrompts().find((item) => item.id === prompt.id)
+        if (drawn) ask(drawn)
+      })
   }
+  const drawnPrompts = () => rows().flatMap((index) => prompts()[index] ?? [])
+
+  // A stats request lost with the connection is asked again once the client is back.
+  createEffect(
+    on(
+      () => props.connected,
+      (connected, before) => {
+        if (!connected || before !== false) return
+        drawnPrompts()
+          .filter((prompt) => stats[prompt.id] === "failed")
+          .forEach((prompt) => ask(prompt, true))
+      },
+      { defer: true },
+    ),
+  )
 
   const options = createMemo((): (RewindOption | "never")[] =>
     state.code ? ["both", "conversation", "code", "never"] : ["conversation", "never"],
@@ -98,20 +138,16 @@ export function DialogRewind(props: {
   const option = () => options()[state.focused]
 
   const rows = createMemo(() => {
-    const total = props.prompts.length + 1
+    const total = prompts().length + 1
     const start = Math.max(0, Math.min(selected() - Math.floor(VISIBLE_ROWS / 2), total - VISIBLE_ROWS))
     return Array.from({ length: Math.min(VISIBLE_ROWS, total) }, (_, offset) => start + offset)
   })
 
   // Closing removes the picker, so a dry run that answers later has nothing left to update.
   const close = () => props.onClose()
-  // Esc waits for a chosen rewind, but ctrl+c or a click outside still removes the picker. Its rewind's answer then
-  // must not clear whatever dialog came next, and a refusal goes to a toast in place of the error line.
-  let mounted = true
-  onCleanup(() => (mounted = false))
 
   function confirm(messageID: string) {
-    const prompt = props.prompts.find((item) => item.id === messageID)
+    const prompt = prompts().find((item) => item.id === messageID)
     if (!prompt) return close()
     setState("checking", true)
     props
@@ -141,6 +177,10 @@ export function DialogRewind(props: {
     const current = options()[index]
     if (!prompt || state.acting) return
     if (current === "never") return back()
+    // Another client's revert can take the prompt out of the conversation while step 2 is open. Staging at it then
+    // would move that revert and put back what it hid, so nothing is sent.
+    if (!prompts().some((item) => item.id === prompt.id))
+      return setState({ step: "error", error: "Could not rewind: that prompt is no longer in the conversation." })
     setState({ acting: true, chosen: mark ? index : undefined })
     props.act(current, prompt.id).then(
       () => mounted && close(),
@@ -153,11 +193,17 @@ export function DialogRewind(props: {
   }
 
   // The list clamps at both ends; step 2's options wrap one step at a time, while its page keys, Home and End clamp.
+  // From a position past the end, up steps back one position at a time, and down or the bottom keys go to "(current)".
   // Nothing moves while a chosen rewind runs, so the effect lines keep describing what was chosen.
   const move = (by: number, policy: "clamp" | "wrap" = "wrap") => {
     if (state.acting) return
+    const count = prompts().length + 1
     if (state.step === "list")
-      setSelected((value) => moveSelection(value, { count: props.prompts.length + 1, delta: by, policy: "clamp" }))
+      setSelected((value) =>
+        value >= count && by < 0 && Number.isFinite(by)
+          ? value + by
+          : moveSelection(Math.min(value, count - 1), { count, delta: by, policy: "clamp" }),
+      )
     if (state.step === "confirm")
       setState("focused", moveSelection(state.focused, { count: options().length, delta: by, policy }))
   }
@@ -217,7 +263,7 @@ export function DialogRewind(props: {
         title: "Close rewind",
         group: "Dialog",
         run: () => {
-          if (state.step === "error" || !props.prompts.length) return close()
+          if (state.step === "error" || !prompts().length) return close()
           // A picker opened on step 2 stands in for that step while it checks files, where `n` does nothing.
           if (state.step === "list" && !props.preselected) close()
         },
@@ -238,8 +284,9 @@ export function DialogRewind(props: {
         group: "Dialog",
         run: () => {
           if (state.step === "confirm") return choose(state.focused, true)
-          if (state.step !== "list" || state.checking || !props.prompts.length) return
-          const prompt = props.prompts[selected()]
+          // Past the end no row is pointed, so Enter has nothing to act on.
+          if (state.step !== "list" || state.checking || !prompts().length || selected() > prompts().length) return
+          const prompt = prompts()[selected()]
           if (!prompt) return close()
           confirm(prompt.id)
         },
@@ -256,12 +303,24 @@ export function DialogRewind(props: {
   const quoteLines = (prompt: RewindPrompt) =>
     bodyText(Array.from(own(prompt)).slice(0, 500).join("").split("\n").slice(0, 4).join("\n")) || "(empty prompt)"
 
+  // A row stands for a position, so it reads whichever prompt that position holds now; the one after the last prompt
+  // is "(current)".
   function Row(row: { index: number }) {
-    const prompt = props.prompts[row.index]
+    const prompt = () => prompts()[row.index]
     const active = () => selected() === row.index
     // A shell command has no file-tool edits of its own to count: the prompt-scoped diff answers only for a prompt.
-    if (prompt && !prompt.shell) ask(prompt.id)
-    const files = () => (prompt ? stats[prompt.id] : undefined)
+    createEffect(() => {
+      const current = prompt()
+      if (current && !current.shell) ask(current)
+    })
+    const files = () => {
+      const current = prompt()
+      return current ? stats[current.id] : undefined
+    }
+    const label = () => {
+      const current = prompt()
+      return current ? quote(current) : "(current)"
+    }
     // Every row is three lines tall, its stats line kept before they load, so the window never shifts.
     return (
       <box flexDirection="row" flexShrink={0} height={3}>
@@ -274,7 +333,7 @@ export function DialogRewind(props: {
             wrapMode="none"
             overflow="hidden"
           >
-            {prompt ? quote(prompt) : "(current)"}
+            {label()}
           </text>
           <Show when={files()}>{(value) => <FileStats files={value()} />}</Show>
         </box>
@@ -389,7 +448,7 @@ export function DialogRewind(props: {
             </box>
           )}
         </Match>
-        <Match when={props.prompts.length === 0}>
+        <Match when={prompts().length === 0}>
           <text fg={theme.text.muted}>Nothing to rewind yet.</text>
         </Match>
         <Match when={props.preselected}>

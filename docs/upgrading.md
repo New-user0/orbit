@@ -1914,6 +1914,17 @@ The list stops at its first and last rows, and page up and page down do nothing 
 so the list does not move when the file lines arrive. `n` closes the list, the `Nothing to rewind yet.` picker and the
 error line, as Esc does; Enter does nothing when there is nothing to rewind.
 
+The list follows the conversation while it is open, with one `(current)` row, always last. The highlight keeps its
+place in the list: a prompt or `!` command that arrives while `(current)` is highlighted is highlighted itself, and one
+that arrives while an older prompt is highlighted leaves the highlight there. When another client stages or clears a
+revert, the rows behind it leave or come back. If the highlighted row leaves, no row is highlighted and Enter does
+nothing; down goes to `(current)`, and up steps back one place at a time. A prompt's file line is asked again
+when its reply finishes a step, when the next prompt arrives after it, and when the session moves to another folder
+(streamed text alone asks nothing). A line that failed to load is asked again once the terminal UI
+reconnects to its server. The confirm step keeps the prompt it was opened for; if another client's revert has taken
+that prompt out of the conversation, choosing an option sends nothing and shows `Could not rewind: that prompt is no
+longer in the conversation.`
+
 The confirm step quotes up to the first four lines of the prompt. Its options wrap: up on the first reaches `Never
 mind`, down on `Never mind` reaches the first. Page up and page down (`dialog.select.page_up`, `page_down`) go to the
 first and the last option, and Home and End do the same. Pressing a digit (also a full-width one) chooses that option

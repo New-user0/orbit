@@ -705,12 +705,17 @@ export function Session(props: {
   // as something after a prompt.
   const rewindable = () => messagesBeforeRevert().filter((message) => !pendingDeliveries().has(message.id))
   // A command the person ran with `!` is a row too; the server's dry run offers no code rewind for it.
-  const rewindPrompts = () =>
-    rewindable().flatMap((message) => {
+  const rewindPrompts = () => {
+    const list = rewindable()
+    return list.flatMap((message, position) => {
+      const revision = promptRevision(list, position)
       if (message.type === "shell")
-        return [{ id: message.id, text: message.command, created: message.time.created, shell: true }]
-      return message.type === "user" ? [{ id: message.id, text: message.text, created: message.time.created }] : []
+        return [{ id: message.id, text: message.command, created: message.time.created, shell: true, revision }]
+      return message.type === "user"
+        ? [{ id: message.id, text: message.text, created: message.time.created, revision }]
+        : []
     })
+  }
   const rewindStats = (messageID: string) =>
     client.api.session
       .diff({ sessionID: route.sessionID, from: messageID, scope: "prompt", context: 0 })
@@ -768,6 +773,7 @@ export function Session(props: {
           act={rewind}
           onClose={() => dialog.clear()}
           preselected={preselected}
+          connected={client.connection.status() === "connected"}
         />
       ),
       undefined,
@@ -1683,6 +1689,32 @@ function meaningful(message: SessionMessageInfo) {
   if (message.type !== "assistant") return false
   if (message.error && message.error.type !== "aborted") return true
   return message.content.some((part) => part.type === "tool" || (part.type === "text" && part.text.trim() !== ""))
+}
+
+/**
+ * What a prompt's own edits depend on, for the rewind picker to ask again when it changes: each message up to and
+ * including the next prompt or `!` command, with the time a reply or command completed and how many tool calls of a
+ * reply finished, and every folder switch after the prompt. Streamed text changes none of it.
+ */
+function promptRevision(list: readonly SessionMessageInfo[], position: number) {
+  const after = list.slice(position + 1)
+  const next = after.findIndex((message) => message.type === "user" || message.type === "shell")
+  const range = next === -1 ? after : after.slice(0, next + 1)
+  return [
+    ...range.map((message) => {
+      if (message.type === "assistant")
+        return `${message.id}:${message.time.completed ?? ""}:${
+          message.content.filter(
+            (part) => part.type === "tool" && (part.state.status === "completed" || part.state.status === "error"),
+          ).length
+        }`
+      if (message.type === "shell") return `${message.id}:${message.time.completed ?? ""}`
+      return message.id
+    }),
+    ...after
+      .slice(range.length)
+      .flatMap((message) => (message.type === "location-switched" ?[message.id] : [])),
+  ].join(" ")
 }
 
 /** Whether a dry run says a code rewind would change at least one file, as the picker reads it for its code options. */

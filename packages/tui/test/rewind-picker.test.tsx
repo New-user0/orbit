@@ -1224,3 +1224,363 @@ test("step 2 quotes up to 500 characters of a long prompt and never half an emoj
   expect(block).not.toContain("bb")
   expect(controlFree(block)).toBe(true)
 })
+
+// The conversation changing while the picker is open (addendum ref-specs/clients-ux-5-p2-picker.md, sections 4 to 6).
+// The list follows the live conversation with one "(current)" row, always last. The selection is a position, as in the
+// reference: a prompt that arrives while "(current)" is selected takes the pointer, and what is drawn at the pointer is
+// what Enter acts on. Each event is what the server sends; `live` numbers them after the fixture's own.
+let liveSeq = 100
+const live = (setup: Setup, type: string, data: Record<string, unknown>) =>
+  setup.events.emit({
+    id: `evt_rewind_live_${liveSeq}`,
+    created: Date.now(),
+    type,
+    durable: { aggregateID: sessionID, seq: liveSeq++, version: 1 },
+    data: { sessionID, ...data },
+  } as never)
+// A person's prompt admitted and then delivered.
+const arrive = (setup: Setup, inboxID: string, text: string) => {
+  live(setup, "session.inbox.enqueued", { inboxID, item: { type: "user", payload: { text }, delivery: "steer" } })
+  live(setup, "session.inbox.delivered", { inboxID })
+}
+
+// The list's own lines, from its heading to its key hints, so the transcript behind the picker does not count.
+const listLines = (frame: string) => {
+  const lines = frame.split("\n")
+  const start = lines.findIndex((line) => line.includes(listHeading))
+  const end = lines.findIndex((line, index) => index > start && line.includes("enter continue"))
+  return start === -1 || end === -1 ? [] : lines.slice(start + 1, end)
+}
+const listHas = (frame: string, text: string) => listLines(frame).filter((line) => line.includes(text)).length
+const pointerLines = (frame: string) => listLines(frame).filter((line) => line.includes("› "))
+// Where each text is drawn in the list, top to bottom.
+const rowOrder = (frame: string, texts: string[]) =>
+  texts.map((text) => listLines(frame).findIndex((line) => line.includes(text)))
+const inOrder = (order: number[]) => order.every((line, index) => line !== -1 && (index === 0 || line > order[index - 1]))
+
+test.each([64, 120])(
+  "a prompt that arrives while the list is open is one new row, and the pointer stays at its position, at %i columns",
+  async (width) => {
+    await using state = await tmpdir()
+    await using setup = await rewindApp({ state: state.path, width })
+    await openPicker(setup)
+    await setup.waitForFrame((frame) => pointerLines(frame).some((line) => line.includes("(current)")))
+    arrive(setup, "msg_0007", "Arrived later")
+
+    const frame = await setup.waitForFrame((frame) => listHas(frame, "Arrived later") === 1, { maxPasses: 200 })
+    expect(listHas(frame, "(current)")).toBe(1)
+    expect(pointerLines(frame)).toHaveLength(1)
+    expect(pointerLines(frame)[0]).toContain("Arrived later")
+    expect(inOrder(rowOrder(frame, ["Rename the helper", "Fix the", "Arrived later", "(current)"]))).toBe(true)
+
+    setup.mockInput.pressEnter()
+    const confirm = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+    expect(setup.dryRunsSent()).toEqual(["msg_0007"])
+    expect(confirm).toContain("Arrived later")
+    expect(setup.actions()).toEqual([])
+  },
+)
+
+test("a prompt that arrives while an older prompt is selected leaves the pointer on it", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  setup.mockInput.pressArrow("up")
+  setup.mockInput.pressArrow("up")
+  await setup.waitForFrame((frame) => pointerLines(frame).some((line) => line.includes("Rename the helper")))
+  arrive(setup, "msg_0007", "Arrived later")
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "Arrived later") === 1, { maxPasses: 200 })
+  expect(listHas(frame, "(current)")).toBe(1)
+  expect(pointerLines(frame)).toHaveLength(1)
+  expect(pointerLines(frame)[0]).toContain("Rename the helper")
+  expect(inOrder(rowOrder(frame, ["Rename the helper", "Fix the", "Arrived later", "(current)"]))).toBe(true)
+  // The prompt before it now ends at the new one, so its file line is asked again; the older ones are not.
+  await until(() => askedFor(setup, "msg_0005") === 2, "the newest old prompt's second ask")
+  expect(askedFor(setup, "msg_0003")).toBe(1)
+
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  expect(setup.dryRunsSent()).toEqual(["msg_0003"])
+})
+
+test("a shell command that arrives while the list is open is one new row", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  await setup.waitForFrame((frame) => pointerLines(frame).some((line) => line.includes("(current)")))
+  live(setup, "session.shell.started", {
+    shell: {
+      id: "sh_live",
+      status: "running",
+      command: "make build",
+      cwd: "/tmp/orbit",
+      shell: "bash",
+      file: "/tmp/orbit/sh_live.log",
+      metadata: {},
+      time: { started: Date.now() },
+    },
+  })
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "! make build") === 1, { maxPasses: 200 })
+  expect(listHas(frame, "(current)")).toBe(1)
+  expect(pointerLines(frame)).toHaveLength(1)
+  expect(pointerLines(frame)[0]).toContain("! make build")
+  expect(inOrder(rowOrder(frame, ["Fix the", "! make build", "(current)"]))).toBe(true)
+})
+
+// Another client stages a revert at the middle prompt: its rows leave the list, and the position (3, the old
+// "(current)") is past the end, where no row is pointed and Enter does nothing.
+const stagedElsewhere = async (setup: Setup) => {
+  await openPicker(setup)
+  live(setup, "session.revert.staged", { revert: { messageID: "msg_0003", files: [] } })
+  return setup.waitForFrame((frame) => listHas(frame, "Add the parser") === 1 && !listHas(frame, "Rename the helper"), {
+    maxPasses: 200,
+  })
+}
+
+test("a revert another client stages while the list is open removes the rows behind it", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  const frame = await stagedElsewhere(setup)
+  expect(listHas(frame, "Fix the")).toBe(0)
+  expect(listHas(frame, "(current)")).toBe(1)
+  const order = rowOrder(frame, ["Add the parser", "(current)"])
+  expect(order[1] - order[0]).toBe(3)
+  expect(pointerLines(frame)).toEqual([])
+
+  setup.mockInput.pressEnter()
+  expect(await settled(setup)).toContain(listHeading)
+  expect(setup.dryRunsSent()).toEqual([])
+  expect(setup.actions()).toEqual([])
+
+  setup.mockInput.pressArrow("down")
+  const down = await setup.waitForFrame((frame) => pointerLines(frame).length === 1)
+  expect(pointerLines(down)[0]).toContain("(current)")
+})
+
+test("up from past the end steps back one position at a time", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await stagedElsewhere(setup)
+  setup.mockInput.pressArrow("up")
+  expect(pointerLines(await settled(setup))).toEqual([])
+  setup.mockInput.pressArrow("up")
+  expect(pointerLines(await settled(setup))[0]).toContain("(current)")
+  setup.mockInput.pressArrow("up")
+  expect(pointerLines(await settled(setup))[0]).toContain("Add the parser")
+})
+
+test("a revert another client clears while the list is open brings its rows back", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path, revert: "msg_0003" })
+  await setup.waitForFrame((frame) => frame.includes("Added the parser."))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => pointerLines(frame).some((line) => line.includes("(current)")))
+  live(setup, "session.revert.cleared", {})
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "Rename the helper") === 1, { maxPasses: 200 })
+  expect(listHas(frame, "(current)")).toBe(1)
+  expect(inOrder(rowOrder(frame, ["Add the parser", "Rename the helper", "Fix the", "(current)"]))).toBe(true)
+  expect(pointerLines(frame)).toHaveLength(1)
+  expect(pointerLines(frame)[0]).toContain("Rename the helper")
+
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  expect(setup.dryRunsSent()).toEqual(["msg_0003"])
+})
+
+// The newest prompt's reply is still running when the list opens, with a file written; then its step ends.
+const runningReply = [
+  ...conversation.slice(0, 5),
+  {
+    id: "msg_0006",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "provider", id: "model" },
+    time: { created: Date.now() - 4 * 60_000 },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    content: [
+      { type: "text", text: "Fixed the title." },
+      {
+        type: "tool",
+        id: "call_write",
+        name: "write",
+        state: { status: "completed", input: { filePath: "src/c.ts" }, content: [], metadata: {} },
+        time: { created: 1, completed: 2 },
+      },
+    ],
+  },
+]
+const askedFor = (setup: Setup, messageID: string) =>
+  setup.statsSent().filter((sent) => sent === `prompt ${messageID}`).length
+
+test("the newest prompt's file line follows its reply's edits", async () => {
+  await using state = await tmpdir()
+  let newest = 0
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: runningReply,
+    answer: (request) => {
+      const query = new URLSearchParams(request.search)
+      if (!request.path.endsWith("/diff") || query.get("from") !== "msg_0005") return undefined
+      return json({
+        data: newest++ === 0 ? [] : [{ file: "src/c.ts", patch: "", additions: 4, deletions: 0, status: "added" }],
+      })
+    },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Fixed the title."))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  const before = await setup.waitForFrame((frame) => listHas(frame, "No file edits") === 1)
+  const [prompt, empty] = rowOrder(before, ["Fix the", "No file edits"])
+  expect(empty - prompt).toBe(1)
+  live(setup, "session.step.ended", {
+    assistantMessageID: "msg_0006",
+    finish: "stop",
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "c.ts +4 -0") === 1, { maxPasses: 200 })
+  const [row, line] = rowOrder(frame, ["Fix the", "c.ts +4 -0"])
+  expect(line - row).toBe(1)
+  await Bun.sleep(200)
+  expect(askedFor(setup, "msg_0005")).toBe(2)
+  expect(askedFor(setup, "msg_0001")).toBe(1)
+  expect(askedFor(setup, "msg_0003")).toBe(1)
+})
+
+// Control for the bound on asking again: streamed text changes no file, so it asks nothing.
+test("streamed text alone does not ask the stats again", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  await until(() => setup.statsSent().length === 3, "the rows' stats")
+  live(setup, "session.text.started", { assistantMessageID: "msg_0006", ordinal: 1 })
+  live(setup, "session.text.delta", { assistantMessageID: "msg_0006", ordinal: 1, delta: "Streamed words" })
+  live(setup, "session.step.streamed", { assistantMessageID: "msg_0006" })
+  await settled(setup)
+  await settled(setup)
+  expect(setup.statsSent()).toHaveLength(3)
+  // The same events reach the picker: the step ending after them asks the newest prompt once more.
+  live(setup, "session.step.ended", {
+    assistantMessageID: "msg_0006",
+    finish: "stop",
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+  await until(() => askedFor(setup, "msg_0005") === 2, "the newest prompt's second ask")
+  expect(setup.statsSent()).toHaveLength(4)
+})
+
+test("a session moved while the list is open asks the earlier rows again", async () => {
+  await using state = await tmpdir()
+  let moved = false
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) =>
+      moved && request.path.endsWith("/diff")
+        ? json({ _tag: "BadRequest", message: "The range crosses a folder switch" }, { status: 400 })
+        : undefined,
+  })
+  await openPicker(setup)
+  await setup.waitForFrame((frame) => listHas(frame, "parser.ts +12 -0") === 1 && listHas(frame, "2 files +5 -3") === 1)
+  moved = true
+  live(setup, "session.moved", { location: { directory: "/tmp/orbit/packages/tui" }, projectID: "project" })
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "No code rewind for this prompt") === 3, {
+    maxPasses: 200,
+  })
+  expect(listHas(frame, "parser.ts +12 -0")).toBe(0)
+  expect(askedFor(setup, "msg_0001")).toBe(2)
+  expect(askedFor(setup, "msg_0003")).toBe(2)
+})
+
+test("a row whose stats failed asks again after a reconnect", async () => {
+  await using state = await tmpdir()
+  let middle = 0
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) => {
+      const query = new URLSearchParams(request.search)
+      if (!request.path.endsWith("/diff") || query.get("from") !== "msg_0003") return undefined
+      return middle++ === 0 ? json({ _tag: "UnknownError", message: "lost" }, { status: 500 }) : undefined
+    },
+  })
+  await openPicker(setup)
+  await setup.waitForFrame((frame) => listHas(frame, "No code rewind for this prompt") === 1)
+  setup.events.disconnect()
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "2 files +5 -3") === 1, { maxPasses: 400 })
+  expect(listHas(frame, "No code rewind for this prompt")).toBe(0)
+  expect(askedFor(setup, "msg_0003")).toBe(2)
+  expect(askedFor(setup, "msg_0001")).toBe(1)
+})
+
+// Class 13: the prompt left the conversation through another client's revert, so staging at it would move that
+// revert and put back what it hid. The picker refuses in words and sends nothing.
+test("a prompt another client's revert hid is not rewound from step 2", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  await selectPrompt(setup, 1)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  live(setup, "session.revert.staged", { revert: { messageID: "msg_0003", files: [] } })
+  await settled(setup)
+  await setup.mockInput.typeText("1")
+
+  const frame = await setup.waitForFrame((frame) =>
+    frame.includes("Could not rewind: that prompt is no longer in the conversation."),
+  )
+  expect(controlFree(frame)).toBe(true)
+  await settled(setup)
+  expect(setup.actions()).toEqual([])
+  setup.mockInput.pressEscape()
+  await setup.waitForFrame((frame) => !frame.includes("Could not rewind"))
+  expect(setup.actions()).toEqual([])
+})
+
+// Step 2 holds the chosen prompt and does not follow the list (a control); Esc goes back to the live list.
+test("a prompt that arrives while step 2 is open changes nothing there, and Esc goes back to the live list", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  const step = (frame: string) =>
+    frame
+      .split("\n")
+      .filter((line) =>
+        /\d\. (Code and conversation|Conversation only|Code only|Never mind)|goes back|stays as it is/.test(line),
+      )
+  const before = step(await setup.waitForFrame((frame) => frame.includes("Code and conversation")))
+  arrive(setup, "msg_0007", "Arrived later")
+  await settled(setup)
+  expect(step(await settled(setup))).toEqual(before)
+
+  setup.mockInput.pressEscape()
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "Arrived later") === 1, { maxPasses: 200 })
+  expect(listHas(frame, "(current)")).toBe(1)
+  expect(pointerLines(frame)).toHaveLength(1)
+  expect(pointerLines(frame)[0]).toContain("Rename the helper")
+})
+
+// Control: the position set when the picker opened is 0, so the first prompt to arrive is pointed and acts.
+test("the first prompt to arrive turns nothing to rewind into the list", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path, messages: [] })
+  await setup.waitForFrame((frame) => frame.includes("Rewind fixture"))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+  arrive(setup, "msg_0001", "Add the first thing")
+
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "Add the first thing") === 1, { maxPasses: 200 })
+  expect(listHas(frame, "(current)")).toBe(1)
+  expect(pointerLines(frame)[0]).toContain("Add the first thing")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(setup.dryRunsSent()).toEqual(["msg_0001"])
+})
