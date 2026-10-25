@@ -1920,7 +1920,8 @@ that arrives while an older prompt is highlighted leaves the highlight there. Wh
 revert, the rows behind it leave or come back. If the highlighted row leaves, no row is highlighted and Enter does
 nothing; down goes to `(current)`, and up steps back one place at a time. A prompt's file line is asked again
 when its reply finishes a step, when the next prompt arrives after it, and when the session moves to another folder
-(streamed text alone asks nothing). A line that failed to load is asked again once the terminal UI
+(streamed text alone asks nothing). A `!` command run while the reply runs does not end the prompt's range, as the
+server's own count does not, so a step the reply finishes after it still asks again. A line that failed to load is asked again once the terminal UI
 reconnects to its server. The confirm step keeps the prompt it was opened for; if another client's revert has taken
 that prompt out of the conversation, choosing an option sends nothing and shows `Could not rewind: that prompt is no
 longer in the conversation.`
@@ -1940,7 +1941,9 @@ confirm step for that prompt, where `Never mind` closes the picker instead of go
 replies with nothing in them follow the prompt and no file would change, it rewinds the conversation at once and puts
 the prompt back in the input, without asking. While it finds that out (stopping a running session first) the picker
 already replaces the dialog and shows `Checking files…`; Esc then gives the rewind up, and a session it stopped stays
-stopped. A reply that holds only reasoning, is waiting to retry or shows only that
+stopped. When the answer comes it looks at the conversation again: if another client's revert has taken the prompt
+back meanwhile, it sends nothing and shows `Could not rewind: that prompt is no longer in the conversation.`, and if
+the reply has gained something, it opens the confirm step instead. A reply that holds only reasoning, is waiting to retry or shows only that
 it was interrupted has nothing in it; a reply that failed with an error does not, since the error is drawn, so it opens
 the confirm step. Notices, compaction summaries and prompts still waiting to be sent do not count as something after
 the prompt; a command run with `!` or a skill does. A prompt still waiting in the inbox (queued or steering) is no row
