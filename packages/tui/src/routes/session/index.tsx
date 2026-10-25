@@ -1833,7 +1833,26 @@ function SessionMessageView(props: { message: SessionMessageInfo }) {
       <Match when={props.message.type === "compaction"}>
         <CompactionMessage message={props.message as Extract<SessionMessageInfo, { type: "compaction" }>} />
       </Match>
+      <Match when={props.message.type === "recap"}>
+        <RecapMessage message={props.message as Extract<SessionMessageInfo, { type: "recap" }>} />
+      </Match>
     </Switch>
+  )
+}
+
+// The away summary: a reference mark in a two-column gutter, indented as the transcript's notices are, then the
+// recap. Both are muted, as the recap is a reminder for the person and not part of the conversation.
+function RecapMessage(props: { message: Extract<SessionMessageInfo, { type: "recap" }> }) {
+  const theme = useTheme()
+  return (
+    <box flexDirection="row" paddingLeft={3} paddingRight={1} flexShrink={0}>
+      <box width={2} flexShrink={0}>
+        <text fg={theme.text.muted}>※</text>
+      </box>
+      <text fg={theme.text.muted} wrapMode="word" flexGrow={1} minWidth={0}>
+        {bodyText(props.message.text)}
+      </text>
+    </box>
   )
 }
 

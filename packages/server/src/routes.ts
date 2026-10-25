@@ -17,6 +17,7 @@ import { Project } from "@orbit/core/project"
 import { Worktree } from "@orbit/core/worktree"
 import { Session } from "@orbit/core/session"
 import { Instance } from "@orbit/core/instance/service"
+import { SessionRecap } from "@orbit/core/session/recap"
 import { SessionTransfer } from "@orbit/core/session/transfer"
 import { SessionAssist } from "@orbit/core/session/assist"
 import { ShellSelect } from "@orbit/core/shell/select"
@@ -68,6 +69,7 @@ const applicationServiceNodes = [
   Session.node,
   Instance.node,
   SessionTransfer.node,
+  SessionRecap.node,
   SessionAssist.node,
   SdkPlugins.node,
   PluginUpdate.node,

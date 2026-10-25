@@ -71,6 +71,7 @@ export interface Interface {
    * Selects the agent and model for work beside the Session, such as titles and side queries, without instruction or
    * tool preflight. The agent's configured model comes first, then the small model of the primary provider, then the
    * primary model; all three use the variant that reasons least, so `primary` is the Session model without its own variant.
+   * `preferred` is the agent's model or the small model alone, without the fallback to the primary model.
    */
   readonly selectAuxiliary: (
     session: SessionSchema.Info,
@@ -79,6 +80,7 @@ export interface Interface {
     | {
         readonly agent: Agent.Info
         readonly primary: SessionRunnerModel.Resolved | undefined
+        readonly preferred: SessionRunnerModel.Resolved | undefined
         readonly selected: SessionRunnerModel.Resolved
       }
     | undefined
@@ -149,7 +151,7 @@ const layer = Layer.effect(
         : undefined
       const selected = preferred ?? primary
       if (!selected) return
-      return { agent, primary, selected }
+      return { agent, primary, preferred, selected }
     })
 
     const resolveFallback = Effect.fn("SessionContext.resolveFallback")(function* (

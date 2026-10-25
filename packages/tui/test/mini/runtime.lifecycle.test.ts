@@ -260,3 +260,176 @@ describe("attention in Mini", () => {
     }
   })
 })
+
+// clients-ux-27: Mini is an interactive client too, so it asks for the away summary as the full TUI does: when focus
+// has been gone for session.recap.after_minutes, not before the session's turn is over, and never once the person is
+// back. The server decides whether a recap is due, so Mini sends only the request.
+describe("away summary in Mini", () => {
+  async function recapHarness(afterMinutes = 0.001, answer?: () => Promise<void>, blurWhileStarting = false) {
+    // Mini reads the folder for its splash after the renderer exists and before the recap trigger does, so a blur sent
+    // with that first read comes while Mini is still starting.
+    let blurred = !blurWhileStarting
+    const app = await createTestRenderer({
+      width: 100,
+      height: 24,
+      screenMode: "split-footer",
+      footerHeight: 4,
+      externalOutputMode: "capture-stdout",
+    })
+    const asked: AbortSignal[] = []
+    const lifecycle = await createRuntimeLifecycle({
+      host: host("linux"),
+      createRenderer: async () => app.renderer as CliRenderer,
+      getDirectory: () => {
+        if (!blurred) app.renderer.emit("blur")
+        blurred = true
+        return "/project"
+      },
+      findFiles: async () => [],
+      agents: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
+      references: [],
+      sessionID: "ses_1",
+      first: true,
+      history: [],
+      agent: "build",
+      model: undefined,
+      variant: undefined,
+      tuiConfig: createTuiResolvedConfig({ session: { recap: { after_minutes: afterMinutes } } }),
+      onPermissionReply: () => {},
+      onFormReply: () => {},
+      onFormCancel: () => {},
+      recap: (signal: AbortSignal) => {
+        asked.push(signal)
+        return answer ? answer() : new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()))
+      },
+    })
+    return {
+      app,
+      lifecycle,
+      asked,
+      [Symbol.dispose]() {
+        lifecycle.footer.destroy()
+        app.renderer.destroy()
+      },
+    }
+  }
+
+  test("asks once after the delay and drops the request when the person comes back", async () => {
+    using harness = await recapHarness()
+    harness.app.renderer.emit("blur")
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
+    harness.app.renderer.emit("focus")
+    expect(harness.asked[0]?.aborted).toBe(true)
+  })
+
+  test("closing Mini drops a request in flight", async () => {
+    const harness = await recapHarness()
+    harness.app.renderer.emit("blur")
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
+    await harness.lifecycle.close({ showExit: false })
+    expect(harness.asked[0]?.aborted).toBe(true)
+  })
+
+  test("a subagent's turn neither holds the request nor ends Mini's own turn", async () => {
+    {
+      using harness = await recapHarness()
+      harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_child" } })
+      await Bun.sleep(100)
+      expect(harness.asked).toHaveLength(0)
+    }
+    {
+      using harness = await recapHarness()
+      harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_child" } })
+      harness.app.renderer.emit("blur")
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect(harness.asked).toHaveLength(1)
+    }
+  })
+
+  test("waits for the turn's end, asks nothing while focus is unknown, and 0 turns it off", async () => {
+    // A turn that fails or is interrupted while the person is away ends it as surely as one that succeeds.
+    const ends = [
+      { type: "session.execution.succeeded", data: { sessionID: "ses_1" } },
+      { type: "session.execution.failed", data: { sessionID: "ses_1", error: { message: "The provider is unavailable" } } },
+      { type: "session.execution.interrupted", data: { sessionID: "ses_1" } },
+    ] as const
+    for (const end of ends) {
+      using harness = await recapHarness()
+      harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+      harness.lifecycle.observe?.(end)
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect({ end: end.type, asked: harness.asked.length }).toEqual({ end: end.type, asked: 1 })
+    }
+    {
+      using harness = await recapHarness()
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+    }
+    {
+      using harness = await recapHarness(0)
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+    }
+  })
+
+  // A session another client is running when Mini attaches sends no execution.started for Mini to see, so the status
+  // read when the session loads holds the request until the turn ends.
+  test("attaching to a session mid-turn holds the request until the turn ends", async () => {
+    {
+      using harness = await recapHarness()
+      harness.lifecycle.setRunning?.(true)
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+      harness.lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect(harness.asked).toHaveLength(1)
+    }
+    {
+      // A reload that finds the turn over (it ended while Mini was disconnected) sends the held request.
+      using harness = await recapHarness()
+      harness.lifecycle.setRunning?.(true)
+      harness.app.renderer.emit("blur")
+      await Bun.sleep(400)
+      expect(harness.asked).toHaveLength(0)
+      harness.lifecycle.setRunning?.(false)
+      const deadline = Date.now() + 3000
+      while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect(harness.asked).toHaveLength(1)
+    }
+  })
+
+  // A terminal reports a blur once, when focus changes, so one that comes while Mini starts is read when the trigger is
+  // created, as the reference does when it mounts.
+  test("a terminal blurred while Mini starts asks after the delay", async () => {
+    using harness = await recapHarness(0.001, undefined, true)
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
+  })
+
+  // Class 13: a refused recap (an untrusted folder, a server that is gone) is silent, as the reference's failures are.
+  test("a refused recap shows nothing and leaves Mini running", async () => {
+    using harness = await recapHarness(0.001, () => Promise.reject(new Error("UntrustedFolderError")))
+    harness.app.renderer.emit("blur")
+    const deadline = Date.now() + 3000
+    while (harness.asked.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(harness.asked).toHaveLength(1)
+    await Bun.sleep(100)
+    expect(harness.app.renderer.isDestroyed).toBe(false)
+  })
+})
