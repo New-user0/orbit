@@ -392,9 +392,9 @@ const layer = Layer.effect(
     // The folders of the sessions this database removed (`SessionRemovedTable`), in this pass, by hand or earlier. The
     // roots are shared by every database on the machine (each channel and `ORBIT_DB` has its own), so a folder whose
     // name this database never removed stays whatever its age: it may belong to another database's live, shared or new
-    // session. A removed session's folder also stays while a live session, its scratchpad or a saved-result marker in
-    // its messages names it. Names are compared in lower case, because Windows and macOS treat two spellings as one
-    // folder (class 4). A record goes once neither root holds a folder of its name.
+    // session. A removed session's folder also stays while a live session, its scratchpad, or a saved-result marker or
+    // message-budget override in its messages names it. Names are compared in lower case, because Windows and macOS
+    // treat two spellings as one folder (class 4). A record goes once neither root holds a folder of its name.
     const sweep = Effect.fnUntraced(function* (cutoff: number) {
       const records = yield* db.select({ id: SessionRemovedTable.id }).from(SessionRemovedTable).all().pipe(Effect.orDie)
       const removed = new Set(records.map((record) => record.id.toLowerCase()))
@@ -406,21 +406,26 @@ const layer = Layer.effect(
       const ids = live.map((session) => session.id.toLowerCase())
       // The scratchpad a session uses (`SessionScratchpad.key`): its parent's, else its fork source's, else its own.
       const keys = live.map((session) => (session.parentID ?? session.forkID ?? session.id).toLowerCase())
+      // A result the step saved names its folder in `persisted`, one the message budget saved in `override`.
       const markers = yield* db
-        .all<{ session: unknown }>(
+        .all<{ persisted: unknown; override: unknown }>(
           sql`
-          SELECT DISTINCT json_extract(content.value, '$.state.metadata.persisted.session') AS session
+          SELECT DISTINCT json_extract(content.value, '$.state.metadata.persisted.session') AS persisted,
+            json_extract(content.value, '$.override.session') AS override
           FROM ${SessionMessageTable} AS message,
             json_each(CASE WHEN json_valid(message.data) THEN message.data ELSE '{}' END, '$.content') AS content
           WHERE message.type = 'assistant'
             AND content.type = 'object'
             AND json_extract(content.value, '$.type') = 'tool'
-            AND json_extract(content.value, '$.state.metadata.persisted.session') IS NOT NULL
+            AND (json_extract(content.value, '$.state.metadata.persisted.session') IS NOT NULL
+              OR json_extract(content.value, '$.override.session') IS NOT NULL)
         `,
         )
         .pipe(Effect.orDie)
       const named = markers.flatMap((marker) =>
-        typeof marker.session === "string" ? [marker.session.toLowerCase()] : [],
+        [marker.persisted, marker.override].flatMap((session) =>
+          typeof session === "string" ? [session.toLowerCase()] : [],
+        ),
       )
       const outputsLeft = yield* sweepRoot(outputs, new Set([...ids, ...named]), removed)
       const scratchLeft = yield* sweepRoot(scratch, new Set([...ids, ...keys]), removed)

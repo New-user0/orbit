@@ -288,27 +288,35 @@ const layer = Layer.effect(
       folder,
       real,
       enabled: () => config.entries().pipe(Effect.map((current) => enabled(process.env, current))),
-      // A path whose links lead to a share is answered before it is resolved, which would connect to the host (class 6).
-      locate: (file) =>
-        LinkShare.blocked(fs, file).pipe(
-          Effect.flatMap((stop) =>
-            stop
-              ? Effect.succeed(undefined)
-              : fs.realPath(file).pipe(
-                  Effect.map(FSUtil.normalizePath),
-                  Effect.map((found) => (FSUtil.contains(real, found) ? found : undefined)),
-                  Effect.orElseSucceed(() => undefined),
-                ),
-          ),
-        ),
+      locate: (file) => locate(fs, real, file),
     })
   }),
 )
 
-// The nearest part of the folder that exists, with its links followed, and the rest of the name as written. A part that
-// cannot be resolved (a link that points nowhere, a loop) counts as not there, which only makes the real folder a name no
-// real place is in: a file below such a part is then asked about, never allowed.
-const realFolder = (fs: FSUtil.Interface, folder: string): Effect.Effect<string> =>
+/**
+ * Where `file` really is, once its links are followed, when that is in the real folder `real`; undefined otherwise or
+ * when it cannot be resolved. A path whose links lead to a share is answered before it is resolved, which would connect
+ * to the host (class 6).
+ */
+export const locate = (fs: FSUtil.Interface, real: string, file: string) =>
+  LinkShare.blocked(fs, file).pipe(
+    Effect.flatMap((stop) =>
+      stop
+        ? Effect.succeed(undefined)
+        : fs.realPath(file).pipe(
+            Effect.map(FSUtil.normalizePath),
+            Effect.map((found) => (FSUtil.contains(real, found) ? found : undefined)),
+            Effect.orElseSucceed(() => undefined),
+          ),
+    ),
+  )
+
+/**
+ * The nearest part of the folder that exists, with its links followed, and the rest of the name as written. A part that
+ * cannot be resolved (a link that points nowhere, a loop) counts as not there, which only makes the real folder a name no
+ * real place is in: a file below such a part is then asked about, never allowed.
+ */
+export const realFolder = (fs: FSUtil.Interface, folder: string): Effect.Effect<string> =>
   fs.stat(folder).pipe(
     Effect.flatMap(() => fs.realPath(folder)),
     Effect.map(FSUtil.normalizePath),

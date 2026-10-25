@@ -254,6 +254,14 @@ export type SessionMessageIdle = {
   outcome: "succeeded" | "failed" | "interrupted"
 }
 
+export type SessionMessageRecap = {
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  type: "recap"
+  text: string
+}
+
 export type SessionActive = { type: "running" }
 
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
@@ -289,6 +297,8 @@ export type InstructionStatusWarning = {
 export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
+
+export type SessionRecapResponse = { recorded: boolean }
 
 export type SessionAssistLabelSkip = "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
 
@@ -344,6 +354,8 @@ export type SessionMessageToolStateRunning1 = {
   input: { [x: string]: any }
   metadata: { [x: string]: JsonValue }
 }
+
+export type SessionMessageAssistantToolOverride = { session: string; name: string; format: 1 }
 
 export type EventLogSynced = { type: "log.synced"; aggregateID: string; seq?: number }
 
@@ -929,6 +941,16 @@ export type SessionSynthetic = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
+}
+
+export type SessionRecapRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.recap.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; text: string }
 }
 
 export type SessionSkillActivated = {
@@ -1646,6 +1668,16 @@ export type SessionMessageAssistantReasoning1 = {
 }
 
 export type ToolContent1 = ToolTextContent | ToolFileContent1
+
+export type SessionToolOverridden = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.tool.overridden"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; assistantMessageID: string; id: string; override: SessionMessageAssistantToolOverride }
+}
 
 export type FormNumberField = {
   key: string
@@ -2525,7 +2557,7 @@ export type ConfigEntry =
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
         shell_tool?: { timeout?: number; max_timeout?: number }
         background_tasks?: boolean
-        tool_output?: { max_lines?: number; max_bytes?: number; max_result_chars?: number }
+        tool_output?: { max_lines?: number; max_bytes?: number; max_result_chars?: number; max_message_chars?: number }
         tool_execution?: { max_concurrency?: number }
         mcp?: {
           timeout?: { startup?: number; catalog?: number; execution?: number }
@@ -2564,7 +2596,7 @@ export type ConfigEntry =
           }
         }
         compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
-        memory?: { enabled?: boolean; directory?: string }
+        memory?: { enabled?: boolean; directory?: string; team?: boolean }
         compatibility?: { enabled?: boolean }
         skills?: Array<string>
         commands?: {
@@ -2668,6 +2700,7 @@ export type SessionMessageAssistantTool = {
   executed?: boolean
   providerState?: SessionMessageProviderState
   providerResultState?: SessionMessageProviderState
+  override?: JsonValue
   state:
     | SessionMessageToolStateStreaming
     | SessionMessageToolStateRunning
@@ -2689,6 +2722,7 @@ export type SessionMessageAssistantTool1 = {
   executed?: boolean
   providerState?: SessionMessageProviderState1
   providerResultState?: SessionMessageProviderState1
+  override?: JsonValue
   state:
     | SessionMessageToolStateStreaming
     | SessionMessageToolStateRunning1
@@ -2777,6 +2811,7 @@ export type SessionMessageInfo =
   | SessionMessageAssistant
   | SessionMessageCompaction
   | SessionMessageIdle
+  | SessionMessageRecap
 
 export type SessionMessageContentUpdated = {
   id: string
@@ -2831,6 +2866,7 @@ export type SessionEventDurable =
   | SessionExecutionInterrupted
   | SessionInstructionsUpdated
   | SessionSynthetic
+  | SessionRecapRecorded
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -2857,6 +2893,7 @@ export type SessionEventDurable =
   | SessionUsageRecorded
   | SessionSideQueryRecorded
   | SessionMessageContentUpdated
+  | SessionToolOverridden
 
 export type IntegrationInfo = {
   id: string
@@ -2897,6 +2934,7 @@ export type V2Event =
   | SessionExecutionInterrupted
   | SessionInstructionsUpdated
   | SessionSynthetic
+  | SessionRecapRecorded
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -3723,6 +3761,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -3887,6 +3926,13 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
         }
     >
     readonly location?: { readonly directory: string } | null
@@ -4074,6 +4120,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -4238,6 +4285,13 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
         }
     >
     readonly location?: { readonly directory: string } | null
@@ -4425,6 +4479,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -4589,6 +4644,13 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
         }
     >
     readonly location?: { readonly directory: string } | null
@@ -5356,6 +5418,10 @@ export type SessionGenerateInput = {
 }
 
 export type SessionGenerateOutput = SessionGenerateResponse["data"]
+
+export type SessionRecapInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionRecapOutput = SessionRecapResponse
 
 export type SessionAssistLabelInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

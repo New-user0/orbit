@@ -100,6 +100,8 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionRecapInput,
+  SessionRecapOutput,
   SessionAssistLabelInput,
   SessionAssistLabelOutput,
   SessionAssistSuggestionInput,
@@ -765,6 +767,11 @@ const EndpointSessionGenerate = (raw: RawClient["server.session"]) => (input: Se
     ),
   )
 
+const EndpointSessionRecap = (raw: RawClient["server.session"]) => (input: SessionRecapInput) =>
+  preserveEffect<SessionRecapOutput>()(
+    raw["session.recap"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
 const EndpointSessionAssistLabel = (raw: RawClient["server.session"]) => (input: SessionAssistLabelInput) =>
   preserveEffect<SessionAssistLabelOutput>()(
     raw["session.assist.label"]({
@@ -918,6 +925,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
     },
   },
   generate: EndpointSessionGenerate(raw),
+  recap: EndpointSessionRecap(raw),
   assist: { label: EndpointSessionAssistLabel(raw), suggestion: EndpointSessionAssistSuggestion(raw) },
   log: EndpointSessionLog(raw),
   interrupt: EndpointSessionInterrupt(raw),

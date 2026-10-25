@@ -432,6 +432,40 @@ test("session.log retains the typed SessionNotFoundError", async () => {
   expect(error._tag).toBe("SessionNotFoundError")
 })
 
+test("session.recap posts to the session's recap route and decodes whether a recap was recorded", async () => {
+  const requests: Array<{ method: string; url: string }> = []
+  const answers = [
+    Response.json({ recorded: true }),
+    Response.json({ recorded: false }),
+    Response.json({ _tag: "SessionNotFoundError", sessionID: "ses_missing", message: "Session not found" }, { status: 404 }),
+    // An answer that does not decode is a client error, not a recap.
+    Response.json({ recorded: "yes" }),
+  ]
+  const httpClient = HttpClient.make((request) => {
+    requests.push({ method: request.method, url: request.url })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, answers.shift() ?? new Response(null, { status: 500 })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const recorded = yield* client.session.recap({ sessionID: Session.ID.make("ses_test") })
+    const skipped = yield* client.session.recap({ sessionID: Session.ID.make("ses_test") })
+    const missing = yield* client.session.recap({ sessionID: Session.ID.make("ses_missing") }).pipe(Effect.flip)
+    const malformed = yield* client.session.recap({ sessionID: Session.ID.make("ses_test") }).pipe(Effect.flip)
+    return { recorded, skipped, missing, malformed }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result.recorded).toEqual({ recorded: true })
+  expect(result.skipped).toEqual({ recorded: false })
+  expect(result.missing._tag).toBe("SessionNotFoundError")
+  expect(result.malformed._tag).toBe("ClientError")
+  expect(requests).toEqual([
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/recap" },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/recap" },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_missing/recap" },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/recap" },
+  ])
+})
+
 const session = {
   data: {
     id: "ses_test",

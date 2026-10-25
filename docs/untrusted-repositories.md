@@ -427,6 +427,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `session-runner-tool-events.test.ts` ("tool input started carries the declared display name") and `server/test/session-import-display-name.test.ts`. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and
   `MCP hints and permissions` in `core/test/mcp.test.ts`.
+- A recap's text (the away summary), which a model writes from the session's history: `SessionRecap` stores it through
+  `body` (`@orbit/util/plain`), and `SessionTransfer.import` writes an imported `recap` message's text through `body`
+  too, so every reader gets it with its control and bidi characters written out. Proof: `core/test/session-recap.test.ts`
+  ("the stored recap has its control and bidi characters written out...") and `core/test/session-create.test.ts` ("an
+  imported away summary's text is stored with its control and bidi characters written out").
 - A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
   model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
   a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
@@ -877,6 +882,38 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   with the recorded file system, the read at the checked real path), `test/memory-instructions.test.ts` (the index link to a marker, which
   neither the reader, the carry-over nor the header rewrite goes through, an index link to a share with the recorded file
   system, a dangling index link the carry-over does not write through, the caps, the envelope escape), `test/session-context-memory.test.ts` and `test/memory-read.test.ts`.
+- Team memory (`MemoryTeam`, `packages/core/src/memory/team.ts`): `.orbit/team-memory/` at the project's root, which the
+  repository ships, so a clone chooses its files and its links. It is on only while memory is on, `memory.team` is set
+  (a key `ConfigTrust` withholds with the rest of `memory` from an untrusted folder, class 8) and `ProjectTrust.trusted()`
+  answers yes, which `current` asks before it resolves anything of the folder (class 1). The folder is then resolved
+  once for the Location: `LinkShare.blocked` is asked about it before anything resolves it (class 6), its real path is
+  the nearest existing part with links followed, and it must be exactly `.orbit/team-memory` of the real project
+  folder, compared with `FSUtil.contains` both ways on two real paths, so neither `.orbit` nor `team-memory` may be a
+  link. The nearest existing part keeps the name of a part it cannot follow, so an `.orbit` or `team-memory` that reads
+  as a link and has no real path (it points at nothing, or loops) is refused before that comparison: a folder that leads out of the project, or onto the project itself, `.orbit`, `.git` or any other folder of it,
+  would carry the carve-out, which drops every ask and every mode's deny, over the project's own files (classes 4, 8); a
+  refused folder turns team memory off with one log line and costs
+  nothing else, the private index included (class 7). That one value is what the guide's folder creation, the index
+  reader, the permission carve-out and the Read tool's staleness note use (class 3). The index reader
+  (`core/team-memory-index` in `MemoryInstructions`) reads `MEMORY.md` only at a real path inside the real team folder
+  (`MemoryStore.locate`, which asks `LinkShare.blocked` first), takes front matter off through
+  `ConfigInstructionFile.parse` (class 11) and escapes envelope and `<team-memory>` look-alikes (class 9). The carve-out
+  is the memory folder's (`inMemory` in `Permission`, given both folders), so a deny still decides and a shell command
+  is not covered (class 8). The secret guard (`FileAccess.refuseTeamSecrets`, rules in
+  `packages/util/src/secret-scan.ts`) needs no trust: Write, Edit and Patch refuse new text that matches a rule when
+  the target is in the team folder by name or when where it really leads is in the folder's real path, which the
+  guard takes even for a folder refused as a link to another folder below the project, but not for one that leads onto
+  the project or out of it (class 3); Patch scans the lines each hunk adds, not its context lines, and the whole of a
+  file it moves in; all before any question or write, as a tool error that names the rules and never the text (classes 9, 13); NotebookEdit and Bash
+  are not scanned. The config watch of a project or home `.orbit` leaves out only `team-memory` at its top
+  (`ConfigWatch.plan`). Proof: `test/memory-team-instructions.test.ts` (untrusted with a trusted control, the folder as a
+  link out, the folder as a link to the project, `.orbit`, `.git` or `src` and an `.orbit` that is a link, a folder or `.orbit` that links to a missing folder out of the project or in it and a folder in a link loop, a `MEMORY.md` link out, the folder as a link to a share with the recorded file system, front matter with a
+  marker file, the tag escape), `test/permission-team-memory.test.ts` (spellings, places beside the folder, the switches,
+  trust, deny, links in and out, the folder as a link into the project under ask rules and a mode's deny, a folder or
+  `.orbit` that links to a missing folder, the shell,
+  the config key), `test/memory-team.test.ts` (each tool, spellings, a link into the folder, a folder that leads onto
+  the project or out of it, a Patch that takes a line out beside a key, an untrusted project, the config watch),
+  `test/config/watch.test.ts` and `packages/util/test/secret-scan.test.ts`.
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and
@@ -896,10 +933,26 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/permission-tool-output.test.ts` (other sessions of a lineage, the flat files of earlier builds, `..`, a sibling
   prefix, a link out, a crafted session ID, Windows letter case) and the `saved tool results` rows of
   `test/session-runner.test.ts`.
+- The message budget (`SessionMessageBudget`, `packages/core/src/session/runner/message-budget.ts`, run by
+  `SessionRunnerLLM` before each request for every client and subagent): when the newest step's results pass
+  `tool_output.max_message_chars`, the largest are saved through the same door as a saved result (`ToolOutput.persist`,
+  so the same ID shapes, `lstat` refusal of a linked folder and exclusive create apply, classes 4 and 5) and recorded as
+  `session.tool.overridden` with the session, the one-segment file name and the format, never a path. It reads nothing
+  that a folder supplies, and an untrusted folder cannot set the key (class 8). The projected `override` is data once a
+  session is imported or forked: it is stored as any JSON so one bad entry costs only its own result, and lowering
+  decodes it strictly and renders the wrapper from the stored content without reading the disk, so a session or name
+  that climbs out, a device name, an unknown format or a string sends the stored result and names no path (classes 5
+  and 7); a look-alike of the wrapper in the preview is escaped (class 9). A sanitized export drops the override along
+  with the content it described (classes 7 and 9). Side queries lower overrides and record none (class 12), and the
+  refusal of a request that no longer fits measures the request as it is sent (class 3). Proof: the `message budget`
+  rows of `test/session-runner.test.ts` (an imported `../../.ssh/id_rsa` with a marker file, a linked session folder,
+  automatic compaction off), the `override` rows of `test/tool-output-lowering.test.ts`,
+  `test/session-message-budget.test.ts`, the override rows of `test/session-compaction.test.ts`, the sanitized export
+  row of `test/session-create.test.ts` and `test/config/trust.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,
-  written when a session is deleted) that no live session, scratchpad or stored saved-result marker names. Every
+  written when a session is deleted) that no live session, scratchpad, stored saved-result marker or message-budget override names. Every
   database on the machine shares those roots, so a folder this database never removed stays at any age. A family whose
   stats cannot be folded (message data that is not JSON) stays with one log line (class 7). It reads nothing a folder
   supplies; the period comes from the config of the server's own folder, where an untrusted project's file is not read
@@ -911,7 +964,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   a row whose ID cannot name a folder or whose clock does not decode keeps its family with one log line (classes 5 and
   7). A config document of any scope (user, home, project, local, the flag file, `ORBIT_CONFIG_CONTENT`, remote and the
   managed settings files) that does not parse, or one rejected while the period is set, skips the pass, on a reload as on the first load; a value set twice of which one is kept is not a rejection (class 7). A source whose content could not be obtained counts as one that does not parse and skips the pass too: a remote document whose fetch fails, a well-known list that cannot be read, and a file that is there but cannot be read (class 7, error and timeout). A row whose clock is ahead of now, or stored as text, does not put the pass off. Proof:
-  `test/session-retention.test.ts` (the folder, link, case, other-database, decode and fold rows, each with a control,
+  `test/session-retention.test.ts` (the folder, override, link, case, other-database, decode and fold rows, each with a control,
   and the table of link spellings in both roots), `test/config/cleanup-period.test.ts` (with its table of scopes) and the
   `cleanup_period_days` row of `test/config/trust.test.ts`; in `packages/cli`, the bare row of
   `test/server-process.test.ts`.
@@ -981,7 +1034,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/acp/trust-first.subprocess.test.ts`, `packages/tui/test/mini/trust-first.shared.test.ts`.
 - Every server route that starts work, reads the folder's instruction files or runs something in a folder
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
-  the destination of `move`, `generate`, `assist.label` and `assist.suggestion` (both ask the model about the
+  the destination of `move`, `generate`, `recap` (the away summary, which reads the session's history into a call on
+  the small model, refused before that read), `assist.label` and `assist.suggestion` (both ask the model about the
   folder's tool output or history; proof: `packages/server/test/session-assist.test.ts`, on a port and in process),
   `update` when it clears the title for the model to write one,
   `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
@@ -992,7 +1046,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
-  `packages/sdk/test/trust-first.test.ts`.
+  `packages/sdk/test/trust-first.test.ts`, and for `recap` before the model call,
+  `packages/server/test/session-recap.test.ts`.
 - A plugin's session doors, which run in the server process without passing a route (`packages/core/src/plugin/host.ts`):
   `create` (the folder it names, or the parent's), `prompt`, `command`, `synthetic`, `compact` and `generate` (the
   session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not trusted, decided by

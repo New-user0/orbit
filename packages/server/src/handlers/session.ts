@@ -1,4 +1,5 @@
 import { Session } from "@orbit/core/session"
+import { SessionRecap } from "@orbit/core/session/recap"
 import { SessionStats } from "@orbit/core/session/stats"
 import { SessionTitle } from "@orbit/core/session/title"
 import { SessionTransfer } from "@orbit/core/session/transfer"
@@ -42,6 +43,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
     // What decides whether a folder is trusted, for the routes that act on a folder other than the request's own.
     const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
     const transfer = yield* SessionTransfer.Service
+    const recap = yield* SessionRecap.Service
     const assist = yield* SessionAssist.Service
     const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
       const form = yield* Form.Service
@@ -704,6 +706,18 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             .suggestion(ctx.params.sessionID)
             .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
           return { data: suggestion }
+        }),
+      )
+      .handle(
+        "session.recap",
+        Effect.fn(function* (ctx) {
+          // The recap reads the session's history into a model call, so the folder must still be trusted.
+          yield* requireTrusted()
+          // A client drops the request when the person comes back, which interrupts this and records nothing.
+          const recorded = yield* recap
+            .generate(ctx.params.sessionID)
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { recorded: recorded !== undefined }
         }),
       )
       .handle(

@@ -1878,6 +1878,34 @@ which one of those folders is a link.
 
 **What to do:** nothing. If clean names a link, remove the link and run it again.
 
+### A recap when you come back to a session
+
+When the terminal has been unfocused for five minutes, the terminal UI and Mini now ask the server for a short recap of
+the session in view: one to three sentences that name the task and the next step. It is drawn as a muted row led by
+`※`. A turn that is still running, including one that was already under way when the client opened the session, holds
+the request until it ends, whether it succeeds, fails or is stopped, and coming back first cancels it. There is at most one
+recap per prompt or `!` command, however many clients ask or however often the terminal loses focus. The recap is
+written by the provider's small model, or by `agents.side.model` when you set one, never by the session's own model;
+with neither, no recap is made. It sees the last 30 messages, less any assistant replies at their start, so that the
+conversation opens on your prompt or on a tool result, with
+no system prompt and no tools, so the tool calls and results among them go as text, and it is never sent to a model
+afterwards. Only the main conversation is recapped: while a subagent's session is in view, the terminal UI asks for the
+recap of the conversation that started it and waits for that conversation's turn to end, and a prompt another
+agent wrote does not count as one of yours. A recap you come back during is dropped,
+and its estimated cost is still counted, as for a side query that times out. A terminal that does not report focus
+never asks, and one that lost focus while the client was still starting begins the wait once the client has started. The server adds the route
+`POST /api/session/:sessionID/recap` and the durable event `session.recap.recorded`, and session message lists can
+hold a `recap` message, whose text is stored with its control and bidi characters written out, both when the server
+writes it and when `orb session import` brings it in from a file. `orb export --sanitize` redacts a recap's text as it does a
+prompt's.
+
+**Affects:** people who use the terminal UI or Mini with a provider that has a small model or with `agents.side.model`
+set, who see the row and pay for one small call per prompt they step away from, and SDK and API clients that switch on
+message or event types.
+
+**What to do:** set `session.recap.after_minutes` in your `cli.json` to another number of minutes, or to 0 to turn
+the recap off. A value above 35791 minutes waits 35791 minutes, the longest a timer holds. A project's `cli.json` cannot set it. Clients that switch on message types should skip `recap`.
+
 ### Opt-in tool labels and prompt suggestions for stream-json runs
 
 `orb -p` and `orb run` take two new flags, both off unless given and both only with `--input-format stream-json` and
@@ -3733,6 +3761,53 @@ the default folder nor moves anything into yours: move the notes, and their `MEM
 `<data>/memory/<project ID>/` to your folder yourself. Notes saved before a folder was trusted keep moving to the
 default folder. Move a rule written for `Memory` to `Edit` and `Read` on the memory folder, and set
 `"memory": { "enabled": false }` or `ORBIT_DISABLE_AUTO_MEMORY=1` to switch memory off.
+
+### Team memory, kept in the repository, and no credentials written into it
+
+New: `memory.team`, off by default. When the last config that sets it turns it on, memory is on and the project is
+trusted, the model also keeps team memory in `.orbit/team-memory/` at the project's root, which is committed with the
+code and so shared with everyone who works in the repository. Its guide then names both folders, says which kind of
+memory goes where, and forbids secrets in team memory; the team folder is made with the guide; the folder's own
+`MEMORY.md` loads after the private index, wrapped in a `<team-memory source="repository">` tag, with the same caps and
+front matter handling; and Read, Write and Edit in the folder ask no question, while a deny rule still wins. Team memory
+is on only for a plain folder: a `.orbit/team-memory` that is a link (out of the project, to a network share, or to the
+project itself, `.orbit`, `.git` or any other folder in it, or to a folder that is not there), or one under an `.orbit`
+that is a link, turns team memory
+off for that project, and a team `MEMORY.md` that links out of the folder is not loaded. The config watch of a
+project's `.orbit` no longer reloads anything when a file below its `team-memory` folder changes; a skill, agent or
+command in a folder of that name further down still reloads.
+
+Whatever `memory.team` says, and in a project that is not trusted too, Write, Edit (its `new_string`) and Patch (the
+lines each hunk adds, not its context lines, and the whole of a file it moves in) refuse to write text that looks like a credential into
+`.orbit/team-memory/`, before anything is asked or written, including through a link elsewhere in the project that leads
+into the folder. The tool error names the kinds of credential found, never the text. The rules are 36 high-confidence
+patterns from gitleaks v8.30.1; keyword rules such as `password = ...` are not among them. NotebookEdit and Bash are not
+scanned.
+
+**Affects:** people who want to share memory with their team, and anyone who keeps a file that looks like a token in a
+folder called `.orbit/team-memory`.
+
+**What to do:** Nothing. To share memory, set `"memory": { "team": true }` in your own config, or in a trusted project's,
+and commit `.orbit/team-memory/`.
+
+### The tool results of one step share a size budget
+
+Before, each tool result was measured on its own, so a step that ran many tools in parallel could send all of their
+results to the model however large they were together. Now, before each request, the results of the newest step are
+added up. When they pass `tool_output.max_message_chars` (200,000 characters by default), the largest are saved to the
+session's tool-output folder and sent as the same `<saved-output>` preview a large single result gets, one after
+another until the rest fit; equal sizes go in call order. A step's results are decided once: the request after them is
+the first to carry them, and every later request, a fork and compaction send the same text. Automatic compaction, and
+the refusal of a request that no longer fits when automatic compaction is off, measure that same text. Results of a
+tool without a result limit (such as Read), results already saved on their own, failed calls, results from tools the
+provider runs and results that hold an image or another file part neither count nor go. A result whose file cannot be
+written is sent whole. The stored result keeps the tool's own content, and clients show it as before. A sanitized
+export (`orb session export --sanitize`) leaves the choice out, so an import of it sends the redacted text. An
+untrusted folder cannot set the key (`tool_output` is withheld whole).
+
+**Affects:** people whose model runs many tools in one step, such as several large searches at once.
+
+**What to do:** Nothing. Set `tool_output.max_message_chars` in your own config to change the budget.
 
 ## Files and web tools
 

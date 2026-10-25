@@ -343,3 +343,20 @@ describe("acp shows a completed Edit or Write as what ran", () => {
     })
   }
 })
+
+// clients-ux-27: the away summary is drawn only by the interactive terminal clients, as the reference draws it only in
+// its interactive terminal UI. An editor neither replays a stored recap nor turns a live one into an update.
+describe("acp away summary", () => {
+  test("a stored recap replays nothing and a live recap produces no update", () => {
+    const stored: Parameters<typeof ACPTranslate.replayMessage>[0] = {
+      id: "msg_recap",
+      type: "recap",
+      text: "Fixing the build.",
+      time: { created: 1 },
+    }
+    expect([...ACPTranslate.replayMessage(stored, "/workspace")]).toEqual([])
+
+    const live = durableEvent("session.recap.recorded", { sessionID: root, text: "Fixing the build." })
+    expect(ACPTranslate.step(ACPTranslate.initial, live, ctx).outputs).toEqual([])
+  })
+})

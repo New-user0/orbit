@@ -94,6 +94,8 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionRecapInput,
+  SessionRecapOutput,
   SessionAssistLabelInput,
   SessionAssistLabelOutput,
   SessionAssistSuggestionInput,
@@ -1083,6 +1085,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      recap: (input: SessionRecapInput, requestOptions?: RequestOptions) =>
+        request<SessionRecapOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/recap`,
+            successStatus: 200,
+            declaredStatuses: [400, 401, 403, 404],
+            empty: false,
+          },
+          requestOptions,
+        ),
       assist: {
         label: (input: SessionAssistLabelInput, requestOptions?: RequestOptions) =>
           request<{ readonly data: SessionAssistLabelOutput }>(

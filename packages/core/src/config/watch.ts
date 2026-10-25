@@ -7,10 +7,8 @@ import type { ConfigDiscovery } from "./discovery.js"
 
 export function plan(sources: ConfigDiscovery.Sources) {
   const levels = [sources, ...(sources.home ? [sources.home] : [])]
-  const directories = [
-    ...(sources.global ? [sources.global] : []),
-    ...levels.flatMap((level) => level.project.filter((root) => root.present).map((root) => root.path)),
-  ]
+  const roots = levels.flatMap((level) => level.project.filter((root) => root.present).map((root) => root.path))
+  const directories = [...(sources.global ? [sources.global] : []), ...roots]
   const files = [
     ...levels.flatMap((level) => [...level.direct, ...level.local, ...level.project.map((root) => root.path)]),
     ...sources.compat.map((root) => root.path),
@@ -28,7 +26,15 @@ export function plan(sources: ConfigDiscovery.Sources) {
       ...directories.map((path) => ({
         path,
         type: "directory" as const,
-        ignore: ["node_modules", ".git", "**/{node_modules,.git}/**"],
+        ignore: [
+          "node_modules",
+          ".git",
+          "**/{node_modules,.git}/**",
+          // Team memory (`.orbit/team-memory`) is written by the agent, not read as config, so its writes must not
+          // reload anything. Only that folder at the top of an `.orbit` root is left out: a skill, agent or command in
+          // a folder of the same name further down is config and still reloads.
+          ...(roots.includes(path) ? ["team-memory", "team-memory/**"] : []),
+        ],
       })),
       ...Array.from(parents, ([parent, files]) => ({
         path: parent,

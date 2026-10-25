@@ -508,6 +508,81 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
+  // clients-ux-27: a recap, recorded by this client or another, is a system row led by the reference mark, from the
+  // replayed history and from the live event, and its text reaches the scrollback only through the body sanitizer.
+  test("renders a replayed and a live recap as sanitized reference-mark rows", async () => {
+    const events = feed()
+    events.push(connected())
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        streams: [events],
+        messages: {
+          ses_1: [
+            { id: "msg_old", type: "user", text: "Fix the build", files: [], agents: [], time: { created: 1 } },
+            { id: "msg_recap", type: "recap", text: "Fixing\u001b]0;pwned\u0007 the build\u202e.", time: { created: 2 } },
+          ] as SessionMessages,
+        },
+      }),
+      sessionID: "ses_1",
+      thinking: false,
+      replay: true,
+      footer: ui.api,
+    })
+
+    const recorded = (id: string, seq: number, text: string) =>
+      ({
+        id,
+        created: seq,
+        type: "session.recap.recorded",
+        durable: durable("ses_1", seq),
+        data: { sessionID: "ses_1", text },
+      }) as RunV2Event
+    // The live event of the replayed recap, the new recap, and that new recap delivered again each draw no second row.
+    events.push(recorded("evt_recap", 2, "Fixing the build."))
+    events.push(recorded("evt_recap_live", 3, "Next: run the tests."))
+    events.push(recorded("evt_recap_live", 3, "Next: run the tests."))
+    events.push(recorded("evt_recap_last", 4, "Done."))
+    const deadline = Date.now() + 3000
+    while (!ui.commits.some((commit) => commit.text.includes("Done.")) && Date.now() < deadline) await Bun.sleep(5)
+
+    const rows = ui.commits.filter((commit) => commit.text.startsWith("※"))
+    expect(rows).toMatchObject([
+      { kind: "system", messageID: "msg_recap" },
+      { kind: "system", text: "※ Next: run the tests." },
+      { kind: "system", text: "※ Done." },
+    ])
+    expect(rows).toHaveLength(3)
+    const replayed = entryBody(rows[0]!)
+    expect(replayed).toMatchObject({ type: "text" })
+    const content = replayed.type === "text" ? replayed.content : ""
+    expect(content).toContain("※ Fixing\\x1b]0;pwned\\x07 the build\\u{202e}.")
+    expect(content).not.toMatch(/[\u001b\u0007\u202e]/)
+    await transport.close()
+  })
+
+  // The away summary waits for a turn that was already running when Mini attached, which only this read reveals.
+  test.each([true, false])("reports whether its session is running when it loads it (running: %s)", async (running) => {
+    const events = feed()
+    events.push(connected())
+    const seen: boolean[] = []
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        streams: [events],
+        active: (): Record<string, { type: "running" }> => (running ? { ses_1: { type: "running" } } : {}),
+        messages: { ses_1: [] },
+      }),
+      sessionID: "ses_1",
+      thinking: false,
+      footer: footer().api,
+      onActive: (active) => seen.push(active),
+    })
+    const deadline = Date.now() + 3000
+    while (seen.length === 0 && Date.now() < deadline) await Bun.sleep(5)
+    expect(seen).toEqual([running])
+    await transport.close()
+  })
+
   test("shows an active compaction boundary before live summary output without history replay", async () => {
     const events = feed()
     events.push(connected())
