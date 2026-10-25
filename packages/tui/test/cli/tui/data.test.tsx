@@ -1189,33 +1189,44 @@ test("removes committed revert messages from local state", async () => {
   ))
 
   try {
-    for (const [seq, inboxID] of ["msg_001", "msg_002", "msg_003"].entries()) {
-      emitEvent(events, {
-        id: Event.ID.create(),
-        created: seq,
-        type: "session.inbox.enqueued",
-        durable: durable(sessionID, seq),
-        data: { sessionID, inboxID, item: { type: "user", payload: { text: inboxID }, delivery: "steer" } },
-      })
-    }
-    await wait(() => data.session.message.list(sessionID).length === 3)
+    // Two prompts delivered one after the other, then a prompt and a notice still waiting when the revert to the second
+    // commits.
+    const enqueued = (inboxID: string, type: "user" | "synthetic", delivery: "steer" | "queue") => ({
+      type: "session.inbox.enqueued" as const,
+      data: { sessionID, inboxID, item: { type, payload: { text: inboxID }, delivery } },
+    })
+    const delivered = (inboxID: string) => ({ type: "session.inbox.delivered" as const, data: { sessionID, inboxID } })
+    const sequence = [
+      enqueued("msg_001", "user", "steer"),
+      delivered("msg_001"),
+      enqueued("msg_002", "user", "steer"),
+      delivered("msg_002"),
+      enqueued("msg_003", "user", "queue"),
+      enqueued("msg_004", "synthetic", "steer"),
+    ]
+    for (const [seq, event] of sequence.entries())
+      emitEvent(events, { id: Event.ID.create(), created: seq, durable: durable(sessionID, seq), ...event })
+    await wait(
+      () => data.session.message.list(sessionID).length === 4 && data.session.pending.list(sessionID).length === 2,
+    )
 
     emitEvent(events, {
       id: Event.ID.create(),
-      created: 3,
+      created: 6,
       type: "session.revert.committed",
-      durable: durable(sessionID, 3),
+      durable: durable(sessionID, 6),
       data: { sessionID, to: "msg_002" },
     })
 
-    await wait(() => data.session.message.list(sessionID).length === 1)
-    expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual(["msg_001"])
+    await wait(() => data.session.message.list(sessionID).length === 2)
+    expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual(["msg_001", "msg_003"])
     expect(data.session.message.get(sessionID, "msg_002")).toBeUndefined()
-    expect(data.session.message.get(sessionID, "msg_003")).toBeUndefined()
-    // The projector also drops inbox items enqueued at or after the boundary, without a cancel event.
-    expect(data.session.pending.list(sessionID).map((item) => item.id)).toEqual(["msg_001"])
-    expect(data.session.input.list(sessionID)).toEqual(["msg_001"])
-    expect(data.session.input.has(sessionID, "msg_002")).toBe(false)
+    expect(data.session.message.get(sessionID, "msg_004")).toBeUndefined()
+    // The projector also drops the notices enqueued at or after the boundary, without a cancel event; a person's
+    // waiting prompt stays pending, and its row stays in the transcript.
+    expect(data.session.pending.list(sessionID).map((item) => item.id)).toEqual(["msg_003"])
+    expect(data.session.input.list(sessionID)).toEqual(["msg_003"])
+    expect(data.session.input.has(sessionID, "msg_004")).toBe(false)
   } finally {
     app.renderer.destroy()
   }

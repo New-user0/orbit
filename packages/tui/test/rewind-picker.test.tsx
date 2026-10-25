@@ -287,6 +287,74 @@ test("a busy session is interrupted and waited for before the rewind acts", asyn
   ])
 })
 
+// A prompt queued while the session ran outlives the rewind, as the reference's queue does. Steering it afterwards is
+// new work: the server commits the staged revert before it delivers the prompt (core session-owned.test.ts pins that),
+// and the transcript keeps the prompt through the commit's echo and draws it in the rewound conversation.
+test("a prompt queued before a conversation rewind is drawn in the rewound conversation once it is steered", async () => {
+  await using state = await tmpdir()
+  const queued = {
+    id: "msg_queued",
+    sessionID,
+    type: "user",
+    delivery: "queue",
+    payload: { text: "Queued before the rewind" },
+    time: { created: Date.now() },
+  }
+  await using setup = await rewindApp({
+    state: state.path,
+    running: true,
+    answer: (request) => {
+      if (request.path === `/api/session/${sessionID}/inbox`) return json({ data: [queued] })
+      if (request.path === `/api/session/${sessionID}/inbox/${queued.id}`) return json({ data: queued })
+      return undefined
+    },
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  setup.mockInput.pressArrow("down")
+  setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  setup.events.emit({
+    id: "evt_rewind_queued_staged",
+    created: Date.now(),
+    type: "session.revert.staged",
+    durable: { aggregateID: sessionID, seq: 1, version: 1 },
+    data: { sessionID, revert: { messageID: "msg_0003", files: [] } },
+  })
+  await setup.waitForFrame((frame) => !frame.includes("Renamed it.") && frame.includes("1 queued"), { maxPasses: 200 })
+
+  // The rewound prompt is back in the input; cleared, Enter on the empty prompt steers the queued one.
+  setup.mockInput.pressKey("c", { ctrl: true })
+  await setup.waitForFrame((frame) => !frame.includes("Rename the helper"))
+  setup.mockInput.pressEnter()
+  await until(() => setup.requests.some((request) => request.path.endsWith(`/inbox/${queued.id}`)), "the steer request")
+  expect(setup.requests.find((request) => request.path.endsWith(`/inbox/${queued.id}`))?.body).toMatchObject({
+    delivery: "steer",
+  })
+  // What the server sends when it delivers the steered prompt over the staged revert.
+  setup.events.emit({
+    id: "evt_rewind_queued_committed",
+    created: Date.now(),
+    type: "session.revert.committed",
+    durable: { aggregateID: sessionID, seq: 2, version: 1 },
+    data: { sessionID, to: "msg_0003" },
+  })
+  setup.events.emit({
+    id: "evt_rewind_queued_delivered",
+    created: Date.now(),
+    type: "session.inbox.delivered",
+    durable: { aggregateID: sessionID, seq: 3, version: 1 },
+    data: { sessionID, inboxID: queued.id },
+  })
+  const frame = await setup.waitForFrame(
+    (frame) => frame.includes("Queued before the rewind") && !frame.includes("1 queued"),
+    { maxPasses: 200 },
+  )
+  expect(frame).toContain("Added the parser.")
+  expect(frame).not.toContain("Renamed it.")
+})
+
 // While a chosen rewind runs, Esc leaves the picker up with a line saying so, and the server's answer is drawn there:
 // a refusal arriving after the person pressed Esc is not dropped.
 test("Esc while a rewind runs keeps the picker up, and a late refusal is drawn", async () => {

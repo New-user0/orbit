@@ -165,6 +165,9 @@ const layer = Layer.effect(
                     sessionID,
                     entering || !continuing ? "input" : "steer",
                   )
+                  // A compaction or move is a person's request, so it settles a staged revert before it is delivered.
+                  if (next?.type === "compaction" || next?.type === "move")
+                    yield* SessionInbox.settleRevert(db, bus, sessionID)
                   if (next?.type === "compaction")
                     yield* bus.publishAll([
                       [SessionEvent.InboxDelivered, { sessionID, inboxID: next.id }],

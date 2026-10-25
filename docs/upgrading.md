@@ -1893,7 +1893,9 @@ the session and waits for it before acting. A conversation rewind is staged as `
 back until your next prompt, and puts the prompt back in the input; `Code only` puts the files back at once, with no
 redo, and leaves the input alone. While a chosen rewind runs the picker shows `Rewinding…` and Esc does nothing; a
 refused rewind keeps the picker open with a line naming what failed. If the picker was closed another way meanwhile
-(ctrl+c or a click outside it), a refusal is shown as a notice instead.
+(ctrl+c or a click outside it), a refusal is shown as a notice instead. A prompt you queued while the session ran stays
+queued through the rewind; steering it, or sending a new prompt, commits the rewind first, so it runs in the rewound
+conversation.
 
 Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. While a session runs, Esc
 keeps interrupting it as before.
@@ -3205,15 +3207,37 @@ revert's list of files, so `/redo` still puts back everything the staged reverts
 A command a person runs with `!` (`POST /api/session/:id/shell`) and a skill activated through
 `POST /api/session/:id/skill` while a revert is staged now commit that revert first, as a prompt (and so a slash
 command) and a compaction already did. Before, the command and its output, or the skill's message, landed after the
-staged boundary, so the terminal UI drew them nowhere and the next prompt's commit deleted them (`session-owned.test.ts`, "commits a staged revert
-before a person's shell command, and keeps the shell command" and "... skill, and keeps the skill", rows of one table
-with the prompt and the compaction). After a `!` command or a skill, `/redo` no longer brings the reverted messages
-back.
+staged boundary, so the terminal UI drew them nowhere and the next prompt's commit deleted them
+(`session-owned.test.ts`, "commits a staged revert before a person's shell command, and keeps the work" and "... skill,
+and keeps the work", rows of one table with the prompt, the queued prompt and the compaction). After a `!` command or a
+skill, `/redo` no longer brings the reverted messages back.
 
 **Affects:** SDK callers, plugins that activate a skill, and terminal UI users who run a `!` command after `/undo` or a
 rewind. The terminal UI sends a skill as a prompt, so it already committed.
 
 **What to do:** Run `/redo` before the command or the skill if you want the reverted messages back.
+
+### A prompt waiting in the inbox outlives a staged revert, and commits it when delivered
+
+A prompt that waits in the inbox (queued, or steering into a session that was interrupted) when a revert is staged now
+stays there when the revert is committed, as a queue outlives a rewind; before, the commit deleted every pending item
+enqueued after the boundary. Only the notices that the rewound work left waiting are still dropped. When such a prompt
+is delivered (you steer it, a wake reaches an idle boundary, or a step boundary takes it), the server commits the staged
+revert first, as it does for a new prompt. Before, it was delivered behind the boundary: the terminal UI drew it
+nowhere, the model still saw the rewound steps, and the next commit deleted it. A waiting compaction or move commits
+the revert the same way when the session takes it up (`session-owned.test.ts`, "commits a staged revert before a
+person's queued prompt from before the revert, steered", "... delivered at the idle boundary", "... steering prompt from
+before the revert, delivered with a notice of the rewound work" and "... prompt, keeping one queued before the revert";
+`session-runner.test.ts`, "a drain delivering a queued prompt / a steering prompt / a queued compaction / a queued move
+over a staged revert commits the revert first"; `data.test.tsx`, "removes committed revert messages from local state";
+`rewind-picker.test.tsx`, "a prompt queued before a conversation rewind is drawn in the rewound conversation once it is
+steered").
+
+**Affects:** people who queue a prompt while a session runs and then use `/undo` with `/redo`, the rewind picker or an
+SDK revert; SDK callers that read the inbox after a commit. As before, the terminal UI's `/undo` takes a newest prompt
+that is still waiting out of the inbox instead of staging a revert.
+
+**What to do:** Delete a queued prompt from the queued prompts list if you do not want it after the rewind.
 
 ## Prompts and instructions
 
