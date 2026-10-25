@@ -111,7 +111,10 @@ export const Plugin = {
                         Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
                       )
                     : written
-                  yield* ledger.recordWrite(context.sessionID, target.absolute, final)
+                  yield* ledger.recordWrite(context.sessionID, target.absolute, {
+                    ...final,
+                    place: FileAccess.realPlace(target),
+                  })
                   const files = [
                     fileDiff(result.resource, current?.text ?? "", final.text, current ? "modified" : "added"),
                   ]
