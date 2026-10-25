@@ -1454,6 +1454,75 @@ test("the newest prompt's file line follows its reply's edits", async () => {
   expect(askedFor(setup, "msg_0003")).toBe(1)
 })
 
+// A tool call that only starts or runs has written nothing yet, so it asks nothing; the moment it finishes, while the
+// reply is still running, the newest prompt's file line is asked again.
+test("a tool call of a running reply asks the stats again when it finishes, not when it starts", async () => {
+  await using state = await tmpdir()
+  let newest = 0
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: runningReply,
+    answer: (request) => {
+      const query = new URLSearchParams(request.search)
+      if (!request.path.endsWith("/diff") || query.get("from") !== "msg_0005") return undefined
+      return json({
+        data: newest++ === 0 ? [] : [{ file: "src/d.ts", patch: "", additions: 2, deletions: 1, status: "modified" }],
+      })
+    },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Fixed the title."))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => listHas(frame, "No file edits") === 1)
+  const call = { assistantMessageID: "msg_0006", id: "call_edit" }
+  live(setup, "session.tool.input.started", { ...call, name: "edit" })
+  live(setup, "session.tool.called", { ...call, input: { filePath: "src/d.ts" }, executed: true, state: {} })
+  await settled(setup)
+  await settled(setup)
+  expect(askedFor(setup, "msg_0005")).toBe(1)
+
+  live(setup, "session.tool.success", { ...call, metadata: {}, content: [], executed: true })
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "d.ts +2 -1") === 1, { maxPasses: 200 })
+  expect(listHas(frame, "No file edits")).toBe(0)
+  expect(askedFor(setup, "msg_0005")).toBe(2)
+})
+
+// One request per row at a time: a range that changes while the row's request runs is asked once more when that
+// request answers, so the line ends on the newer range rather than the answer that was already on its way.
+test("a reply that ends while its prompt's stats are being asked asks them once more after the answer", async () => {
+  await using state = await tmpdir()
+  const held = Promise.withResolvers<void>()
+  let newest = 0
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: runningReply,
+    answer: (request) => {
+      const query = new URLSearchParams(request.search)
+      if (!request.path.endsWith("/diff") || query.get("from") !== "msg_0005") return undefined
+      if (newest++ === 0) return held.promise.then(() => json({ data: [] }))
+      return json({ data: [{ file: "src/e.ts", patch: "", additions: 3, deletions: 0, status: "added" }] })
+    },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Fixed the title."))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  await until(() => askedFor(setup, "msg_0005") === 1, "the newest prompt's first ask")
+  live(setup, "session.step.ended", {
+    assistantMessageID: "msg_0006",
+    finish: "stop",
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+  await settled(setup)
+  await settled(setup)
+  expect(askedFor(setup, "msg_0005")).toBe(1)
+
+  held.resolve()
+  const frame = await setup.waitForFrame((frame) => listHas(frame, "e.ts +3 -0") === 1, { maxPasses: 200 })
+  expect(listHas(frame, "No file edits")).toBe(0)
+  expect(askedFor(setup, "msg_0005")).toBe(2)
+})
+
 // Control for the bound on asking again: streamed text changes no file, so it asks nothing.
 test("streamed text alone does not ask the stats again", async () => {
   await using state = await tmpdir()
