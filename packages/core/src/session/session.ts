@@ -232,6 +232,8 @@ export const make = Effect.fn("Session.make")(function* () {
     const skill = yield* SessionSkill.get({ session, skill: input.skill }).pipe(
       Effect.provideService(Instance.Service, instances),
     )
+    // An activated skill is new work too: commit a staged revert once the skill is known, as a prompt does.
+    if (session.revert) yield* SessionRevert.commit(bus, session)
     yield* bus.publish(
       SessionEvent.Skill.Activated,
       {
