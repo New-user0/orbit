@@ -58,7 +58,8 @@ import { LinkShare } from "@orbit/util/link-share"
 // The readers of the memory folder (`MemoryStore.scan` and the index of `MemoryInstructions`) read no file of the
 // project's: the folder is Orbit's own, or the one `memory.directory` names in the person's own, local, command-line or
 // managed config. Because that can be a folder a repository fills, each reads only a file whose real path is in the
-// folder's real path.
+// folder's real path. Team memory (`MemoryTeam`) is a folder of the project's, so its index is read only once
+// `ProjectTrust.trusted()` answers yes, and the same real-path rule holds for it.
 //
 // A folder that is trusted loads its config as it is now, as the reference does (D8): nothing is recorded at the grant,
 // and nothing that changed since is held back. The readers of a file that carries code, such as the hooks and MCP
@@ -301,8 +302,9 @@ export const classification = {
     tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
     compaction: withhold("providers"),
-    // `directory` picks a folder that the file tools write in without a question, so a folder that is not trusted
-    // supplies none of `memory` (its reader also ignores the project scope once trusted). Withheld whole, as a permission.
+    // `directory` picks a folder that the file tools write in without a question, and `team` makes the repository's
+    // `.orbit/team-memory/` such a folder, so a folder that is not trusted supplies none of `memory` (the `directory`
+    // reader also ignores the project scope once trusted). Withheld whole, as a permission.
     memory: withhold("permissions"),
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.
     compatibility: inert,
