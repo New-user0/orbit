@@ -91,6 +91,38 @@ const rows = [
     shows: ["Write a.txt"],
     hides: ["PROPOSED", "# Wrote"],
   },
+  // Only a completed call wrote what its diff records: a call still running or one that failed is not drawn as written,
+  // even when its metadata already holds a diff. Drawing the recorded diff for every status fails these rows.
+  {
+    name: "a call still running whose metadata already holds a diff",
+    status: "running",
+    files: [
+      {
+        file: "a.txt",
+        status: "added",
+        patch: "--- a.txt\n+++ a.txt\n@@ -0,0 +1,1 @@\n+REVISED\n",
+        additions: 1,
+        deletions: 0,
+      },
+    ],
+    shows: ["Write a.txt"],
+    hides: ["REVISED", "# Wrote"],
+  },
+  {
+    name: "a failed call whose metadata holds a diff",
+    status: "error",
+    files: [
+      {
+        file: "a.txt",
+        status: "added",
+        patch: "--- a.txt\n+++ a.txt\n@@ -0,0 +1,1 @@\n+REVISED\n",
+        additions: 1,
+        deletions: 0,
+      },
+    ],
+    shows: ["Write a.txt"],
+    hides: ["REVISED", "# Wrote"],
+  },
   // The recorded file name can come from the model or the repository, so the completed header writes out a control or
   // bidi character instead of drawing it (class 9). Without `bodyText` on the header the frame holds the raw character.
   {
@@ -125,97 +157,192 @@ const rows = [
     shows: ["# Wrote", "REVISED"],
     hides: ["\u001b"],
   },
+  // What the file holds comes from the repository or the person, so the drawn diff of a file that was there and the drawn
+  // text of a new file write out control and bidi characters too (class 9). Without `bodyText` on the diff or the text the
+  // frame holds the raw character.
+  {
+    name: "a file that was there, whose recorded diff holds a bidi override and an escape",
+    status: "completed",
+    files: [
+      {
+        file: "a.txt",
+        status: "modified",
+        patch: "--- a.txt\n+++ a.txt\n@@ -1,1 +1,1 @@\n-before\n+RE‮V\u001b[2JD\n",
+        additions: 1,
+        deletions: 1,
+      },
+    ],
+    shows: ["# Wrote", "before", "\\u{202e}"],
+    hides: ["‮", "\u001b"],
+  },
+  {
+    name: "a new file whose text holds a bidi override and an escape",
+    status: "completed",
+    files: [
+      {
+        file: "a.txt",
+        status: "added",
+        patch: "--- a.txt\n+++ a.txt\n@@ -0,0 +1,1 @@\n+RE‮V\u001b[2JD\n",
+        additions: 1,
+        deletions: 0,
+      },
+    ],
+    shows: ["# Wrote", "\\u{202e}"],
+    hides: ["‮", "\u001b"],
+  },
 ] as const
 
 for (const row of rows)
   test(`a Write in the session draws what ran: ${row.name}`, async () => {
-    addDefaultParsers(parsers.parsers)
-    await using temporary = await tmpdir()
-    const metadata: Record<string, JsonValue> = row.files ? { files: row.files.map((file) => ({ ...file })) } : {}
-    const input = { path: "path" in row ? row.path : "a.txt", content: "PROPOSED\n" }
-    const part: SessionMessageAssistantTool =
-      row.status === "completed"
+    const frame = await draw({
+      status: row.status,
+      path: "path" in row ? row.path : "a.txt",
+      metadata: row.files ? { files: row.files.map((file) => ({ ...file })) } : {},
+    })
+    for (const text of row.shows) expect(frame).toContain(text)
+    for (const text of row.hides) expect(frame).not.toContain(text)
+  })
+
+// A file that was there is drawn as its diff, laid out as the other file diffs are: unified when the session is narrow,
+// split when it is wide, and as the `diffs.view` setting says when it names a layout. Split draws the removed and the
+// added line on one row; unified draws them on two.
+const overwrite = {
+  files: [
+    {
+      file: "a.txt",
+      status: "modified",
+      patch: "--- a.txt\n+++ a.txt\n@@ -1,1 +1,1 @@\n-before\n+REVISED\n",
+      additions: 1,
+      deletions: 1,
+    },
+  ],
+}
+for (const layout of [
+  { name: "a narrow session draws it unified", width: 80, view: undefined, split: false },
+  { name: "a wide session draws it split", width: 160, view: undefined, split: true },
+  { name: "a wide session with the unified setting draws it unified", width: 160, view: "unified", split: false },
+  { name: "a narrow session with the split setting draws it split", width: 80, view: "split", split: true },
+] as const)
+  test(`a Write over a file that was there: ${layout.name}`, async () => {
+    const frame = await draw({
+      status: "completed",
+      path: "a.txt",
+      metadata: overwrite,
+      width: layout.width,
+      view: layout.view,
+    })
+    const lines = frame.split("\n")
+    expect(lines.some((line) => line.includes("before"))).toBe(true)
+    expect(lines.some((line) => line.includes("REVISED"))).toBe(true)
+    expect(lines.some((line) => line.includes("before") && line.includes("REVISED"))).toBe(layout.split)
+  })
+
+async function draw(input: {
+  status: "completed" | "running" | "error"
+  path: string
+  metadata: Record<string, JsonValue>
+  width?: number
+  view?: "split" | "unified"
+}) {
+  addDefaultParsers(parsers.parsers)
+  await using temporary = await tmpdir()
+  const width = input.width ?? 80
+  const metadata = input.metadata
+  const toolInput = { path: input.path, content: "PROPOSED\n" }
+  const part: SessionMessageAssistantTool =
+    input.status === "completed"
+      ? {
+          type: "tool",
+          id: "call_write",
+          name: "write",
+          time: { created: 0, completed: 1 },
+          state: { status: "completed", input: toolInput, content: [{ type: "text", text: "" }], metadata },
+        }
+      : input.status === "error"
         ? {
             type: "tool",
             id: "call_write",
             name: "write",
             time: { created: 0, completed: 1 },
-            state: { status: "completed", input, content: [{ type: "text", text: "" }], metadata },
+            state: {
+              status: "error",
+              input: toolInput,
+              error: { type: "unknown", message: "write failed" },
+              metadata,
+            },
           }
         : {
             type: "tool",
             id: "call_write",
             name: "write",
             time: { created: 0 },
-            state: { status: "running", input, metadata },
+            state: { status: "running", input: toolInput, metadata },
           }
-    const config = createTuiResolvedConfig({ animations: false })
-    const calls = createFetch((url) => {
-      const location = { directory }
-      if (url.pathname === "/api/agent") return json({ location, data: [agent("build")] })
-      if (url.pathname === "/api/model") return json({ location, data: [model("first")] })
-    }, createEventStream())
-    const app = await testRender(
-      () => (
-        <TestTuiContexts paths={{ state: temporary.path }}>
-          <ArgsProvider>
-            <ConfigProvider config={config}>
-              <Keymap.Provider>
-                <ThemeProvider mode="dark" source={emptyThemeSource}>
-                  <ToastProvider>
-                    <RouteProvider initialRoute={{ type: "home" }}>
-                      <ClientProvider api={createApi(calls.fetch)}>
-                        <DataProvider directory={directory}>
-                          <LocationProvider>
-                            <PermissionProvider directory={directory}>
-                              <LocalProvider>
-                                <DialogProvider>
-                                  <context.Provider
-                                    value={{
-                                      width: 80,
-                                      terminal: { width: 80, height: 20 },
-                                      sessionID: "ses_write",
-                                      anchors: createTimelineAnchors(),
-                                      groupExpanded: () => true,
-                                      setGroupExpanded: () => {},
-                                      thinkingMode: () => "hide",
-                                      markdownMode: () => "rendered",
-                                      groupExploration: () => false,
-                                      legacyTurns: () => false,
-                                      diffWrapMode: () => "word",
-                                      models: () => [],
-                                      messageIndex: () => undefined,
-                                      config,
-                                      mutatePending: async () => true,
-                                      pendingDelivery: () => undefined,
-                                    }}
-                                  >
-                                    <Write input={input} metadata={metadata} tool="write" output="" part={part} />
-                                  </context.Provider>
-                                </DialogProvider>
-                              </LocalProvider>
-                            </PermissionProvider>
-                          </LocationProvider>
-                        </DataProvider>
-                      </ClientProvider>
-                    </RouteProvider>
-                  </ToastProvider>
-                </ThemeProvider>
-              </Keymap.Provider>
-            </ConfigProvider>
-          </ArgsProvider>
-        </TestTuiContexts>
-      ),
-      { width: 80, height: 20 },
-    )
-    try {
-      await app.renderOnce()
-      await Bun.sleep(0)
-      await app.renderOnce()
-      const frame = app.captureCharFrame()
-      for (const text of row.shows) expect(frame).toContain(text)
-      for (const text of row.hides) expect(frame).not.toContain(text)
-    } finally {
-      app.renderer.destroy()
-    }
-  })
+  const config = createTuiResolvedConfig({ animations: false, ...(input.view ? { diffs: { view: input.view } } : {}) })
+  const calls = createFetch((url) => {
+    const location = { directory }
+    if (url.pathname === "/api/agent") return json({ location, data: [agent("build")] })
+    if (url.pathname === "/api/model") return json({ location, data: [model("first")] })
+  }, createEventStream())
+  const app = await testRender(
+    () => (
+      <TestTuiContexts paths={{ state: temporary.path }}>
+        <ArgsProvider>
+          <ConfigProvider config={config}>
+            <Keymap.Provider>
+              <ThemeProvider mode="dark" source={emptyThemeSource}>
+                <ToastProvider>
+                  <RouteProvider initialRoute={{ type: "home" }}>
+                    <ClientProvider api={createApi(calls.fetch)}>
+                      <DataProvider directory={directory}>
+                        <LocationProvider>
+                          <PermissionProvider directory={directory}>
+                            <LocalProvider>
+                              <DialogProvider>
+                                <context.Provider
+                                  value={{
+                                    width,
+                                    terminal: { width, height: 20 },
+                                    sessionID: "ses_write",
+                                    anchors: createTimelineAnchors(),
+                                    groupExpanded: () => true,
+                                    setGroupExpanded: () => {},
+                                    thinkingMode: () => "hide",
+                                    markdownMode: () => "rendered",
+                                    groupExploration: () => false,
+                                    legacyTurns: () => false,
+                                    diffWrapMode: () => "word",
+                                    models: () => [],
+                                    messageIndex: () => undefined,
+                                    config,
+                                    mutatePending: async () => true,
+                                    pendingDelivery: () => undefined,
+                                  }}
+                                >
+                                  <Write input={toolInput} metadata={metadata} tool="write" output="" part={part} />
+                                </context.Provider>
+                              </DialogProvider>
+                            </LocalProvider>
+                          </PermissionProvider>
+                        </LocationProvider>
+                      </DataProvider>
+                    </ClientProvider>
+                  </RouteProvider>
+                </ToastProvider>
+              </ThemeProvider>
+            </Keymap.Provider>
+          </ConfigProvider>
+        </ArgsProvider>
+      </TestTuiContexts>
+    ),
+    { width, height: 20 },
+  )
+  try {
+    await app.renderOnce()
+    await Bun.sleep(0)
+    await app.renderOnce()
+    return app.captureCharFrame()
+  } finally {
+    app.renderer.destroy()
+  }
+}

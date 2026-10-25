@@ -225,6 +225,20 @@ it.live(
           ).toContain(request.id)
           expect(yield* Effect.promise(() => Bun.file(path.join(project, "a.txt")).exists())).toBe(false)
 
+          // A plain reply that names another session does not reach this session's question either.
+          const other = yield* Effect.promise(() => orbit.sessions.create({ location: { directory: project } }))
+          const elsewhere = yield* Effect.promise(() =>
+            ctx.permission.reply({ sessionID: other.id, requestID: request.id, decision: "once" }).then(
+              () => undefined,
+              (error: unknown) => error,
+            ),
+          )
+          expect(elsewhere).toMatchObject({ message: `Permission request not found: ${request.id}` })
+          expect(
+            (yield* Effect.promise(() => orbit.permission.list({ sessionID: session.id }))).map((item) => item.id),
+          ).toContain(request.id)
+          expect(yield* Effect.promise(() => Bun.file(path.join(project, "a.txt")).exists())).toBe(false)
+
           yield* Effect.promise(() =>
             ctx.permission.reply({ sessionID: session.id, requestID: request.id, decision: "once" }),
           )
