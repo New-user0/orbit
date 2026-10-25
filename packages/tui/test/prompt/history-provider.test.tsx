@@ -162,6 +162,8 @@ test("forgetting a repeated prompt that added no entry keeps the earlier one", a
     setup.history.append({ text: "same", files: [], agents: [], pasted: [] }, undefined, "msg_same_2")
 
     setup.history.forget("msg_same_2")
+    // The repeat also lets go of the entry the first prompt added: its message is no longer the newest sent.
+    setup.history.forget("msg_same_1")
     expect(setup.history.entries().map((item) => item.text)).toEqual(["same"])
     await Bun.sleep(100)
     expect(texts(await savedHistory(tmp.path, (text) => texts(text).length > 0))).toEqual(["same"])
