@@ -1222,6 +1222,8 @@ test("removes committed revert messages from local state", async () => {
     expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual(["msg_001", "msg_003"])
     expect(data.session.message.get(sessionID, "msg_002")).toBeUndefined()
     expect(data.session.message.get(sessionID, "msg_004")).toBeUndefined()
+    // The kept prompt moved up a row, and a lookup by its ID still finds it there.
+    expect(data.session.message.get(sessionID, "msg_003")?.id).toBe("msg_003")
     // The projector also drops the notices enqueued at or after the boundary, without a cancel event; a person's
     // waiting prompt stays pending, and its row stays in the transcript.
     expect(data.session.pending.list(sessionID).map((item) => item.id)).toEqual(["msg_003"])

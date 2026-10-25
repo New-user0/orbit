@@ -405,6 +405,41 @@ test("the message dialog's Rewind on a prompt a staged revert already took back 
   expect(setup.actions()).toEqual([])
 })
 
+// A prompt that leaves the conversation while its message dialog is open (here a revert another client committed) is
+// no prompt to rewind any more: the dialog's Rewind does nothing, and the dialog stays for its other actions.
+test("the message dialog's Rewind on a prompt that left the conversation while the dialog was open does nothing", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({ state: state.path })
+  await setup.waitForFrame(loaded)
+  await setup.mockInput.typeText("/timeline")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Timeline"))
+  await Bun.sleep(50)
+  await setup.mockInput.typeText("Fix the")
+  await setup.waitForFrame((frame) => frame.includes("Fix the"))
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Message Actions") && frame.includes("Fixed the title."))
+  setup.events.emit({
+    id: "evt_committed_elsewhere",
+    created: Date.now(),
+    type: "session.revert.committed",
+    durable: { aggregateID: sessionID, seq: 1, version: 1 },
+    data: { sessionID, to: "msg_0005" },
+  })
+  await setup.waitForFrame((frame) => !frame.includes("Fixed the title."), { maxPasses: 200 })
+  await Bun.sleep(50)
+  await setup.mockInput.typeText("Rewind")
+  await setup.waitForFrame((frame) => frame.includes("code and/or conversation"))
+  setup.mockInput.pressEnter()
+  await Bun.sleep(300)
+  await setup.renderOnce()
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("Message Actions")
+  expect(frame).not.toContain("Checking files")
+  expect(setup.dryRunsSent()).toEqual([])
+  expect(setup.actions()).toEqual([])
+})
+
 // Class 13: a conversation rewind the server refuses, on the shortcut or after an interrupt, is shown as an error.
 test.each([
   { label: "the message dialog's shortcut", running: false },
