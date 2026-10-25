@@ -1878,6 +1878,34 @@ which one of those folders is a link.
 
 **What to do:** nothing. If clean names a link, remove the link and run it again.
 
+### A recap when you come back to a session
+
+When the terminal has been unfocused for five minutes, the terminal UI and Mini now ask the server for a short recap of
+the session in view: one to three sentences that name the task and the next step. It is drawn as a muted row led by
+`※`. A turn that is still running, including one that was already under way when the client opened the session, holds
+the request until it ends, whether it succeeds, fails or is stopped, and coming back first cancels it. There is at most one
+recap per prompt or `!` command, however many clients ask or however often the terminal loses focus. The recap is
+written by the provider's small model, or by `agents.side.model` when you set one, never by the session's own model;
+with neither, no recap is made. It sees the last 30 messages, less any assistant replies at their start, so that the
+conversation opens on your prompt or on a tool result, with
+no system prompt and no tools, so the tool calls and results among them go as text, and it is never sent to a model
+afterwards. Only the main conversation is recapped: while a subagent's session is in view, the terminal UI asks for the
+recap of the conversation that started it and waits for that conversation's turn to end, and a prompt another
+agent wrote does not count as one of yours. A recap you come back during is dropped,
+and its estimated cost is still counted, as for a side query that times out. A terminal that does not report focus
+never asks, and one that lost focus while the client was still starting begins the wait once the client has started. The server adds the route
+`POST /api/session/:sessionID/recap` and the durable event `session.recap.recorded`, and session message lists can
+hold a `recap` message, whose text is stored with its control and bidi characters written out, both when the server
+writes it and when `orb session import` brings it in from a file. `orb export --sanitize` redacts a recap's text as it does a
+prompt's.
+
+**Affects:** people who use the terminal UI or Mini with a provider that has a small model or with `agents.side.model`
+set, who see the row and pay for one small call per prompt they step away from, and SDK and API clients that switch on
+message or event types.
+
+**What to do:** set `session.recap.after_minutes` in your `cli.json` to another number of minutes, or to 0 to turn
+the recap off. A value above 35791 minutes waits 35791 minutes, the longest a timer holds. A project's `cli.json` cannot set it. Clients that switch on message types should skip `recap`.
+
 ### Opt-in tool labels and prompt suggestions for stream-json runs
 
 `orb -p` and `orb run` take two new flags, both off unless given and both only with `--input-format stream-json` and
@@ -3369,6 +3397,73 @@ bodies as message text, because a response can carry text from a project's files
 
 **What to do:** Nothing.
 
+### A file changed after the agent wrote it is reported to the model
+
+When a file that a session wrote with its file tools is changed afterwards outside the
+conversation (by you, an editor, a formatter or a shell command), the next step of that session gets a hidden reminder
+with the changed lines, numbered as `Read` numbers them, with eight unchanged lines around each change and at most
+8,192 characters in all. The reported change then counts as read, so the edit tools do not refuse the file as changed
+on disk. Before, the model learned of such a change only when an edit was refused. A change counts as read only once
+its reminder is stored: when the check runs out of time, is stopped, or a compaction ends while it runs, no file counts
+as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step. Each
+step starts checking the files within a short time budget, and gives each file half of it, so a file that is slow to
+check or read, or never answers, costs only its own share and the other files are reported. A check that is still
+running when the budget ends keeps the rest of its share. When a step has no time for every file, the files the
+session wrote most recently are checked first, and the next step goes on with the files not yet checked; a change to a
+file whose check ran out of its share is reported once a later check finishes in time. The
+changed lines of small changes are worked out before those of large rewrites, so a formatter rewriting many large files
+does not hold up a one-line change.
+
+Only what the session itself wrote is watched: a file it only read is not reported, and reading a file after writing it
+ends the watch. A touch, a change of line endings or of the final line break alone, a notebook, an image, a file with a
+NUL byte, a folder in the file's place and a file longer than one read are not reported. A deleted file is forgotten. A
+file that a `Read` deny rule names, or that a link now leads to, is skipped, as is a file outside the project that an
+`external_directory` deny rule covers, a file of the project that has become a link leading out of it, a file outside
+it that no longer really is where the session wrote it because the file, its folder or a folder above it has become a
+link or junction, and, once the project's trust is revoked, any file outside it. A subagent's session is told about the files it wrote, and what Orbit
+holds about its files is released when its run ends, as it is when a session is deleted. Clients show nothing for
+these rows, and `orb run --bare` adds none.
+
+After a restart, the first step of each main session rebuilds what it saw from its history since the latest compaction:
+a whole `Read`, a `Write` (whether or not the call succeeded), and an `Edit` or `Patch` that succeeded, whose files are
+read from disk as they are then. A later `Patch` that deletes or moves a file away, or a later `NotebookEdit`, drops
+what earlier calls showed of that file, so the session's own patch is never reported as someone else's change. Changes
+made while Orbit was not running are then reported, and a file known this way can be edited without a new read. The
+rebuild works from the newest call back, within a budget of its own: a file from history that is slow to check or
+read, and the oldest files when there is no time for all of them, are left out of it, and a rebuild that does not finish within the
+step's time limit is not tried again until Orbit restarts. Only
+files inside the project that `Read` would open without a question are rebuilt, at most the 100 named most recently: a
+file under an ask rule, such as the built-in one for `.env` files, is left out. A subagent is never rebuilt: a
+continued or resumed one starts with nothing watched, so it must read a file again before it edits it. A file tracked for freshness is now dropped once a
+session tracks more than 100 files or 25 MB of written text, least recently used first, and must be read again before
+an edit.
+
+**Affects:** everyone who edits files the agent wrote while a session runs, and clients that list hidden
+`session.synthetic` rows, which now see rows of kind `file-change`.
+
+**What to do:** Nothing.
+
+### The active built-in output style is named on every step
+
+When `output_style` names a built-in style (`explanatory` or `learning`, in any letter case), the main conversation gets
+a short hidden reminder on each step that its replies follow that style. The default style and a style that a file defines add
+nothing, and subagents and `orb run --bare` get nothing.
+
+**Affects:** people who use a built-in output style.
+
+**What to do:** Nothing.
+
+### An opt-in reminder of how much of the context window is used
+
+With `ORBIT_ENABLE_CONTEXT_USAGE_REMINDER` set to `1` or `true` in the server's environment, the main conversation gets
+a hidden line on each step: how many tokens the newest response used, out of the model's context window less the
+smaller of its output limit and 20,000 tokens, and how many are left. It is off by default, says nothing when the
+model's window is not known, and is not sent to subagents or by `orb run --bare`.
+
+**Affects:** people who set the variable.
+
+**What to do:** Nothing; set the variable to turn the reminder on.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
@@ -3635,6 +3730,53 @@ the default folder nor moves anything into yours: move the notes, and their `MEM
 `<data>/memory/<project ID>/` to your folder yourself. Notes saved before a folder was trusted keep moving to the
 default folder. Move a rule written for `Memory` to `Edit` and `Read` on the memory folder, and set
 `"memory": { "enabled": false }` or `ORBIT_DISABLE_AUTO_MEMORY=1` to switch memory off.
+
+### Team memory, kept in the repository, and no credentials written into it
+
+New: `memory.team`, off by default. When the last config that sets it turns it on, memory is on and the project is
+trusted, the model also keeps team memory in `.orbit/team-memory/` at the project's root, which is committed with the
+code and so shared with everyone who works in the repository. Its guide then names both folders, says which kind of
+memory goes where, and forbids secrets in team memory; the team folder is made with the guide; the folder's own
+`MEMORY.md` loads after the private index, wrapped in a `<team-memory source="repository">` tag, with the same caps and
+front matter handling; and Read, Write and Edit in the folder ask no question, while a deny rule still wins. Team memory
+is on only for a plain folder: a `.orbit/team-memory` that is a link (out of the project, to a network share, or to the
+project itself, `.orbit`, `.git` or any other folder in it, or to a folder that is not there), or one under an `.orbit`
+that is a link, turns team memory
+off for that project, and a team `MEMORY.md` that links out of the folder is not loaded. The config watch of a
+project's `.orbit` no longer reloads anything when a file below its `team-memory` folder changes; a skill, agent or
+command in a folder of that name further down still reloads.
+
+Whatever `memory.team` says, and in a project that is not trusted too, Write, Edit (its `new_string`) and Patch (the
+lines each hunk adds, not its context lines, and the whole of a file it moves in) refuse to write text that looks like a credential into
+`.orbit/team-memory/`, before anything is asked or written, including through a link elsewhere in the project that leads
+into the folder. The tool error names the kinds of credential found, never the text. The rules are 36 high-confidence
+patterns from gitleaks v8.30.1; keyword rules such as `password = ...` are not among them. NotebookEdit and Bash are not
+scanned.
+
+**Affects:** people who want to share memory with their team, and anyone who keeps a file that looks like a token in a
+folder called `.orbit/team-memory`.
+
+**What to do:** Nothing. To share memory, set `"memory": { "team": true }` in your own config, or in a trusted project's,
+and commit `.orbit/team-memory/`.
+
+### The tool results of one step share a size budget
+
+Before, each tool result was measured on its own, so a step that ran many tools in parallel could send all of their
+results to the model however large they were together. Now, before each request, the results of the newest step are
+added up. When they pass `tool_output.max_message_chars` (200,000 characters by default), the largest are saved to the
+session's tool-output folder and sent as the same `<saved-output>` preview a large single result gets, one after
+another until the rest fit; equal sizes go in call order. A step's results are decided once: the request after them is
+the first to carry them, and every later request, a fork and compaction send the same text. Automatic compaction, and
+the refusal of a request that no longer fits when automatic compaction is off, measure that same text. Results of a
+tool without a result limit (such as Read), results already saved on their own, failed calls, results from tools the
+provider runs and results that hold an image or another file part neither count nor go. A result whose file cannot be
+written is sent whole. The stored result keeps the tool's own content, and clients show it as before. A sanitized
+export (`orb session export --sanitize`) leaves the choice out, so an import of it sends the redacted text. An
+untrusted folder cannot set the key (`tool_output` is withheld whole).
+
+**Affects:** people whose model runs many tools in one step, such as several large searches at once.
+
+**What to do:** Nothing. Set `tool_output.max_message_chars` in your own config to change the budget.
 
 ## Files and web tools
 

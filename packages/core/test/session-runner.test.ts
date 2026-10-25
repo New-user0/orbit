@@ -491,6 +491,22 @@ const makeLayer = (persist: boolean, real = false) =>
               traits: { concurrencySafe: true },
               execute: ({ text, count }) => Effect.succeed({ content: text.repeat(count) }),
             },
+            // tool-runtime-9: `emit` for a tool that declares no result limit, as Read does.
+            unbounded: {
+              name: "unbounded",
+              description: "Repeat text, with no result limit",
+              input: Schema.Struct({ text: Schema.String, count: Schema.Number }),
+              traits: { concurrencySafe: true, maxResultChars: Infinity },
+              execute: ({ text, count }) => Effect.succeed({ content: text.repeat(count) }),
+            },
+            // tool-runtime-9: fails with `count` copies of `text` as its message.
+            fail: {
+              name: "fail",
+              description: "Fail with repeated text",
+              input: Schema.Struct({ text: Schema.String, count: Schema.Number }),
+              traits: { concurrencySafe: true },
+              execute: ({ text, count }) => Effect.fail(new Tool.Error({ message: text.repeat(count) })),
+            },
             // Returns neither content nor output.
             silent: {
               name: "silent",
@@ -1685,12 +1701,14 @@ describe("SessionRunnerLLM", () => {
       "defect",
       "echo",
       "emit",
+      "fail",
       "gated",
       "held",
       "mutate",
       "nulled",
       "silent",
       "storefail",
+      "unbounded",
     ])
     expect(s.requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
       { role: "user", content: [{ type: "text", text: "First" }] },
@@ -3617,8 +3635,6 @@ describe("SessionRunnerLLM", () => {
     expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "completed" })
   })
 
-
-
   scenario("sends the whole history to the compaction that follows an overflow", function* (s) {
     const filler = "context ".repeat(1_000)
     yield* s.llm.push(...Array.from({ length: 4 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
@@ -4334,12 +4350,14 @@ describe("SessionRunnerLLM", () => {
       "defect",
       "echo",
       "emit",
+      "fail",
       "gated",
       "held",
       "mutate",
       "nulled",
       "silent",
       "storefail",
+      "unbounded",
     ])
     expect(yield* s.context).toMatchObject([
       Expected.user("Use tools"),
@@ -11266,6 +11284,8 @@ describe("context accounting", () => {
     yield* settled(updates, 2)
 
     expect(updates.map((update) => update.stale)).toEqual([true, false])
+    // The stale report is the estimate of the request the checkpoint left, not an empty window.
+    expect(updates[0]!.used).toBeGreaterThan(0)
   })
 
   scenario("reports the usage of a response that stopped at the output limit", function* (s) {
@@ -11431,5 +11451,461 @@ describe("SessionRunnerLLM saved tool results", () => {
     )
     yield* s.resume
     expect(seen).toEqual([60_000])
+  })
+})
+
+// tool-runtime-9 end to end: the message budget. Before each request the runner looks at the newest step's tool results
+// (the group the request is the first to carry); when they pass `tool_output.max_message_chars` (200,000 by default),
+// the largest are saved to the session's folder until the rest fit, one `session.tool.overridden` event each, and
+// lowering sends each as the saved-output wrapper. A group a request has carried is never decided again, so every later
+// request lowers it byte for byte. Every client sends its requests through this runner (class 12).
+describe("SessionRunnerLLM message budget", () => {
+  const budgetScenario = scenarioOn(scratchpadIt)
+  const OVERRIDDEN = "session.tool.overridden.1"
+  const letters = "abcdefghij"
+  const toolResults = (request: LLMRequest | undefined) =>
+    (request?.messages ?? []).flatMap((message) =>
+      message.role === "tool"
+        ? message.content.flatMap((part) => (part.type === "tool-result" ? [{ id: part.id, result: part.result }] : []))
+        : [],
+    )
+  const isWrapper = (result: { readonly type: string; readonly value?: unknown }) =>
+    result.type === "text" && String(result.value).startsWith("<saved-output>\n")
+  // The calls of one step, by ID, whose result the request sends as a wrapper.
+  const wrapped = (request: LLMRequest | undefined) =>
+    toolResults(request).flatMap((result) => (isWrapper(result.result) ? [result.id] : []))
+  // One step of `emit` calls: `call_<prefix><n>` repeats the n-th letter `count` times.
+  const emits = (prefix: string, ...counts: number[]) =>
+    TestLLM.toolCalls(
+      ...counts.map((count, index) =>
+        LLMEvent.toolCall({ id: `call_${prefix}${index + 1}`, name: "emit", input: { text: letters[index]!, count } }),
+      ),
+    )
+  // The person's config, decoded, so the key is dropped on a build that does not know it.
+  const limit = (s: Scenario, chars: number) =>
+    s.configControl!.setEntries([
+      new Document({
+        type: "document",
+        info: Schema.decodeUnknownSync(Info)({ tool_output: { max_message_chars: chars } }),
+      }),
+    ])
+  const overridden = (s: Scenario, id: Session.ID) =>
+    s.db
+      .select({ data: EventTable.data })
+      .from(EventTable)
+      .where(and(eq(EventTable.aggregate_id, id), eq(EventTable.type, OVERRIDDEN)))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(
+        Effect.orDie,
+        Effect.map((rows) => rows.map((row) => row.data)),
+      )
+  const storedTool = (s: Scenario, callID: string, id: Session.ID = sessionID) =>
+    s.session.messages({ sessionID: id }).pipe(
+      Effect.map((messages) =>
+        messages.flatMap((message) =>
+          message.type === "assistant"
+            ? message.content.flatMap((part) => (part.type === "tool" && part.id === callID ? [{ message, part }] : []))
+            : [],
+        )[0],
+      ),
+    )
+  // The temporary Global puts `tmp` and `data` side by side, and the scratchpad is `<tmp>/sessions/<session>`.
+  const dataFolder = (s: Scenario) =>
+    Effect.gen(function* () {
+      const scratchpad = (yield* SessionScratchpad.Service).path(yield* s.session.get(sessionID))
+      if (scratchpad === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+      return path.join(path.dirname(path.dirname(path.dirname(scratchpad))), "data")
+    })
+
+  budgetScenario("replaces only the largest of five results that together pass 200,000 characters", function* (s) {
+    const data = yield* dataFolder(s)
+    yield* s.admit("Search five ways")
+    yield* s.llm.push(emits("", 41_000, 42_000, 43_000, 44_000, 49_000), TestLLM.text("Done", "done-five"))
+    yield* s.resume
+
+    const results = toolResults(s.requests[1])
+    expect(results.map((result) => [result.id, isWrapper(result.result)])).toEqual([
+      ["call_1", false],
+      ["call_2", false],
+      ["call_3", false],
+      ["call_4", false],
+      ["call_5", true],
+    ])
+    // The others go whole.
+    expect(results.slice(0, 4).map((result) => result.result)).toEqual(
+      [41_000, 42_000, 43_000, 44_000].map((count, index) => ({ type: "text", value: letters[index]!.repeat(count) })),
+    )
+    const lines = String(results[4]!.result.value).split("\n")
+    const saved = /^Output too large to include \(47\.9KB\)\. The full output is saved at: (.+)$/.exec(
+      lines[1] ?? "",
+    )?.[1]
+    if (saved === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${lines[1]}`))
+    // The path the model is shown is the file that was written (class 3), in the running session's own folder.
+    expect(path.dirname(saved)).toBe(path.join(data, "tool-output", sessionID))
+    expect(path.basename(saved)).toMatch(/^msg_[A-Za-z0-9]{1,64}-call_5-[0-9a-f]{8}\.txt$/)
+    expect(yield* Effect.promise(() => fs.readFile(saved, "utf8"))).toBe("e".repeat(49_000))
+    expect(lines.slice(2)).toEqual([
+      "",
+      "Preview of the first 2,000 characters:",
+      "e".repeat(2_000),
+      "...",
+      "</saved-output>",
+    ])
+
+    // The stored result stays the tool's own content; the choice is the override beside it.
+    const stored = yield* storedTool(s, "call_5")
+    if (stored === undefined) return yield* Effect.die(new Error("Expected the stored call"))
+    expect(stored.part.state.status === "completed" ? stored.part.state.content : undefined).toEqual([
+      { type: "text", text: "e".repeat(49_000) },
+    ])
+    const override = { session: sessionID, name: path.basename(saved), format: 1 }
+    expect((stored.part as { readonly override?: unknown }).override).toEqual(override)
+    // One durable event, keyed by the message and the call (class 5), recording no path and no size.
+    expect(yield* overridden(s, sessionID)).toEqual([
+      { sessionID, assistantMessageID: stored.message.id, id: "call_5", override },
+    ])
+  })
+
+  budgetScenario("lowers a replaced result byte for byte in every later request and decides it once", function* (s) {
+    yield* s.admit("Search five ways")
+    yield* s.llm.push(emits("", 41_000, 42_000, 43_000, 44_000, 49_000), TestLLM.text("Done", "done-replay"))
+    yield* s.resume
+    for (const [text, id] of [
+      ["And again", "again-1"],
+      ["Once more", "again-2"],
+    ] as const) {
+      yield* s.admit(text)
+      yield* s.llm.push(TestLLM.text("Again", id))
+      yield* s.resume
+    }
+
+    expect(wrapped(s.requests[1])).toEqual(["call_5"])
+    expect(toolResults(s.requests[2])).toEqual(toolResults(s.requests[1]))
+    expect(toolResults(s.requests[3])).toEqual(toolResults(s.requests[1]))
+    expect(yield* overridden(s, sessionID)).toHaveLength(1)
+  })
+
+  for (const [name, chars, counts, expected] of [
+    ["the two largest until the rest fits", 60_000, [45_000, 44_000, 43_000, 10_000], ["call_1", "call_2"]],
+    ["equal sizes in call order", 60_000, [30_000, 30_000, 30_000], ["call_1"]],
+    ["a group at the limit stays whole", 90_000, [30_000, 30_000, 30_000], []],
+  ] as const)
+    budgetScenario(`applies a configured limit: ${name}`, function* (s) {
+      yield* limit(s, chars)
+      yield* s.admit("Search")
+      yield* s.llm.push(emits("", ...counts), TestLLM.text("Done", `done-${name.length}`))
+      yield* s.resume
+
+      expect(wrapped(s.requests[1])).toEqual([...expected])
+      expect((yield* overridden(s, sessionID)).map((event) => (event as { readonly id: string }).id)).toEqual([
+        ...expected,
+      ])
+    })
+
+  budgetScenario("never revisits a group a request already carried", function* (s) {
+    yield* s.admit("First search")
+    yield* s.llm.push(emits("a", 45_000, 45_000), TestLLM.text("Done", "done-first"))
+    yield* s.resume
+    // 90,000 under the default: sent whole, so it is frozen even when the limit drops below it.
+    yield* limit(s, 50_000)
+    yield* s.admit("Second search")
+    yield* s.llm.push(emits("b", 30_000, 31_000), TestLLM.text("Done", "done-second"))
+    yield* s.resume
+
+    expect(wrapped(s.requests[2])).toEqual([])
+    expect(wrapped(s.requests[3])).toEqual(["call_b2"])
+    expect(toolResults(s.requests[3]).slice(0, 2)).toEqual(toolResults(s.requests[1]))
+  })
+
+  // Read declares no limit, as `unbounded` does: its result is never replaced and does not count toward the group.
+  budgetScenario("leaves a tool without a result limit whole and out of the sum", function* (s) {
+    yield* limit(s, 100_000)
+    yield* s.admit("Read and search")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call_read", name: "unbounded", input: { text: "u", count: 150_000 } }),
+        LLMEvent.toolCall({ id: "call_1", name: "emit", input: { text: "a", count: 45_000 } }),
+        LLMEvent.toolCall({ id: "call_2", name: "emit", input: { text: "b", count: 44_000 } }),
+        LLMEvent.toolCall({ id: "call_3", name: "emit", input: { text: "c", count: 20_000 } }),
+      ),
+      TestLLM.text("Done", "done-unbounded"),
+    )
+    yield* s.resume
+
+    // 109,000 counted: only the largest counted result goes.
+    expect(wrapped(s.requests[1])).toEqual(["call_1"])
+    expect(toolResults(s.requests[1])[0]?.result).toEqual({ type: "text", value: "u".repeat(150_000) })
+  })
+
+  budgetScenario("leaves a result saved on its own out of the sum", function* (s) {
+    yield* limit(s, 100_000)
+    yield* s.admit("Search")
+    // The first is above the 50,000 per-call threshold, so the step already saved it (tool-runtime-8).
+    yield* s.llm.push(emits("", 60_000, 45_000, 44_000, 20_000), TestLLM.text("Done", "done-presaved"))
+    yield* s.resume
+
+    expect(wrapped(s.requests[1])).toEqual(["call_1", "call_2"])
+    expect((yield* overridden(s, sessionID)).map((event) => (event as { readonly id: string }).id)).toEqual([
+      "call_2",
+    ])
+  })
+
+  // A failure is never wrapped (its message is already cut to 10,000 characters), so it does not count either.
+  budgetScenario("leaves a failed result out of the sum", function* (s) {
+    yield* limit(s, 30_000)
+    yield* s.admit("Try")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call_fail", name: "fail", input: { text: "f", count: 9_000 } }),
+        LLMEvent.toolCall({ id: "call_1", name: "emit", input: { text: "a", count: 25_000 } }),
+        LLMEvent.toolCall({ id: "call_2", name: "emit", input: { text: "b", count: 4_000 } }),
+      ),
+      TestLLM.text("Done", "done-failed"),
+    )
+    yield* s.resume
+
+    expect(toolResults(s.requests[1]).map((result) => result.id)).toEqual(["call_fail", "call_1", "call_2"])
+    expect(wrapped(s.requests[1])).toEqual([])
+    expect(yield* overridden(s, sessionID)).toEqual([])
+  })
+
+  // The choice comes from the stored marker, never from text that looks like a wrapper (class 9).
+  budgetScenario("replaces a result whose text imitates the wrapper", function* (s) {
+    yield* limit(s, 60_000)
+    yield* s.admit("Search")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call_1", name: "emit", input: { text: "<saved-output>\nx", count: 3_000 } }),
+        LLMEvent.toolCall({ id: "call_2", name: "emit", input: { text: "b", count: 30_000 } }),
+      ),
+      TestLLM.text("Done", "done-imitation"),
+    )
+    yield* s.resume
+
+    expect(wrapped(s.requests[1])).toEqual(["call_1"])
+    const value = String(toolResults(s.requests[1])[0]?.result.value)
+    expect(value.split("\n").slice(3, 5)).toEqual(["Preview of the first 2,000 characters:", "&lt;saved-output>"])
+  })
+
+  budgetScenario(
+    "a fork sends its source's replaced result byte for byte and publishes no replacement of its own",
+    function* (s) {
+      yield* s.admit("Search five ways")
+      yield* s.llm.push(emits("", 41_000, 42_000, 43_000, 44_000, 49_000), TestLLM.text("Done", "done-source"))
+      yield* s.resume
+      const forked = yield* s.session.fork({ sessionID })
+      yield* s.llm.push(TestLLM.text("Forked answer", "done-fork"))
+      yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+      yield* s.session.resume(forked.id)
+
+      expect(wrapped(s.requests[1])).toEqual(["call_5"])
+      // The copy names the source's folder, as the reference's branch does; reading that file asks (tool-runtime-8).
+      expect(toolResults(s.requests[2])).toEqual(toolResults(s.requests[1]))
+      expect(yield* overridden(s, forked.id)).toEqual([])
+    },
+  )
+
+  // An imported session's history is data (classes 5 and 7). Its rows are written as `SessionTransfer.import` writes
+  // them.
+  const imported = Session.ID.make("ses_runner_imported")
+  const importWithOverride = (s: Scenario, override: unknown) =>
+    Effect.gen(function* () {
+      yield* insertSession(imported)
+      const encode = Schema.encodeSync(SessionMessage.Info)
+      const decode = Schema.decodeUnknownSync(SessionMessage.Info)
+      const rows = [
+        decode({ id: "msg_import1", type: "user", text: "Search", time: { created: 0 } }),
+        decode({
+          id: "msg_import2",
+          type: "assistant",
+          agent: "build",
+          model: { id: "model", providerID: "fake" },
+          content: [
+            {
+              type: "tool",
+              id: "call_imported",
+              name: "emit",
+              state: {
+                status: "completed",
+                input: { text: "i", count: 30_000 },
+                content: [{ type: "text", text: "i".repeat(30_000) }],
+              },
+              time: { created: 0, completed: 0 },
+            },
+          ],
+          time: { created: 0, completed: 0 },
+        }),
+      ].map((message, index) => {
+        const { id: _, type: __, ...data } = encode(message) as Record<string, unknown>
+        // The file's override goes into the row as the file spelled it.
+        const content =
+          message.type === "assistant"
+            ? (data.content as Array<Record<string, unknown>>).map((part) => ({ ...part, override }))
+            : undefined
+        return {
+          id: message.id,
+          session_id: imported,
+          type: message.type,
+          seq: index + 1,
+          time_created: 0,
+          data: (content === undefined ? data : { ...data, content }) as never,
+        }
+      })
+      yield* s.db.insert(SessionMessageTable).values(rows).run().pipe(Effect.orDie)
+      yield* Bus.reserveSequence(s.db, imported, rows.length)
+      yield* s.llm.push(TestLLM.text("Answered", "done-imported"))
+      yield* s.session.prompt({ sessionID: imported, text: "Go on", resume: false })
+      yield* s.session.resume(imported)
+      return s.requests.at(-1)
+    })
+
+  budgetScenario(
+    "sends an imported result whose override names a file outside tool-output as stored, and reads nothing",
+    function* (s) {
+      const data = yield* dataFolder(s)
+      // A marker file where `<tool-output>/<session>/../../.ssh/id_rsa` would lead.
+      const secret = path.join(data, ".ssh", "id_rsa")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.dirname(secret), { recursive: true })
+        await fs.writeFile(secret, "MARKER-imported-override-secret")
+      })
+      const request = yield* importWithOverride(s, { session: imported, name: "../../.ssh/id_rsa", format: 1 })
+
+      expect(toolResults(request)).toEqual([
+        { id: "call_imported", result: { type: "text", value: "i".repeat(30_000) } },
+      ])
+      const sent = JSON.stringify(request?.messages)
+      expect({ marker: sent.includes("MARKER-imported"), path: sent.includes(".ssh") }).toEqual({
+        marker: false,
+        path: false,
+      })
+    },
+  )
+
+  budgetScenario("renders an imported result's valid override as the wrapper", function* (s) {
+    const data = yield* dataFolder(s)
+    const name = "msg_import2-call_imported-1a2b3c4d.txt"
+    const request = yield* importWithOverride(s, { session: imported, name, format: 1 })
+
+    const file = path.join(data, "tool-output", imported, name)
+    const lines = String(toolResults(request)[0]?.result.value).split("\n")
+    expect(lines.slice(0, 2)).toEqual([
+      "<saved-output>",
+      `Output too large to include (29.3KB). The full output is saved at: ${file}`,
+    ])
+  })
+
+  // The save refuses a session folder that is a link (tool-runtime-8's door, class 4): the result goes whole and, being
+  // sent, is frozen, so a later request does not try again once the folder is fixed (class 7).
+  budgetScenario("sends the result whole and never retries it when its file cannot be saved", function* (s) {
+    const data = yield* dataFolder(s)
+    const outside = path.join(data, "outside")
+    const folder = path.join(data, "tool-output", sessionID)
+    yield* Effect.promise(async () => {
+      await fs.mkdir(outside, { recursive: true })
+      await fs.mkdir(path.dirname(folder), { recursive: true })
+      await fs.symlink(outside, folder, process.platform === "win32" ? "junction" : "dir")
+    })
+    yield* s.admit("Search five ways")
+    yield* s.llm.push(emits("", 41_000, 42_000, 43_000, 44_000, 49_000), TestLLM.text("Done", "done-refused"))
+    yield* s.resume
+
+    expect(wrapped(s.requests[1])).toEqual([])
+    expect(yield* Effect.promise(() => fs.readdir(outside))).toEqual([])
+    yield* Effect.promise(() => fs.unlink(folder))
+    yield* s.admit("And again")
+    yield* s.llm.push(TestLLM.text("Again", "again-refused"))
+    yield* s.resume
+
+    expect(wrapped(s.requests[2])).toEqual([])
+    expect(yield* overridden(s, sessionID)).toEqual([])
+  })
+
+  // The budget runs before automatic compaction measures the request, as the reference orders them: five results of
+  // 45,000 characters (about 56,000 tokens) would pass a 40,000-token window's 20,000-token threshold, and the four
+  // wrappers the 60,000 limit leaves do not.
+  budgetScenario("applies the budget before automatic compaction measures the request", function* (s) {
+    s.currentModel = testModel("forty-budget", { context: 40_000, output: 32_000 })
+    yield* limit(s, 60_000)
+    yield* s.admit("Search five ways")
+    yield* s.llm.push(emits("", 45_000, 45_000, 45_000, 45_000, 45_000), TestLLM.text("Done", "done-ordered"))
+    yield* s.resume
+
+    expect((yield* s.messages).filter((message) => message.type === "compaction")).toEqual([])
+    expect(wrapped(s.requests[1])).toEqual(["call_1", "call_2", "call_3", "call_4"])
+  })
+
+  // With automatic compaction off, the refusal measures the same request: whole, the five results would pass the
+  // window's blocking limit, and the wrappers the budget chose bring it under (class 3).
+  budgetScenario("refuses no request the budget made fit when automatic compaction is off", function* (s) {
+    s.currentModel = testModel("forty-budget-off", { context: 40_000, output: 32_000 })
+    const compaction = yield* SessionCompaction.Service
+    yield* compaction.transform((editor) => editor.configure({ auto: false }))
+    yield* limit(s, 60_000)
+    yield* s.admit("Search five ways")
+    yield* s.llm.push(emits("", 45_000, 45_000, 45_000, 45_000, 45_000), TestLLM.text("Done", "done-budget-off"))
+    yield* s.resume
+
+    expect(wrapped(s.requests[1])).toEqual(["call_1", "call_2", "call_3", "call_4"])
+  })
+
+  // A manual compaction steered into a turn that moved to a fallback model of another provider leaves a native window
+  // the fallback cannot replay, so the report after it measures the whole history, overridden results included. Whole,
+  // the five results are about 56,000 tokens; as one result and four wrappers they are about 14,000 (class 3).
+  budgetScenario("reports the wrappers after a manual compaction the fallback model cannot replay", function* (s) {
+    modelLimits.set("native-budget", { context: 1_000_000, output: 32_000 })
+    yield* Effect.addFinalizer(() => Effect.sync(() => modelLimits.delete("native-budget")))
+    s.currentModel = LanguageModel.make({ id: "native-budget", provider: "openai", route: OpenAIResponses.route })
+    s.compaction = { type: "native" }
+    yield* limit(s, 60_000)
+    const reports = new Array<{ readonly used: unknown; readonly stale: unknown }>()
+    yield* s.bus.subscribe().pipe(
+      Stream.filter((event) => event.type === "session.context.updated"),
+      Stream.runForEach((event) =>
+        Effect.sync(() => {
+          const data = event.data as { readonly used?: unknown; readonly stale?: unknown }
+          reports.push({ used: data.used, stale: data.stale })
+        }),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* s.session.prompt({
+      sessionID,
+      text: "Search five ways",
+      turn: { fallbackModel: { providerID: Provider.ID.make("fake"), id: ID.make("replacement") } },
+      resume: false,
+    })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(
+      emits("", 45_000, 45_000, 45_000, 45_000, 45_000),
+      TestLLM.tool("call_wait", "echo", { text: "wait" }),
+      CompactionCheckpointResponse.make({
+        responseID: "resp_budget_window",
+        checkpoint: { type: "compaction", provider: s.currentModel.provider, encrypted: "budget-window" },
+      }),
+      TestLLM.text("Done", "done-fallback-report"),
+    )
+    const blocked = yield* s.blockTools()
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (let index = 0; index < 2; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    yield* blocked.started
+    yield* s.session.compact({ sessionID })
+    yield* blocked.release
+    yield* Fiber.join(run)
+    for (let turn = 0; turn < 200 && !reports.some((report) => report.stale === true); turn++) yield* Effect.yieldNow
+
+    expect(wrapped(s.requests[4])).toEqual(["call_1", "call_2", "call_3", "call_4"])
+    expect((yield* s.messages).filter((message) => message.type === "compaction")).toMatchObject([
+      { status: "completed", reason: "manual", providerContext: { version: 1 } },
+    ])
+    const after = reports.filter((report) => report.stale === true)
+    expect(after).toHaveLength(1)
+    expect(after[0]!.used).toBeGreaterThan(11_000)
+    expect(after[0]!.used).toBeLessThan(30_000)
   })
 })

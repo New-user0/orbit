@@ -149,6 +149,7 @@ describe("public event manifest", () => {
         "session.execution.interrupted.1",
         "session.instructions.updated.2",
         "session.synthetic.1",
+        "session.recap.recorded.1",
         "session.skill.activated.1",
         "session.shell.started.1",
         "session.shell.ended.1",
@@ -163,6 +164,7 @@ describe("public event manifest", () => {
         "session.tool.called.1",
         "session.tool.success.2",
         "session.tool.failed.2",
+        "session.tool.overridden.1",
         "session.reasoning.started.1",
         "session.reasoning.ended.1",
         "session.retry.scheduled.1",
@@ -180,6 +182,7 @@ describe("public event manifest", () => {
       SessionEvent.UsageRecorded,
       SessionEvent.SideQueryRecorded,
       SessionEvent.MessageContentUpdated,
+      SessionEvent.Tool.Overridden,
     ])
     expect(SessionEvent.UsageRecorded.durability).toBe("durable")
     expect(EventManifest.Durable.get("session.usage.recorded.1")).toBe(SessionEvent.UsageRecorded)

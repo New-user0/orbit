@@ -931,19 +931,38 @@ const flattenMessage = (message: Message) => {
       if (part.type === "text")
         return part.text ? [`[${message.role === "user" ? "User" : "Assistant"}]: ${part.text}`] : []
       if (part.type === "media") return [`[${part.media.mediaType} omitted]`]
-      if (part.type === "tool-call") return [`[Assistant tool call]: ${part.name}(${JSON.stringify(part.input) ?? ""})`]
-      if (part.type !== "tool-result") return []
-      const result = part.result
-      const output =
-        result.type === "content"
-          ? serializeToolContent(result.value)
-          : typeof result.value === "string"
-            ? result.value
-            : (JSON.stringify(result.value) ?? "")
-      const label = result.type === "error" ? "Tool error" : "Tool result"
-      return [`[${label}]: ${truncateToolOutput(output)}`]
+      if (part.type === "tool-call" || part.type === "tool-result") return [toolPartText(part)]
+      return []
     })
     .join("\n")
+}
+
+/**
+ * A request message with its tool calls and results written out as transcript text, so that a request that sends no
+ * tool definitions can carry it: some providers refuse tool blocks without the definitions. A tool message becomes a
+ * user message, the side that providers put a tool result on.
+ */
+export const withoutToolBlocks = (message: Message) => {
+  if (!message.content.some((part) => part.type === "tool-call" || part.type === "tool-result")) return message
+  return Message.make({
+    id: message.id,
+    role: message.role === "tool" ? "user" : message.role,
+    content: message.content.map((part) =>
+      part.type === "tool-call" || part.type === "tool-result" ? Message.text(toolPartText(part)) : part,
+    ),
+  })
+}
+
+const toolPartText = (part: Extract<ContentPart, { type: "tool-call" | "tool-result" }>) => {
+  if (part.type === "tool-call") return `[Assistant tool call]: ${part.name}(${JSON.stringify(part.input) ?? ""})`
+  const result = part.result
+  const output =
+    result.type === "content"
+      ? serializeToolContent(result.value)
+      : typeof result.value === "string"
+        ? result.value
+        : (JSON.stringify(result.value) ?? "")
+  return `[${result.type === "error" ? "Tool error" : "Tool result"}]: ${truncateToolOutput(output)}`
 }
 
 const serializeToolContent = (content: ReadonlyArray<SessionMessage.ToolStateCompleted["content"][number]>) =>

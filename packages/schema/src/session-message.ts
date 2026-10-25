@@ -172,6 +172,18 @@ export const ToolState = Schema.Union([ToolStateStreaming, ToolStateRunning, Too
 )
 export type ToolState = ToolStateStreaming | ToolStateRunning | ToolStateCompleted | ToolStateError
 
+/**
+ * Where the message budget saved a result: the session whose tool-output folder holds the file, the file's one-segment
+ * name and the wrapper's version. The session has the shape of a session folder's key and the name the shape the step
+ * gives a saved file, so neither can climb out of the folder once joined (class 5).
+ */
+export interface ToolOverride extends Schema.Schema.Type<typeof ToolOverride> {}
+export const ToolOverride = Schema.Struct({
+  session: Schema.String.check(Schema.isPattern(/^ses_[A-Za-z0-9_]{1,96}$/)),
+  name: Schema.String.check(Schema.isPattern(/^msg_[A-Za-z0-9]{1,64}-[A-Za-z0-9_-]{0,64}-[0-9a-f]{8}\.(txt|json)$/)),
+  format: Schema.Literal(1),
+}).annotate({ identifier: "Session.Message.Assistant.Tool.Override" })
+
 export interface AssistantTool extends Schema.Schema.Type<typeof AssistantTool> {}
 export const AssistantTool = Schema.Struct({
   type: Schema.tag("tool"),
@@ -181,6 +193,12 @@ export const AssistantTool = Schema.Struct({
   executed: Schema.Boolean.pipe(optional),
   providerState: ProviderState.pipe(optional),
   providerResultState: ProviderState.pipe(optional),
+  /**
+   * A `ToolOverride` the message budget recorded: the model gets the saved copy's wrapper in place of this result, whose
+   * own content is kept. Stored as any JSON and decoded where it is lowered, so a malformed one in an imported or edited
+   * history costs only its own result (class 7).
+   */
+  override: Schema.Json.pipe(optional),
   state: ToolState,
   time: Schema.Struct({
     created: DateTimeUtcFromMillis,
@@ -311,6 +329,17 @@ export const Idle = Schema.Struct({
   outcome: Schema.Literals(["succeeded", "failed", "interrupted"]),
 }).annotate({ identifier: "Session.Message.Idle" })
 
+/**
+ * The away summary recorded for a person returning to the Session. It is shown to people only: no model request
+ * includes it.
+ */
+export interface Recap extends Schema.Schema.Type<typeof Recap> {}
+export const Recap = Schema.Struct({
+  ...Base,
+  type: Schema.tag("recap"),
+  text: Schema.String,
+}).annotate({ identifier: "Session.Message.Recap" })
+
 export const Info = Schema.Union([
   AgentSelected,
   ModelSelected,
@@ -323,6 +352,7 @@ export const Info = Schema.Union([
   Assistant,
   Compaction,
   Idle,
+  Recap,
 ]).annotate({ identifier: "Session.Message.Info" })
 export type Info =
   | AgentSelected
@@ -336,4 +366,5 @@ export type Info =
   | Assistant
   | Compaction
   | Idle
+  | Recap
 export type Type = Info["type"]

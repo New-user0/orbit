@@ -39,7 +39,9 @@ describe("FileLedger", () => {
 
       yield* readNow(sessionID, file)
       expect(yield* ledger.assertFresh(sessionID, file, "a.ts").pipe(Effect.exit)).toEqual(Exit.void)
-      expect(message(yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.exit))).toContain("has no read in this session")
+      expect(message(yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.exit))).toContain(
+        "has no read in this session",
+      )
       expect((yield* ledger.assertFresh(other, file, "a.ts").pipe(Effect.flip)).code).toBe("file.unread")
 
       yield* Effect.promise(() => fs.utimes(file, new Date(2_000_000), new Date(2_000_000)))
@@ -294,4 +296,136 @@ describe("FileLedger", () => {
       )
     }).pipe(Effect.provide(ledgerLayer)),
   )
+})
+
+// prompts-context-7: the ledger is also the store of the text a session's own write left in a file, which the
+// file-change reminder diffs against (durable-reminders.test.ts). As in the reference's read-file cache, one store serves
+// both freshness and change detection, and it is bounded: dropping an entry drops its freshness too.
+describe("FileLedger bounds", () => {
+  const ledgerLayer = AppNodeBuilder.build(FileLedger.node, [Location.node.replace(tempLocationLayer)])
+  const digestOf = (text: string) => FileLedger.digest(new TextEncoder().encode(text))
+  // What a writing tool records: the time and digest of its result, and the text it left (`FileMutation.readSnapshot`).
+  const written = (text: string) => ({ mtimeMs: 1_000, digest: digestOf(text), text })
+  const unread = (file: string) =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      const exit = yield* ledger.assertRead(sessionID, file, path.basename(file)).pipe(Effect.exit)
+      return Exit.isFailure(exit)
+    })
+
+  it.live("holds at most 100 files per session and drops the least recently used first", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const ledger = yield* FileLedger.Service
+      const file = (index: number) => path.join(tmp.path, `file-${index}.ts`)
+      yield* Effect.promise(() => Promise.all([0, 1, 2].map((index) => Bun.write(file(index), String(index)))))
+      for (let index = 0; index < 100; index++)
+        yield* ledger.recordWrite(sessionID, file(index), written(String(index)))
+      // Asking about a file is a use: file-0 is now the most recent, so file-1 is the least recently used.
+      yield* ledger.assertRead(sessionID, file(0), "file-0.ts")
+      yield* ledger.recordWrite(sessionID, file(100), written("100"))
+      expect([yield* unread(file(0)), yield* unread(file(1)), yield* unread(file(2))]).toEqual([false, true, false])
+      // Another session's files are counted for that session only.
+      yield* ledger.recordWrite(other, file(1), written("1"))
+      const exit = yield* ledger.assertRead(other, file(1), "file-1.ts").pipe(Effect.exit)
+      expect(exit).toEqual(Exit.void)
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  it.live("holds at most 25 MB of written text per session", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const ledger = yield* FileLedger.Service
+      const [one, small, two] = ["one.txt", "small.txt", "two.txt"].map((name) => path.join(tmp.path, name))
+      yield* Effect.promise(() => Promise.all([one, small, two].map((file) => Bun.write(file, "on disk"))))
+      const large = "x".repeat(13 * 1024 * 1024)
+      yield* ledger.recordWrite(sessionID, one, written(large))
+      yield* ledger.recordWrite(sessionID, small, written("small"))
+      yield* ledger.recordWrite(sessionID, two, written(large))
+      expect([yield* unread(one), yield* unread(small), yield* unread(two)]).toEqual([true, false, false])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  // Builder's row: a read keeps no text even when its caller hands some over, so it always ends the watch.
+  it.live("watches what a write left until a read of the same file", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      yield* ledger.recordWrite(sessionID, "/project/a.ts", written("a"))
+      yield* ledger.recordWrite(sessionID, "/project/b.ts", written("b"))
+      yield* ledger.recordRead(sessionID, "/project/a.ts", written("a"))
+      expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual(["/project/b.ts"])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  // Review fix loop 7: the order the file-change reminder checks the watched files in, which goes on across steps.
+  it.live("lists the files not yet checked in the scan first, the newest first, and starts a new scan after all", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      const order = ledger.toCheck(sessionID).pipe(Effect.map((files) => files.map((file) => file.path)))
+      for (const name of ["a", "b", "c", "d"])
+        yield* ledger.recordWrite(sessionID, `/project/${name}.ts`, written(name))
+      expect(yield* order).toEqual(["/project/d.ts", "/project/c.ts", "/project/b.ts", "/project/a.ts"])
+      yield* ledger.checked(sessionID, ["/project/d.ts", "/project/c.ts"])
+      expect(yield* order).toEqual(["/project/b.ts", "/project/a.ts", "/project/d.ts", "/project/c.ts"])
+      // A file no longer watched does not hold the scan open.
+      yield* ledger.recordRead(sessionID, "/project/a.ts", written("a"))
+      yield* ledger.checked(sessionID, ["/project/b.ts"])
+      expect(yield* order).toEqual(["/project/d.ts", "/project/c.ts", "/project/b.ts"])
+      yield* ledger.checked(sessionID, ["/project/d.ts"])
+      expect(yield* order).toEqual(["/project/c.ts", "/project/b.ts", "/project/d.ts"])
+      // Listing is not a use, and noting a check counts nothing as read.
+      expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual([
+        "/project/b.ts",
+        "/project/c.ts",
+        "/project/d.ts",
+      ])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  // Test gate row (class 7): the file-change reminder settles what it checked only after its row is posted, so a write
+  // recorded in between must survive that settle; the matching record is the control.
+  it.live("settles a record only while it is still the one that was checked", () =>
+    Effect.gen(function* () {
+      const ledger = yield* FileLedger.Service
+      const read = { mtimeMs: 3_000, digest: digestOf("read") }
+      yield* ledger.recordWrite(sessionID, "/project/a.ts", written("first"))
+      yield* ledger.recordWrite(sessionID, "/project/b.ts", written("first"))
+      const [a, b] = yield* ledger.watched(sessionID)
+      yield* ledger.recordWrite(sessionID, "/project/a.ts", { ...written("second"), mtimeMs: 2_000 })
+      yield* ledger.settle(sessionID, a.path, a.seen, read)
+      yield* ledger.settle(sessionID, b.path, b.seen, read)
+      expect(yield* ledger.watched(sessionID)).toEqual([
+        { path: "/project/a.ts", seen: { ...written("second"), mtimeMs: 2_000 } },
+      ])
+      // A settle without a next record forgets the file, but again only while the record is the one checked.
+      yield* ledger.settle(sessionID, a.path, a.seen)
+      expect((yield* ledger.watched(sessionID)).map((file) => file.path)).toEqual(["/project/a.ts"])
+      const [current] = yield* ledger.watched(sessionID)
+      yield* ledger.settle(sessionID, current.path, current.seen)
+      expect(yield* ledger.watched(sessionID)).toEqual([])
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
+
+  // A write that left the same time, or the same text, is still a different record when any one field differs.
+  const replacements = [
+    { field: "time", next: { ...written("first"), place: "/outside/a.ts", mtimeMs: 2_000 } },
+    { field: "digest", next: { ...written("first"), place: "/outside/a.ts", digest: digestOf("other") } },
+    { field: "text", next: { ...written("first"), place: "/outside/a.ts", text: "other" } },
+    { field: "place", next: { ...written("first"), place: "/elsewhere/a.ts" } },
+  ]
+  for (const row of replacements)
+    it.live(`does not settle a record a write replaced with one whose ${row.field} alone differs`, () =>
+      Effect.gen(function* () {
+        const ledger = yield* FileLedger.Service
+        yield* ledger.recordWrite(sessionID, "/project/a.ts", { ...written("first"), place: "/outside/a.ts" })
+        const [held] = yield* ledger.watched(sessionID)
+        yield* ledger.recordWrite(sessionID, "/project/a.ts", row.next)
+        yield* ledger.settle(sessionID, held.path, held.seen, { mtimeMs: 3_000, digest: digestOf("read") })
+        expect(yield* ledger.watched(sessionID)).toEqual([{ path: "/project/a.ts", seen: row.next }])
+        // The control: settling the record that is there now replaces it with the read, which holds no text.
+        const [current] = yield* ledger.watched(sessionID)
+        yield* ledger.settle(sessionID, current.path, current.seen, { mtimeMs: 3_000, digest: digestOf("read") })
+        expect(yield* ledger.watched(sessionID)).toEqual([])
+      }).pipe(Effect.provide(ledgerLayer)),
+    )
 })

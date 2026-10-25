@@ -407,6 +407,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
       await state.sdk.session.inbox.update({ sessionID: state.sessionID, inboxID, delivery: action })
     },
+    recap: async (signal) => {
+      if (state.sessionID) await state.sdk.session.recap({ sessionID: state.sessionID }, { signal })
+    },
     onSubagentInterrupt: (sessionID) => {
       log?.write("send.subagent.interrupt", { sessionID })
       void state.sdk.session.interrupt({ sessionID }).catch(() => {})
@@ -812,6 +815,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         footer,
         onCommit: rememberLocal,
         onEvent: (event) => shell.observe?.(event),
+        onActive: (active) => shell.setRunning?.(active),
         onSessionTitle: (title) => {
           state.sessionTitle = title
           shell.setTitle(title)

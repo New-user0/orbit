@@ -71,6 +71,33 @@ test("preserves the schema in an existing cli.json", async () => {
   expect(await Bun.file(file).json()).toEqual(config)
 })
 
+// clients-ux-27, class 8: when the away summary runs is a spend choice, so it comes from the person's own cli.json and
+// never from the folder Orbit starts in. The project's marker files set a value that would show if they were read.
+test("session.recap.after_minutes is read from the person's cli.json and from no project folder", async () => {
+  await using config = await tmpdir()
+  await using project = await tmpdir()
+  await Bun.write(path.join(config.path, "cli.json"), JSON.stringify({ session: { recap: { after_minutes: 7 } } }))
+  await Bun.write(path.join(project.path, "cli.json"), JSON.stringify({ session: { recap: { after_minutes: 0.001 } } }))
+  await Bun.write(
+    path.join(project.path, ".orbit", "cli.json"),
+    JSON.stringify({ session: { recap: { after_minutes: 0.001 } } }),
+  )
+  const cwd = process.cwd()
+  process.chdir(project.path)
+  try {
+    const read = await run(
+      config.path,
+      Effect.gen(function* () {
+        const service = yield* Config.Service
+        return yield* service.get()
+      }),
+    )
+    expect(read.session?.recap?.after_minutes).toBe(7)
+  } finally {
+    process.chdir(cwd)
+  }
+})
+
 test("merges inline CLI config content over the global config", async () => {
   await using directory = await tmpdir()
   const file = path.join(directory.path, "cli.json")
