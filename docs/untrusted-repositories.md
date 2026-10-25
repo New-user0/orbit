@@ -427,6 +427,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `session-runner-tool-events.test.ts` ("tool input started carries the declared display name") and `server/test/session-import-display-name.test.ts`. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and
   `MCP hints and permissions` in `core/test/mcp.test.ts`.
+- A recap's text (the away summary), which a model writes from the session's history: `SessionRecap` stores it through
+  `body` (`@orbit/util/plain`), and `SessionTransfer.import` writes an imported `recap` message's text through `body`
+  too, so every reader gets it with its control and bidi characters written out. Proof: `core/test/session-recap.test.ts`
+  ("the stored recap has its control and bidi characters written out...") and `core/test/session-create.test.ts` ("an
+  imported away summary's text is stored with its control and bidi characters written out").
 - A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
   model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
   a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
@@ -1029,7 +1034,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/acp/trust-first.subprocess.test.ts`, `packages/tui/test/mini/trust-first.shared.test.ts`.
 - Every server route that starts work, reads the folder's instruction files or runs something in a folder
   (`session.create`, `import` (where it lands), `prompt`, `command`, `skill`, `synthetic`, `shell`, `compact`, `fork`,
-  the destination of `move`, `generate`, `assist.label` and `assist.suggestion` (both ask the model about the
+  the destination of `move`, `generate`, `recap` (the away summary, which reads the session's history into a call on
+  the small model, refused before that read), `assist.label` and `assist.suggestion` (both ask the model about the
   folder's tool output or history; proof: `packages/server/test/session-assist.test.ts`, on a port and in process),
   `update` when it clears the title for the model to write one,
   `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
@@ -1040,7 +1046,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/server/src/handlers/trust-error.ts`, which answers
   `UntrustedFolderError` (403). `SessionExecution` starts no drain, startup recovery included, for a session whose
   folder is not trusted, and keeps its claim. Proof: `packages/server/test/trust-first.test.ts`,
-  `packages/sdk/test/trust-first.test.ts`.
+  `packages/sdk/test/trust-first.test.ts`, and for `recap` before the model call,
+  `packages/server/test/session-recap.test.ts`.
 - A plugin's session doors, which run in the server process without passing a route (`packages/core/src/plugin/host.ts`):
   `create` (the folder it names, or the parent's), `prompt`, `command`, `synthetic`, `compact` and `generate` (the
   session's folder) fail with `WorkspaceTrust.UntrustedError` for a folder that is not trusted, decided by

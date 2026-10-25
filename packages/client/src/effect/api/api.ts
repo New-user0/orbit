@@ -592,6 +592,10 @@ export type SessionGenerateOperation<E = never> = (
   input: SessionGenerateInput,
 ) => Effect.Effect<SessionGenerateOutput, E>
 
+export type SessionRecapInput = { readonly sessionID: Session.ID }
+export type SessionRecapOutput = { readonly recorded: boolean }
+export type SessionRecapOperation<E = never> = (input: SessionRecapInput) => Effect.Effect<SessionRecapOutput, E>
+
 export type SessionAssistLabelInput = {
   readonly sessionID: Session.ID
   readonly messageID: SessionMessage.ID
@@ -998,6 +1002,20 @@ export type SessionLogOutput =
             readonly description?: string | undefined
             readonly metadata?: { readonly [x: string]: unknown } | undefined
           }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.recap.recorded"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: { readonly sessionID: Session.ID; readonly text: string }
         }
       | {
           readonly id: Event.ID
@@ -1751,6 +1769,7 @@ export interface SessionApi<E = never> {
     }
   }
   readonly generate: SessionGenerateOperation<E>
+  readonly recap: SessionRecapOperation<E>
   readonly assist: {
     readonly label: SessionAssistLabelOperation<E>
     readonly suggestion: SessionAssistSuggestionOperation<E>

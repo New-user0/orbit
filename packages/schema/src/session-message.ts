@@ -329,6 +329,17 @@ export const Idle = Schema.Struct({
   outcome: Schema.Literals(["succeeded", "failed", "interrupted"]),
 }).annotate({ identifier: "Session.Message.Idle" })
 
+/**
+ * The away summary recorded for a person returning to the Session. It is shown to people only: no model request
+ * includes it.
+ */
+export interface Recap extends Schema.Schema.Type<typeof Recap> {}
+export const Recap = Schema.Struct({
+  ...Base,
+  type: Schema.tag("recap"),
+  text: Schema.String,
+}).annotate({ identifier: "Session.Message.Recap" })
+
 export const Info = Schema.Union([
   AgentSelected,
   ModelSelected,
@@ -341,6 +352,7 @@ export const Info = Schema.Union([
   Assistant,
   Compaction,
   Idle,
+  Recap,
 ]).annotate({ identifier: "Session.Message.Info" })
 export type Info =
   | AgentSelected
@@ -354,4 +366,5 @@ export type Info =
   | Assistant
   | Compaction
   | Idle
+  | Recap
 export type Type = Info["type"]

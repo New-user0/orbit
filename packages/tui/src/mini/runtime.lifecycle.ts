@@ -20,6 +20,7 @@ import { isFallbackTitle } from "@orbit/util/session-title-fallback"
 import { createMiniTitle } from "../util/renderer"
 import { createTuiAttention } from "../attention"
 import { createAttentionEvents, isAttentionEvent } from "../attention-events"
+import { createRecapTrigger } from "../recap"
 import { monoSnapshot } from "./mono"
 import { entrySplash, exitSplash } from "./splash"
 import { resolveRunTheme } from "./theme"
@@ -87,12 +88,16 @@ export type LifecycleInput = {
   onQueuedPromptAction?: (action: QueuedPromptAction, inboxID: string) => Promise<void>
   onSubagentSelect?: (sessionID: string | undefined) => void
   onSubagentInterrupt?: (sessionID: string) => void
+  /** Asks the server for the away summary; the signal aborts when the person comes back. */
+  recap?: (signal: AbortSignal) => Promise<unknown>
 }
 
 export type Lifecycle = {
   footer: FooterApi
   /** Reports a session event that may need the person, so Mini notifies like the TUI does. */
   observe?(event: { type: string; data?: unknown }): void
+  /** Whether Mini's own session is running a turn, as read from the server when the session is loaded or reloaded. */
+  setRunning?(active: boolean): void
   onResize(fn: () => void): () => void
   refreshTheme(): void
   setTitle(title?: string): void
@@ -180,6 +185,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     consoleMode: "disabled",
     clearOnShutdown: false,
   })
+  // Created with the renderer, so the focus it records covers the start-up below: a terminal reports a blur only when
+  // focus changes, and the recap trigger, created later, reads what was missed.
+  const attention = createTuiAttention({ renderer, config: tuiConfig })
   if (mono) renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
   const title = createMiniTitle(renderer, input.host.platform, input.sessionTitle)
   const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono, input.root)
@@ -210,7 +218,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
   const { RunFooter } = await footerTask
   let sessionTitle = input.sessionTitle
-  const attention = createTuiAttention({ renderer, config: tuiConfig })
   const attentionEvents = createAttentionEvents({
     attention,
     // Mini follows one session tree: the root, and the subagents it started.
@@ -220,6 +227,22 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     pending: () => footer.hasPending(),
   })
   renderer.keyInput.on("keypress", attentionEvents.keypress)
+  // Whether Mini's own session is running a turn: read from the server when the session loads, so a turn already under
+  // way when Mini attaches holds the recap, and then kept from the execution events Mini observes.
+  let running = false
+  const setRunning = (active: boolean) => {
+    running = active
+    if (!active) recap?.idle()
+  }
+  const recap = input.recap
+    ? createRecapTrigger({
+        renderer,
+        focus: attention.focus,
+        afterMinutes: () => tuiConfig.session.recap.after_minutes,
+        busy: () => running,
+        request: input.recap,
+      })
+    : undefined
   let closed = false
   let sigintRegistered = false
   let detachSigintListener: (() => void) | undefined
@@ -331,6 +354,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     renderer.keyInput.off("keypress", attentionEvents.keypress)
     attentionEvents.dispose()
     attention.dispose()
+    recap?.dispose()
     let wroteExit = false
 
     try {
@@ -367,8 +391,19 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   return {
     footer,
     observe: (event) => {
-      if (isAttentionEvent(event)) attentionEvents.handle(event)
+      if (!isAttentionEvent(event)) return
+      attentionEvents.handle(event)
+      // The recap waits for the end of a turn of Mini's own session; a subagent's turn is not the person's.
+      if (
+        (event.type === "session.execution.started" ||
+          event.type === "session.execution.succeeded" ||
+          event.type === "session.execution.failed" ||
+          event.type === "session.execution.interrupted") &&
+        event.data.sessionID === (input.getSessionID?.() ?? input.sessionID)
+      )
+        setRunning(event.type === "session.execution.started")
     },
+    setRunning,
     refreshTheme() {
       footer.refreshTheme()
     },
