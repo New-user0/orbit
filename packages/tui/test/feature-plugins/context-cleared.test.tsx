@@ -104,3 +104,55 @@ test.each([
   // Control: the same history without the marker draws the same screen, so the marker adds no row at all.
   expect(withMarker).toBe(await screen([user, assistant], width))
 })
+
+// The runner writes the marker before the request, so on a reloaded session it sits between a prompt and its reply,
+// between two tool-call steps, or beside other markers. Each position must draw exactly the history without it.
+const read = (id: string, file: string, t: number) => ({
+  type: "tool",
+  id,
+  name: "read",
+  state: {
+    status: "completed",
+    input: { filePath: file },
+    content: [{ type: "text", text: `body of ${file}` }],
+    metadata: {},
+  },
+  time: { created: t, completed: t + 1 },
+})
+const step = (id: string, finish: string, content: unknown[], t: number) => ({
+  id,
+  type: "assistant",
+  agent: "build",
+  model: { providerID: "test", id: "test" },
+  finish,
+  content,
+  time: { created: t, completed: t + 2 },
+})
+const stepA = step("assistant-a", "tool-calls", [read("ra1", "a1.txt", 1), read("ra2", "a2.txt", 2)], 1)
+const stepB = step("assistant-b", "tool-calls", [read("rb1", "b1.txt", 5), read("rb2", "b2.txt", 6)], 5)
+const stepC = step("assistant-c", "stop", [{ type: "text", text: "All done here" }], 8)
+const next = { id: "user-1", type: "user", text: "Next one", time: { created: 10 } }
+const reply = step("assistant-d", "stop", [{ type: "text", text: "Reply after idle" }], 12)
+const mark = (id: string) => ({
+  id,
+  type: "context-cleared",
+  trigger: "pressure",
+  tools: [{ assistantMessageID: "assistant-a", id: "ra1" }],
+  time: { created: 4 },
+})
+
+const positions: [string, unknown[], unknown[]][] = [
+  ["first", [mark("m1"), user, stepA, stepC], [user, stepA, stepC]],
+  ["between a prompt and its reply", [user, stepA, stepC, next, mark("m1"), reply], [user, stepA, stepC, next, reply]],
+  ["inside one exploration group", [user, stepA, mark("m1"), stepB, stepC], [user, stepA, stepB, stepC]],
+  ["several in a row", [user, stepA, mark("m1"), mark("m2"), mark("m3"), stepB, stepC], [user, stepA, stepB, stepC]],
+  ["last", [user, stepA, stepC, mark("m1")], [user, stepA, stepC]],
+]
+
+test.each(
+  positions.flatMap(([name, withMarker, without]) =>
+    ([60, 120] as const).map((width) => [`${name} (${width} columns)`, withMarker, without, width] as const),
+  ),
+)("a context-cleared row at %s draws the same screen as the history without it", async (_, withMarker, without, width) => {
+  expect(await screen(withMarker, width)).toBe(await screen(without, width))
+})
