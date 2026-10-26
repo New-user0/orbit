@@ -141,7 +141,8 @@ describe("agent definition: native files", () => {
         description: "Checks things",
         model: { providerID: "example", id: "chat", variant: "high" },
         effort: "medium",
-        tools: { allow: ["read", "grep"], deny: ["shell"] },
+        // The memory scope adds the file tools the list lacks (context-memory-10); `read` is Read's old name.
+        tools: { allow: ["read", "grep", "Write", "Edit"], deny: ["shell"] },
         permissionMode: "accept-edits",
         mcpServers: ["github", { local: { type: "local", command: ["node", "server.js"] } }],
         steps: 7,
@@ -1011,6 +1012,82 @@ describe("agent definition: a file shaped for another product", () => {
     Effect.gen(function* () {
       const agent = yield* loadOne("model: large\nvariant: high\neffort: low")
       expect(agent).toMatchObject({ modelTier: "large", effort: "low" })
+    }),
+  )
+})
+
+// context-memory-10 (S5): while memory is on, an agent with a memory scope and a list of allowed tools gets Write, Edit
+// and Read added to the list when they are missing, in that order, as the reference does, so it can reach its memory.
+// An agent with no list has every tool already. The deny list is left as written, so a tool it names stays denied. The
+// tools and the scope may come from two documents: the addition runs after every document is applied.
+describe("agent definition: tools for an agent with memory", () => {
+  const scoped = (scope: "user" | "flag", input: unknown) => {
+    const result = ConfigNormalize.normalize(input)
+    if (result.type !== "normalized") throw new Error("expected normalized config")
+    return new Document({ type: "document", scope, info: decodeInfo(result.encoded) })
+  }
+  const rows: {
+    readonly name: string
+    readonly front: string
+    readonly after?: Entry[]
+    readonly allow: readonly string[] | undefined
+    readonly deny?: readonly string[]
+  }[] = [
+    { name: "a list without them", front: "tools: Grep\nmemory: user", allow: ["Grep", "Write", "Edit", "Read"] },
+    {
+      name: "a list with Read",
+      front: 'tools: "Read, Grep"\nmemory: project',
+      allow: ["Read", "Grep", "Write", "Edit"],
+    },
+    {
+      name: "a list with all three",
+      front: 'tools: "Edit, Read, Write"\nmemory: local',
+      allow: ["Edit", "Read", "Write"],
+    },
+    { name: "no list", front: "memory: user", allow: undefined },
+    { name: "a list and no scope", front: "tools: Grep", allow: ["Grep"] },
+    {
+      name: "a deny of Write",
+      front: "tools: Grep\ndisallowed_tools: Write\nmemory: user",
+      allow: ["Grep", "Write", "Edit", "Read"],
+      deny: ["Write"],
+    },
+    {
+      name: "memory switched off",
+      front: "tools: Grep\nmemory: user",
+      after: [scoped("user", { memory: { enabled: false } })],
+      allow: ["Grep"],
+    },
+    {
+      name: "the scope from the person's orbit.json",
+      front: "tools: Grep",
+      after: [scoped("user", { agents: { a: { memory: "user" } } })],
+      allow: ["Grep", "Write", "Edit", "Read"],
+    },
+  ]
+  it.live("adds Write, Edit and Read to the allow list of an agent with memory", () =>
+    Effect.gen(function* () {
+      for (const row of rows) {
+        const agent = yield* loadOne(row.front, (directory) => [directoryEntry(directory), ...(row.after ?? [])])
+        expect({ name: row.name, allow: agent.tools?.allow, deny: agent.tools?.deny }).toEqual({
+          name: row.name,
+          allow: row.allow,
+          deny: row.deny,
+        })
+      }
+    }),
+  )
+
+  // The plan's check: `memory: local` decodes from orbit.json and from the document of the `--agents` flag, as it does
+  // from front matter (the row of `reads memory: local`).
+  it.live("decodes memory: local from orbit.json and the agents flag", () =>
+    Effect.gen(function* () {
+      const agents = yield* load({}, () => [
+        jsonDocument({ agents: { fromjson: { memory: "local" } } }),
+        scoped("flag", { agents: { fromflag: { memory: "local" } } }),
+      ])
+      expect((yield* get(agents, "fromjson"))?.memory).toBe("local")
+      expect((yield* get(agents, "fromflag"))?.memory).toBe("local")
     }),
   )
 })
