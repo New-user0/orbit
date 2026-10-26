@@ -69,7 +69,7 @@ const ADVICE =
   "Tool output can be cleared later on, so when a result holds something you will need again, note it in your reply."
 
 const clearedNote = (keep: number) =>
-  `the output of older tool calls is replaced with a short note saying it was cleared, and the output of the ${keep} latest calls is never cleared`
+  `The output of older tool calls is replaced with a short note saying it was cleared. The output of the ${keep} latest calls is never cleared.`
 
 /**
  * The tool-results section: a notice that older tool output is cleared while clearing is on, then the advice, which holds
@@ -87,13 +87,13 @@ export const toolResultsSource = (clearing: Effect.Effect<boolean>) =>
           ? ADVICE
           : [
               "# Clearing of old tool output",
-              `To keep the conversation within its context limit, ${clearedNote(keep)}.`,
+              clearedNote(keep),
               ADVICE,
             ].join("\n\n"),
       changed: (_previous, keep) =>
         keep === null
           ? "Clearing of old tool output is now off: tool output is no longer cleared automatically. Output that was cleared earlier stays cleared."
-          : `Clearing of old tool output is now on: ${clearedNote(keep)}.`,
+          : `Clearing of old tool output is now on. ${clearedNote(keep)}`,
     },
   })
 

@@ -622,10 +622,28 @@ describe("the tool-results section in the runner's request", () => {
       yield* agents.transform((editor) =>
         editor.update(Agent.ID.make("plan"), (agent) => {
           agent.mode = "primary"
-          // Plan's edit deny is a mode rule followed by a folder allow, so the tool list does not change.
-          agent.permissions.push({ action: "edit", resource: "*", effect: "deny" })
-          agent.permissions.push({ action: "edit", resource: "/project/**", effect: "allow" })
+          // Plan's own rules: a mode deny of every edit, then an allow for the plan folder. The folder allow keeps the
+          // edit tool in the list, so a snapshot that honoured the earlier deny would drop it from the request.
+          agent.permissions.push({ action: "AskUserQuestion", resource: "*", effect: "allow" })
+          agent.permissions.push(Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }))
+          agent.permissions.push({ action: "Bash", resource: "*", effect: "ask" })
+          agent.permissions.push({ action: "Edit", resource: "/project/.plans/*", effect: "allow" })
         }),
+      )
+      // A direct tool whose permission is Edit, as the production edit tools are, so Plan's rules reach the request.
+      yield* transformTools(
+        registry,
+        {
+          plan_edit: {
+            name: "plan_edit",
+            description: "Edit a file",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            traits: { concurrencySafe: true },
+            execute: () => Effect.succeed({ output: {} }),
+          },
+        },
+        { codemode: false, permission: "Edit" },
       )
       const tool = (name: string) => ({
         [name]: {
@@ -656,9 +674,10 @@ describe("the tool-results section in the runner's request", () => {
             }),
         },
         {
-          // The harness replaces the permission service, so the grant is written to the session's own rules, which the
-          // tool snapshot merges with the agent's.
-          name: "a grant",
+          // The harness replaces the permission service, so the row cannot answer a real ask with "always". It writes
+          // session rules, the other place the tool snapshot merges with the agent's; the saved-grant store is not
+          // exercised here.
+          name: "a session permission rule",
           event: (id) =>
             s.session.setPermissions({
               sessionID: id,
@@ -713,6 +732,7 @@ describe("the tool-results section in the runner's request", () => {
         const after = yield* ask(s, id, "Two")
         // The system part is identical in every row, the direct tool's included.
         expect(after.system).toEqual(before.system)
+        expect(before.tools.map((definition) => definition.name)).toContain("plan_edit")
         const names = (request: typeof before) => request.tools.map((definition) => definition.name)
         if (row.name.startsWith("a switch")) {
           expect(inPlan).toHaveLength(1)
