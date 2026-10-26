@@ -853,7 +853,9 @@ export const node = makeLocationNode({
     Global.node,
     FSUtil.node,
     MemoryStore.node,
-    MemoryTeam.node,
+    // Before `MemoryTeam`: with it after, a Location whose config cannot be read failed with an interruption in place
+    // of the config's own error (test/location-layer.test.ts, "retries after repairing config reference").
     MemoryAgent.node,
+    MemoryTeam.node,
   ],
 })

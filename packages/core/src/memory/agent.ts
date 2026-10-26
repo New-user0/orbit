@@ -57,8 +57,11 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const trust = yield* ProjectTrust.Service
     const userFolder = path.join(global.data, "memory", "agents")
-    // The data folder is the person's own and may be a link, so the user root is taken where it really is.
-    const user: Folder = { folder: userFolder, real: yield* MemoryStore.realFolder(fs, userFolder) }
+    // The data folder is the person's own and may be a link, so the user root is taken where it really is, once, when it
+    // is first asked for: nothing is read while the Location's services are being built.
+    const user = yield* Effect.cached(
+      MemoryStore.realFolder(fs, userFolder).pipe(Effect.map((real): Folder => ({ folder: userFolder, real }))),
+    )
 
     const repository = (name: string) =>
       Effect.cached(
@@ -83,13 +86,13 @@ const layer = Layer.effect(
 
     // Trust first: nothing of the repository's roots is resolved before the project is trusted (class 1).
     const root = Effect.fnUntraced(function* (scope: Scope) {
-      if (scope === "user") return user
+      if (scope === "user") return yield* user
       if (!(yield* trust.trusted())) return undefined
       return yield* scope === "project" ? project : local
     })
 
     const current = Effect.fn("MemoryAgent.current")(function* () {
-      const roots = [user, yield* root("project"), yield* root("local")]
+      const roots = [yield* user, yield* root("project"), yield* root("local")]
       return roots.filter((item): item is Folder => item !== undefined)
     })
 
