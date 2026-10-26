@@ -81,6 +81,7 @@ const BUILT_INS = [
   "core/memory-guide",
   "core/memory-index",
   "core/team-memory-index",
+  "core/agent-memory",
   "core/date",
   "core/environment",
   "core/vcs-snapshot",
