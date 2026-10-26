@@ -692,9 +692,10 @@ export const withoutReplaced = (messages: readonly SessionMessage.Info[]) => {
 
 /**
  * The user messages that arrived while work was in progress: a steer that follows a round of tool calls the client ran,
- * with nothing between that ends the busy period. A first prompt, one after idle, an interruption, a checkpoint or a
- * move, queued input (it waited for the work to end) and a steer after a final text-only step are all fresh prompts and
- * get no note. Decided from history up to each message, so an earlier request never changes when history grows.
+ * with nothing between that ends the busy period. A first prompt, one after idle, an interruption, a checkpoint that keeps
+ * nothing or a move, queued input (it waited for the work to end) and a steer after a final text-only step are all fresh
+ * prompts and get no note. A checkpoint that keeps messages is lowered first, so a steer stored after it follows the
+ * kept messages and can be a steer. Decided from history up to each message, so an earlier request never changes when history grows.
  */
 const queuedInput = (history: readonly SessionMessage.Info[]) => {
   const queued = new Set<SessionMessage.ID>()

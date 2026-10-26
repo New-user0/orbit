@@ -964,4 +964,28 @@ describe("SessionProjector tool overrides", () => {
       expect(yield* compactionsOf(inside.id)).toEqual([])
     }),
   )
+
+  // The completed row is appended when no running row exists (a compaction that began before the log was kept), and
+  // that path copies `retain` as well.
+  forking.effect("appends a completed checkpoint with its retain when no compaction was running", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const bus = yield* Bus.Service
+      const kept = yield* seedStep(bus, sessionID, { id: "msg_append_kept", calls: [] })
+      yield* bus.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        reason: "manual",
+        text: "summary",
+        recent: "",
+        retain: kept,
+      })
+      const rows = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows.map((row) => row.data)).toMatchObject([{ status: "completed", retain: kept }])
+    }),
+  )
 })

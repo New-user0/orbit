@@ -890,6 +890,8 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     },
     {
       name: "an unknown ID",
+      prepare: (id) =>
+        s.bus.publish(SessionEvent.InstructionsUpdated, { sessionID: id, delta: {}, text: "Updated" }).pipe(Effect.asVoid),
       retain: () => Effect.succeed(SessionMessage.ID.make("msg_missing")),
       expected: [...plain(1), ...plain(2), ...plain(3), "compaction"],
       warns: true,
@@ -959,6 +961,20 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     expect({ name: row.name, warnings: logged.length }).toEqual({ name: row.name, warnings: row.warns ? 1 : 0 })
     // The log line never repeats the stored value.
     for (const line of logged) expect(line).not.toContain("\u001b")
+    // An instruction update recorded before the checkpoint is superseded by its baseline, kept view or failed-open view.
+    const checkpointAt = value.findIndex((message) => message.type === "compaction")
+    expect({ name: row.name, early: value.slice(0, checkpointAt).filter((message) => message.type === "system") }).toEqual({
+      name: row.name,
+      early: [],
+    })
+    if (row.name === "an unknown ID") {
+      // Control: an update recorded after the checkpoint stays.
+      yield* s.bus.publish(SessionEvent.InstructionsUpdated, { sessionID: id, delta: {}, text: "Later" })
+      const later = yield* SessionHistory.load(s.db, id, "latest")
+      expect(later.slice(later.findIndex((message) => message.type === "compaction")).map((message) => message.type)).toContain(
+        "system",
+      )
+    }
     // The request starts with the checkpoint, then the earlier history.
     const lowered = toLLMMessages(value, fakeModel)
     expect(textOf(lowered[0]!)).toContain("Forged summary")
@@ -1131,10 +1147,14 @@ transferred.effect("an import refuses a checkpoint whose retain is not a message
       info: { ...document.info, id: Session.ID.create() },
       messages: document.messages.map((message) => (message.type === "compaction" ? { ...message, retain: "../x" } : message)),
     }
-    expect(() => Schema.decodeUnknownSync(SessionTransfer.Data)(edited)).toThrow()
+    // The import command reads the file text with this exact decode before it sends anything to a server, and the
+    // server route decodes the same schema, so a document that fails here never reaches `SessionTransfer.import`.
+    const fromFile = Schema.decodeUnknownEffect(Schema.fromJsonString(SessionTransfer.Data))
+    const refused = yield* Effect.result(fromFile(JSON.stringify(edited)))
+    expect(refused._tag).toBe("Failure")
     expect((yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie)).length).toBe(sessionsBefore)
-    // Control: the unedited document decodes.
-    expect(() => Schema.decodeUnknownSync(SessionTransfer.Data)(document)).not.toThrow()
+    // Control: the unedited file decodes.
+    expect((yield* Effect.result(fromFile(JSON.stringify(document))))._tag).toBe("Success")
   }),
 )
 
