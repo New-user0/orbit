@@ -421,3 +421,21 @@ describe("InstructionBuiltIns.toolResults", () => {
     }),
   )
 })
+
+// `orb run --bare` sets ORBIT_DISABLE_INSTRUCTIONS before the server starts, and the default node reads it once at
+// load, so each row starts a fresh process; the row with "0" is the control on the same fixture.
+describe("the default InstructionBuiltIns.node", () => {
+  test.each([
+    ["1", "leaves the tool-results section out"],
+    ["0", "carries the tool-results section"],
+  ])("with ORBIT_DISABLE_INSTRUCTIONS=%s %s", async (value) => {
+    const child = Bun.spawn([process.execPath, "test", "./test/fixture/builtins-env.child.ts"], {
+      cwd: path.join(import.meta.dir, "..", ".."),
+      env: { ...process.env, ORBIT_DISABLE_INSTRUCTIONS: value },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [out, err, code] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited])
+    expect({ code, log: code === 0 ? "" : out + err }).toEqual({ code: 0, log: "" })
+  }, 60_000)
+})
