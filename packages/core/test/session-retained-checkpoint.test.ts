@@ -1069,6 +1069,23 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     "compaction",
   ])
   expect(onRow.logged).toHaveLength(1)
+
+  // A start at exactly the previous checkpoint's start is within its view (the view's first row is allowed).
+  const same = yield* newSession(s, "same_start")
+  yield* grow(s, 3, { id: same })
+  const sameStart = yield* userID(s, "prompt 3", same)
+  yield* s.llm.push(summaryReply("previous"))
+  yield* compactWith(s, { id: same, retain: sameStart })
+  yield* grow(s, 1, { id: same, from: 4 })
+  yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID: same, reason: "manual", recent: "" })
+  yield* s.bus.publish(SessionEvent.Compaction.Ended, { sessionID: same, reason: "manual", text: "Second summary", recent: "", retain: sameStart })
+  const onStart = yield* withWarnings(SessionHistory.load(s.db, same, "latest"))
+  expect(onStart.value.filter((message) => REAL.includes(message.type)).map(typeOf)).toEqual([
+    ...plain(3),
+    ...plain(4),
+    "compaction",
+  ])
+  expect(onStart.logged).toHaveLength(0)
 })
 
 // ---------------------------------------------------------------------------------------------------------------------

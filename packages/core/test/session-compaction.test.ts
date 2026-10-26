@@ -1973,6 +1973,39 @@ it.effect("a native compaction resent as text keeps the summary of a retained ch
   }),
 )
 
+// A view that failed open can hold two completed compactions; the text fallback leads with the newest one.
+it.effect("a native compaction resent as text leads with the newest of two checkpoints", () =>
+  Effect.gen(function* () {
+    const endpoint = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:1" }).responses("gpt-5.4-mini")
+    checkpoints = [
+      () =>
+        Effect.fail(
+          new AIError({ reason: new InvalidRequestError({ message: "Too large", classification: "payload-too-large" }) }),
+        ),
+      () =>
+        Effect.succeed(
+          CompactionCheckpointResponse.make({
+            responseID: "resp_cm4_two_checkpoints",
+            checkpoint: { type: "compaction", provider: endpoint.provider, encrypted: "native-text" },
+          }),
+        ),
+    ]
+    const run = yield* scripted(
+      "ses_cm4_two_checkpoints",
+      [previousCheckpoint("OLDER-SUMMARY"), userText("Kept request"), previousCheckpoint("NEWER-SUMMARY"), userText("Newest request")],
+      [],
+      {
+        context: (context) => ({ ...context, model: { ...context.model, model: endpoint, compaction: { type: "native" } } }),
+      },
+    ).pipe(Effect.ensuring(Effect.sync(() => (checkpoints = []))))
+
+    expect(run.outcome).toEqual({ status: "completed" })
+    const resent = run.sent[1]?.messages ?? []
+    expect(textOf(resent[0])).toContain("NEWER-SUMMARY")
+    expect(textOf(resent[0])).not.toContain("OLDER-SUMMARY")
+  }),
+)
+
 it.effect("a reply with text and a tool call uses the text and runs no tool", () =>
   Effect.gen(function* () {
     const both = () =>
