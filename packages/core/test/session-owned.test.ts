@@ -705,6 +705,177 @@ describe("Session-owned handles", () => {
     }),
   )
 
+  // Every way a person's work reaches a session over a staged revert settles the revert first: work admitted after
+  // the stage (a prompt, a queued prompt, a compaction, a shell command, a skill; a slash command admits through
+  // prompt), and a prompt that waited in the inbox from before the stage, whether a steer, a wake at the idle boundary
+  // or a step boundary delivers it. Without the commit the work lands after the boundary, where nothing draws it, the
+  // model still sees the rewound steps, and the next commit deletes it. A person's waiting prompt also outlives a
+  // commit, as the reference's queue outlives a rewind; a notice the rewound work left waiting does not.
+  const queued = SessionMessage.ID.make("msg_queued_before_revert")
+  const notice = SessionMessage.ID.make("msg_notice_before_revert")
+  const prepared = SessionMessage.ID.make("msg_prepared_over_revert")
+  // As a drain does: a promotion that commits a staged revert delivers nothing, so the runner loads the context again,
+  // and the next promotion delivers.
+  const deliver = (db: Database.Interface["db"], bus: Bus.Interface, scope: SessionInbox.Promotable) =>
+    SessionInbox.promote(db, bus, sessionID, scope).pipe(
+      Effect.andThen(SessionInbox.promote(db, bus, sessionID, scope)),
+      Effect.asVoid,
+    )
+  for (const row of [
+    {
+      name: "prompt",
+      act: (handle: Session.Handle) => handle.prompt({ id: prepared, text: "New work", resume: false }),
+      kept: [{ id: prepared, type: "user", in: "inbox" }],
+    },
+    {
+      name: "queued prompt",
+      act: (handle: Session.Handle) =>
+        handle.prompt({ id: prepared, text: "New work", delivery: "queue", resume: false }),
+      kept: [{ id: prepared, type: "user", in: "inbox" }],
+    },
+    {
+      name: "compaction",
+      act: (handle: Session.Handle) => handle.compact({ id: prepared }),
+      kept: [{ id: prepared, type: "compaction", in: "inbox" }],
+    },
+    {
+      name: "shell command",
+      act: (handle: Session.Handle) => handle.shell({ id: prepared, command: "ls -la" }),
+      kept: [{ id: prepared, type: "shell", in: "context" }],
+    },
+    {
+      name: "skill",
+      act: (handle: Session.Handle) => handle.skill({ messageID: prepared, skill: skillInfo.id, resume: false }),
+      kept: [{ id: prepared, type: "skill", in: "context" }],
+    },
+    {
+      name: "prompt, keeping one queued before the revert",
+      before: (handle: Session.Handle) =>
+        handle.prompt({ id: queued, text: "Queued earlier", delivery: "queue", resume: false }),
+      act: (handle: Session.Handle) => handle.prompt({ id: prepared, text: "New work", resume: false }),
+      kept: [
+        { id: queued, type: "user", in: "inbox" },
+        { id: prepared, type: "user", in: "inbox" },
+      ],
+    },
+    {
+      name: "queued prompt from before the revert, steered",
+      before: (handle: Session.Handle) =>
+        handle.prompt({ id: queued, text: "Queued earlier", delivery: "queue", resume: false }),
+      act: (handle: Session.Handle, db: Database.Interface["db"], bus: Bus.Interface) =>
+        handle.steerInbox(queued).pipe(Effect.andThen(deliver(db, bus, "steer"))),
+      kept: [{ id: queued, type: "user", in: "context" }],
+    },
+    {
+      name: "queued prompt from before the revert, delivered at the idle boundary",
+      before: (handle: Session.Handle) =>
+        handle.prompt({ id: queued, text: "Queued earlier", delivery: "queue", resume: false }),
+      act: (_: Session.Handle, db: Database.Interface["db"], bus: Bus.Interface) => deliver(db, bus, "input"),
+      kept: [{ id: queued, type: "user", in: "context" }],
+    },
+    {
+      name: "steering prompt from before the revert, delivered with a notice of the rewound work",
+      before: (handle: Session.Handle) =>
+        handle
+          .synthetic({ id: notice, text: "Background job finished", resume: false })
+          .pipe(Effect.andThen(handle.prompt({ id: queued, text: "Steered earlier", resume: false }))),
+      act: (_: Session.Handle, db: Database.Interface["db"], bus: Bus.Interface) => deliver(db, bus, "steer"),
+      kept: [{ id: queued, type: "user", in: "context" }],
+      dropped: [notice],
+    },
+  ])
+    it.live(`commits a staged revert before a person's ${row.name}, and keeps the work`, () =>
+      Effect.gen(function* () {
+        const started = Info.make({
+          id: ID.make("sh_over_revert"),
+          command: "ls -la",
+          cwd: source.directory,
+          shell: "sh",
+          file: "/project/shell.out",
+          status: "running",
+          metadata: { sessionID, background: true },
+          time: { started: 0 },
+        })
+        const fixture = yield* setup({
+          snapshot: () => Layer.mock(Snapshot.Service, { capture: () => Effect.undefined }),
+          shell: Layer.mock(Shell.Service, {
+            create: () => Effect.succeed(started),
+            result: () =>
+              Effect.succeed({
+                info: Info.make({ ...started, status: "exited", exit: 0, time: { started: 0, completed: 1 } }),
+                capture: { output: "listing", truncated: false },
+              }),
+            output: () => Effect.succeed(Output.make({ output: "listing", cursor: 7, size: 7, truncated: false })),
+          }),
+        })
+        const handle = fixture.sessions.forSession(sessionID)
+        const boundary = yield* handle.synthetic({ text: "Revert boundary", resume: false })
+        yield* SessionInbox.promote(fixture.db, fixture.bus, sessionID, "steer")
+        if (row.before) yield* row.before(handle)
+        yield* handle.revert.stage({ messageID: boundary.id, files: false })
+
+        yield* row.act(handle, fixture.db, fixture.bus)
+
+        expect((yield* handle.get()).revert).toBeUndefined()
+        const context = yield* fixture.store.context(sessionID)
+        const inbox = yield* handle.inbox()
+        expect(context.map((message) => message.id)).not.toContain(boundary.id)
+        for (const kept of row.kept)
+          expect(kept.in === "inbox" ? inbox : context).toContainEqual(
+            expect.objectContaining({ id: kept.id, type: kept.type }),
+          )
+        for (const id of row.dropped ?? []) {
+          expect(context.map((message) => message.id)).not.toContain(id)
+          expect(inbox.map((item) => item.id)).not.toContain(id)
+        }
+      }),
+    )
+
+  // A person's steer can arrive while a queued notice is delivered at the idle boundary. Delivering that steer commits
+  // the staged revert, so the promotion answers that the drain must load the context again, not a count of delivered
+  // items, and the steer waits for the next promotion.
+  it.live("a steer that arrives while a queued notice is delivered commits a staged revert and asks for a reload", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup({
+        snapshot: () => Layer.mock(Snapshot.Service, { capture: () => Effect.undefined }),
+      })
+      const admission = yield* SessionInbox.Service
+      const handle = fixture.sessions.forSession(sessionID)
+      const boundary = yield* handle.synthetic({ text: "Revert boundary", resume: false })
+      yield* SessionInbox.promote(fixture.db, fixture.bus, sessionID, "steer")
+      yield* admission.admit({
+        id: notice,
+        sessionID,
+        item: { type: "synthetic", payload: { text: "Background job finished" }, delivery: "queue" },
+      })
+      yield* handle.revert.stage({ messageID: boundary.id, files: false })
+      // Admission is idempotent by ID, so admitting the steer on every delivery admits it once.
+      const steering: Bus.Interface = {
+        ...fixture.bus,
+        publish: (definition, data, options) =>
+          fixture.bus.publish(definition, data, options).pipe(
+            Effect.tap(() =>
+              definition.type === SessionEvent.InboxDelivered.type
+                ? admission
+                    .admit({
+                      id: queued,
+                      sessionID,
+                      item: { type: "user", payload: { text: "Steered meanwhile" }, delivery: "steer" },
+                    })
+                    .pipe(Effect.orDie)
+                : Effect.void,
+            ),
+          ),
+      }
+
+      expect(yield* SessionInbox.promote(fixture.db, steering, sessionID, "input")).toBeUndefined()
+
+      expect((yield* handle.get()).revert).toBeUndefined()
+      expect(yield* handle.inbox()).toContainEqual(expect.objectContaining({ id: queued, type: "user" }))
+      expect((yield* fixture.store.context(sessionID)).map((message) => message.id)).not.toContain(queued)
+    }),
+  )
+
   it.live("selects the destination's snapshot service after a move", () =>
     Effect.gen(function* () {
       const captures: Location.Ref[] = []

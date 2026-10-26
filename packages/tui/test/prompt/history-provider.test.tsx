@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { mkdir } from "node:fs/promises"
+import { appendFile, mkdir } from "node:fs/promises"
 import path from "node:path"
 import { ConfigProvider } from "../../src/config"
 import { TuiPathsProvider } from "../../src/context/runtime"
@@ -67,9 +67,7 @@ test("files a sent prompt under its directory and time, and keeps only history_l
     expect(setup.history.search("t", "/work/a").map((item) => item.text)).toEqual(["three", "two"])
 
     // The file is rewritten when the limit trims it, and holds the same two entries.
-    const lines = (await savedHistory(tmp.path, (text) => texts(text).join() === "two,three"))
-      .trim()
-      .split("\n")
+    const lines = (await savedHistory(tmp.path, (text) => texts(text).join() === "two,three")).trim().split("\n")
     expect(lines.map((item) => JSON.parse(item).text)).toEqual(["two", "three"])
   } finally {
     setup.app.renderer.destroy()
@@ -93,6 +91,82 @@ test("keeps an image and a large paste in memory but saves neither", async () =>
     const saved = await savedHistory(tmp.path, (text) => text.endsWith("\n"))
     expect(saved).not.toContain("data:")
     expect(saved).not.toContain(big)
+  } finally {
+    setup.app.renderer.destroy()
+  }
+})
+
+// An interrupted prompt that goes back into the input drops the entry it added, so Up does not offer it twice. The entry
+// is found by the ID of the message its prompt was sent as, never by its text; any other newest entry stays, and so
+// does one added without a message (a `!` command, a slash command, a cleared draft), which also replaces the entry an
+// earlier prompt added.
+test("forgets the newest entry only when it was sent as the given message, in memory and on disk", async () => {
+  await using tmp = await tmpdir()
+  const setup = await renderHistory(tmp.path)
+  try {
+    setup.history.append({ text: "first", files: [], agents: [], pasted: [] }, undefined, "msg_first")
+    setup.history.append({ text: "interrupted", files: [], agents: [], pasted: [] }, undefined, "msg_interrupted")
+
+    setup.history.forget("msg_first")
+    setup.history.forget("interrupted")
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["first", "interrupted"])
+
+    setup.history.forget("msg_interrupted")
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["first"])
+    expect(setup.history.move(-1, "")?.text).toBe("first")
+
+    setup.history.append({ text: "sent", files: [], agents: [], pasted: [] }, undefined, "msg_sent")
+    setup.history.append({ text: "ls", files: [], agents: [], pasted: [], mode: "shell" })
+    setup.history.forget("msg_sent")
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["first", "sent", "ls"])
+    const saved = await savedHistory(tmp.path, (text) => texts(text).join() === "first,sent,ls")
+    expect(texts(saved)).toEqual(["first", "sent", "ls"])
+  } finally {
+    setup.app.renderer.destroy()
+  }
+})
+
+// The history file is shared by every TUI process, so forgetting removes only this process's entry: a line another
+// process appended after this one loaded the file stays.
+test("forgetting an entry keeps the lines another process appended since", async () => {
+  await using tmp = await tmpdir()
+  const setup = await renderHistory(
+    tmp.path,
+    JSON.stringify({ text: "first", files: [], agents: [], pasted: [] }) + "\n",
+  )
+  try {
+    expect((await waitForHistory(setup.history))?.text).toBe("first")
+    setup.history.append({ text: "interrupted", files: [], agents: [], pasted: [] }, undefined, "msg_interrupted")
+    // Writes run in order, so once the append is on disk the load's own rewrite is done too.
+    await savedHistory(tmp.path, (text) => texts(text).join() === "first,interrupted")
+    await appendFile(
+      path.join(tmp.path, "state", "prompt-history.jsonl"),
+      JSON.stringify({ text: "other process", files: [], agents: [], pasted: [] }) + "\n",
+    )
+
+    setup.history.forget("msg_interrupted")
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["first"])
+    const saved = await savedHistory(tmp.path, (text) => !texts(text).includes("interrupted"))
+    expect(texts(saved)).toEqual(["first", "other process"])
+  } finally {
+    setup.app.renderer.destroy()
+  }
+})
+
+// A prompt that repeats the newest entry adds none, so forgetting it would drop the earlier, genuine entry instead.
+test("forgetting a repeated prompt that added no entry keeps the earlier one", async () => {
+  await using tmp = await tmpdir()
+  const setup = await renderHistory(tmp.path)
+  try {
+    setup.history.append({ text: "same", files: [], agents: [], pasted: [] }, undefined, "msg_same_1")
+    setup.history.append({ text: "same", files: [], agents: [], pasted: [] }, undefined, "msg_same_2")
+
+    setup.history.forget("msg_same_2")
+    // The repeat also lets go of the entry the first prompt added: its message is no longer the newest sent.
+    setup.history.forget("msg_same_1")
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["same"])
+    await Bun.sleep(100)
+    expect(texts(await savedHistory(tmp.path, (text) => texts(text).length > 0))).toEqual(["same"])
   } finally {
     setup.app.renderer.destroy()
   }

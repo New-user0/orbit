@@ -889,12 +889,15 @@ const layer = Layer.effectDiscard(
           )
           .run()
           .pipe(Effect.orDie)
+        // A person's pending prompts, compactions and moves outlive the rewind, as a queue does; only the notices that
+        // the rewound work left waiting go with it.
         yield* db
           .delete(SessionInboxTable)
           .where(
             and(
               eq(SessionInboxTable.session_id, event.data.sessionID),
               gte(SessionInboxTable.enqueued_seq, boundary.seq),
+              eq(SessionInboxTable.type, "synthetic"),
             ),
           )
           .run()

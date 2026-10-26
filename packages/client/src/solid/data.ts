@@ -1105,17 +1105,27 @@ export function createData(config: CreateDataInput) {
         if (store.session.info[event.data.sessionID]) {
           setStore("session", "info", event.data.sessionID, "revert", undefined)
         }
-        // The projector also deletes inbox items enqueued at or after the boundary without a cancel event.
+        // The projector also deletes the notices enqueued at or after the boundary, without a cancel event. A person's
+        // pending items stay, and so do the transcript rows drawn for them.
         setStore(
           "session",
           "pending",
           event.data.sessionID,
-          (store.session.pending[event.data.sessionID] ?? []).filter((item) => item.id < event.data.to),
+          (store.session.pending[event.data.sessionID] ?? []).filter(
+            (item) => item.type !== "synthetic" || item.id < event.data.to,
+          ),
         )
         message.update(event.data.sessionID, (draft, index) => {
           const position = draft.findIndex((item) => item.id >= event.data.to)
           if (position === -1) return
-          for (const item of draft.splice(position)) index.delete(item.id)
+          const pending = new Set(store.session.pending[event.data.sessionID]?.map((item) => item.id))
+          const kept = draft.splice(position).filter((item) => {
+            if (pending.has(item.id)) return true
+            index.delete(item.id)
+            return false
+          })
+          draft.push(...kept)
+          message.reindex(draft, index, position)
         })
         return
       case "session.compaction.delta":

@@ -1888,6 +1888,80 @@ which one of those folders is a link.
 
 **What to do:** nothing. If clean names a link, remove the link and run it again.
 
+### A rewind picker in the terminal UI, and Rewind in the message dialog
+
+`/rewind` (also `/checkpoint`) opens a picker that lists your prompts, oldest first, each with the files its own file
+tools changed (`<name> +A -D` or `N files +A -D`), and a `(current)` row. A command you ran with `!` is a row too, drawn
+as `! <command>` without a file line; it offers only `Conversation only`, which puts the command back in the input in
+shell mode, because the server keeps no checkpoint for a shell command. To undo a command's file edits, use `Code only`
+on the row of the prompt after it. Sending the put-back command commits the staged rewind first, as sending a prompt
+does, so the command and its output stay in the conversation. Choosing a prompt asks the server what a code rewind would change on disk now and offers
+`Code and conversation`, `Conversation only` and `Code only` when at least one file would change, or only
+`Conversation only` otherwise; `Never mind` goes back. The server answers that question only for a session that is not
+running, so choosing a prompt while the session runs interrupts it and waits for it first. Every option also interrupts
+the session and waits for it before acting. A conversation rewind is staged as `/undo` stages one, so `/redo` brings it
+back until your next prompt, and puts the prompt back in the input; `Code only` puts the files back at once, with no
+redo, and leaves the input alone. While a chosen rewind runs the picker shows `Rewinding…` and Esc does nothing; a
+refused rewind keeps the picker open with a line naming what failed. If the picker was closed another way meanwhile
+(ctrl+c or a click outside it), a refusal is shown as a notice instead. A prompt you queued while the session ran stays
+queued through the rewind; steering it, or sending a new prompt, commits the rewind first, so it runs in the rewound
+conversation.
+
+The list moves with the dialog keys every picker uses (up and down, ctrl+p and ctrl+n, Home and End, Enter to choose),
+so keys you set for `dialog.select.prev`, `next`, `home`, `end` and `submit` apply to it too, and also with j and k.
+Ctrl, shift or alt with up, or shift+k, selects the oldest prompt; the same with down, or shift+j, selects `(current)`.
+The list stops at its first and last rows, and page up and page down do nothing in it. Every row is three lines tall,
+so the list does not move when the file lines arrive. `n` closes the list, the `Nothing to rewind yet.` picker and the
+error line, as Esc does; Enter does nothing when there is nothing to rewind.
+
+The list follows the conversation while it is open, with one `(current)` row, always last. The highlight keeps its
+place in the list: a prompt or `!` command that arrives while `(current)` is highlighted is highlighted itself, and one
+that arrives while an older prompt is highlighted leaves the highlight there. When another client stages or clears a
+revert, the rows behind it leave or come back. If the highlighted row leaves, no row is highlighted and Enter does
+nothing; down goes to `(current)`, and up steps back one place at a time. A prompt's file line is asked again
+when its reply finishes a step, when the next prompt arrives after it, and when the session moves to another folder
+(streamed text alone asks nothing). A `!` command run while the reply runs does not end the prompt's range, as the
+server's own count does not, so a step the reply finishes after it still asks again. A line that failed to load is asked again once the terminal UI
+reconnects to its server. The confirm step keeps the prompt it was opened for; if another client's revert has taken
+that prompt out of the conversation, choosing an option sends nothing and shows `Could not rewind: that prompt is no
+longer in the conversation.`
+
+The confirm step quotes up to the first four lines of the prompt. Its options wrap: up on the first reaches `Never
+mind`, down on `Never mind` reaches the first. Page up and page down (`dialog.select.page_up`, `page_down`) go to the
+first and the last option, and Home and End do the same. Pressing a digit (also a full-width one) chooses that option
+at once without moving the highlight; Enter chooses the highlighted option and marks it with `✓`. While a chosen rewind
+runs no key moves the options and none is highlighted. `n` does nothing in the confirm step.
+
+Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. It opens nothing when the
+session shows no message, including when a staged revert has taken back every prompt. While a session runs, Esc keeps
+interrupting it as before.
+
+The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
+confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only
+replies with nothing in them follow the prompt and no file would change, it rewinds the conversation at once and puts
+the prompt back in the input, without asking. While it finds that out (stopping a running session first) the picker
+already replaces the dialog and shows `Checking files…`; Esc then gives the rewind up, and a session it stopped stays
+stopped. When the answer comes it looks at the conversation again: if another client's revert has taken the prompt
+back meanwhile, it sends nothing and shows `Could not rewind: that prompt is no longer in the conversation.`, and if
+the reply has gained something, it opens the confirm step instead. A reply that holds only reasoning, is waiting to retry or shows only that
+it was interrupted has nothing in it; a reply that failed with an error does not, since the error is drawn, so it opens
+the confirm step. Notices, compaction summaries and prompts still waiting to be sent do not count as something after
+the prompt; a command run with `!` or a skill does. A prompt still waiting in the inbox (queued or steering) is no row
+of the picker, and `Rewind` on it closes the dialog without interrupting the session or changing anything.
+
+Interrupting a prompt (Esc twice while it runs) before its reply holds any text, tool call or error, with nothing typed
+and nothing queued, now rewinds the conversation to before that prompt and puts it back in the input; the prompt-history
+entry that this submit added is dropped, whatever the prompt held: plain text, a pasted block shown as
+`[Pasted ~N lines]`, or a mentioned file or agent. A prompt that repeated the newest entry added none, so nothing is
+dropped. Nothing is dropped either for a slash command, whose prompt is the command's text rather than what was typed,
+or when this window added another entry after the prompt's, such as a `!` command, and the entry of a `!` command is
+never dropped. Entries that other terminal UI windows saved meanwhile stay. Files are not touched.
+
+**Affects:** people who use the terminal UI's message dialog or press Esc on an idle prompt, or interrupt a prompt with
+Esc twice before its reply holds anything.
+
+**What to do:** Nothing. Use `Rewind`, then `Code and conversation`, where you used `Revert`.
+
 ### A recap when you come back to a session
 
 When the terminal has been unfocused for five minutes, the terminal UI and Mini now ask the server for a short recap of
@@ -3197,6 +3271,54 @@ diff write that file. Comparing, restoring and rewinding refuse such an ID befor
 **Affects:** imported sessions whose files were edited by hand.
 
 **What to do:** Nothing.
+
+### A conversation-only revert leaves the files an earlier staged revert put back
+
+Staging a revert without its files (`files: false`) while a revert with its files was already staged first put those
+files back to their latest content, and then moved the boundary. It now leaves every file as it is and keeps the staged
+revert's list of files, so `/redo` still puts back everything the staged reverts changed (`session-revert.test.ts`,
+"Session.revert conversation only over a staged revert").
+
+**Affects:** SDK callers that stage a revert with `files: false`, and the terminal UI's `Conversation only`.
+
+**What to do:** Nothing.
+
+### A shell command or a skill commits a staged revert, as a prompt does
+
+A command a person runs with `!` (`POST /api/session/:id/shell`) and a skill activated through
+`POST /api/session/:id/skill` while a revert is staged now commit that revert first, as a prompt (and so a slash
+command) and a compaction already did. Before, the command and its output, or the skill's message, landed after the
+staged boundary, so the terminal UI drew them nowhere and the next prompt's commit deleted them
+(`session-owned.test.ts`, "commits a staged revert before a person's shell command, and keeps the work" and "... skill,
+and keeps the work", rows of one table with the prompt, the queued prompt and the compaction). After a `!` command or a
+skill, `/redo` no longer brings the reverted messages back.
+
+**Affects:** SDK callers, plugins that activate a skill, and terminal UI users who run a `!` command after `/undo` or a
+rewind. The terminal UI sends a skill as a prompt, so it already committed.
+
+**What to do:** Run `/redo` before the command or the skill if you want the reverted messages back.
+
+### A prompt waiting in the inbox outlives a staged revert, and commits it when delivered
+
+A prompt that waits in the inbox (queued, or steering into a session that was interrupted) when a revert is staged now
+stays there when the revert is committed, as a queue outlives a rewind; before, the commit deleted every pending item
+enqueued after the boundary. Only the notices that the rewound work left waiting are still dropped. When such a prompt
+is delivered (you steer it, a wake reaches an idle boundary, or a step boundary takes it), the server commits the staged
+revert first, as it does for a new prompt. Before, it was delivered behind the boundary: the terminal UI drew it
+nowhere, the model still saw the rewound steps, and the next commit deleted it. A waiting compaction or move commits
+the revert the same way when the session takes it up (`session-owned.test.ts`, "commits a staged revert before a
+person's queued prompt from before the revert, steered", "... delivered at the idle boundary", "... steering prompt from
+before the revert, delivered with a notice of the rewound work" and "... prompt, keeping one queued before the revert";
+`session-runner.test.ts`, "a drain delivering a queued prompt / a steering prompt / a queued compaction / a queued move
+over a staged revert commits the revert first"; `data.test.tsx`, "removes committed revert messages from local state";
+`rewind-picker.test.tsx`, "a prompt queued before a conversation rewind is drawn in the rewound conversation once it is
+steered").
+
+**Affects:** people who queue a prompt while a session runs and then use `/undo` with `/redo`, the rewind picker or an
+SDK revert; SDK callers that read the inbox after a commit. As before, the terminal UI's `/undo` takes a newest prompt
+that is still waiting out of the inbox instead of staging a revert.
+
+**What to do:** Delete a queued prompt from the queued prompts list if you do not want it after the rewind.
 
 ## Prompts and instructions
 

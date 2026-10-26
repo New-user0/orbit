@@ -349,6 +349,44 @@ describe("Session.revert files", () => {
   )
 })
 
+// clients-ux-5 part 2: the rewind picker's "Conversation only" stages a revert without its files. When a revert with
+// files is already staged (the picker's "Code and conversation", or /undo), moving the boundary earlier without files
+// must leave the files as the staged revert left them, as a conversation rewind in the reference never touches code,
+// and /redo must still put back everything the staged reverts changed.
+describe("Session.revert conversation only over a staged revert", () => {
+  it.live(
+    "leaves the files a staged revert put back, and /redo still restores them",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const directory = path.join(tmp.path, "project")
+        const file = path.join(directory, "a.txt")
+        yield* repository(directory, { "a.txt": "base\n" })
+        const session = yield* Session.Service
+        const created = yield* session.create({ location: { directory: AbsolutePath.make(directory) } })
+        const first = yield* promptNow(created.id, "Write one")
+        yield* recordStep(created.id, [{ name: "Write", files: ["a.txt"] }], () => Bun.write(file, "one\n"))
+        const second = yield* promptNow(created.id, "Write two")
+        yield* recordStep(created.id, [{ name: "Write", files: ["a.txt"] }], () => Bun.write(file, "two\n"))
+
+        // "Code and conversation" at the second prompt: the file goes back to its content before that prompt.
+        yield* session.revert.stage({ sessionID: created.id, messageID: second.id })
+        expect(yield* text(file)).toBe("one\n")
+
+        // "Conversation only" at the first prompt moves the boundary and leaves the file as it is.
+        const moved = yield* session.revert.stage({ sessionID: created.id, messageID: first.id, files: false })
+        expect(moved.messageID).toBe(first.id)
+        expect(yield* text(file)).toBe("one\n")
+
+        // /redo puts back what the staged reverts changed.
+        yield* session.revert.clear(created.id)
+        expect(yield* text(file)).toBe("two\n")
+        expect((yield* session.get(created.id)).revert).toBeUndefined()
+      }),
+    { timeout: 30_000 },
+  )
+})
+
 // A recorded name is the spelling of the folder its step ran in. Once the session has moved, the same name in the
 // folder it is in now is another file, which a file tool there never touched: a rewind and an undo leave it, and
 // still put back what a file tool changed in the folder they restore.

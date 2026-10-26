@@ -5779,6 +5779,58 @@ describe("SessionRunnerLLM", () => {
     expect(yield* SessionInbox.has(s.db, sessionID, "queue")).toBe(true)
   })
 
+  // A person's item that waited in the inbox when a revert was staged settles that revert when a drain delivers it: the
+  // model is asked without the rewound steps, and the item is kept (session-owned.test.ts pins the inbox side).
+  for (const row of [
+    {
+      name: "a queued prompt",
+      admit: (s: Scenario) => s.session.prompt({ sessionID, text: "Waiting prompt", delivery: "queue", resume: false }),
+      asked: ["Waiting prompt"],
+    },
+    {
+      name: "a steering prompt",
+      admit: (s: Scenario) => s.session.prompt({ sessionID, text: "Waiting prompt", resume: false }),
+      asked: ["Waiting prompt"],
+    },
+    {
+      name: "a queued compaction",
+      admit: (s: Scenario) =>
+        s.sessionInbox.admitCompaction({ id: SessionMessage.ID.create(), sessionID, delivery: "queue" }),
+    },
+    {
+      name: "a queued move",
+      admit: (s: Scenario) =>
+        s.sessionInbox.admit({
+          id: SessionMessage.ID.create(),
+          sessionID,
+          item: {
+            type: "move",
+            payload: {
+              location: Location.Ref.make({ directory: AbsolutePath.make("/moved") }),
+              projectID: Project.ID.global,
+            },
+            delivery: "queue",
+          },
+        }),
+    },
+  ])
+    scenario(`a drain delivering ${row.name} over a staged revert commits the revert first`, function* (s) {
+      yield* s.llm.push(TestLLM.stop())
+      const rewound = yield* s.runPrompt("Rewound prompt")
+      const waiting = yield* row.admit(s)
+      yield* s.bus.publish(SessionEvent.RevertEvent.Staged, { sessionID, revert: { messageID: rewound.id, files: [] } })
+      yield* s.llm.push(TestLLM.stop())
+
+      yield* s.resume
+
+      expect((yield* s.session.get(sessionID)).revert).toBeUndefined()
+      expect(yield* SessionInbox.find(s.db, waiting.id)).toBeUndefined()
+      const ids = (yield* s.messages).map((message) => message.id)
+      expect(ids).not.toContain(rewound.id)
+      if (waiting.type !== "move") expect(ids).toContain(waiting.id)
+      if (row.asked) expect(userTexts(s.requests.at(-1)!)).toEqual(row.asked)
+    })
+
   scenario("a steer-scoped drain runs a queued manual compaction next in line", function* (s) {
     // Admit without waking so the steer-scoped drain below is the first consumer.
     const compaction = yield* s.sessionInbox.admitCompaction({

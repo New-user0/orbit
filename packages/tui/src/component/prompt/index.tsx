@@ -75,6 +75,7 @@ import { useInteractivity } from "../../context/interactivity"
 import { abbreviateHome } from "../../runtime"
 import { Slot } from "../../plugin/render"
 import type { SessionInbox } from "@orbit/schema/session-inbox"
+import { SessionMessage } from "@orbit/schema/session-message"
 import {
   deduplicatePromptImages,
   preserveMentionlessPromptAttachments,
@@ -94,6 +95,11 @@ export type PromptProps = {
   muted?: boolean
   onSubmit?: () => void
   onEmptySubmit?: () => boolean | Promise<boolean>
+  /**
+   * The session's rewind hooks: Esc pressed twice on an empty prompt opens the picker when `ready` holds and the session
+   * is idle, and a double-Esc interrupt of a running session calls `interrupted` once the server has answered it.
+   */
+  rewind?: { ready: () => boolean; open: () => void; interrupted: () => void }
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -118,6 +124,8 @@ export type PromptRef = {
 
 const DRAFT_RETENTION_MIN_CHARS = 20
 const revealedPromptMetadata = new WeakSet<object>()
+// The window in which a second Esc on an idle session opens the rewind picker.
+const REWIND_ESCAPE_MS = 800
 
 function randomIndex(count: number) {
   if (count <= 0) return 0
@@ -510,6 +518,11 @@ export function Prompt(props: PromptProps) {
     ),
   )
 
+  // Esc on an idle session belongs to the rewind picker only on an empty prompt of a session that has something to
+  // rewind. Shell mode, Vim's insert mode and an open completion take Esc before this command sees it.
+  let lastEscape = 0
+  const rewindReady = () => !!props.rewind?.ready() && store.prompt.text === ""
+
   const promptCommands = createMemo(() =>
     [
       {
@@ -597,7 +610,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         palette: undefined,
-        enabled: status() === "running",
+        enabled: status() === "running" || rewindReady(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -607,6 +620,14 @@ export function Prompt(props: PromptProps) {
             return
           }
           if (!props.sessionID) return
+          if (status() !== "running") {
+            // The first Esc on an idle session arms; a second one within the window opens the rewind picker.
+            const now = Date.now()
+            const armed = now - lastEscape <= REWIND_ESCAPE_MS
+            lastEscape = armed ? 0 : now
+            if (armed) props.rewind?.open()
+            return
+          }
 
           setStore("interrupt", store.interrupt + 1)
 
@@ -615,10 +636,12 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void client.api.session.interrupt({
-              sessionID: props.sessionID,
-              resume: true,
-            })
+            void client.api.session
+              .interrupt({
+                sessionID: props.sessionID,
+                resume: true,
+              })
+              .then(() => props.rewind?.interrupted())
             setStore("interrupt", 0)
           }
           dialog.clear()
@@ -1542,9 +1565,19 @@ export function Prompt(props: PromptProps) {
       })
       return true
     }
-    history.append(entry, historyDirectory())
+    // A prompt is sent under an ID minted here, so that the history entry it adds can be found again by the message it
+    // became. A `!` command and a slash command are sent without one: neither becomes a message of an ID chosen here.
+    const messageID = currentMode === "shell" || (slashHead && isCommand) ? undefined : SessionMessage.ID.create()
+    history.append(entry, historyDirectory(), messageID)
     if (currentMode === "shell") {
       move.startSubmit()
+      // A command is new work too: settle a staged revert first, as a prompt does, so the command lands after the
+      // rewind instead of behind the boundary, where it is drawn nowhere and the next prompt's commit drops it.
+      if (
+        session?.revert &&
+        !(await attempt("Failed to commit revert", () => client.api.session.revert.commit({ sessionID: target })))
+      )
+        return false
       const send = () => client.api.session.shell({ sessionID: target, command: inputText })
       void (newSession ? newSession.gate.then(send).catch(newSession.recover) : send())
       setStore("mode", "normal")
@@ -1599,6 +1632,7 @@ export function Prompt(props: PromptProps) {
           sessionID: target,
           text: inputText,
           files: entry.files,
+          id: messageID,
           agents: entry.agents,
           skills: entry.skills?.length ? entry.skills : undefined,
           delivery,

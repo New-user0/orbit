@@ -33,6 +33,8 @@ export const context = createContext<{
   config: ReturnType<typeof useConfig>["data"]
   mutatePending: (action: PendingAction, inboxID: string) => Promise<boolean>
   pendingDelivery: (inboxID: string) => SessionInbox.Delivery | undefined
+  /** The message dialog's Rewind for a prompt: the skip-picker shortcut, or the picker's confirm step. */
+  rewind: (messageID: string) => Promise<void>
 }>()
 
 export function use() {

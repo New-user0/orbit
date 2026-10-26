@@ -317,6 +317,7 @@ async function draw(input: {
                                     config,
                                     mutatePending: async () => true,
                                     pendingDelivery: () => undefined,
+                                    rewind: async () => {},
                                   }}
                                 >
                                   <Write input={toolInput} metadata={metadata} tool="write" output="" part={part} />

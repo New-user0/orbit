@@ -53,16 +53,21 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
       input.files === false || !original || planned.size === 0
         ? new Map<RelativePath, Snapshot.ID>()
         : yield* toolEdits(database.db, input.session.id, planned, original)
+    // A conversation-only revert never touches the files, not even those an earlier staged revert put back: it keeps
+    // that revert's list, so /redo still restores everything the staged reverts changed.
     const restore = new Map<RelativePath, Snapshot.ID>()
-    if (original) {
+    if (original && input.files !== false) {
       for (const file of input.session.revert?.files ?? []) restore.set(RelativePath.make(file.file), original)
     }
     for (const [file, tree] of next) restore.set(file, tree)
     if (restore.size) yield* snapshot.restore({ files: restore })
     const paths = Array.from(next.keys())
-    const files = original
-      ? yield* snapshot.diff({ from: original, to: (yield* snapshot.capture()) ?? original, paths })
-      : []
+    const files =
+      input.files === false && input.session.revert
+        ? (input.session.revert.files ?? [])
+        : original
+          ? yield* snapshot.diff({ from: original, to: (yield* snapshot.capture()) ?? original, paths })
+          : []
     const revert = {
       messageID: input.messageID,
       snapshot: original,
