@@ -748,6 +748,31 @@ scenario("on the automatic path a result at or above the threshold falls back to
     const ended = (yield* eventsOf(s, ENDED, id)).at(-1)!
     expect({ name, kept: ended.retain !== undefined }).toEqual({ name, kept })
   }
+
+  // An earlier checkpoint stored inside the new kept span's tail joins the summarized part, so the check does not count
+  // its (large) summary against the result: the view after compaction is the new checkpoint plus the kept messages.
+  for (const reason of ["auto", "overflow"] as const) {
+    const id = yield* newSession(s, `earlier_${reason}`)
+    for (let n = 1; n <= 4; n++) {
+      yield* s.llm.push(answer(n))
+      yield* s.session.prompt({ sessionID: id, text: `prompt ${n}`, resume: false })
+      yield* s.session.resume(id)
+    }
+    const users = (yield* messagesOf(s, id)).filter((message) => message.type === "user")
+    yield* s.llm.push(TestLLM.text(`## Objective\n- ${big(80_000)}`, "summary-large"))
+    yield* compactWith(s, { id, retain: users[1]!.id })
+    expect(yield* completedCheckpoints(s, id)).toHaveLength(1)
+    // A measured response after the checkpoint is what makes the automatic check run.
+    yield* s.llm.push(answer(5, 20_000))
+    yield* s.session.prompt({ sessionID: id, text: "prompt 5", resume: false })
+    yield* s.session.resume(id)
+    const requests = s.requests.length
+    yield* s.llm.push(summaryReply("second"))
+    // "prompt 3" lies inside the first checkpoint's kept span, so that checkpoint is stored after it.
+    yield* compactWith(s, { id, retain: users[2]!.id, reason, window })
+    expect(s.requests.length - requests).toBe(1)
+    expect((yield* eventsOf(s, ENDED, id)).at(-1)!.retain).toBe(users[2]!.id)
+  }
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
