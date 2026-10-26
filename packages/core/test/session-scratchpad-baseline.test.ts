@@ -133,12 +133,13 @@ describe("the scratchpad among the sources of the baseline", () => {
       yield* entries.put({ sessionID: ids.main, key: InstructionEntry.Key.make("notes"), value: "from the API" })
       const keys: string[] = (yield* select(ids.main)).instructions.map((source) => source.key)
       expect(
-        keys.filter((key) => /^(core\/date|core\/environment|core\/vcs-snapshot|core\/scratchpad|api\/)/.test(key)),
-      ).toEqual(["core/date", "core/environment", "core/vcs-snapshot", "core/scratchpad", "api/notes"])
-      // The git snapshot sits directly after the environment and the scratchpad directly after it, before the entries.
+        keys.filter((key) => /^(core\/date|core\/environment|core\/vcs-snapshot|core\/scratchpad|core\/tool-results|api\/)/.test(key)),
+      ).toEqual(["core/date", "core/environment", "core/vcs-snapshot", "core/scratchpad", "core/tool-results", "api/notes"])
+      // The git snapshot sits directly after the environment and the scratchpad directly after it; the tool-results section follows, before the entries.
       expect(keys[keys.indexOf("core/environment") + 1]).toBe("core/vcs-snapshot")
       expect(keys[keys.indexOf("core/vcs-snapshot") + 1]).toBe("core/scratchpad")
-      expect(keys[keys.indexOf("core/scratchpad") + 1]).toBe("api/notes")
+      expect(keys[keys.indexOf("core/scratchpad") + 1]).toBe("core/tool-results")
+      expect(keys[keys.indexOf("core/tool-results") + 1]).toBe("api/notes")
     }),
   )
 

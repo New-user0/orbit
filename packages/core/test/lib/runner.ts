@@ -420,6 +420,7 @@ const makeLayer = (persist: boolean, production?: LspDiagnostics.Interface) =>
       const systemContextKey = Instructions.Key.make("test/context")
       const systemContext = Layer.mock(InstructionBuiltIns.Service, {
         preferences: () => Effect.succeed(Instructions.empty),
+        toolResults: InstructionBuiltIns.toolResultsSource,
         load: () =>
           Effect.sync(() =>
             Instructions.make({

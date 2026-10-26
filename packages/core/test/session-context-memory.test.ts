@@ -102,6 +102,7 @@ const harness = (entries: Entry[] = []) =>
           Layer.mock(InstructionBuiltIns.Service, {
             load: () => Effect.succeed(source("core/date")),
             preferences: () => Effect.succeed(Instructions.empty),
+            toolResults: () => Instructions.empty,
           }),
         ),
         AgentInstructions.node.replace(

@@ -67,7 +67,7 @@ const it = build(locationLayer)
 const inWorktree = build(worktreeLayer)
 // The minimal instance of `orb run --bare` and vanilla instances.
 const bare = build(locationLayer, [
-  InstructionBuiltIns.node.replace(InstructionBuiltIns.configured({ preferences: false })),
+  InstructionBuiltIns.node.replace(InstructionBuiltIns.configured({ minimal: true })),
 ])
 
 // A shell that resolves to a file the test made, so the shell the block names does not depend on the machine.
@@ -402,6 +402,22 @@ describe("InstructionBuiltIns.preferences", () => {
       const initial = yield* readInitial(yield* context.preferences())
       expect(initial.values).toEqual({})
       expect(initial.text).not.toContain("Japanese")
+    }),
+  )
+})
+
+describe("InstructionBuiltIns.toolResults", () => {
+  it.effect("carries one core/tool-results source on the default instance", () =>
+    Effect.gen(function* () {
+      const context = yield* InstructionBuiltIns.Service
+      expect(context.toolResults(Effect.succeed(true)).map((source) => String(source.key))).toEqual(["core/tool-results"])
+    }),
+  )
+
+  bare.effect("leaves the tool-results section out on a minimal instance", () =>
+    Effect.gen(function* () {
+      const context = yield* InstructionBuiltIns.Service
+      expect(context.toolResults(Effect.succeed(true))).toEqual([])
     }),
   )
 })
