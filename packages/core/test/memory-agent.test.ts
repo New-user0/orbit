@@ -310,6 +310,8 @@ describe("agent memory roots in the repository", () => {
       }).pipe(provide(plain))
       expect(control).toEqual([plain.user, plain.shared, plain.local])
     }),
+    // Seventeen Locations, each with its own folders: under a loaded runner they take longer than the default 5 s.
+    30_000,
   )
 
   // Class 4 (S1, S2): an id segment inside a root can be a link too. One that leads out of the root or nowhere gives the
@@ -399,6 +401,8 @@ describe("agent memory roots in the repository", () => {
         }).pipe(provide(plain, { files: recordedFileSystem().layer }))
         expect(control).toEqual([plain.user, plain.shared, plain.local])
       }),
+      // Room for the 15 s bound above to be the check that fails when a share is resolved.
+      30_000,
     )
 
   // Class 6 (S1, S2): an id segment inside an accepted root can be a link to a share too. The agent gets no folder, and
@@ -431,6 +435,8 @@ describe("agent memory roots in the repository", () => {
         expect(calls.filter((call) => !call.startsWith("readLink "))).toEqual([])
         expect(out).toEqual({ linked: undefined, nested: undefined, control: path.join(l.shared, "other") })
       }),
+      // Room for the 15 s bound above to be the check that fails when a share is resolved.
+      30_000,
     )
 
   // Class 1: nothing of the repository's roots is resolved before the project is trusted: only the user root is there,

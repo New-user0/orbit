@@ -364,33 +364,35 @@ describe("the agent memory block", () => {
   )
 
   // The frozen block belongs to the agent and the scope it was read for: a session that switches to another agent with
-  // memory, or whose agent's scope changes, gets the new folder and index at once. Staying is the control.
+  // memory, or whose agent's scope changes, gets the new folder and index at once. Each change is made alone: the scope
+  // changes while the agent stays, then the agent changes while the scope stays. Staying is the control.
   it.live("gives a session the block of its new agent or scope when either changes", () =>
     Effect.gen(function* () {
       const l = yield* layout
       const reviewer = path.join(l.roots.user, "reviewer")
-      const writer = path.join(l.roots.user, "writer")
       const project = path.join(l.roots.project, "reviewer")
+      const writer = path.join(l.roots.project, "writer")
       yield* write(path.join(reviewer, "MEMORY.md"), "- REVIEWER-INDEX\n")
-      yield* write(path.join(writer, "MEMORY.md"), "- WRITER-INDEX\n")
       yield* write(path.join(project, "MEMORY.md"), "- PROJECT-INDEX\n")
+      yield* write(path.join(writer, "MEMORY.md"), "- WRITER-INDEX\n")
       const out = yield* Effect.gen(function* () {
         yield* sessions
         const before = yield* readInitial(yield* load(first, { id: "reviewer", memory: "user" }))
         const stay = yield* readUpdate(yield* load(first, { id: "reviewer", memory: "user" }), before)
-        const switched = yield* readUpdate(yield* load(first, { id: "writer", memory: "user" }), before)
-        const scoped = yield* readUpdate(yield* load(first, { id: "reviewer", memory: "project" }), switched)
-        return { before, stay, switched, scoped }
+        const scoped = yield* readUpdate(yield* load(first, { id: "reviewer", memory: "project" }), before)
+        const switched = yield* readUpdate(yield* load(first, { id: "writer", memory: "project" }), scoped)
+        return { before, stay, scoped, switched }
       }).pipe(provide(l))
       expect(out.before.text).toContain("REVIEWER-INDEX")
       expect(out.stay.changed).toBe(false)
-      expect(out.switched.changed).toBe(true)
-      expect(out.switched.text).toContain(writer)
-      expect(out.switched.text).toContain("WRITER-INDEX")
-      expect(out.switched.text).not.toContain("REVIEWER-INDEX")
       expect(out.scoped.changed).toBe(true)
       expect(out.scoped.text).toContain(project)
       expect(out.scoped.text).toContain("PROJECT-INDEX")
+      expect(out.scoped.text).not.toContain("REVIEWER-INDEX")
+      expect(out.switched.changed).toBe(true)
+      expect(out.switched.text).toContain(writer)
+      expect(out.switched.text).toContain("WRITER-INDEX")
+      expect(out.switched.text).not.toContain("PROJECT-INDEX")
     }),
   )
 
