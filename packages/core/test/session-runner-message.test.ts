@@ -1257,4 +1257,63 @@ Recent work
       },
     ])
   })
+
+  // context-memory-4: a checkpoint that keeps messages is stored after them, and the request opens with it.
+  describe("a retained checkpoint", () => {
+    const user = (value: string) =>
+      SessionMessage.User.make({ id: id(`retain-${value}`), type: "user", text: value, time: { created } })
+    const checkpoint = (value: string) =>
+      SessionMessage.Compaction.make({
+        id: id(`retain-${value}`),
+        type: "compaction",
+        status: "completed",
+        reason: "manual",
+        summary: `Summary ${value}`,
+        recent: "",
+        time: { created },
+      })
+    const text = (message: Message) => message.content.map((part) => (part.type === "text" ? part.text : "")).join("")
+    const lowered = (messages: readonly SessionMessage.Info[], insertions: Parameters<typeof toLLMMessages>[3] = []) =>
+      toLLMMessages(messages, model, model.providerID, insertions).map((message) => {
+        const value = text(message)
+        return value.includes("Summary ") ? `[${value.slice(value.indexOf("Summary "))}]` : value
+      })
+
+    test("toLLMMessages lowers the latest checkpoint first and keeps the rest in order", () => {
+      // Control: a checkpoint that keeps nothing is the first row, and lowers where it stands.
+      expect(lowered([checkpoint("c"), user("new")])).toEqual(["[Summary c]", "new"])
+      // The kept messages are stored before the checkpoint and follow it in the request.
+      expect(lowered([user("kept"), user("also kept"), checkpoint("c"), user("new")])).toEqual([
+        "[Summary c]",
+        "kept",
+        "also kept",
+        "new",
+      ])
+      // A view that failed open holds the earlier checkpoint too: only the latest one moves.
+      expect(lowered([checkpoint("c1"), user("a"), checkpoint("c2"), user("b")])).toEqual([
+        "[Summary c2]",
+        "[Summary c1]",
+        "a",
+        "b",
+      ])
+      // A derived insertion keyed `start` stands after the checkpoint and before the kept messages.
+      expect(lowered([user("kept"), checkpoint("c"), user("new")], [{ after: "start", text: "derived" }])).toEqual([
+        "[Summary c]",
+        "derived",
+        "kept",
+        "new",
+      ])
+      // A checkpoint that is not completed is not moved.
+      const running = SessionMessage.CompactionRunning.make({
+        id: id("retain-running"),
+        type: "compaction",
+        status: "running",
+        reason: "manual",
+        summary: "",
+        recent: "",
+        time: { created },
+      })
+      expect(toLLMMessages([user("kept"), running], model).map(text)).toEqual(["kept"])
+    })
+  })
 })

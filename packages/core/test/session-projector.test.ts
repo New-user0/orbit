@@ -915,4 +915,53 @@ describe("SessionProjector tool overrides", () => {
 
     }),
   )
+
+  // context-memory-4: a checkpoint records the first message it keeps, and a fork names the copy of that message.
+  forking.effect("projects a checkpoint's retain and remaps it on a fork", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const bus = yield* Bus.Service
+      const sessions = yield* Session.Service
+      yield* seedStep(bus, sessionID, { id: "msg_retain_first", calls: [] })
+      const second = yield* seedStep(bus, sessionID, { id: "msg_retain_second", calls: [] })
+      yield* bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+      yield* bus.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        reason: "manual",
+        text: "summary",
+        recent: "",
+        retain: second,
+      })
+      yield* seedStep(bus, sessionID, { id: "msg_retain_third", calls: [] })
+
+      const compactionsOf = (id: Session.ID) =>
+        db
+          .select()
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, id), eq(SessionMessageTable.type, "compaction")))
+          .all()
+          .pipe(
+            Effect.orDie,
+            Effect.map((rows) =>
+              rows.map((row) =>
+                Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type }),
+              ),
+            ),
+          )
+      expect(yield* compactionsOf(sessionID)).toMatchObject([{ status: "completed", retain: second }])
+
+      // A fork past the checkpoint copies it, and its `retain` follows the kept message to its copy.
+      const past = yield* sessions.fork({ sessionID })
+      const copies = (yield* sessions.messages({ sessionID: past.id, order: "asc" })).filter(
+        (message) => message.type === "assistant",
+      )
+      expect(copies).toHaveLength(3)
+      expect(copies[1]!.id).not.toBe(second)
+      expect(yield* compactionsOf(past.id)).toMatchObject([{ retain: copies[1]!.id }])
+
+      // A fork that stops inside the kept span has no copy of the checkpoint.
+      const inside = yield* sessions.fork({ sessionID, before: second })
+      expect(yield* compactionsOf(inside.id)).toEqual([])
+    }),
+  )
 })
