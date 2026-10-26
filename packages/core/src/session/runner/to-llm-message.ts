@@ -651,7 +651,7 @@ function toLLMMessage(
               ReminderText.neutralize(message.summary),
               ...(message.reason === "auto"
                 ? [
-                    'Keep working without checking in with the user. Go straight to the task that was underway, and say nothing about this summary or about having resumed.',
+                    "Keep working without checking in with the user. Go straight to the task that was underway, and say nothing about this summary or about having resumed.",
                   ]
                 : []),
             ].join("\n\n"),
@@ -692,9 +692,10 @@ export const withoutReplaced = (messages: readonly SessionMessage.Info[]) => {
 
 /**
  * The user messages that arrived while work was in progress: a steer that follows a round of tool calls the client ran,
- * with nothing between that ends the busy period. A first prompt, one after idle, an interruption, a checkpoint or a
- * move, queued input (it waited for the work to end) and a steer after a final text-only step are all fresh prompts and
- * get no note. Decided from history up to each message, so an earlier request never changes when history grows.
+ * with nothing between that ends the busy period. A first prompt, one after idle, an interruption, a checkpoint that keeps
+ * nothing or a move, queued input (it waited for the work to end) and a steer after a final text-only step are all fresh
+ * prompts and get no note. A checkpoint that keeps messages is lowered first, so a steer stored after it follows the
+ * kept messages and can be a steer. Decided from history up to each message, so an earlier request never changes when history grows.
  */
 const queuedInput = (history: readonly SessionMessage.Info[]) => {
   const queued = new Set<SessionMessage.ID>()
@@ -740,8 +741,10 @@ export interface LoweredInsertion {
  *
  * History falls into runs: the messages after one assistant message (or the epoch start) up to the next. In each run
  * the stored reminder rows come first, then that run's derived `insertions`, then the rest. A reminder therefore sits
- * ahead of the prompt it was collected for, and after the tool results of the round it follows. Nothing moves above a
- * checkpoint, and an assistant message keeps its tool results.
+ * ahead of the prompt it was collected for, and after the tool results of the round it follows. Nothing moves above the
+ * latest checkpoint, which comes first even when it is stored after the messages it keeps, and an assistant message
+ * keeps its tool results. When the checkpoint keeps messages, the first run is the one after the last kept assistant
+ * message, so the epoch's reminders sit next to its first new message, after the kept ones.
  */
 export const toLLMMessages = (
   messages: readonly SessionMessage.Info[],
@@ -750,7 +753,11 @@ export const toLLMMessages = (
   insertions: readonly LoweredInsertion[] = [],
   options: { readonly minimal?: boolean; readonly toolOutput?: string } = {},
 ) => {
-  const history = withoutReplaced(messages)
+  const active = withoutReplaced(messages)
+  // A checkpoint that keeps messages is stored after them, but the request opens with it. Earlier checkpoints of a
+  // view that failed open keep their places.
+  const latest = active.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+  const history = latest === -1 ? active : [active[latest]!, ...active.slice(0, latest), ...active.slice(latest + 1)]
   const lowering = {
     queued: queuedInput(history),
     minimal: options.minimal === true,
@@ -761,7 +768,12 @@ export const toLLMMessages = (
     return history.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, lowering))
 
   const byRun = Map.groupBy(insertions, (insertion) => insertion.after)
-  const checkpoint = history.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+  const checkpoint = latest === -1 ? -1 : 0
+  // The epoch's first run follows the last assistant message stored before the latest checkpoint (a kept one), so a
+  // derived insertion for the newest prompt lands next to it, after the kept messages. Without one it follows the
+  // checkpoint (0).
+  const keptEnd =
+    latest === -1 ? -1 : active.slice(0, latest).findLastIndex((message) => message.type === "assistant") + 1
   const out: Message[] = []
   let key: string | undefined = checkpoint === -1 ? "start" : undefined
   let reminders: Message[] = []
@@ -777,7 +789,14 @@ export const toLLMMessages = (
     if (message.type === "assistant" || (message.type === "compaction" && message.status === "completed")) {
       flush()
       out.push(...lowered)
-      key = message.type === "assistant" ? message.id : index === checkpoint ? "start" : undefined
+      key =
+        message.type === "assistant"
+          ? index === keptEnd
+            ? "start"
+            : message.id
+          : index === checkpoint && keptEnd === 0
+            ? "start"
+            : undefined
       return
     }
     if (ReminderText.isReminder(message)) reminders.push(...lowered)

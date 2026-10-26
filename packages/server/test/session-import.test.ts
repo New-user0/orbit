@@ -71,3 +71,40 @@ it.live("preserves imported parentID through HTTP import, read, and parent filte
     }).pipe(Effect.scoped),
   )
 })
+
+// A checkpoint's `retain` comes from the document (class 5): the route decodes it as a message ID, so another spelling
+// is refused before anything is written (class 7), and a valid one is stored with the checkpoint.
+it.live("refuses an imported checkpoint whose retain is not a message ID and writes nothing", () =>
+  Effect.gen(function* () {
+    const request = yield* setup
+    const template = Schema.decodeUnknownSync(SessionResponse)(yield* request("/api/session", {}))
+    const document = (id: Session.ID, retain: string) => ({
+      info: { ...template.data, id },
+      messages: [
+        { id: "msg_retain_first", type: "user", text: "First", time: { created: 1 } },
+        { id: "msg_retain_second", type: "user", text: "Second", time: { created: 2 } },
+        {
+          id: "msg_retain_checkpoint",
+          type: "compaction",
+          status: "completed",
+          reason: "manual",
+          summary: "Summary",
+          recent: "",
+          retain,
+          time: { created: 3 },
+        },
+      ],
+    })
+    const forged = Session.ID.create()
+    const refused = yield* request("/api/experimental/session/import", document(forged, "../x"), 400)
+    expect(refused).toBeDefined()
+    // Nothing was written: neither the session nor its messages exist.
+    yield* request(`/api/session/${forged}`, undefined, 404)
+
+    // Control: the same document with a message ID imports, and the checkpoint keeps its reference.
+    const valid = Session.ID.create()
+    yield* request("/api/experimental/session/import", document(valid, "msg_retain_second"))
+    const messages = yield* request(`/api/session/${valid}/message`)
+    expect(JSON.stringify(messages)).toContain('"retain":"msg_retain_second"')
+  }).pipe(Effect.scoped),
+)

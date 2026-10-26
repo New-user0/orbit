@@ -295,6 +295,9 @@ export const CompactionCompleted = Schema.Struct({
   providerState: ProviderState.pipe(optional),
   summary: Schema.String,
   recent: Schema.String,
+  retain: ID.annotate({
+    description: "The first message this checkpoint keeps verbatim after its summary. Unset when it keeps none.",
+  }).pipe(optional),
   providerContext: SessionProviderContext.Info.pipe(optional),
   ...CompactionUsage,
 }).annotate({ identifier: "Session.Message.Compaction.Completed" })

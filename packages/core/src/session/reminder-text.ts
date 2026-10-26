@@ -110,7 +110,9 @@ export interface Run {
 
 /**
  * The runs of the epoch, as `toLLMMessages` lowers them: the first run, then one after each assistant message. A
- * derived producer folds over these in order so that each run decides from history up to itself.
+ * derived producer folds over these in order so that each run decides from history up to itself. After a checkpoint
+ * that keeps messages the first run is lowered after the last kept assistant message, so a kept message stored after
+ * that assistant sits in the same lowered run but is not listed here.
  */
 export const runs = (messages: ReadonlyArray<SessionMessage.Info>): ReadonlyArray<Run> => {
   const epoch = messages.slice(epochStart(messages))

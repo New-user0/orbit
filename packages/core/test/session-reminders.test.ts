@@ -967,10 +967,10 @@ describe("lowering", () => {
   })
 
   test("never moves anything above a checkpoint or between a call and its result", () => {
-    const history = [user(1, "OLD"), checkpoint(2), user(3, "P"), reminder(4)]
+    // The view begins at the checkpoint, which the request opens with wherever it is stored.
+    const history = [checkpoint(2), user(3, "P"), reminder(4)]
 
     expect(roles(history, [{ after: "start", text: "INS" }])).toEqual([
-      "OLD",
       expect.stringContaining("Earlier messages in this session were replaced by the summary"),
       "n",
       "INS",
@@ -982,6 +982,20 @@ describe("lowering", () => {
     const history = [user(1, "OLD"), checkpoint(2), user(3, "P")]
 
     expect(roles(history, [{ after: "start", text: "INS" }]).filter((text) => text === "INS")).toHaveLength(1)
+  })
+
+  test("keys a start insertion to the latest checkpoint when an earlier one stays in the view", () => {
+    // A view that failed open holds the earlier checkpoint too, which the request lowers after the latest one.
+    const history = [checkpoint(1), user(2, "kept"), checkpoint(3), user(4, "P")]
+    const out = roles(history, [{ after: "start", text: "INS" }])
+
+    expect(out.map((text) => (text.includes("replaced by the summary") ? "CP" : text))).toEqual([
+      "CP",
+      "INS",
+      "CP",
+      "kept",
+      "P",
+    ])
   })
 
   test("keys an insertion to the run after its assistant message", () => {
