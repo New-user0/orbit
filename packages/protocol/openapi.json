@@ -16034,6 +16034,10 @@
               "auto": {
                 "type": "boolean"
               },
+              "clear": {
+                "type": "boolean",
+                "description": "Whether old tool results are left out of the model's context after an hour idle or when automatic compaction is due, keeping the newest five. The transcript keeps them. Default true."
+              },
               "keep": {
                 "type": "object",
                 "properties": {
@@ -21323,6 +21327,64 @@
         "required": ["type", "id", "time", "status", "reason", "summary", "recent"],
         "additionalProperties": false
       },
+      "Session.Message.ContextCleared": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^msg_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": ["created"],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": ["context-cleared"]
+          },
+          "trigger": {
+            "type": "string",
+            "enum": ["idle", "pressure"]
+          },
+          "tools": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/Session.Message.ContextCleared.Tool"
+              }
+            ],
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/Session.Message.ContextCleared.Tool"
+            }
+          }
+        },
+        "required": ["id", "time", "type", "trigger", "tools"],
+        "additionalProperties": false
+      },
+      "Session.Message.ContextCleared.Tool": {
+        "type": "object",
+        "properties": {
+          "assistantMessageID": {
+            "type": "string",
+            "pattern": "^msg_"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["assistantMessageID", "id"],
+        "additionalProperties": false
+      },
       "Session.Message.Idle": {
         "type": "object",
         "properties": {
@@ -21392,6 +21454,9 @@
           },
           {
             "$ref": "#/components/schemas/Session.Message.Recap"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Message.ContextCleared"
           }
         ]
       },

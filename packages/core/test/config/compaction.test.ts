@@ -4,6 +4,8 @@ import { OpenAIChat } from "@orbit/ai/protocols"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
 import { ConfigCompactionPlugin } from "@orbit/core/config/plugin/compaction"
+import { ConfigNormalize } from "@orbit/core/config/normalize"
+import { SessionContextWindow } from "@orbit/core/session/context-window"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { llmClient } from "@orbit/core/effect/app-node-platform"
 import { SessionCompaction } from "@orbit/core/session/compaction"
@@ -140,6 +142,60 @@ describe("ConfigCompactionPlugin.Plugin", () => {
         yield* Effect.sleep("10 millis")
       }
       yield* Effect.die(new Error("Timed out waiting for compaction config reload"))
+    }),
+  )
+})
+
+// context-memory-3 (class 7): a file's compaction.clear is decoded where it enters, and a malformed value costs only itself.
+describe("compaction.clear", () => {
+  const options = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
+  const document = (raw: unknown) => {
+    const normalized = ConfigNormalize.normalize(raw)
+    if (normalized.type !== "normalized") throw new Error("expected a normalized config")
+    return {
+      diagnostics: normalized.diagnostics.map((item) => [item.kind, item.path]),
+      entry: new Document({ type: "document", info: Schema.decodeUnknownSync(Info, options)(normalized.encoded) }),
+    }
+  }
+  const applied = (settings: () => ReturnType<SessionCompaction.Interface["thresholds"]>, expected: boolean) =>
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (settings().clear === expected) return
+        yield* Effect.sleep("10 millis")
+      }
+      yield* Effect.die(new Error("Timed out waiting for compaction config reload"))
+    })
+
+  it.live("decodes compaction.clear and lets a malformed value cost only itself", () =>
+    Effect.gen(function* () {
+      const compaction = yield* SessionCompaction.Service
+      const config = yield* Config.Test
+      const bus = yield* Bus.Service
+      const context = nearInput.context
+      const settings = () => compaction.thresholds(context)
+      yield* ConfigCompactionPlugin.Plugin.effect(host({ event: { subscribe: () => bus.subscribe(Event.Updated) } }))
+      // Left alone, clearing is on.
+      expect(settings().clear).toBe(true)
+
+      const off = document({ compaction: { clear: false } })
+      expect(off.diagnostics).toEqual([])
+      yield* config.setEntries([off.entry])
+      yield* bus.publish(Event.Updated, {})
+      yield* applied(settings, false)
+
+      const malformed = document({ compaction: { clear: "no", buffer: 2_000 } })
+      expect(malformed.diagnostics).toEqual([["invalid", ["compaction", "clear"]]])
+      yield* config.setEntries([malformed.entry])
+      yield* bus.publish(Event.Updated, {})
+      yield* applied(settings, true)
+      // The buffer beside it still applied.
+      expect(settings().thresholds?.threshold).toBe(
+        SessionContextWindow.thresholds({
+          limit: context.model.limit,
+          outputTokenCap: undefined,
+          buffer: 2_000,
+        })?.threshold,
+      )
     }),
   )
 })

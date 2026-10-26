@@ -262,6 +262,8 @@ export type SessionMessageRecap = {
   text: string
 }
 
+export type SessionMessageContextClearedTool = { assistantMessageID: string; id: string }
+
 export type SessionActive = { type: "running" }
 
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
@@ -771,6 +773,15 @@ export type SessionMessageCompactionFailed = {
 
 export type SessionProviderContext = { version: 1; provenance: SessionProviderContextProvenance; messages: JsonValue }
 
+export type SessionMessageContextCleared = {
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  type: "context-cleared"
+  trigger: "idle" | "pressure"
+  tools: [SessionMessageContextClearedTool, ...Array<SessionMessageContextClearedTool>]
+}
+
 export type SessionInboxSynthetic = {
   id: string
   sessionID: string
@@ -951,6 +962,20 @@ export type SessionRecapRecorded = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; text: string }
+}
+
+export type SessionContextCleared = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.context.cleared"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    trigger: "idle" | "pressure"
+    tools: [SessionMessageContextClearedTool, ...Array<SessionMessageContextClearedTool>]
+  }
 }
 
 export type SessionSkillActivated = {
@@ -2595,7 +2620,7 @@ export type ConfigEntry =
                 }
           }
         }
-        compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
+        compaction?: { auto?: boolean; clear?: boolean; keep?: { tokens?: number }; buffer?: number }
         memory?: { enabled?: boolean; directory?: string; team?: boolean }
         compatibility?: { enabled?: boolean }
         skills?: Array<string>
@@ -2812,6 +2837,7 @@ export type SessionMessageInfo =
   | SessionMessageCompaction
   | SessionMessageIdle
   | SessionMessageRecap
+  | SessionMessageContextCleared
 
 export type SessionMessageContentUpdated = {
   id: string
@@ -2867,6 +2893,7 @@ export type SessionEventDurable =
   | SessionInstructionsUpdated
   | SessionSynthetic
   | SessionRecapRecorded
+  | SessionContextCleared
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -2935,6 +2962,7 @@ export type V2Event =
   | SessionInstructionsUpdated
   | SessionSynthetic
   | SessionRecapRecorded
+  | SessionContextCleared
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -3934,6 +3962,17 @@ export type SessionImportInput = {
           readonly type: "recap"
           readonly text: string
         }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "context-cleared"
+          readonly trigger: "idle" | "pressure"
+          readonly tools: readonly [
+            { readonly assistantMessageID: string; readonly id: string },
+            ...Array<{ readonly assistantMessageID: string; readonly id: string }>,
+          ]
+        }
     >
     readonly location?: { readonly directory: string } | null
   }["info"]
@@ -4293,6 +4332,17 @@ export type SessionImportInput = {
           readonly type: "recap"
           readonly text: string
         }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "context-cleared"
+          readonly trigger: "idle" | "pressure"
+          readonly tools: readonly [
+            { readonly assistantMessageID: string; readonly id: string },
+            ...Array<{ readonly assistantMessageID: string; readonly id: string }>,
+          ]
+        }
     >
     readonly location?: { readonly directory: string } | null
   }["messages"]
@@ -4651,6 +4701,17 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "recap"
           readonly text: string
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "context-cleared"
+          readonly trigger: "idle" | "pressure"
+          readonly tools: readonly [
+            { readonly assistantMessageID: string; readonly id: string },
+            ...Array<{ readonly assistantMessageID: string; readonly id: string }>,
+          ]
         }
     >
     readonly location?: { readonly directory: string } | null

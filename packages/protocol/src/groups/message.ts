@@ -62,6 +62,7 @@ export const PublicSessionMessage = Schema.Union([
   SessionMessage.Compaction,
   SessionMessage.Idle,
   SessionMessage.Recap,
+  SessionMessage.ContextCleared,
 ]).annotate({ identifier: "Session.Message.Info" })
 
 export const MessageGroup = HttpApiGroup.make("server.message")

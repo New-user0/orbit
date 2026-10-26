@@ -180,6 +180,16 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
             time: { created },
           }),
         ),
+      "session.context.cleared": (event) =>
+        adapter.appendMessage(
+          SessionMessage.ContextCleared.make({
+            id: SessionMessage.ID.fromEvent(event.id),
+            type: "context-cleared",
+            trigger: event.data.trigger,
+            tools: event.data.tools,
+            time: { created },
+          }),
+        ),
       "session.skill.activated": (event) => {
         return adapter.appendMessage(
           SessionMessage.Skill.make({

@@ -252,11 +252,16 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       .pipe(Effect.orDie)
     if (rows.length === 0) break
 
-    const copies = rows.map((row) => ({
+    const copied = rows.map((row) => ({
       row,
       id: SessionMessage.ID.make(`${SessionMessage.ID.fromEvent(event.id)}_${row.seq}`),
     }))
-    copies.forEach((copy) => copiedIDs.set(copy.row.id, copy.id))
+    copied.forEach((copy) => copiedIDs.set(copy.row.id, copy.id))
+    // A clearing whose calls were not copied has nothing left to name, so it is not copied either.
+    const copies = copied.flatMap((copy) => {
+      const data = copiedData(copy.row, copiedIDs)
+      return data === undefined ? [] : [{ ...copy, data }]
+    })
     yield* db
       .insert(SessionMessageTable)
       .values(
@@ -267,7 +272,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
           seq: copy.row.seq,
           time_created: copy.row.time_created,
           time_updated: copy.row.time_updated,
-          data: replacedToCopy(copy.row, copiedIDs),
+          data: copy.data,
         })),
       )
       .run()
@@ -282,6 +287,19 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       current: event.data.instructions,
     })
 })
+
+/**
+ * The data a row is copied with: a clearing marker names the copies of its calls' messages, and is dropped when none of
+ * them was copied. Every other row is copied as it is, apart from an escalation notice.
+ */
+function copiedData(row: typeof SessionMessageTable.$inferSelect, copiedIDs: ReadonlyMap<string, SessionMessage.ID>) {
+  if (row.type !== "context-cleared" || !("tools" in row.data)) return replacedToCopy(row, copiedIDs)
+  const [first, ...rest] = row.data.tools.flatMap((tool) => {
+    const copy = copiedIDs.get(tool.assistantMessageID)
+    return copy ? [{ ...tool, assistantMessageID: copy }] : []
+  })
+  return first === undefined ? undefined : { ...row.data, tools: [first, ...rest] as const }
+}
 
 /** An output-escalation notice keeps naming the parent's attempt unless it is remapped to that attempt's copy. */
 function replacedToCopy(
@@ -787,6 +805,7 @@ const layer = Layer.effectDiscard(
     )
     yield* bus.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* bus.project(SessionEvent.RecapRecorded, (event) => run(db, event))
+    yield* bus.project(SessionEvent.ContextCleared, (event) => run(db, event))
     yield* bus.project(SessionEvent.Skill.Activated, (event) => run(db, event))
     yield* bus.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* bus.project(SessionEvent.Shell.Ended, (event) => run(db, event))

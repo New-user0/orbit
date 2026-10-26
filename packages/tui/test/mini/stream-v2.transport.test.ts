@@ -561,6 +561,63 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
+  // context-memory-3: the clearing marker is a stored row that only tells the model's request what to leave out. The
+  // scrollback keeps the tool's full output and gets nothing for the marker.
+  test("replays a context-cleared row as nothing", async () => {
+    const replayed = async (withMarker: boolean) => {
+      const events = feed()
+      events.push(connected())
+      const ui = footer()
+      const history = [
+        { id: "msg_old", type: "user", text: "Show notes", files: [], agents: [], time: { created: 1 } },
+        {
+          id: "msg_assistant",
+          type: "assistant",
+          agent: "build",
+          model: { id: "model", providerID: "provider" },
+          content: [
+            canonicalToolPart("Bash", {
+              status: "completed",
+              input: { command: "cat notes.txt" },
+              content: [{ type: "text", text: "the full output of the cleared call" }],
+            }),
+          ],
+          time: { created: 2, completed: 3 },
+        },
+        ...(withMarker
+          ? [
+              {
+                id: "msg_cleared",
+                type: "context-cleared",
+                trigger: "idle",
+                tools: [{ assistantMessageID: "msg_assistant", id: "Bash-1" }],
+                time: { created: 4 },
+              },
+            ]
+          : []),
+        { id: "msg_next", type: "user", text: "Thanks", files: [], agents: [], time: { created: 5 } },
+      ] as SessionMessages
+      const transport = await createSessionTransport({
+        sdk: sdk({ streams: [events], messages: { ses_1: history } }),
+        sessionID: "ses_1",
+        thinking: false,
+        replay: true,
+        footer: ui.api,
+      })
+      const deadline = Date.now() + 3000
+      while (!ui.commits.some((commit) => commit.text.includes("Thanks")) && Date.now() < deadline) await Bun.sleep(5)
+      await transport.close()
+      return ui.commits
+    }
+
+    const commits = await replayed(true)
+    // The tool's output is replayed whole, and no commit belongs to the marker.
+    expect(commits.some((commit) => JSON.stringify(commit).includes("the full output of the cleared call"))).toBe(true)
+    expect(commits.some((commit) => commit.messageID === "msg_cleared")).toBe(false)
+    // Control: without the marker the replay is the same.
+    expect(commits).toEqual(await replayed(false))
+  })
+
   // The away summary waits for a turn that was already running when Mini attached, which only this read reveals.
   test.each([true, false])("reports whether its session is running when it loads it (running: %s)", async (running) => {
     const events = feed()
