@@ -267,6 +267,8 @@ describe("the layout of the baseline", () => {
       expect(at(HEADING)).toBeGreaterThan(at("value of core/scratchpad"))
       expect(at(HEADING)).toBeLessThan(at("from the API"))
       expect(at(ADVICE)).toBeGreaterThan(at(HEADING))
+      // The preview and the runner's baseline read the same list, so their text is the same.
+      expect(preview.initial).toEqual((yield* readInitial(list)).text)
     }),
   )
 })
@@ -636,6 +638,8 @@ describe("the tool-results section in the runner's request", () => {
         },
       })
 
+      // The request made while Plan mode is active, kept so the row can compare it with the one before the switch.
+      const inPlan: Array<Effect.Success<ReturnType<typeof ask>>> = []
       const rows: ReadonlyArray<{
         readonly name: string
         readonly event: (id: Session.ID) => Effect.Effect<unknown, unknown, Scope.Scope>
@@ -647,7 +651,7 @@ describe("the tool-results section in the runner's request", () => {
           event: (id) =>
             Effect.gen(function* () {
               yield* s.session.switchAgent({ sessionID: id, agent: Agent.ID.make("plan") })
-              yield* ask(s, id, "In plan")
+              inPlan.push(yield* ask(s, id, "In plan"))
               yield* s.session.switchAgent({ sessionID: id, agent: Agent.ID.make("build") })
             }),
         },
@@ -699,18 +703,27 @@ describe("the tool-results section in the runner's request", () => {
       ]
 
       for (const row of rows) {
+        // A reminder left by the row before would otherwise fire in this row's first request.
+        s.reminders.durable = []
+        inPlan.length = 0
         const id = yield* newSession(s, row.name.replaceAll(/\W+/g, "_"))
         const before = yield* ask(s, id, "One")
         expect(systemText(before)).toContain(ADVICE)
         yield* row.event(id)
-        s.reminders.durable = row.name.startsWith("a durable") ? s.reminders.durable : []
         const after = yield* ask(s, id, "Two")
         // The system part is identical in every row, the direct tool's included.
         expect(after.system).toEqual(before.system)
         const names = (request: typeof before) => request.tools.map((definition) => definition.name)
-        if (row.added?.deferred === false)
+        if (row.name.startsWith("a switch")) {
+          expect(inPlan).toHaveLength(1)
+          expect(inPlan[0].system).toEqual(before.system)
+          expect(inPlan[0].tools).toEqual(before.tools)
+        }
+        if (row.added?.deferred === false) {
           expect(names(after).filter((name) => !names(before).includes(name))).toEqual([row.added.tool])
-        else expect(after.tools).toEqual(before.tools)
+          // Only the new definition differs.
+          expect(after.tools.filter((definition) => definition.name !== row.added?.tool)).toEqual([...before.tools])
+        } else expect(after.tools).toEqual(before.tools)
         if (row.update !== undefined) expect(everything(after)).toContain(row.update)
         if (row.added?.deferred === true) expect(everything(after)).toContain(row.added.tool)
       }
