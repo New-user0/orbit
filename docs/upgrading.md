@@ -4906,9 +4906,10 @@ stores one fact, `retain`: the ID of the first message it keeps. The summary cov
   the checkpoint, then the kept messages unchanged, then the newer ones. A checkpoint without `retain` is the first
   message of the list, as before.
 - **A stored `retain` that does not fit** (a message that is not in the session, one at or after the checkpoint, an
-  instruction update or a compaction, one from before the previous checkpoint's view, or text that is not a message ID)
-  is not trusted: the history then also holds what the checkpoint summarized, back to the previous view, and one warning
-  is logged. An imported document whose `retain` is not a message ID is refused.
+  instruction update or a compaction, or one from before the previous checkpoint's view) is not trusted: the history then
+  also holds what the checkpoint summarized, back to the previous view, and one warning is logged. An imported document
+  whose `retain` is not a message ID is refused, and an edited database whose `retain` is not one fails to load that
+  history like any other row that does not decode.
 - **Forks and reverts.** A fork that includes the checkpoint keeps its kept span; a fork that stops inside the span has
   no checkpoint. A revert to a kept message removes the checkpoint with it, and the history falls back to the one before.
 - **Asking for a message that is not there.** A compaction that names a message outside the active history fails with

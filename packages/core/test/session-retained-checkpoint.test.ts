@@ -5,7 +5,7 @@
 import { expect } from "bun:test"
 import { CompactionCheckpointResponse, CompactionPart, Message, type LLMRequest } from "@orbit/ai"
 import { TestLLM } from "@orbit/ai/testing"
-import { and, asc, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray, sql } from "drizzle-orm"
 import { DateTime, Effect, Logger, Schema, type Layer, type Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { Bus } from "@orbit/core/bus"
@@ -531,6 +531,20 @@ scenario("the kept start moves past rows a kept span never holds", function* (s)
     const latest = loaded.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
     expect(loaded.slice(0, latest).filter((message) => message.type === "system" || message.type === "compaction")).toEqual([])
   }
+
+  // An instruction update inside the kept span is not kept: the new baseline supersedes it.
+  const inside = yield* newSession(s, "move_inside")
+  yield* grow(s, 3, { id: inside })
+  yield* system(inside)
+  yield* grow(s, 1, { id: inside, from: 4 })
+  expect(yield* rowsOf(inside, "system")).toHaveLength(1)
+  const second = yield* userID(s, "prompt 2", inside)
+  yield* s.llm.push(summaryReply("inside"))
+  expect((yield* compactWith(s, { id: inside, retain: second })).outcome).toEqual({ status: "completed" })
+  expect((yield* eventsOf(s, ENDED, inside)).at(-1)!.retain).toBe(second)
+  const kept = yield* SessionHistory.load(s.db, inside, "latest")
+  expect(kept.some((message) => message.id === second)).toBe(true)
+  expect(kept.filter((message) => message.type === "system")).toEqual([])
 })
 
 scenario("a retain that is not in the active history fails with a typed error and stores nothing", function* (s) {
@@ -948,6 +962,35 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     // The request starts with the checkpoint, then the earlier history.
     const lowered = toLLMMessages(value, fakeModel)
     expect(textOf(lowered[0]!)).toContain("Forged summary")
+  }
+
+  // A value edited into the database after the event was accepted, a path or a number, is no message ID at all (class 5).
+  for (const [name, edited] of [
+    ["a path", "../x"],
+    ["a number", 5],
+  ] as const) {
+    const edit = yield* newSession(s, `forged_edit_${name.replace(" ", "_")}`)
+    yield* grow(s, 3, { id: edit })
+    yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID: edit, reason: "manual", recent: "" })
+    yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+      sessionID: edit,
+      reason: "manual",
+      text: "Forged summary",
+      recent: "",
+      retain: yield* userID(s, "prompt 2", edit),
+    })
+    yield* s.db
+      .update(SessionMessageTable)
+      .set({ data: sql`json_set(${SessionMessageTable.data}, '$.retain', ${edited})` })
+      .where(and(eq(SessionMessageTable.session_id, edit), eq(SessionMessageTable.type, "compaction")))
+      .run()
+      .pipe(Effect.orDie)
+    // The row no longer decodes, and a row that does not decode fails the load as any malformed row does; the value
+    // is never used as a key on the way.
+    const rowsBefore = yield* countRows(s, edit)
+    const failure = yield* withWarnings(SessionHistory.load(s.db, edit, "latest").pipe(Effect.flip))
+    expect({ name, failure: failure.value }).toMatchObject({ name, failure: { _tag: "Session.MessageDecodeError" } })
+    expect(yield* countRows(s, edit)).toBe(rowsBefore)
   }
 
   // A row before the previous checkpoint's start gives no wider view than that start.

@@ -972,8 +972,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Retained checkpoints (`retain` on a completed compaction; `SessionHistory`, `SessionCompaction`, `toLLMMessages`): the
   field names the first message the checkpoint keeps, and no production path sets it yet. It reads, spawns and fetches
   nothing, and writes only the session's own rows. The stored value comes from the session's own events, an import or
-  an edited database, so it is hostile: history selection checks that it is `msg_`-shaped, looks it up as a bound
-  parameter scoped to the session, and never joins it into a path, a ref, a glob or a log line. A value that names no row
+  an edited database, so it is hostile: history selection checks that it is `msg_`-shaped (a value that is not fails the
+  load as a row that does not decode, like any malformed row), looks it up as a bound parameter scoped to the session,
+  and never joins it into a path, a ref, a glob or a log line. A value that names no row
   of the session, a row at or after the checkpoint, an instruction update or a compaction, or a row before the previous
   view fails open to the earlier history with one warning, so a forged value never hides more than the checkpoint would
   (classes 5 and 7). An import decodes it as a message ID, so `../x` refuses the document. A fork remaps it to the copy
