@@ -401,6 +401,38 @@ describe("agent memory roots in the repository", () => {
       }),
     )
 
+  // Class 6 (S1, S2): an id segment inside an accepted root can be a link to a share too. The agent gets no folder, and
+  // no call but a readLink names the link, so nothing connects to the host. A plain sibling id is the control.
+  if (process.platform === "win32" && canLinkFile)
+    it.live("does not resolve an agent folder whose id segment is a link to a share", () =>
+      Effect.gen(function* () {
+        const share = "\\\\203.0.113.171\\share\\x"
+        const l = yield* layout
+        yield* Effect.promise(async () => {
+          await fs.mkdir(l.shared, { recursive: true })
+          await fs.symlink(share, path.join(l.shared, "review"), "dir")
+        })
+        const recorded = recordedFileSystem()
+        const started = Date.now()
+        const out = yield* Effect.gen(function* () {
+          const agents = yield* service
+          return {
+            linked: yield* agents.folder("review", "project"),
+            nested: yield* agents.folder("review/deep", "project"),
+            control: (yield* agents.folder("other", "project"))?.folder,
+          }
+        }).pipe(provide(l, { files: recorded.layer }))
+        expect(Date.now() - started).toBeLessThan(15_000)
+        const named = path.join(l.shared, "review").toLowerCase()
+        const calls = recorded.calls.filter((call) => {
+          const arg = call.slice(call.indexOf(" ") + 1).toLowerCase()
+          return arg === named || arg.startsWith(`${named}${path.sep}`)
+        })
+        expect(calls.filter((call) => !call.startsWith("readLink "))).toEqual([])
+        expect(out).toEqual({ linked: undefined, nested: undefined, control: path.join(l.shared, "other") })
+      }),
+    )
+
   // Class 1: nothing of the repository's roots is resolved before the project is trusted: only the user root is there,
   // and no call of the file system names `.orbit`. The trusted run is the control.
   it.live("resolves no project or local root before the project is trusted", () =>
@@ -464,6 +496,27 @@ describe("agent memory roots in the repository", () => {
         local: path.join(worktree, ".orbit", "agent-memory-local", "x"),
         user: path.join(l.user, "x"),
       })
+    }),
+  )
+
+  // Class 7: a root that cannot be resolved, here because the Location's folder is gone (a removed worktree), turns its
+  // scope off with one line in the log instead of failing every question about the carve-out. The user root stays.
+  it.live("turns project and local agent memory off when the Location's folder cannot be resolved", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const gone = path.join(l.root, "removed-worktree")
+      const logs: string[] = []
+      const out = yield* Effect.gen(function* () {
+        const agents = yield* service
+        return {
+          current: folders(yield* agents.current()),
+          project: yield* agents.folder("x", "project"),
+          local: yield* agents.folder("x", "local"),
+          user: (yield* agents.folder("x", "user"))?.folder,
+        }
+      }).pipe(provide(l, { directory: gone }), Effect.provide(logged(logs)))
+      expect(out).toEqual({ current: [l.user], project: undefined, local: undefined, user: path.join(l.user, "x") })
+      expect(logs.filter((line) => line.includes("agent memory is off"))).toHaveLength(2)
     }),
   )
 })

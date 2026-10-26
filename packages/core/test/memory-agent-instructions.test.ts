@@ -33,6 +33,7 @@ import { SessionEvent } from "@orbit/core/session/event"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { SessionStore } from "@orbit/core/session/store"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { recordedFileSystem } from "./fixture/recorded-fs"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
@@ -105,15 +106,31 @@ const locationOf = (directory: string) =>
     ),
   )
 
-const provide = (l: Layout, entries: Entry[] = [], options: { readonly untrusted?: boolean } = {}) =>
+const provide = (
+  l: Layout,
+  entries: Entry[] = [],
+  options: {
+    readonly untrusted?: boolean
+    readonly directory?: string
+    readonly files?: Layer.Layer<FSUtil.Service>
+  } = {},
+) =>
   Effect.provide(
     AppNodeBuilder.build(
-      LayerNode.group([Database.node, Bus.node, Agent.node, MemoryInstructions.node, InstructionDiscovery.node]),
+      LayerNode.group([
+        Database.node,
+        Bus.node,
+        Agent.node,
+        MemoryAgent.node,
+        MemoryInstructions.node,
+        InstructionDiscovery.node,
+      ]),
       [
         Global.node.replace(Global.layerWith({ data: l.data, config: path.join(l.root, "config") })),
         Config.node.replace(Config.testLayer(entries)),
-        locationOf(l.project),
+        locationOf(options.directory ?? l.project),
         ...(options.untrusted ? [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))] : []),
+        ...(options.files === undefined ? [] : [FSUtil.node.replace(options.files)]),
       ],
     ),
   )
@@ -286,6 +303,37 @@ describe("the agent memory block", () => {
       expect(out.other.text).toContain("SECOND-AGENT-VERSION")
       expect(out.after.changed).toBe(true)
       expect(out.after.text).toContain("SECOND-AGENT-VERSION")
+    }),
+  )
+
+  // The frozen block belongs to the agent and the scope it was read for: a session that switches to another agent with
+  // memory, or whose agent's scope changes, gets the new folder and index at once. Staying is the control.
+  it.live("gives a session the block of its new agent or scope when either changes", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const reviewer = path.join(l.roots.user, "reviewer")
+      const writer = path.join(l.roots.user, "writer")
+      const project = path.join(l.roots.project, "reviewer")
+      yield* write(path.join(reviewer, "MEMORY.md"), "- REVIEWER-INDEX\n")
+      yield* write(path.join(writer, "MEMORY.md"), "- WRITER-INDEX\n")
+      yield* write(path.join(project, "MEMORY.md"), "- PROJECT-INDEX\n")
+      const out = yield* Effect.gen(function* () {
+        yield* sessions
+        const before = yield* readInitial(yield* load(first, { id: "reviewer", memory: "user" }))
+        const stay = yield* readUpdate(yield* load(first, { id: "reviewer", memory: "user" }), before)
+        const switched = yield* readUpdate(yield* load(first, { id: "writer", memory: "user" }), before)
+        const scoped = yield* readUpdate(yield* load(first, { id: "reviewer", memory: "project" }), switched)
+        return { before, stay, switched, scoped }
+      }).pipe(provide(l))
+      expect(out.before.text).toContain("REVIEWER-INDEX")
+      expect(out.stay.changed).toBe(false)
+      expect(out.switched.changed).toBe(true)
+      expect(out.switched.text).toContain(writer)
+      expect(out.switched.text).toContain("WRITER-INDEX")
+      expect(out.switched.text).not.toContain("REVIEWER-INDEX")
+      expect(out.scoped.changed).toBe(true)
+      expect(out.scoped.text).toContain(project)
+      expect(out.scoped.text).toContain("PROJECT-INDEX")
     }),
   )
 
@@ -529,5 +577,31 @@ describe("one folder for the block, the disk and the carve-out", () => {
         })
       }),
     timeout,
+  )
+
+  // Class 3: the folder that is made is the real place `MemoryAgent` checked, never the spelling through the linked
+  // session folder, so nothing that changes under that spelling after the check decides where the folder goes. The
+  // recorded file system is the oracle; the block naming the spelled folder is the control.
+  it.live("makes the checked real folder, not the spelling the block names", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const linked = path.join(l.root, "linked-project")
+      yield* Effect.promise(() => fs.symlink(l.project, linked, linkType))
+      const recorded = recordedFileSystem()
+      const out = yield* Effect.gen(function* () {
+        yield* sessions
+        const memoryAgent = yield* MemoryAgent.Service
+        const resolved = yield* memoryAgent.folder("keeper", "project")
+        const block = yield* readInitial(yield* load(first, { id: "keeper", memory: "project" }))
+        return { resolved: resolved!, block }
+      }).pipe(provide(l, [], { directory: linked, files: recorded.layer }))
+      const made = recorded.calls
+        .filter((call) => call.startsWith("makeDirectory "))
+        .map((call) => call.slice("makeDirectory ".length))
+      expect(out.resolved.folder).toBe(path.join(linked, ".orbit", "agent-memory", "keeper"))
+      expect(out.block.text).toContain(out.resolved.folder)
+      expect(made).toEqual([out.resolved.real])
+      expect(out.resolved.real).not.toBe(out.resolved.folder)
+    }),
   )
 })
