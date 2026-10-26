@@ -4893,3 +4893,24 @@ rest of `compaction`.
 for a file or command again that it can no longer see.
 
 **What to do:** Nothing. Set `compaction.clear` to `false` to keep every old result in the request.
+
+## The main thread is told that tool output can be cleared
+
+The baseline of a main conversation now ends its built-in part with a section on tool output, after the scratchpad and
+before the entries of the API. It holds one sentence that asks the model to note in its reply anything it will need
+again from a tool result, because the output may be cleared later. While `compaction.clear` is on (the default), a
+short notice comes first: older tool output is replaced with a short note saying it was cleared, and the output of the
+newest five calls is never cleared. The notice follows the setting the clearing itself follows, so it is there exactly
+when the session clears.
+
+- **Who gets it.** The main thread on Orbit's own prompt and an exact fork of it. A subagent, an agent with a prompt of
+  its own, a `system_prompt` or `system_prompt_file` of yours, `orb run --bare` and a vanilla instance do not, the same
+  places the memory guide goes without.
+- **When you change the setting.** Turning `compaction.clear` on or off during a session reaches the model as one
+  update at its next step; the start of the conversation is not rewritten.
+- **Sessions that started before.** They receive the section as an update at their next step.
+
+**Affects:** people who read or compare the first request of a session, and prompt-cache tooling that expects the old
+baseline.
+
+**What to do:** Nothing.

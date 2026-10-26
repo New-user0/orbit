@@ -12,7 +12,7 @@ import { LinkShare } from "@orbit/util/link-share"
 import { Effect, Option } from "effect"
 import { Config } from "../config.js"
 import { SessionSystemPrompt } from "../session/system-prompt.js"
-import { ShellTool } from "../tool/plugin/shell.js"
+import { ToolNames } from "../tool/names.js"
 import type { PluginInternal } from "./internal.js"
 
 import CORE_RULES from "./system-prompt/core-rules.txt"
@@ -112,7 +112,7 @@ export const Plugin = define({
           }
         }
 
-        if (event.tools[ShellTool.name]) text = `${text}\n\n${SessionSystemPrompt.renderGit(attribution)}`
+        if (event.tools[ToolNames.tools.shell]) text = `${text}\n\n${SessionSystemPrompt.renderGit(attribution)}`
 
         if (main && keys.append) {
           pieces.push(keys.append)

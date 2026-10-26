@@ -161,8 +161,8 @@ const vanillaReplacements: LayerNode.Replacements = [
   InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: false, global: false })),
   // A vanilla instance adds no reminders beyond the minimal set, as `--bare` does.
   SessionReminders.node.replace(SessionReminders.configured(SessionReminders.minimal(SessionReminders.production))),
-  // A vanilla instance carries no reply-language preference, as the minimal prompt has no such section; a `language` the host passes in config is dropped too.
-  InstructionBuiltIns.node.replace(InstructionBuiltIns.configured({ preferences: false })),
+  // A vanilla instance carries neither the reply-language preference nor the tool-results section, as the minimal prompt has no such sections; a `language` the host passes in config is dropped too.
+  InstructionBuiltIns.node.replace(InstructionBuiltIns.configured({ minimal: true })),
   // A vanilla instance reads nothing about the project it stands on, and the git snapshot is one such read.
   VcsInstructions.node.replace(Layer.succeed(VcsInstructions.Service, { source: () => Instructions.empty })),
 ]

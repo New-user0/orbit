@@ -124,7 +124,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   and managed, so a project, local or remote document never supplies them, trusted or not, and nothing ranks against
   the person's value. `system_prompt` and `append_system_prompt` stay `inert` in `ConfigTrust` for that reason, as
   `compatibility` does: withholding them would list `settings` in the trust prompt for keys a grant never applies. The
-  core rules follow a replacement. A drive letter mapped to a share is not detected (follow-up). Proof: the scope table
+  core rules follow a replacement. `SessionContext.select` also asks `PromptConfigPlugin.replaces` for the default-prompt
+  gate (class 3), once per selection, and hands that one value to the memory guide and the tool-results section; the
+  door itself is unchanged and `test/session-context-layout.test.ts` ("carries the section wherever the default prompt
+  goes") pins the one read and the share rows through `select`. A drive letter mapped to a share is not detected (follow-up). Proof: the scope table
   in `test/plugin/prompt-config.test.ts` ("system prompt keys by scope"), `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`. The same text can arrive as `agents.<id>.system`, because an agent with a prompt
   of its own makes the session skip the person's `system_prompt`. `ConfigAgentPlugin` therefore ignores `system`, `description` (the text of the agent listing) and `initial_prompt` from

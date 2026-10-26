@@ -86,6 +86,8 @@ export interface Interface extends State.Transformable<Editor> {
     readonly clear: boolean
     readonly thresholds: SessionContextWindow.Thresholds | undefined
   }
+  /** Whether old tool results are cleared now: the setting `thresholds(...).clear` reports, readable without a loaded context. */
+  readonly clearing: Effect.Effect<boolean>
   /** Whether an automatic compaction would start for this context now, as `compact({ reason: "auto" })` decides it. */
   readonly due: (context: SessionContext.Loaded) => boolean
 }
@@ -762,6 +764,7 @@ export const layer = Layer.effect(
         clear: state.get().clear,
         thresholds: thresholds(context, state.get()),
       }),
+      clearing: Effect.sync(() => state.get().clear),
       due: (context) => {
         const found = thresholds(context, state.get())
         return state.get().auto && found !== undefined && due(context, found.threshold)
