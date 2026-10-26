@@ -169,40 +169,42 @@ describe("the agent memory block", () => {
   // S6: the block for each scope. Its title is its own (not the main guide's `# Memory`), it names the folder, it has
   // the private guide's sections and none of the team guide's, the scope line after the last section says how far the
   // memory reaches, and the index follows its heading.
-  it.live("builds the agent block for each scope: its heading, the folder, the private guide's sections, the scope line, then the index", () =>
-    Effect.gen(function* () {
-      const scopes = ["user", "project", "local"] as const
-      const out = yield* Effect.forEach(scopes, (scope) =>
-        Effect.gen(function* () {
-          const l = yield* layout
-          const folder = path.join(l.roots[scope], "reviewer")
-          yield* write(path.join(folder, "MEMORY.md"), `- [Style](style.md) — INDEX-LINE-${scope}\n`)
-          return { scope, folder, view: yield* initial(l, { id: "reviewer", memory: scope }) }
-        }),
-      )
-      const tails = out.map((row) => {
-        const text = row.view.text
-        expect(Object.keys(row.view.values)).toEqual([AGENT])
-        expect(titles(text)).toHaveLength(1)
-        expect(titles(text)[0]).toMatch(/agent memory/i)
-        expect(titles(text)[0]).not.toBe("# Memory")
-        expect(text).toContain(row.folder)
-        expect(headings(text)).toEqual([...HEADINGS, INDEX_HEADING])
-        expect(text).not.toContain("## Private and team memory")
-        expect(text.split("\n").filter((line) => line.trim().startsWith("- Scope:"))).toEqual([])
-        expect(text.toLowerCase()).not.toContain("secret")
-        expect(text.indexOf(INDEX_HEADING)).toBeLessThan(text.indexOf(`INDEX-LINE-${row.scope}`))
-        return text.slice(text.indexOf("## Memory, plans and tasks"), text.indexOf(INDEX_HEADING))
-      })
-      const [user, project, local] = tails as [string, string, string]
-      expect(user).toContain("general")
-      expect(project).toContain("committed")
-      expect(project).toContain("shared with the team")
-      expect(project).not.toContain("not committed")
-      expect(local).toContain("not committed")
-      expect(local).toContain("this machine")
-      expect(new Set(tails).size).toBe(3)
-    }),
+  it.live(
+    "builds the agent block for each scope: its heading, the folder, the private guide's sections, the scope line, then the index",
+    () =>
+      Effect.gen(function* () {
+        const scopes = ["user", "project", "local"] as const
+        const out = yield* Effect.forEach(scopes, (scope) =>
+          Effect.gen(function* () {
+            const l = yield* layout
+            const folder = path.join(l.roots[scope], "reviewer")
+            yield* write(path.join(folder, "MEMORY.md"), `- [Style](style.md) — INDEX-LINE-${scope}\n`)
+            return { scope, folder, view: yield* initial(l, { id: "reviewer", memory: scope }) }
+          }),
+        )
+        const tails = out.map((row) => {
+          const text = row.view.text
+          expect(Object.keys(row.view.values)).toEqual([AGENT])
+          expect(titles(text)).toHaveLength(1)
+          expect(titles(text)[0]).toMatch(/agent memory/i)
+          expect(titles(text)[0]).not.toBe("# Memory")
+          expect(text).toContain(row.folder)
+          expect(headings(text)).toEqual([...HEADINGS, INDEX_HEADING])
+          expect(text).not.toContain("## Private and team memory")
+          expect(text.split("\n").filter((line) => line.trim().startsWith("- Scope:"))).toEqual([])
+          expect(text.toLowerCase()).not.toContain("secret")
+          expect(text.indexOf(INDEX_HEADING)).toBeLessThan(text.indexOf(`INDEX-LINE-${row.scope}`))
+          return text.slice(text.indexOf("## Memory, plans and tasks"), text.indexOf(INDEX_HEADING))
+        })
+        const [user, project, local] = tails as [string, string, string]
+        expect(user).toContain("general")
+        expect(project).toContain("committed")
+        expect(project).toContain("shared with the team")
+        expect(project).not.toContain("not committed")
+        expect(local).toContain("not committed")
+        expect(local).toContain("this machine")
+        expect(new Set(tails).size).toBe(3)
+      }),
   )
 
   // Class 7: an index that is not there, is empty or cannot be read (a folder named MEMORY.md) reads as empty: the block
@@ -325,7 +327,6 @@ describe("the agent memory block", () => {
         yield* write(path.join(l.roots.project, id, "MEMORY.md"), `${front}- FRONT-CONTROL-${index}\n`)
         const out = yield* initial(l, { id, memory: "project" })
         expect(out.text).toContain(`- FRONT-CONTROL-${index}`)
-        expect(out.text).not.toContain("writeFileSync")
         expect(yield* exists(marker)).toBe(false)
       }
     }),

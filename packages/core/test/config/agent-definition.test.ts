@@ -141,7 +141,8 @@ describe("agent definition: native files", () => {
         description: "Checks things",
         model: { providerID: "example", id: "chat", variant: "high" },
         effort: "medium",
-        tools: { allow: ["read", "grep"], deny: ["shell"] },
+        // The memory scope adds the file tools the list lacks (context-memory-10); `read` is Read's old name.
+        tools: { allow: ["read", "grep", "Write", "Edit"], deny: ["shell"] },
         permissionMode: "accept-edits",
         mcpServers: ["github", { local: { type: "local", command: ["node", "server.js"] } }],
         steps: 7,

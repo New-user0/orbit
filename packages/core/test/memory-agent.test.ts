@@ -379,9 +379,16 @@ describe("agent memory roots in the repository", () => {
             }
           }).pipe(provide(l, { files: recorded.layer }))
           expect(Date.now() - started).toBeLessThan(15_000)
-          const named = linked === "orbit" ? l.orbit : l.shared
-          const calls = recorded.calls.filter((call) => call.toLowerCase().includes(` ${named.toLowerCase()}`))
-          expect({ linked, calls: calls.filter((call) => !call.startsWith("readLink ")) }).toEqual({ linked, calls: [] })
+          // A call names the link or a path below it; `agent-memory-local` beside it is another folder.
+          const named = (linked === "orbit" ? l.orbit : l.shared).toLowerCase()
+          const calls = recorded.calls.filter((call) => {
+            const arg = call.slice(call.indexOf(" ") + 1).toLowerCase()
+            return arg === named || arg.startsWith(`${named}${path.sep}`)
+          })
+          expect({ linked, calls: calls.filter((call) => !call.startsWith("readLink ")) }).toEqual({
+            linked,
+            calls: [],
+          })
           expect(out.project).toBeUndefined()
           expect(out.current).not.toContain(l.shared)
         }

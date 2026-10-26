@@ -236,13 +236,18 @@ const layer = Layer.effect(
           entries: entries.load(sessionID),
           // The guide is part of Orbit's base prompt on the main thread, so a subagent goes without it, and so does an agent
           // whose own prompt, or a system prompt of the person's, takes the base's place. The index goes wherever the
-          // instruction files do.
+          // instruction files do. The block of an agent with a memory scope goes with the agent wherever it runs.
           memory: Effect.gen(function* () {
             const guide =
               main &&
               !info.system &&
               !(yield* PromptConfigPlugin.replaces(fs, location.directory, yield* config.entries(), info))
-            return yield* memory.load({ sessionID, guide, index: withInstructions })
+            return yield* memory.load({
+              sessionID,
+              guide,
+              index: withInstructions,
+              agent: { id: info.id, memory: info.memory },
+            })
           }),
         },
         { concurrency: "unbounded" },

@@ -5,6 +5,9 @@ import { FSUtil } from "@orbit/util/fs-util"
 import type { Watcher } from "../filesystem/watcher.js"
 import type { ConfigDiscovery } from "./discovery.js"
 
+// The memory folders at the top of an `.orbit` root, which the agent writes and config never reads.
+const MEMORY_FOLDERS = ["team-memory", "agent-memory", "agent-memory-local"]
+
 export function plan(sources: ConfigDiscovery.Sources) {
   const levels = [sources, ...(sources.home ? [sources.home] : [])]
   const roots = levels.flatMap((level) => level.project.filter((root) => root.present).map((root) => root.path))
@@ -30,10 +33,13 @@ export function plan(sources: ConfigDiscovery.Sources) {
           "node_modules",
           ".git",
           "**/{node_modules,.git}/**",
-          // Team memory (`.orbit/team-memory`) is written by the agent, not read as config, so its writes must not
-          // reload anything. Only that folder at the top of an `.orbit` root is left out: a skill, agent or command in
-          // a folder of the same name further down is config and still reloads.
-          ...(roots.includes(path) ? ["team-memory", "team-memory/**"] : []),
+          // Team memory (`.orbit/team-memory`) and agent memory (`.orbit/agent-memory`, `.orbit/agent-memory-local`)
+          // are written by the agent, not read as config, so their writes must not reload anything. Only those folders
+          // at the top of an `.orbit` root are left out: a skill, agent or command in a folder of the same name further
+          // down is config and still reloads.
+          ...(roots.includes(path)
+            ? MEMORY_FOLDERS.flatMap((folder) => [folder, `${folder}/**`])
+            : []),
         ],
       })),
       ...Array.from(parents, ([parent, files]) => ({

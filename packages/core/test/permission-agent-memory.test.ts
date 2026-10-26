@@ -128,7 +128,7 @@ const seed = (l: Layout, extra: Permission.Ruleset = [], ids: readonly Agent.ID[
   })
 
 // What the file tools do, in their order: resolve the path, ask for the folder, and then for the file with `action`.
-const decide = (file: string, action: "Edit" | "Read" | "Write" = "Edit", agent: Agent.ID = probe) =>
+const decide = (file: string, action: "Edit" | "Read" = "Edit", agent: Agent.ID = probe) =>
   Effect.gen(function* () {
     const access = yield* FileAccess.Service
     const permission = yield* Permission.Service
@@ -211,7 +211,7 @@ describe("agent memory folders", () => {
         const l = yield* layout
         const out = yield* Effect.gen(function* () {
           yield* seed(l, askRules)
-          const rows = yield* Effect.forEach(scopes, (scope) =>
+          const rows = yield* Effect.forEach([...scopes], (scope) =>
             Effect.forEach(["probe", "other", "review/deep"], (id) =>
               Effect.gen(function* () {
                 const file = path.join(l.roots[scope], ...id.split("/"), "a.md")
@@ -219,7 +219,8 @@ describe("agent memory folders", () => {
                   scope,
                   id,
                   edit: (yield* decide(file, "Edit")).effect,
-                  write: (yield* decide(file, "Write")).effect,
+                  // Write, Patch and NotebookEdit ask as Edit does; Write makes the folders above a new file.
+                  write: (yield* decide(path.join(path.dirname(file), "topics", "new.md"))).effect,
                   read: (yield* decide(file, "Read")).effect,
                   index: (yield* decide(path.join(l.roots[scope], id, "MEMORY.md"), "Read")).effect,
                 }
@@ -229,7 +230,14 @@ describe("agent memory folders", () => {
           return { rows: rows.flat(), project: yield* decide(path.join(l.project, "a.md")) }
         }).pipe(provide(l))
         for (const row of out.rows)
-          expect(row).toEqual({ scope: row.scope, id: row.id, edit: "allow", write: "allow", read: "allow", index: "allow" })
+          expect(row).toEqual({
+            scope: row.scope,
+            id: row.id,
+            edit: "allow",
+            write: "allow",
+            read: "allow",
+            index: "allow",
+          })
         expect(out.project).toEqual({ effect: "ask", stage: "Edit" })
       }),
     timeout,
@@ -336,7 +344,7 @@ describe("agent memory folders", () => {
               agent: probe,
             })
           return {
-            memory: yield* Effect.forEach(scopes, (scope) => decide(path.join(l.roots[scope], "probe", "a.md"))),
+            memory: yield* Effect.forEach([...scopes], (scope) => decide(path.join(l.roots[scope], "probe", "a.md"))),
             project: yield* decide(path.join(l.project, "a.md")),
             memoryDenied: yield* denied(path.join(l.roots.project, "probe", "a.md")),
             projectDenied: yield* denied(path.join(l.project, "a.md")),
@@ -410,7 +418,7 @@ describe("agent memory folders", () => {
             ],
           })
           return {
-            write: yield* Effect.forEach(scopes, (scope) => decide(path.join(l.roots[scope], "probe", "a.md"))),
+            write: yield* Effect.forEach([...scopes], (scope) => decide(path.join(l.roots[scope], "probe", "a.md"))),
             read: (yield* decide(path.join(l.roots.user, "probe", "a.md"), "Read")).effect,
             denied: (yield* decide(path.join(l.roots.user, "probe", "secret.md"))).effect,
             project: yield* decide(path.join(l.project, "a.md")),
@@ -446,7 +454,7 @@ describe("agent memory folders", () => {
                 agent: probe,
               })
               .pipe(Effect.map((answer) => answer.effect))
-          return yield* Effect.forEach(scopes, (scope) =>
+          return yield* Effect.forEach([...scopes], (scope) =>
             Effect.gen(function* () {
               const resource = path.join(l.roots[scope], "probe", "a.md").replaceAll("\\", "/")
               return { scope, plain: yield* ask(resource, false), escaped: yield* ask(resource, true) }
@@ -549,7 +557,11 @@ describe("agent memory folders", () => {
               yield* linkRoot(ask, row.scope, row.link)
               const deny = yield* layout
               yield* linkRoot(deny, row.scope, row.link)
-              return { ...row, ask: yield* run(ask, row.scope, askRules), deny: yield* run(deny, row.scope, modeDeny()) }
+              return {
+                ...row,
+                ask: yield* run(ask, row.scope, askRules),
+                deny: yield* run(deny, row.scope, modeDeny()),
+              }
             }),
         )
         for (const row of out) {
@@ -570,7 +582,10 @@ describe("agent memory folders", () => {
             user: row.deny.user,
           }).toEqual({ name, memory: false, source: "deny", hook: "deny", user: "allow" })
         }
-        const plain = { ask: yield* run(yield* layout, "project", askRules), deny: yield* run(yield* layout, "local", modeDeny()) }
+        const plain = {
+          ask: yield* run(yield* layout, "project", askRules),
+          deny: yield* run(yield* layout, "local", modeDeny()),
+        }
         expect(plain.ask).toEqual({ memory: "allow", source: "ask", hook: "ask", user: "allow" })
         expect(plain.deny).toEqual({ memory: "allow", source: "deny", hook: "deny", user: "allow" })
       }),
@@ -678,7 +693,7 @@ describe("agent memory folders", () => {
         const run = (entries: Entry[]) =>
           Effect.gen(function* () {
             yield* seed(l, askRules)
-            return yield* Effect.forEach(scopes, (scope) => decide(path.join(l.roots[scope], "probe", "a.md")))
+            return yield* Effect.forEach([...scopes], (scope) => decide(path.join(l.roots[scope], "probe", "a.md")))
           }).pipe(provide(l, { entries }))
         expect({ off: yield* run([configured({ enabled: false })]), on: yield* run([]) }).toEqual({
           off: scopes.map(() => allowEdit),

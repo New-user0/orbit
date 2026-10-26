@@ -158,19 +158,25 @@ export const memory = (global: Pick<Global.Interface, "data">): Info["permission
 }
 
 /**
- * `rules` with each allow that `memory` wrote replaced by allows for the memory folder as it is named and as it really
- * is. The real folder is the only one a call's real place may be in for the allow to decide (`memoryFolders`), so a link
- * inside the folder cannot carry the allow out of it. The order of the rules is kept.
+ * `rules` with each allow that `memory` wrote replaced by allows for each memory folder (the project's, and the roots of
+ * agent memory) as it is named and as it really is. The real folder is the only one a call's real place may be in for
+ * the allow to decide (`memoryFolders`), so a link inside the folder cannot carry the allow out of it. The order of the
+ * rules is kept.
  */
-export const placeMemory = (rules: Info["permissions"], folder: { readonly folder: string; readonly real: string }) =>
+export const placeMemory = (
+  rules: Info["permissions"],
+  folders: readonly { readonly folder: string; readonly real: string }[],
+) =>
   rules.flatMap((rule) => {
     if (!memoryAllows.has(rule)) return [rule]
-    return places(folder.folder, folder.real).map((place) => {
-      const placed = { ...rule, resource: path.join(place, "*") }
-      placedMemory.set(placed, [folder.real])
-      orbitOwn.add(placed)
-      return placed
-    })
+    return folders.flatMap((folder) =>
+      places(folder.folder, folder.real).map((place) => {
+        const placed = { ...rule, resource: path.join(place, "*") }
+        placedMemory.set(placed, [folder.real])
+        orbitOwn.add(placed)
+        return placed
+      }),
+    )
   })
 
 /** The real memory folder that `rule` allows, when `placeMemory` made it. */
