@@ -86,6 +86,7 @@ const it = testEffect(
         Layer.mock(InstructionBuiltIns.Service, {
           load: () => Effect.succeed(source("core/date")),
           preferences: () => Effect.succeed(source("core/language")),
+          toolResults: () => Instructions.empty,
         }),
       ),
       AgentInstructions.node.replace(

@@ -25,6 +25,7 @@ import { SkillInstructions } from "../skill/instructions.js"
 import { VcsInstructions } from "../vcs/instructions.js"
 import { Tool } from "../tool.js"
 import { AgentNotFoundError } from "./error.js"
+import { SessionCompaction } from "./compaction.js"
 import { SessionHistory } from "./history.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { InstructionEntry } from "./instruction-entry.js"
@@ -115,6 +116,7 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const agentInstructions = yield* AgentInstructions.Service
     const builtins = yield* InstructionBuiltIns.Service
+    const compaction = yield* SessionCompaction.Service
     const model = yield* Model.Service
     const db = (yield* Database.Service).db
     const discovery = yield* InstructionDiscovery.Service
@@ -214,6 +216,13 @@ const layer = Layer.effect(
       const main = PromptConfigPlugin.mainThread(session, forkSource || undefined)
       const withInstructions = agent.info.context?.instructions !== false
       const info = agent.info
+      // Whether Orbit's own default prompt applies: a subagent has none of it, and an agent whose own prompt, or a system
+      // prompt of the person's, takes its place drops it. The memory guide and the tool-results section go with it, so the
+      // answer is worked out once (one read of `system_prompt_file`).
+      const defaultPrompt =
+        main &&
+        !info.system &&
+        !(yield* PromptConfigPlugin.replaces(fs, location.directory, yield* config.entries(), info))
       const loaded = yield* Effect.all(
         {
           builtins: builtins.load(),
@@ -237,17 +246,11 @@ const layer = Layer.effect(
           // The guide is part of Orbit's base prompt on the main thread, so a subagent goes without it, and so does an agent
           // whose own prompt, or a system prompt of the person's, takes the base's place. The index goes wherever the
           // instruction files do. The block of an agent with a memory scope goes with the agent wherever it runs.
-          memory: Effect.gen(function* () {
-            const guide =
-              main &&
-              !info.system &&
-              !(yield* PromptConfigPlugin.replaces(fs, location.directory, yield* config.entries(), info))
-            return yield* memory.load({
-              sessionID,
-              guide,
-              index: withInstructions,
-              agent: { id: info.id, memory: info.memory },
-            })
+          memory: memory.load({
+            sessionID,
+            guide: defaultPrompt,
+            index: withInstructions,
+            agent: { id: info.id, memory: info.memory },
           }),
         },
         { concurrency: "unbounded" },
@@ -261,7 +264,8 @@ const layer = Layer.effect(
         // prompt-cache prefix: user-level catalog and guidance, then project instructions, then
         // the date and environment, which vary by day and directory, then the git snapshot, which
         // varies by the moment the session began, then the scratchpad, which varies by the session
-        // the lineage goes back to.
+        // the lineage goes back to. The tool-results section follows, in the reference's section order; it is the same text
+        // for every default-prompt main thread with the same setting. The entries of the API come last.
         instructions: Instructions.combine([
           // `core/mcp-guidance` and `core/codemode` carry the MCP and deferred-tool deltas. The native deferred-tool
           // source that file-web-tools adds belongs in this group, before the references.
@@ -276,6 +280,7 @@ const layer = Layer.effect(
           loaded.builtins,
           vcsInstructions.source(session, { enabled: agent.info.context?.git_status !== false }),
           scratchpad.source(session),
+          defaultPrompt ? builtins.toolResults(compaction.clearing) : Instructions.empty,
           loaded.entries,
         ]),
         tools,
@@ -319,6 +324,7 @@ export const node = makeLocationNode({
     Agent.node,
     AgentInstructions.node,
     Config.node,
+    SessionCompaction.node,
     Model.node,
     Database.node,
     FSUtil.node,

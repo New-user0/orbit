@@ -74,7 +74,7 @@ const it = testEffect(
         Config.node.replace(config),
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(
-          Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty), preferences: () => Effect.succeed(empty) }),
+          Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty), preferences: () => Effect.succeed(empty), toolResults: () => empty }),
         ),
         noScratchpad,
         noMemory,

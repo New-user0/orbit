@@ -110,6 +110,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
   preferences: () => Effect.succeed(Instructions.empty),
+  toolResults: () => Instructions.empty,
   load: () =>
     Effect.succeed(
       Instructions.make({
