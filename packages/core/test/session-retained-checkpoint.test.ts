@@ -6,7 +6,7 @@ import { expect } from "bun:test"
 import { CompactionCheckpointResponse, CompactionPart, Message, type LLMRequest } from "@orbit/ai"
 import { TestLLM } from "@orbit/ai/testing"
 import { and, asc, eq, inArray } from "drizzle-orm"
-import { DateTime, Effect, Logger, Schema } from "effect"
+import { DateTime, Effect, Logger, Schema, type Layer, type Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
@@ -32,11 +32,14 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { AbsolutePath } from "@orbit/core/schema"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { nativeWindowModel, scenario, sessionID, type Scenario } from "./lib/runner"
+import { nativeWindowModel, scenario, sessionID, type Scenario, type layer } from "./lib/runner"
 import { fakeModel, seedStep } from "./lib/context-history"
 import { testEffect } from "./lib/effect"
 import { globalProjectNode } from "./lib/project"
 import { promptLocationNode } from "./fixture/prompt-location"
+
+/** What the scenario layer provides. */
+type Env = Layer.Success<typeof layer> | Scope.Scope
 
 const STARTED = "session.compaction.started.1"
 const ENDED = "session.compaction.ended.1"
@@ -424,7 +427,7 @@ scenario("the kept start moves past rows a kept span never holds", function* (s)
     messagesOf(s, id).pipe(Effect.map((messages) => messages.filter((message) => message.type === type)))
   type Row = {
     readonly name: string
-    readonly build: (id: Session.ID) => Effect.Effect<SessionMessage.ID>
+    readonly build: (id: Session.ID) => Effect.Effect<SessionMessage.ID, unknown, Env>
     /** The user message the stored `retain` should name, or undefined when nothing is kept. */
     readonly keeps: string | undefined
   }
@@ -470,7 +473,7 @@ scenario("the kept start moves past rows a kept span never holds", function* (s)
     },
     {
       name: "a native checkpoint",
-      keeps: "prompt 3",
+      keeps: "prompt 4",
       build: (id) =>
         Effect.gen(function* () {
           yield* grow(s, 3, { id })
@@ -519,7 +522,7 @@ scenario("the kept start moves past rows a kept span never holds", function* (s)
       expect(ended).not.toHaveProperty("retain")
       for (const text of ["prompt 1", "prompt 2", "prompt 3"]) expect(JSON.stringify(sent.messages)).toContain(text)
     } else {
-      expect(ended.retain).toBe(yield* userID(s, row.keeps, id))
+      expect({ name: row.name, retain: ended.retain }).toEqual({ name: row.name, retain: yield* userID(s, row.keeps, id) })
       expect(JSON.stringify(sent.messages)).not.toContain(row.keeps)
     }
     expect(s.requests).toHaveLength(requests + 1)
@@ -639,11 +642,18 @@ scenario("on the automatic path a result at or above the threshold falls back to
       return { id, start: user.id }
     })
   const window = { context: 16_000, output: 4_000 }
-  const row = (input: { name: string; size: "kept" | "summarized"; reason: "manual" | "auto" | "overflow"; window?: typeof window }) =>
+  const row = (input: {
+    name: string
+    size: "kept" | "summarized"
+    reason: "manual" | "auto" | "overflow"
+    window?: typeof window
+    /** The summaries the model is asked for: a second one only where the result is dropped for a full summary. */
+    summaries: 1 | 2
+  }) =>
     Effect.gen(function* () {
       const { id, start } = yield* history(input.name, input.size)
       const requests = s.requests.length
-      yield* s.llm.push(summaryReply("first"), summaryReply("second"))
+      yield* s.llm.push(...(input.summaries === 2 ? [summaryReply("first"), summaryReply("second")] : [summaryReply("first")]))
       const result = yield* compactWith(s, { id, retain: start, reason: input.reason, window: input.window ?? window })
       expect(result.outcome).toEqual({ status: "completed" })
       const ended = yield* eventsOf(s, ENDED, id)
@@ -665,27 +675,33 @@ scenario("on the automatic path a result at or above the threshold falls back to
   expect(threshold).toBeGreaterThan(0)
 
   for (const reason of ["auto", "overflow"] as const) {
-    const fallback = yield* row({ name: `fallback_${reason}`, size: "kept", reason })
+    const fallback = yield* row({ name: `fallback_${reason}`, size: "kept", reason, summaries: 2 })
     expect(fallback.calls).toBe(2)
     expect(fallback.retain).toBeUndefined()
     expect(fallback.text).toContain("second summary")
     // The second request carries every exchange.
     for (const n of [1, 2, 3, 4]) expect(fallback.last).toContain(`answer ${n}`)
     // One compaction message: the fallback does not announce itself again.
-    expect(fallback.started).toBe(reason === "auto" ? 1 : 0)
+    expect(fallback.started).toBe(1)
     const view = yield* SessionHistory.load(s.db, fallback.id, "latest")
     expect(view[0]?.type).toBe("compaction")
   }
   // The same span, asked for by a person, is kept.
-  const manual = yield* row({ name: "manual", size: "kept", reason: "manual" })
+  const manual = yield* row({ name: "manual", size: "kept", reason: "manual", summaries: 1 })
   expect(manual.calls).toBe(1)
   expect(manual.retain).toBe(manual.start)
   // A small kept span stays under the threshold on the automatic path.
-  const small = yield* row({ name: "small", size: "summarized", reason: "auto" })
+  const small = yield* row({ name: "small", size: "summarized", reason: "auto", summaries: 1 })
   expect(small.calls).toBe(1)
   expect(small.retain).toBe(small.start)
   // An unknown window has no threshold to check.
-  const unknown = yield* row({ name: "unknown", size: "kept", reason: "overflow", window: { context: 0, output: 4_000 } })
+  const unknown = yield* row({
+    name: "unknown",
+    size: "kept",
+    reason: "overflow",
+    window: { context: 0, output: 4_000 },
+    summaries: 1,
+  })
   expect(unknown.calls).toBe(1)
   expect(unknown.retain).toBe(unknown.start)
 
@@ -713,7 +729,7 @@ scenario("on the automatic path a result at or above the threshold falls back to
   ] as const) {
     const id = (yield* history(`exact_${name.replace(" ", "_")}`, "kept")).id
     const start = (yield* messagesOf(s, id)).filter((message) => message.type === "user")[2]!.id
-    yield* s.llm.push(summaryReply("first"), summaryReply("second"))
+    yield* s.llm.push(...(kept ? [summaryReply("first")] : [summaryReply("first"), summaryReply("second")]))
     yield* compactWith(s, { id, retain: start, reason: "overflow", window: { context, output: 0 } })
     const ended = (yield* eventsOf(s, ENDED, id)).at(-1)!
     expect({ name, kept: ended.retain !== undefined }).toEqual({ name, kept })
@@ -730,7 +746,7 @@ scenario("a second retained checkpoint summarizes the first and keeps from its o
   yield* s.llm.push(summaryReply("second"))
   expect((yield* compactWith(s, { retain: inside })).outcome).toEqual({ status: "completed" })
   expect(labelled(shape(s.requests.at(-1))).slice(0, 3)).toEqual(["[first summary]", "user: prompt 3", "assistant: answer 3"])
-  expect(shape(s.requests.at(-1))).toHaveLength(4 + 1)
+  expect(shape(s.requests.at(-1))).toHaveLength(4)
 
   const [, second] = yield* completedCheckpoints(s)
   const view = yield* SessionHistory.load(s.db, sessionID, "latest")
@@ -845,9 +861,9 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     message.type === "user" ? `user:${message.text}` : message.type === "assistant" ? `assistant:${(message.content[0] as { text?: string } | undefined)?.text ?? ""}` : message.type
   const rows: Array<{
     readonly name: string
-    readonly prepare?: (id: Session.ID) => Effect.Effect<void>
-    /** The retain to forge, given the session, its checkpoint row ID, and the IDs of what the session holds. */
-    readonly retain: (id: Session.ID) => Effect.Effect<SessionMessage.ID>
+    readonly prepare?: (id: Session.ID) => Effect.Effect<void, unknown, Env>
+    /** The retain to forge in the session. */
+    readonly retain: (id: Session.ID) => Effect.Effect<SessionMessage.ID, unknown, Env>
     readonly newer?: boolean
     readonly expected: string[]
     readonly warns: boolean
@@ -1043,7 +1059,7 @@ transferred.effect("an exported and imported session keeps its retained checkpoi
     const { db } = yield* Database.Service
     const first = yield* imported("")
     const texts = (messages: ReadonlyArray<SessionMessage.Info>) =>
-      toLLMMessages(messages, fakeModel).map((message) => textOf(message).slice(0, 18))
+      toLLMMessages(messages, fakeModel).map((message) => textOf(message).slice(0, 17))
     const expected = ["Earlier messages ", "second", "second answer", "third"]
     expect(texts(yield* SessionHistory.load(db, first.sessionID, "latest"))).toEqual(expected)
 

@@ -740,8 +740,9 @@ export interface LoweredInsertion {
  *
  * History falls into runs: the messages after one assistant message (or the epoch start) up to the next. In each run
  * the stored reminder rows come first, then that run's derived `insertions`, then the rest. A reminder therefore sits
- * ahead of the prompt it was collected for, and after the tool results of the round it follows. Nothing moves above a
- * checkpoint, and an assistant message keeps its tool results.
+ * ahead of the prompt it was collected for, and after the tool results of the round it follows. Nothing moves above the
+ * latest checkpoint, which comes first even when it is stored after the messages it keeps, and an assistant message
+ * keeps its tool results.
  */
 export const toLLMMessages = (
   messages: readonly SessionMessage.Info[],
@@ -750,7 +751,12 @@ export const toLLMMessages = (
   insertions: readonly LoweredInsertion[] = [],
   options: { readonly minimal?: boolean; readonly toolOutput?: string } = {},
 ) => {
-  const history = withoutReplaced(messages)
+  const active = withoutReplaced(messages)
+  // A checkpoint that keeps messages is stored after them, but the request opens with it. Earlier checkpoints of a
+  // view that failed open keep their places.
+  const latest = active.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+  const history =
+    latest > 0 ? [active[latest]!, ...active.slice(0, latest), ...active.slice(latest + 1)] : active
   const lowering = {
     queued: queuedInput(history),
     minimal: options.minimal === true,
@@ -761,7 +767,7 @@ export const toLLMMessages = (
     return history.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, lowering))
 
   const byRun = Map.groupBy(insertions, (insertion) => insertion.after)
-  const checkpoint = history.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+  const checkpoint = latest === -1 ? -1 : 0
   const out: Message[] = []
   let key: string | undefined = checkpoint === -1 ? "start" : undefined
   let reminders: Message[] = []

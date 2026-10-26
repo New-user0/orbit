@@ -90,7 +90,8 @@ describe("toLLMMessages", () => {
       source: { type: "inline" },
       name: "hello.png",
     })
-    const messages = toLLMMessages(
+    // The latest checkpoint is lowered first wherever it is stored, so it is taken off the front here.
+    const [checkpoint, ...messages] = toLLMMessages(
       [
         SessionMessage.AgentSelected.make({
           id: id("agent"),
@@ -156,7 +157,14 @@ describe("toLLMMessages", () => {
       model,
     )
 
-    expect(messages.map((message) => message.role)).toEqual(["user", "system", "user", "user", "user", "user"])
+    expect([checkpoint, ...messages].map((message) => message!.role)).toEqual([
+      "user",
+      "user",
+      "system",
+      "user",
+      "user",
+      "user",
+    ])
     expect(messages[0]).toEqual(
       Message.make({
         id: id("location"),
@@ -180,7 +188,7 @@ describe("toLLMMessages", () => {
         metadata: { agents: [{ name: "build" }] },
       }),
     )
-    expect(messages.slice(3).map((message) => message.content)).toEqual([
+    expect([...messages.slice(3), checkpoint].map((message) => message!.content)).toEqual([
       [{ type: "text", text: "Synthetic context" }],
       [
         {

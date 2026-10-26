@@ -4893,3 +4893,31 @@ rest of `compaction`.
 for a file or command again that it can no longer see.
 
 **What to do:** Nothing. Set `compaction.clear` to `false` to keep every old result in the request.
+
+## A checkpoint can keep the messages from one point on
+
+A completed compaction can now keep the messages from one point onward, word for word, beside its summary. The checkpoint
+stores one fact, `retain`: the ID of the first message it keeps. The summary covers only what came before that message.
+
+- **Nothing sets it yet.** No command, setting or automatic compaction names a message to keep from, so every checkpoint
+  Orbit writes today has no `retain` and behaves as before. The field is there for later compaction modes.
+- **`session.context`.** When a checkpoint keeps messages, the list holds them before the checkpoint, in the order they
+  were recorded: the kept messages, then the checkpoint, then everything after it. The model's request still opens with
+  the checkpoint, then the kept messages unchanged, then the newer ones. A checkpoint without `retain` is the first
+  message of the list, as before.
+- **A stored `retain` that does not fit** (a message that is not in the session, one at or after the checkpoint, an
+  instruction update or a compaction, one from before the previous checkpoint's view, or text that is not a message ID)
+  is not trusted: the history then also holds what the checkpoint summarized, back to the previous view, and one warning
+  is logged. An imported document whose `retain` is not a message ID is refused.
+- **Forks and reverts.** A fork that includes the checkpoint keeps its kept span; a fork that stops inside the span has
+  no checkpoint. A revert to a kept message removes the checkpoint with it, and the history falls back to the one before.
+- **Asking for a message that is not there.** A compaction that names a message outside the active history fails with
+  `compaction.unavailable` ("The message to keep from is not in the active history") and stores nothing.
+- **Automatic compactions.** When a compaction started by the context filling up keeps messages and the checkpoint with
+  them would still be at or above the automatic threshold, it is replaced by a full summary that keeps nothing (the model
+  is called a second time). A compaction a person asked for is kept as asked.
+
+**Affects:** SDK callers and clients that read `session.context` or the `retain` field of a completed compaction, and
+scripts that assume the checkpoint is the first message of the list.
+
+**What to do:** Nothing. Treat a checkpoint with `retain` as the start of the model's view, not of the list.

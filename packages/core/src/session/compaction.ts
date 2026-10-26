@@ -21,7 +21,7 @@ import type { StreamOptions } from "@orbit/ai/route"
 import type { SessionCompactionResult } from "@orbit/plugin/effect/session"
 import type { SessionError } from "@orbit/schema/session-error"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { Context, Effect, Layer, Result, Stream } from "effect"
+import { Context, DateTime, Effect, Layer, Result, Stream } from "effect"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
 import { llmClient } from "../effect/app-node-platform.js"
@@ -31,7 +31,7 @@ import type { SessionContext } from "./context.js"
 import { SessionContextWindow } from "./context-window.js"
 import { SessionEvent } from "./event.js"
 import { SessionHistory } from "./history.js"
-import type { SessionMessage } from "./message.js"
+import { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionReminders } from "./reminders.js"
 import { SessionToolText } from "./tool-text.js"
@@ -59,13 +59,18 @@ export type Editor = {
   configure: (settings: Partial<Settings>) => void
 }
 
+/**
+ * `retain` is the message the checkpoint keeps verbatim from, with everything after it: the summary then covers only
+ * the messages before it. It must be a message of the active history (see `keepFrom`); the caller chooses it.
+ */
 export type Trigger =
   /** `overflow`: the provider just rejected this context as too long. */
-  | { readonly reason: "auto" | "overflow"; readonly context: SessionContext.Loaded }
+  | { readonly reason: "auto" | "overflow"; readonly context: SessionContext.Loaded; readonly retain?: SessionMessage.ID }
   /** `inputID` is the `/compact` inbox item, whose message shows the outcome. */
   | {
       readonly reason: "manual"
       readonly context: SessionContext.Loaded
+      readonly retain?: SessionMessage.ID
       readonly inputID: SessionMessage.ID
       /** Text from the person, added to the summary prompt. Blank counts as none. */
       readonly instructions?: string
@@ -96,6 +101,8 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Sessi
 type Result = {
   readonly text: string
   readonly recent: string
+  /** The first message the checkpoint keeps; unset when it keeps none. */
+  readonly retain?: SessionMessage.ID
   // todo: consolidate these 2
   readonly providerState?: SessionMessage.ProviderState
   readonly providerContext?: SessionProviderContext.Info
@@ -114,6 +121,9 @@ type Streamed = {
 }
 
 const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
+const NOT_IN_HISTORY: Failure = {
+  error: { type: "compaction.unavailable", message: "The message to keep from is not in the active history" },
+}
 /** After each "too long" rejection of a native compaction, the next attempt aims at this share of the first rejected request's size. */
 const SHRINK_STEPS = [0.7, 0.5, 0.35]
 /** A common window size, assumed for the compaction request when the model's window is unknown. */
@@ -221,11 +231,37 @@ export const layer = Layer.effect(
       const budget =
         trigger.reason === "overflow" ? Math.min(cap, Math.floor(estimateContext(context, reminders.minimal, toolOutput.root) * SHRINK_STEPS[0])) : cap
 
+      // The messages from `retain` on stay as they are; the summary covers the rest.
+      const kept = trigger.retain === undefined ? undefined : keepFrom(context.messages, trigger.retain)
+      if (trigger.retain !== undefined && kept === undefined) return yield* publish(trigger, NOT_IN_HISTORY)
+
+      // A native compaction keeps its own window of user messages and cannot keep an arbitrary span, so a trigger that
+      // names one is summarized.
       const compaction =
-        context.model.compaction?.type === "native"
+        trigger.retain === undefined && context.model.compaction?.type === "native"
           ? compactNatively(trigger, budget, settings.keep)
-          : summarize(trigger, budget)
+          : summarize(trigger, budget, compactable(kept?.summarized ?? context.messages), true)
+      // A result that keeps messages must leave room below the automatic threshold. On the automatic paths one that does
+      // not is dropped for a full summary, which the person's own request is spared (the window is known).
+      const crowded = (result: Result) =>
+        kept?.start !== undefined &&
+        trigger.reason !== "manual" &&
+        found !== undefined &&
+        estimateRequest({
+          system: [],
+          tools: [],
+          messages: toLLMMessages([...kept.kept, checkpointOf(result.text)], context.model.ref, undefined, [], {
+            minimal: reminders.minimal,
+            toolOutput: toolOutput.root,
+          }),
+        }) >= found.threshold
       return yield* compaction.pipe(
+        Effect.map((result): Result => ({ ...result, retain: kept?.start })),
+        Effect.flatMap((result) =>
+          crowded(result)
+            ? summarize(trigger, budget, compactable(context.messages), false)
+            : Effect.succeed(result),
+        ),
         Effect.matchEffect({
           onSuccess: (result) => publish(trigger, result),
           onFailure: (failure) => publish(trigger, failure),
@@ -259,7 +295,10 @@ export const layer = Layer.effect(
      *
      *   [system][S1][E11 … E18][E19][prompt]
      *
-     * Later requests open with the checkpoint as one user message, followed by the new messages.
+     * Later requests open with the checkpoint as one user message, followed by the new messages. A trigger that names
+     * `retain` summarizes only the messages before it, and later requests send the rest unchanged after the checkpoint:
+     *
+     *   retain = E18:  [system][S1][E11 … E17][prompt]  →  [S2][E18][E19][new messages…]
      *
      * E = one exchange: a user message and the replies to it. S = a summary.
      *
@@ -268,14 +307,19 @@ export const layer = Layer.effect(
      * a one-line system prompt, no media, no request-level reasoning options, the model without its reasoning variant and the read tool only. A rejection of the fallback as too long
      * drops the oldest round groups of the history and starts again, at most three times.
      */
-    const summarize = Effect.fnUntraced(function* (trigger: Trigger, budget: number): Effect.fn.Return<Result, Failure> {
+    const summarize = Effect.fnUntraced(function* (
+      trigger: Trigger,
+      budget: number,
+      messages: ReadonlyArray<SessionMessage.Info>,
+      announce: boolean,
+    ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      const messages = compactable(context.messages)
       if (!messages.some(covered)) return yield* Effect.fail(NOTHING_TO_COMPACT)
 
       const prepared = yield* prepare(context, messages, budget)
-      // The runner opened the manual compaction's message when it delivered the `/compact` item.
-      if (trigger.reason !== "manual") {
+      // The runner opened the manual compaction's message when it delivered the `/compact` item. A summary that
+      // replaces one just made (see `crowded`) belongs to the same message.
+      if (announce && trigger.reason !== "manual") {
         yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: context.session.id, reason: "auto", recent: "" })
       }
       if (prepared.event.result) return yield* fromHook(context, prepared.event.result)
@@ -746,6 +790,7 @@ export const layer = Layer.effect(
           providerContext: outcome.providerContext,
           text: outcome.text,
           recent: outcome.recent,
+          retain: outcome.retain,
           ...usage,
         },
         { metadata: outcome.metadata },
@@ -789,11 +834,49 @@ export const node = makeLocationNode({
 const compactable = (messages: ReadonlyArray<SessionMessage.Info>) =>
   withoutReplaced(messages).filter((message) => !isReminder(message))
 
-/** History loads from the latest completed compaction, so a previous one is always the first message. */
-const previousCompaction = (messages: ReadonlyArray<SessionMessage.Info>) => {
-  const [first] = messages
-  return first?.type === "compaction" && first.status === "completed" ? first : undefined
+/**
+ * The active history (stored order) split at the message a compaction keeps from. Undefined when that message is not in
+ * it: unknown, another session's, a replaced attempt or its notice, or before the view the history begins at.
+ *
+ * The kept span runs from the start to the end, without the rows it never holds: an instruction update (the new
+ * baseline supersedes it) and a compaction row (a previous summary joins the summarized part). When the named message
+ * is one of those, the start moves forward to the next row that is not; with none left, nothing is kept (`start`
+ * unset). The summarized part is everything else, so a previous checkpoint stored after the start stays in it.
+ */
+const keepFrom = (messages: ReadonlyArray<SessionMessage.Info>, retain: SessionMessage.ID) => {
+  const active = withoutReplaced(messages)
+  const named = active.findIndex((message) => message.id === retain)
+  if (named === -1) return undefined
+  const first = active.findIndex((message, index) => index >= named && !leftOut(message))
+  if (first === -1) return { start: undefined, kept: [], summarized: active }
+  const tail = active.slice(first)
+  return {
+    start: active[first]!.id,
+    kept: tail.filter((message) => !leftOut(message)),
+    summarized: [...active.slice(0, first), ...tail.filter(leftOut)],
+  }
 }
+
+const leftOut = (message: SessionMessage.Info) => message.type === "system" || message.type === "compaction"
+
+/** The checkpoint a summary becomes, as an automatic compaction records and renders it. */
+const checkpointOf = (summary: string) =>
+  SessionMessage.Compaction.make({
+    id: SessionMessage.ID.create(),
+    type: "compaction",
+    status: "completed",
+    reason: "auto",
+    summary,
+    recent: "",
+    time: { created: DateTime.makeUnsafe(0) },
+  })
+
+/** The newest completed compaction. A checkpoint that keeps messages is stored after them, so it need not be first. */
+const previousCompaction = (messages: ReadonlyArray<SessionMessage.Info>) =>
+  messages.findLast(
+    (message): message is SessionMessage.CompactionCompleted =>
+      message.type === "compaction" && message.status === "completed",
+  )
 
 const transcript = (
   context: SessionContext.Loaded,
@@ -959,7 +1042,13 @@ export const estimateContext = (context: SessionContext.Loaded, minimal?: boolea
 /** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
 export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean, toolOutput?: string) => {
   const messages = withoutReplaced(context.messages)
-  const anchorIndex = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
+  // The messages a checkpoint keeps are stored before it and still carry the usage of the large request they were
+  // answered in, so only a response after the latest checkpoint can anchor the count.
+  const measured = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
+  const anchorIndex =
+    measured > messages.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+      ? measured
+      : -1
   const anchor = messages[anchorIndex]
   // A clearing recorded after the response left out results the response was measured with. Those of the response itself
   // are lowered as the placeholder below, so only the calls before it are taken off, and only the ones no earlier

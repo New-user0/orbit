@@ -1496,6 +1496,7 @@ export type SessionLogOutput =
               | undefined
             readonly text: string
             readonly recent: string
+            readonly retain?: SessionMessage.ID | undefined
             readonly cost?: (number & Brand.Brand<"Money.USD">) | undefined
             readonly tokens?:
               | {

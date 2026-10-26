@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gte, lt, notInArray, or, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { Database } from "../database/database.js"
 import { MessageDecodeError } from "./error.js"
@@ -25,18 +25,25 @@ const replayable = (message: SessionMessage.Info, boundary: Boundary) =>
   boundary === "latest" ||
   (boundary !== "local" && SessionProviderContext.compatible(message.providerContext.provenance, boundary))
 
+/** The newest completed compaction that bounds a read, optionally only among those recorded before `before`. */
 export const latestCompaction = Effect.fnUntraced(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   boundary: Boundary,
+  before?: number,
 ) {
   return yield* db
-    .select({ seq: SessionMessageTable.seq })
+    .select({
+      id: SessionMessageTable.id,
+      seq: SessionMessageTable.seq,
+      retain: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.retain')`,
+    })
     .from(SessionMessageTable)
     .where(
       and(
         eq(SessionMessageTable.session_id, sessionID),
         eq(SessionMessageTable.type, "compaction"),
+        before === undefined ? undefined : lt(SessionMessageTable.seq, before),
         sql`json_extract(${SessionMessageTable.data}, '$.status') = 'completed'`,
         boundary === "latest"
           ? undefined
@@ -75,19 +82,68 @@ export const decodeMessageRow = (row: typeof SessionMessageTable.$inferSelect) =
     ),
   )
 
+const KEPT_LEFT_OUT: SessionMessage.Type[] = ["system", "compaction"]
+const FAILED_OPEN_LEFT_OUT: SessionMessage.Type[] = ["system"]
+
+type Checkpoint = NonNullable<Effect.Success<ReturnType<typeof latestCompaction>>>
+
+/**
+ * Where the view a checkpoint bounds begins. A checkpoint without `retain` begins at itself. One with `retain` begins
+ * at the message it names, which must be a row recorded before the checkpoint and not before the view of the checkpoint
+ * before it. The stored value may come from an import, so a row that fails any of that, or that is another session's or
+ * is not there, makes the view fail open: it begins where the previous view does (at the first row of the session when
+ * there is none), so the checkpoint's whole summarized span stays visible beside its summary. The ID is a bound
+ * parameter and is never logged (class 5).
+ */
+const viewStart = (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  boundary: Boundary,
+  checkpoint: Checkpoint,
+): Effect.Effect<{ readonly start: number; readonly kept: boolean }> =>
+  Effect.gen(function* () {
+    if (checkpoint.retain === null) return { start: checkpoint.seq, kept: false }
+    const previous = yield* latestCompaction(db, sessionID, boundary, checkpoint.seq)
+    const floor = previous ? (yield* viewStart(db, sessionID, boundary, previous)).start : 0
+    // A stored row is not decoded here, so the value is checked before it is used as a key.
+    const retain = Schema.is(SessionMessage.ID)(checkpoint.retain) ? checkpoint.retain : undefined
+    const row =
+      retain === undefined
+        ? undefined
+        : yield* db
+            .select({ seq: SessionMessageTable.seq, type: SessionMessageTable.type })
+            .from(SessionMessageTable)
+            .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, retain)))
+            .get()
+            .pipe(Effect.orDie)
+    if (row && row.seq < checkpoint.seq && row.seq >= floor && row.type !== "compaction" && row.type !== "system")
+      return { start: row.seq, kept: true }
+    yield* Effect.logWarning("retained checkpoint skipped", { sessionID, checkpointID: checkpoint.id })
+    return { start: floor, kept: false }
+  })
+
 const messageEntries = Effect.fnUntraced(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   boundary: Boundary,
 ) {
   const compaction = yield* latestCompaction(db, sessionID, boundary)
+  const view = compaction ? yield* viewStart(db, sessionID, boundary, compaction) : undefined
   const rows = yield* db
     .select()
     .from(SessionMessageTable)
     .where(
       and(
         eq(SessionMessageTable.session_id, sessionID),
-        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+        view ? gte(SessionMessageTable.seq, view.start) : undefined,
+        // Rows from before the checkpoint that its summary or baseline supersedes: instruction updates, and (when it
+        // keeps a span) earlier compaction rows too.
+        compaction && view && view.start < compaction.seq
+          ? or(
+              gte(SessionMessageTable.seq, compaction.seq),
+              notInArray(SessionMessageTable.type, view.kept ? KEPT_LEFT_OUT : FAILED_OPEN_LEFT_OUT),
+            )
+          : undefined,
       ),
     )
     .orderBy(asc(SessionMessageTable.seq))
