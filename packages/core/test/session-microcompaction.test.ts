@@ -624,6 +624,19 @@ describe("clearing old tool results", () => {
     expect(yield* clearings(s, quiet)).toEqual([])
   })
 
+  // A model with no context window has no threshold, so automatic compaction is never due: the idle trigger still
+  // clears, and the pressure check must answer "not due" rather than read the missing threshold.
+  scenario("clears after an hour idle when the model has no context window", function* (s) {
+    s.currentModel = LanguageModel.make({ id: "unknown-context", provider: "fake", route: OpenAIChat.route })
+    const idle = yield* idleCleared(s, "nowindow")
+    expect(clearedIn(idle.request)).toEqual(idle.cleared)
+    expect((yield* clearings(s, idle.id)).map((event) => event.trigger)).toEqual(["idle"])
+    // Control: no hour and no window, so nothing is cleared.
+    const quiet = yield* newSession(s, "nowindowquiet")
+    yield* seedStep(s.bus, quiet, { id: "msg_nowindowquiet", calls: reads("q", 8) })
+    expect(clearedIn(yield* ask(s, quiet))).toEqual([])
+  })
+
   scenario("pressure never clears with automatic compaction off or paused", function* (s) {
     const compaction = yield* SessionCompaction.Service
     const registry = yield* Tool.Service
