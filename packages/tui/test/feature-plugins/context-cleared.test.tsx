@@ -50,7 +50,7 @@ const marker = {
   time: { created: 3 },
 }
 
-async function screen(messages: unknown[], width: number) {
+async function screen(messages: unknown[], width: number, done: string) {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width, height: 40, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
@@ -79,7 +79,8 @@ async function screen(messages: unknown[], width: number) {
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await setup.waitForFrame((frame) => frame.includes("Run it"))
+    // The last text of the history must be drawn before the frame is taken; the first frame can come before it on a slow runner.
+    await setup.waitForFrame((frame) => frame.includes("Run it") && frame.includes(done))
     await setup.waitForVisualIdle()
     return setup.captureCharFrame()
   } finally {
@@ -93,7 +94,7 @@ test.each([
   ["narrow", 60],
   ["wide", 120],
 ] as const)("draws a cleared read's output and nothing for the marker (%s)", async (_, width) => {
-  const withMarker = await screen([user, assistant, marker], width)
+  const withMarker = await screen([user, assistant, marker], width, output)
   // The stored output is still on the screen, whole.
   expect(withMarker).toContain("cat notes.txt")
   expect(withMarker).toContain(output)
@@ -102,7 +103,7 @@ test.each([
   expect(withMarker).not.toContain("context-cleared")
   expect(withMarker).not.toContain("idle")
   // Control: the same history without the marker draws the same screen, so the marker adds no row at all.
-  expect(withMarker).toBe(await screen([user, assistant], width))
+  expect(withMarker).toBe(await screen([user, assistant], width, output))
 })
 
 // The runner writes the marker before the request, so on a reloaded session it sits between a prompt and its reply,
@@ -154,5 +155,6 @@ test.each(
     ([60, 120] as const).map((width) => [`${name} (${width} columns)`, withMarker, without, width] as const),
   ),
 )("a context-cleared row at %s draws the same screen as the history without it", async (_, withMarker, without, width) => {
-  expect(await screen(withMarker, width)).toBe(await screen(without, width))
+  const done = without.includes(reply) ? "Reply after idle" : "All done here"
+  expect(await screen(withMarker, width, done)).toBe(await screen(without, width, done))
 })
