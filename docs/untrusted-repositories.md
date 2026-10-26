@@ -975,14 +975,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   an edited database, so it is hostile: history selection uses it only as a bound lookup parameter scoped to the
   session, so a value that is not an ID finds no row and fails open, and the row decode refuses a stored value that is
   not an ID (it fails the load as any malformed row does). The value is never joined into a path, a ref, a glob or a log
-  line. A value that names no row
-  of the session, a row at or after the checkpoint, an instruction update or a compaction, or a row before the previous
-  view fails open to the earlier history with one warning, so a forged value never hides more than the checkpoint would
-  (classes 5 and 7). An import decodes it as a message ID, so `../x` refuses the document. A fork remaps it to the copy
+  line. A value that names no row of the session, a row at or after the checkpoint, an instruction update or a
+  compaction, or a row before the view of the summary checkpoint before it fails open to the earlier history with one
+  warning, so a forged value never hides more than the checkpoint would. That floor ignores the reader's boundary, so
+  every reader accepts or refuses the same value, and a start at or after the previous checkpoint is accepted without
+  walking down the chain (classes 5 and 7). An import decodes it as a message ID, so `../x` refuses the document. A fork remaps it to the copy
   and a committed revert removes the checkpoint with the span (class 12). The one new refusal, a compaction that names
   a message outside the active history, travels as `session.compaction.failed` with the typed `compaction.unavailable`
   error to every client (class 13). Proof: `test/session-retained-checkpoint.test.ts` (the forged, fork, revert, restart,
-  export and import rows), `test/session-runner-message.test.ts`, `test/session-projector.test.ts`.
+  export and import rows, one span for every reader, the chain walk and the reminder placement), `test/session-runner-message.test.ts`,
+  `test/session-projector.test.ts`; the import doors with a control: `packages/cli/test/import-export.test.ts` and
+  `packages/server/test/session-import.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,

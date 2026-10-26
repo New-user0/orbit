@@ -4910,6 +4910,9 @@ stores one fact, `retain`: the ID of the first message it keeps. The summary cov
   also holds what the checkpoint summarized, back to the previous view, and one warning is logged. An imported document
   whose `retain` is not a message ID is refused, and an edited database whose `retain` is not one fails to load that
   history like any other row that does not decode.
+- **Reminders.** The plan, todo and verification reminders for the newest prompt stand right before it, after the kept
+  messages, as they do in a history that kept nothing. Every reader gives a checkpoint the same kept span: an earlier
+  checkpoint of a native model between the kept start and the new checkpoint does not make `session.context` skip it.
 - **Forks and reverts.** A fork that includes the checkpoint keeps its kept span; a fork that stops inside the span has
   no checkpoint. A revert to a kept message removes the checkpoint with it, and the history falls back to the one before.
 - **Asking for a message that is not there.** A compaction that names a message outside the active history fails with

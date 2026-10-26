@@ -26,6 +26,11 @@ import { SessionTransfer } from "@orbit/core/session/transfer"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionStore } from "@orbit/core/session/store"
+import { SessionReminders } from "@orbit/core/session/reminders"
+import { PlanMode } from "@orbit/core/plan-mode"
+import { PlanReminders } from "@orbit/core/plan/reminders"
+import { TodoReminders } from "@orbit/core/tool/todo-reminders"
+import { Verification } from "@orbit/core/session/verification"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
@@ -181,7 +186,10 @@ const rowData = (s: Scenario, ids: readonly SessionMessage.ID[]) =>
     .where(inArray(SessionMessageTable.id, [...ids]))
     .orderBy(asc(SessionMessageTable.seq))
     .all()
-    .pipe(Effect.orDie, Effect.map((rows) => JSON.stringify(rows.map((row) => [row.id, row.seq, row.type, row.data]))))
+    .pipe(
+      Effect.orDie,
+      Effect.map((rows) => JSON.stringify(rows.map((row) => [row.id, row.seq, row.type, row.data]))),
+    )
 const countRows = (s: Scenario, id: Session.ID) =>
   s.db
     .select({ id: SessionMessageTable.id })
@@ -298,7 +306,13 @@ scenario("the summary request covers only the messages before the kept one", fun
   yield* s.llm.push(summaryReply("later"))
   yield* compactWith(s, { id: second, retain: yield* userID(s, "prompt 5", second) })
   const sent = labelled(shape(s.requests.at(-1)))
-  expect(sent.slice(0, 5)).toEqual(["[earlier summary]", "user: prompt 3", "assistant: answer 3", "user: prompt 4", "assistant: answer 4"])
+  expect(sent.slice(0, 5)).toEqual([
+    "[earlier summary]",
+    "user: prompt 3",
+    "assistant: answer 3",
+    "user: prompt 4",
+    "assistant: answer 4",
+  ])
   expect(sent.join("\n")).not.toContain("prompt 5")
 })
 
@@ -369,7 +383,9 @@ scenario("the estimate after a retained checkpoint ignores the kept messages' ol
   expect(prompt.estimated).toBeGreaterThan(0)
   expect(prompt.estimated).toBeLessThan(threshold)
   // The kept answers stay stored with their usage; only the estimate looks past it.
-  expect(loaded.messages.some((message) => message.type === "assistant" && message.tokens?.input === 150_000)).toBe(true)
+  expect(loaded.messages.some((message) => message.type === "assistant" && message.tokens?.input === 150_000)).toBe(
+    true,
+  )
 
   // The next step makes one model request and no second compaction.
   const requests = s.requests.length
@@ -396,7 +412,8 @@ scenario("estimatePrompt anchors only on a response after the latest checkpoint"
       tokens: { input, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
       time: { created: 0, completed: 0 },
     })
-  const user = (id: string, text: string) => SessionMessage.User.make({ id: SessionMessage.ID.make(id), type: "user", text, time: { created } })
+  const user = (id: string, text: string) =>
+    SessionMessage.User.make({ id: SessionMessage.ID.make(id), type: "user", text, time: { created } })
   const checkpoint = SessionMessage.Compaction.make({
     id: SessionMessage.ID.make("msg_anchor_checkpoint"),
     type: "compaction",
@@ -406,15 +423,26 @@ scenario("estimatePrompt anchors only on a response after the latest checkpoint"
     recent: "",
     time: { created },
   })
-  const before = [user("msg_anchor_kept", "Kept"), assistant("msg_anchor_old", 150_000), checkpoint, user("msg_anchor_new", "New")]
+  const before = [
+    user("msg_anchor_kept", "Kept"),
+    assistant("msg_anchor_old", 150_000),
+    checkpoint,
+    user("msg_anchor_new", "New"),
+  ]
   const unanchored = SessionCompaction.estimatePrompt({ ...base, messages: before })
   expect(unanchored.measured).toBe(0)
   expect(unanchored.estimated).toBeGreaterThan(0)
   // A response after the checkpoint is the anchor, and it alone.
-  const anchored = SessionCompaction.estimatePrompt({ ...base, messages: [...before, assistant("msg_anchor_response", 30_000)] })
+  const anchored = SessionCompaction.estimatePrompt({
+    ...base,
+    messages: [...before, assistant("msg_anchor_response", 30_000)],
+  })
   expect(anchored.measured).toBe(30_010)
   // Control: with no checkpoint in the list, the measured response is the anchor.
-  expect(SessionCompaction.estimatePrompt({ ...base, messages: before.filter((message) => message.type !== "compaction") }).measured).toBe(150_010)
+  expect(
+    SessionCompaction.estimatePrompt({ ...base, messages: before.filter((message) => message.type !== "compaction") })
+      .measured,
+  ).toBe(150_010)
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -522,14 +550,19 @@ scenario("the kept start moves past rows a kept span never holds", function* (s)
       expect(ended).not.toHaveProperty("retain")
       for (const text of ["prompt 1", "prompt 2", "prompt 3"]) expect(JSON.stringify(sent.messages)).toContain(text)
     } else {
-      expect({ name: row.name, retain: ended.retain }).toEqual({ name: row.name, retain: yield* userID(s, row.keeps, id) })
+      expect({ name: row.name, retain: ended.retain }).toEqual({
+        name: row.name,
+        retain: yield* userID(s, row.keeps, id),
+      })
       expect(JSON.stringify(sent.messages)).not.toContain(row.keeps)
     }
     expect(s.requests).toHaveLength(requests + 1)
     // The new checkpoint's view holds no instruction update and no older compaction row before it.
     const loaded = yield* SessionHistory.load(s.db, id, "latest")
     const latest = loaded.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
-    expect(loaded.slice(0, latest).filter((message) => message.type === "system" || message.type === "compaction")).toEqual([])
+    expect(
+      loaded.slice(0, latest).filter((message) => message.type === "system" || message.type === "compaction"),
+    ).toEqual([])
   }
 
   // An instruction update inside the kept span is not kept: the new baseline supersedes it.
@@ -639,141 +672,152 @@ scenario("a native-compaction model summarizes a retained compaction", function*
 // ---------------------------------------------------------------------------------------------------------------------
 // The automatic check
 
-scenario("on the automatic path a result at or above the threshold falls back to a full summary; manual keeps it", function* (s) {
-  const compaction = yield* SessionCompaction.Service
-  const big = (chars: number) => `${"x".repeat(chars)} end`
-  /** Four exchanges with "prompt 3" (the kept start) big or small; `early` makes the summarized part the big one. */
-  const history = (name: string, size: "kept" | "summarized") =>
-    Effect.gen(function* () {
-      const id = yield* newSession(s, name)
-      const text = (n: number) => (size === "kept" ? (n === 3 ? big(40_000) : `prompt ${n}`) : n === 1 ? big(40_000) : `prompt ${n}`)
+scenario(
+  "on the automatic path a result at or above the threshold falls back to a full summary; manual keeps it",
+  function* (s) {
+    const compaction = yield* SessionCompaction.Service
+    const big = (chars: number) => `${"x".repeat(chars)} end`
+    /** Four exchanges with "prompt 3" (the kept start) big or small; `early` makes the summarized part the big one. */
+    const history = (name: string, size: "kept" | "summarized") =>
+      Effect.gen(function* () {
+        const id = yield* newSession(s, name)
+        const text = (n: number) =>
+          size === "kept" ? (n === 3 ? big(40_000) : `prompt ${n}`) : n === 1 ? big(40_000) : `prompt ${n}`
+        for (let n = 1; n <= 4; n++) {
+          yield* s.llm.push(answer(n))
+          yield* s.session.prompt({ sessionID: id, text: text(n), resume: false })
+          yield* s.session.resume(id)
+        }
+        const user = (yield* messagesOf(s, id)).filter((message) => message.type === "user")[2]!
+        return { id, start: user.id }
+      })
+    const window = { context: 16_000, output: 4_000 }
+    const row = (input: {
+      name: string
+      size: "kept" | "summarized"
+      reason: "manual" | "auto" | "overflow"
+      window?: typeof window
+      /** The summaries the model is asked for: a second one only where the result is dropped for a full summary. */
+      summaries: 1 | 2
+    }) =>
+      Effect.gen(function* () {
+        const { id, start } = yield* history(input.name, input.size)
+        const requests = s.requests.length
+        yield* s.llm.push(
+          ...(input.summaries === 2 ? [summaryReply("first"), summaryReply("second")] : [summaryReply("first")]),
+        )
+        const result = yield* compactWith(s, {
+          id,
+          retain: start,
+          reason: input.reason,
+          window: input.window ?? window,
+        })
+        expect(result.outcome).toEqual({ status: "completed" })
+        const ended = yield* eventsOf(s, ENDED, id)
+        expect(ended).toHaveLength(1)
+        return {
+          id,
+          start,
+          calls: s.requests.length - requests,
+          retain: ended[0]!.retain,
+          started: (yield* eventsOf(s, STARTED, id)).length,
+          last: JSON.stringify(s.requests.at(-1)!.messages),
+          text: ended[0]!.text,
+        }
+      })
+
+    yield* grow(s, 1)
+    const base = yield* loadedContext()
+    const threshold = compaction.thresholds({ ...base, model: { ...base.model, limit: window } }).thresholds!.threshold
+    expect(threshold).toBeGreaterThan(0)
+
+    for (const reason of ["auto", "overflow"] as const) {
+      const fallback = yield* row({ name: `fallback_${reason}`, size: "kept", reason, summaries: 2 })
+      expect(fallback.calls).toBe(2)
+      expect(fallback.retain).toBeUndefined()
+      expect(fallback.text).toContain("second summary")
+      // The second request carries every exchange.
+      for (const n of [1, 2, 3, 4]) expect(fallback.last).toContain(`answer ${n}`)
+      // One compaction message: the fallback does not announce itself again.
+      expect(fallback.started).toBe(1)
+      const view = yield* SessionHistory.load(s.db, fallback.id, "latest")
+      expect(view[0]?.type).toBe("compaction")
+    }
+    // The same span, asked for by a person, is kept.
+    const manual = yield* row({ name: "manual", size: "kept", reason: "manual", summaries: 1 })
+    expect(manual.calls).toBe(1)
+    expect(manual.retain).toBe(manual.start)
+    // A small kept span stays under the threshold on the automatic path.
+    const small = yield* row({ name: "small", size: "summarized", reason: "auto", summaries: 1 })
+    expect(small.calls).toBe(1)
+    expect(small.retain).toBe(small.start)
+    // An unknown window has no threshold to check.
+    const unknown = yield* row({
+      name: "unknown",
+      size: "kept",
+      reason: "overflow",
+      window: { context: 0, output: 4_000 },
+      summaries: 1,
+    })
+    expect(unknown.calls).toBe(1)
+    expect(unknown.retain).toBe(unknown.start)
+
+    // A result exactly at the threshold falls back; one token below keeps. The window is sized from the estimate.
+    const exact = yield* history("exact", "kept")
+    const probe = yield* loadedContext(exact.id)
+    const checkpoint = SessionMessage.Compaction.make({
+      id: SessionMessage.ID.make("msg_exact_checkpoint"),
+      type: "compaction",
+      status: "completed",
+      reason: "auto",
+      summary: "## Objective\n- first summary",
+      recent: "",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    const keptRows = probe.messages.slice(probe.messages.findIndex((message) => message.id === exact.start))
+    const estimate = SessionCompaction.estimateRequest({
+      system: [],
+      tools: [],
+      messages: toLLMMessages([...keptRows, checkpoint], fakeModel),
+    })
+    for (const [name, context, kept] of [
+      ["equal", 2 * estimate, false],
+      ["one below", 2 * estimate + 2, true],
+    ] as const) {
+      const id = (yield* history(`exact_${name.replace(" ", "_")}`, "kept")).id
+      const start = (yield* messagesOf(s, id)).filter((message) => message.type === "user")[2]!.id
+      yield* s.llm.push(...(kept ? [summaryReply("first")] : [summaryReply("first"), summaryReply("second")]))
+      yield* compactWith(s, { id, retain: start, reason: "overflow", window: { context, output: 0 } })
+      const ended = (yield* eventsOf(s, ENDED, id)).at(-1)!
+      expect({ name, kept: ended.retain !== undefined }).toEqual({ name, kept })
+    }
+
+    // An earlier checkpoint stored inside the new kept span's tail joins the summarized part, so the check does not count
+    // its (large) summary against the result: the view after compaction is the new checkpoint plus the kept messages.
+    for (const reason of ["auto", "overflow"] as const) {
+      const id = yield* newSession(s, `earlier_${reason}`)
       for (let n = 1; n <= 4; n++) {
         yield* s.llm.push(answer(n))
-        yield* s.session.prompt({ sessionID: id, text: text(n), resume: false })
+        yield* s.session.prompt({ sessionID: id, text: `prompt ${n}`, resume: false })
         yield* s.session.resume(id)
       }
-      const user = (yield* messagesOf(s, id)).filter((message) => message.type === "user")[2]!
-      return { id, start: user.id }
-    })
-  const window = { context: 16_000, output: 4_000 }
-  const row = (input: {
-    name: string
-    size: "kept" | "summarized"
-    reason: "manual" | "auto" | "overflow"
-    window?: typeof window
-    /** The summaries the model is asked for: a second one only where the result is dropped for a full summary. */
-    summaries: 1 | 2
-  }) =>
-    Effect.gen(function* () {
-      const { id, start } = yield* history(input.name, input.size)
-      const requests = s.requests.length
-      yield* s.llm.push(...(input.summaries === 2 ? [summaryReply("first"), summaryReply("second")] : [summaryReply("first")]))
-      const result = yield* compactWith(s, { id, retain: start, reason: input.reason, window: input.window ?? window })
-      expect(result.outcome).toEqual({ status: "completed" })
-      const ended = yield* eventsOf(s, ENDED, id)
-      expect(ended).toHaveLength(1)
-      return {
-        id,
-        start,
-        calls: s.requests.length - requests,
-        retain: ended[0]!.retain,
-        started: (yield* eventsOf(s, STARTED, id)).length,
-        last: JSON.stringify(s.requests.at(-1)!.messages),
-        text: ended[0]!.text,
-      }
-    })
-
-  yield* grow(s, 1)
-  const base = yield* loadedContext()
-  const threshold = compaction.thresholds({ ...base, model: { ...base.model, limit: window } }).thresholds!.threshold
-  expect(threshold).toBeGreaterThan(0)
-
-  for (const reason of ["auto", "overflow"] as const) {
-    const fallback = yield* row({ name: `fallback_${reason}`, size: "kept", reason, summaries: 2 })
-    expect(fallback.calls).toBe(2)
-    expect(fallback.retain).toBeUndefined()
-    expect(fallback.text).toContain("second summary")
-    // The second request carries every exchange.
-    for (const n of [1, 2, 3, 4]) expect(fallback.last).toContain(`answer ${n}`)
-    // One compaction message: the fallback does not announce itself again.
-    expect(fallback.started).toBe(1)
-    const view = yield* SessionHistory.load(s.db, fallback.id, "latest")
-    expect(view[0]?.type).toBe("compaction")
-  }
-  // The same span, asked for by a person, is kept.
-  const manual = yield* row({ name: "manual", size: "kept", reason: "manual", summaries: 1 })
-  expect(manual.calls).toBe(1)
-  expect(manual.retain).toBe(manual.start)
-  // A small kept span stays under the threshold on the automatic path.
-  const small = yield* row({ name: "small", size: "summarized", reason: "auto", summaries: 1 })
-  expect(small.calls).toBe(1)
-  expect(small.retain).toBe(small.start)
-  // An unknown window has no threshold to check.
-  const unknown = yield* row({
-    name: "unknown",
-    size: "kept",
-    reason: "overflow",
-    window: { context: 0, output: 4_000 },
-    summaries: 1,
-  })
-  expect(unknown.calls).toBe(1)
-  expect(unknown.retain).toBe(unknown.start)
-
-  // A result exactly at the threshold falls back; one token below keeps. The window is sized from the estimate.
-  const exact = yield* history("exact", "kept")
-  const probe = yield* loadedContext(exact.id)
-  const checkpoint = SessionMessage.Compaction.make({
-    id: SessionMessage.ID.make("msg_exact_checkpoint"),
-    type: "compaction",
-    status: "completed",
-    reason: "auto",
-    summary: "## Objective\n- first summary",
-    recent: "",
-    time: { created: DateTime.makeUnsafe(0) },
-  })
-  const keptRows = probe.messages.slice(probe.messages.findIndex((message) => message.id === exact.start))
-  const estimate = SessionCompaction.estimateRequest({
-    system: [],
-    tools: [],
-    messages: toLLMMessages([...keptRows, checkpoint], fakeModel),
-  })
-  for (const [name, context, kept] of [
-    ["equal", 2 * estimate, false],
-    ["one below", 2 * estimate + 2, true],
-  ] as const) {
-    const id = (yield* history(`exact_${name.replace(" ", "_")}`, "kept")).id
-    const start = (yield* messagesOf(s, id)).filter((message) => message.type === "user")[2]!.id
-    yield* s.llm.push(...(kept ? [summaryReply("first")] : [summaryReply("first"), summaryReply("second")]))
-    yield* compactWith(s, { id, retain: start, reason: "overflow", window: { context, output: 0 } })
-    const ended = (yield* eventsOf(s, ENDED, id)).at(-1)!
-    expect({ name, kept: ended.retain !== undefined }).toEqual({ name, kept })
-  }
-
-  // An earlier checkpoint stored inside the new kept span's tail joins the summarized part, so the check does not count
-  // its (large) summary against the result: the view after compaction is the new checkpoint plus the kept messages.
-  for (const reason of ["auto", "overflow"] as const) {
-    const id = yield* newSession(s, `earlier_${reason}`)
-    for (let n = 1; n <= 4; n++) {
-      yield* s.llm.push(answer(n))
-      yield* s.session.prompt({ sessionID: id, text: `prompt ${n}`, resume: false })
+      const users = (yield* messagesOf(s, id)).filter((message) => message.type === "user")
+      yield* s.llm.push(TestLLM.text(`## Objective\n- ${big(80_000)}`, "summary-large"))
+      yield* compactWith(s, { id, retain: users[1]!.id })
+      expect(yield* completedCheckpoints(s, id)).toHaveLength(1)
+      // A measured response after the checkpoint is what makes the automatic check run.
+      yield* s.llm.push(answer(5, 20_000))
+      yield* s.session.prompt({ sessionID: id, text: "prompt 5", resume: false })
       yield* s.session.resume(id)
+      const requests = s.requests.length
+      yield* s.llm.push(summaryReply("second"))
+      // "prompt 3" lies inside the first checkpoint's kept span, so that checkpoint is stored after it.
+      yield* compactWith(s, { id, retain: users[2]!.id, reason, window })
+      expect(s.requests.length - requests).toBe(1)
+      expect((yield* eventsOf(s, ENDED, id)).at(-1)!.retain).toBe(users[2]!.id)
     }
-    const users = (yield* messagesOf(s, id)).filter((message) => message.type === "user")
-    yield* s.llm.push(TestLLM.text(`## Objective\n- ${big(80_000)}`, "summary-large"))
-    yield* compactWith(s, { id, retain: users[1]!.id })
-    expect(yield* completedCheckpoints(s, id)).toHaveLength(1)
-    // A measured response after the checkpoint is what makes the automatic check run.
-    yield* s.llm.push(answer(5, 20_000))
-    yield* s.session.prompt({ sessionID: id, text: "prompt 5", resume: false })
-    yield* s.session.resume(id)
-    const requests = s.requests.length
-    yield* s.llm.push(summaryReply("second"))
-    // "prompt 3" lies inside the first checkpoint's kept span, so that checkpoint is stored after it.
-    yield* compactWith(s, { id, retain: users[2]!.id, reason, window })
-    expect(s.requests.length - requests).toBe(1)
-    expect((yield* eventsOf(s, ENDED, id)).at(-1)!.retain).toBe(users[2]!.id)
-  }
-})
+  },
+)
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Later checkpoints, forks, reverts
@@ -784,7 +828,11 @@ scenario("a second retained checkpoint summarizes the first and keeps from its o
   const inside = yield* userID(s, "prompt 4")
   yield* s.llm.push(summaryReply("second"))
   expect((yield* compactWith(s, { retain: inside })).outcome).toEqual({ status: "completed" })
-  expect(labelled(shape(s.requests.at(-1))).slice(0, 3)).toEqual(["[first summary]", "user: prompt 3", "assistant: answer 3"])
+  expect(labelled(shape(s.requests.at(-1))).slice(0, 3)).toEqual([
+    "[first summary]",
+    "user: prompt 3",
+    "assistant: answer 3",
+  ])
   expect(shape(s.requests.at(-1))).toHaveLength(4)
 
   const [, second] = yield* completedCheckpoints(s)
@@ -819,7 +867,9 @@ scenario("a fork keeps a retained checkpoint and a fork inside its kept span doe
 
   // A fork past the checkpoint holds it, with `retain` on the copy of the kept start.
   const past = yield* s.session.fork({ sessionID, before: p5 })
-  const copied = (yield* messagesOf(s, past.id)).find((message) => message.type === "user" && message.text === "prompt 3")!
+  const copied = (yield* messagesOf(s, past.id)).find(
+    (message) => message.type === "user" && message.text === "prompt 3",
+  )!
   expect(copied.id).not.toBe(run.start)
   const [checkpoint] = yield* completedCheckpoints(s, past.id)
   expect(checkpoint).toMatchObject({ retain: copied.id })
@@ -846,7 +896,10 @@ scenario("a committed revert into the kept span returns to the earlier checkpoin
   // Control: a revert to a message after the checkpoint keeps the checkpoint and its kept span.
   const control = yield* newSession(s, "revert_after")
   yield* retained(s, control)
-  yield* s.bus.publish(SessionEvent.RevertEvent.Committed, { sessionID: control, to: yield* userID(s, "prompt 5", control) })
+  yield* s.bus.publish(SessionEvent.RevertEvent.Committed, {
+    sessionID: control,
+    to: yield* userID(s, "prompt 5", control),
+  })
   yield* grow(s, 1, { id: control, from: 6 })
   expect(labelled(shape(s.requests.at(-1)))).toEqual([
     "[first summary]",
@@ -881,7 +934,10 @@ scenario("a committed revert into the kept span returns to the earlier checkpoin
   yield* grow(s, 2, { id: earlier, from: 3 })
   yield* s.llm.push(summaryReply("later"))
   yield* compactWith(s, { id: earlier, retain: yield* userID(s, "prompt 4", earlier) })
-  yield* s.bus.publish(SessionEvent.RevertEvent.Committed, { sessionID: earlier, to: yield* userID(s, "prompt 4", earlier) })
+  yield* s.bus.publish(SessionEvent.RevertEvent.Committed, {
+    sessionID: earlier,
+    to: yield* userID(s, "prompt 4", earlier),
+  })
   yield* grow(s, 1, { id: earlier, from: 6 })
   expect(labelled(shape(s.requests.at(-1)))).toEqual([
     "[earlier summary]",
@@ -897,7 +953,11 @@ scenario("a committed revert into the kept span returns to the earlier checkpoin
 scenario("a forged or imported retain fails open to the earlier history", function* (s) {
   const plain = (n: number) => [`user:prompt ${n}`, `assistant:answer ${n}`]
   const typeOf = (message: SessionMessage.Info) =>
-    message.type === "user" ? `user:${message.text}` : message.type === "assistant" ? `assistant:${(message.content[0] as { text?: string } | undefined)?.text ?? ""}` : message.type
+    message.type === "user"
+      ? `user:${message.text}`
+      : message.type === "assistant"
+        ? `assistant:${(message.content[0] as { text?: string } | undefined)?.text ?? ""}`
+        : message.type
   const rows: Array<{
     readonly name: string
     readonly prepare?: (id: Session.ID) => Effect.Effect<void, unknown, Env>
@@ -916,7 +976,9 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     {
       name: "an unknown ID",
       prepare: (id) =>
-        s.bus.publish(SessionEvent.InstructionsUpdated, { sessionID: id, delta: {}, text: "Updated" }).pipe(Effect.asVoid),
+        s.bus
+          .publish(SessionEvent.InstructionsUpdated, { sessionID: id, delta: {}, text: "Updated" })
+          .pipe(Effect.asVoid),
       retain: () => Effect.succeed(SessionMessage.ID.make("msg_missing")),
       expected: [...plain(1), ...plain(2), ...plain(3), "compaction"],
       warns: true,
@@ -955,7 +1017,9 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     {
       name: "an instruction update",
       prepare: (id) =>
-        s.bus.publish(SessionEvent.InstructionsUpdated, { sessionID: id, delta: {}, text: "Updated" }).pipe(Effect.asVoid),
+        s.bus
+          .publish(SessionEvent.InstructionsUpdated, { sessionID: id, delta: {}, text: "Updated" })
+          .pipe(Effect.asVoid),
       retain: (id) =>
         messagesOf(s, id).pipe(Effect.map((messages) => messages.find((message) => message.type === "system")!.id)),
       expected: [...plain(1), ...plain(2), ...plain(3), "compaction"],
@@ -976,7 +1040,13 @@ scenario("a forged or imported retain fails open to the earlier history", functi
       recent: "",
       ...(checkpointID ? { inputID: checkpointID } : {}),
     })
-    yield* s.bus.publish(SessionEvent.Compaction.Ended, { sessionID: id, reason: "manual", text: "Forged summary", recent: "", retain })
+    yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+      sessionID: id,
+      reason: "manual",
+      text: "Forged summary",
+      recent: "",
+      retain,
+    })
     if (row.newer) yield* seedStep(s.bus, id, { id: retain, calls: [], finish: "stop" })
     const rowsBefore = yield* countRows(s, id)
     const { value, logged } = yield* withWarnings(SessionHistory.load(s.db, id, "latest"))
@@ -988,7 +1058,10 @@ scenario("a forged or imported retain fails open to the earlier history", functi
     for (const line of logged) expect(line).not.toContain("\u001b")
     // An instruction update recorded before the checkpoint is superseded by its baseline, kept view or failed-open view.
     const checkpointAt = value.findIndex((message) => message.type === "compaction")
-    expect({ name: row.name, early: value.slice(0, checkpointAt).filter((message) => message.type === "system") }).toEqual({
+    expect({
+      name: row.name,
+      early: value.slice(0, checkpointAt).filter((message) => message.type === "system"),
+    }).toEqual({
       name: row.name,
       early: [],
     })
@@ -996,9 +1069,9 @@ scenario("a forged or imported retain fails open to the earlier history", functi
       // Control: an update recorded after the checkpoint stays.
       yield* s.bus.publish(SessionEvent.InstructionsUpdated, { sessionID: id, delta: {}, text: "Later" })
       const later = yield* SessionHistory.load(s.db, id, "latest")
-      expect(later.slice(later.findIndex((message) => message.type === "compaction")).map((message) => message.type)).toContain(
-        "system",
-      )
+      expect(
+        later.slice(later.findIndex((message) => message.type === "compaction")).map((message) => message.type),
+      ).toContain("system")
     }
     // The request starts with the checkpoint, then the earlier history.
     const lowered = toLLMMessages(value, fakeModel)
@@ -1042,7 +1115,13 @@ scenario("a forged or imported retain fails open to the earlier history", functi
   yield* grow(s, 1, { id: chained, from: 4 })
   const first = yield* userID(s, "prompt 1", chained)
   yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID: chained, reason: "manual", recent: "" })
-  yield* s.bus.publish(SessionEvent.Compaction.Ended, { sessionID: chained, reason: "manual", text: "Forged summary", recent: "", retain: first })
+  yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+    sessionID: chained,
+    reason: "manual",
+    text: "Forged summary",
+    recent: "",
+    retain: first,
+  })
   const before = yield* withWarnings(SessionHistory.load(s.db, chained, "latest"))
   expect(before.value.filter((message) => REAL.includes(message.type)).map(typeOf)).toEqual([
     ...plain(3),
@@ -1060,7 +1139,13 @@ scenario("a forged or imported retain fails open to the earlier history", functi
   yield* grow(s, 2, { id: onPrevious, from: 4 })
   const previous = (yield* completedCheckpoints(s, onPrevious))[0]!.id
   yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID: onPrevious, reason: "manual", recent: "" })
-  yield* s.bus.publish(SessionEvent.Compaction.Ended, { sessionID: onPrevious, reason: "manual", text: "Forged summary", recent: "", retain: previous })
+  yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+    sessionID: onPrevious,
+    reason: "manual",
+    text: "Forged summary",
+    recent: "",
+    retain: previous,
+  })
   const onRow = yield* withWarnings(SessionHistory.load(s.db, onPrevious, "latest"))
   expect(onRow.value.filter((message) => REAL.includes(message.type)).map(typeOf)).toEqual([
     "compaction",
@@ -1078,7 +1163,13 @@ scenario("a forged or imported retain fails open to the earlier history", functi
   yield* compactWith(s, { id: same, retain: sameStart })
   yield* grow(s, 1, { id: same, from: 4 })
   yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID: same, reason: "manual", recent: "" })
-  yield* s.bus.publish(SessionEvent.Compaction.Ended, { sessionID: same, reason: "manual", text: "Second summary", recent: "", retain: sameStart })
+  yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+    sessionID: same,
+    reason: "manual",
+    text: "Second summary",
+    recent: "",
+    retain: sameStart,
+  })
   const onStart = yield* withWarnings(SessionHistory.load(s.db, same, "latest"))
   expect(onStart.value.filter((message) => REAL.includes(message.type)).map(typeOf)).toEqual([
     ...plain(3),
@@ -1120,7 +1211,12 @@ const imported = (suffix: string, retain?: string) =>
     const template = yield* sessions.create({ location, title: "Retained" })
     const created = DateTime.makeUnsafe(1)
     const user = (name: string, text: string) =>
-      SessionMessage.User.make({ id: SessionMessage.ID.make(`msg_${name}${suffix}`), type: "user", text, time: { created } })
+      SessionMessage.User.make({
+        id: SessionMessage.ID.make(`msg_${name}${suffix}`),
+        type: "user",
+        text,
+        time: { created },
+      })
     const assistant = (name: string, text: string) =>
       Schema.decodeUnknownSync(SessionMessage.Assistant)({
         id: `msg_${name}${suffix}`,
@@ -1166,7 +1262,10 @@ transferred.effect("an exported and imported session keeps its retained checkpoi
 
     // Exported, renamed (message IDs are global) and imported again: the reference travels with the document.
     const document = yield* first.transfer.export({ sessionID: first.sessionID })
-    const encoded = JSON.stringify(Schema.encodeSync(SessionTransfer.Data)(document)).replaceAll(/"msg_(rc_\w+?)"/g, '"msg_$1_copy"')
+    const encoded = JSON.stringify(Schema.encodeSync(SessionTransfer.Data)(document)).replaceAll(
+      /"msg_(rc_\w+?)"/g,
+      '"msg_$1_copy"',
+    )
     const renamed = Schema.decodeUnknownSync(SessionTransfer.Data)({
       ...JSON.parse(encoded),
       info: { ...JSON.parse(encoded).info, id: Session.ID.create() },
@@ -1182,19 +1281,26 @@ transferred.effect("an import refuses a checkpoint whose retain is not a message
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const first = yield* imported("_doc")
-    const document = Schema.encodeSync(SessionTransfer.Data)(yield* first.transfer.export({ sessionID: first.sessionID }))
-    const sessionsBefore = (yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie)).length
+    const document = Schema.encodeSync(SessionTransfer.Data)(
+      yield* first.transfer.export({ sessionID: first.sessionID }),
+    )
+    const sessionsBefore = (yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie))
+      .length
     const edited = {
       ...document,
       info: { ...document.info, id: Session.ID.create() },
-      messages: document.messages.map((message) => (message.type === "compaction" ? { ...message, retain: "../x" } : message)),
+      messages: document.messages.map((message) =>
+        message.type === "compaction" ? { ...message, retain: "../x" } : message,
+      ),
     }
-    // The import command reads the file text with this exact decode before it sends anything to a server, and the
-    // server route decodes the same schema, so a document that fails here never reaches `SessionTransfer.import`.
+    // This pins the schema both doors decode with. The doors themselves are driven in packages/cli/test/import-export.test.ts
+    // (the import command on a file) and packages/server/test/session-import.test.ts (the route), each with a control.
     const fromFile = Schema.decodeUnknownEffect(Schema.fromJsonString(SessionTransfer.Data))
     const refused = yield* Effect.result(fromFile(JSON.stringify(edited)))
     expect(refused._tag).toBe("Failure")
-    expect((yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie)).length).toBe(sessionsBefore)
+    expect((yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie)).length).toBe(
+      sessionsBefore,
+    )
     // Control: the unedited file decodes.
     expect((yield* Effect.result(fromFile(JSON.stringify(document))))._tag).toBe("Success")
   }),
@@ -1205,7 +1311,11 @@ transferred.effect("an import refuses a checkpoint whose retain is not a message
 
 const BODY = (id: string) => `${id}:`.padEnd(400, "x")
 const reads = (prefix: string, count: number) =>
-  Array.from({ length: count }, (_, index) => ({ id: `${prefix}${index + 1}`, name: "Read", text: BODY(`${prefix}${index + 1}`) }))
+  Array.from({ length: count }, (_, index) => ({
+    id: `${prefix}${index + 1}`,
+    name: "Read",
+    text: BODY(`${prefix}${index + 1}`),
+  }))
 const toolResults = (request: LLMRequest | undefined) =>
   (request?.messages ?? []).flatMap((message) =>
     message.role === "tool"
@@ -1229,10 +1339,18 @@ scenario("clearing markers inside the kept span still apply", function* (s) {
       // The runner starts a session's instruction state with its first step.
       yield* grow(s, 1, { id })
       const summarized = yield* seedStep(s.bus, id, { id: `msg_${name}_old`, calls: reads("a", 3) })
-      yield* s.bus.publish(SessionEvent.ContextCleared, { sessionID: id, trigger: "pressure", tools: [{ assistantMessageID: summarized, id: "a1" }] })
+      yield* s.bus.publish(SessionEvent.ContextCleared, {
+        sessionID: id,
+        trigger: "pressure",
+        tools: [{ assistantMessageID: summarized, id: "a1" }],
+      })
       const kept = yield* seedStep(s.bus, id, { id: `msg_${name}_kept`, calls: reads("b", 3) })
       if (markKept)
-        yield* s.bus.publish(SessionEvent.ContextCleared, { sessionID: id, trigger: "pressure", tools: [{ assistantMessageID: kept, id: "b1" }] })
+        yield* s.bus.publish(SessionEvent.ContextCleared, {
+          sessionID: id,
+          trigger: "pressure",
+          tools: [{ assistantMessageID: kept, id: "b1" }],
+        })
       yield* s.llm.push(summaryReply("first"))
       expect((yield* compactWith(s, { id, retain: kept })).outcome).toEqual({ status: "completed" })
       return yield* ask(s, id)
@@ -1272,5 +1390,243 @@ scenario("idle clearing measures from a kept assistant message", function* (s) {
   const recorded = yield* eventsOf(s, "session.context.cleared.1", idle)
   expect(recorded).toHaveLength(1)
   expect(recorded[0]).toMatchObject({ trigger: "idle" })
-  expect(toolResults(request).filter((result) => isCleared(result.result)).map((result) => result.id)).toEqual(["k1", "k2", "k3"])
+  expect(
+    toolResults(request)
+      .filter((result) => isCleared(result.result))
+      .map((result) => result.id),
+  ).toEqual(["k1", "k2", "k3"])
+})
+
+// ---------------------------------------------------------------------------------------------------------------------
+// One kept span for every reader
+
+scenario(
+  "every read gives a retained checkpoint the same kept span, whatever native checkpoint lies inside it",
+  function* (s) {
+    yield* grow(s, 2)
+    const target = SessionProviderContext.provenance({
+      model: s.currentModel,
+      ref: { id: fakeModel.id, providerID: fakeModel.providerID },
+    })
+    if (!target) throw new Error("Expected a concrete fixture endpoint")
+    // A native checkpoint of another endpoint lies between the start we keep from and the checkpoint we write.
+    yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "auto", recent: "" })
+    yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+      sessionID,
+      reason: "auto",
+      text: "",
+      recent: "",
+      providerContext: SessionProviderContext.encode({ ...target, modelID: "some-other-model" }, [
+        Message.assistant(CompactionPart.make({ provider: s.currentModel.provider, encrypted: "window" })),
+      ]),
+    })
+    yield* grow(s, 2, { from: 3 })
+    const start = yield* userID(s, "prompt 2")
+    yield* s.llm.push(summaryReply("first"))
+    expect((yield* compactWith(s, { retain: start })).outcome).toEqual({ status: "completed" })
+    expect((yield* eventsOf(s, ENDED)).at(-1)).toMatchObject({ retain: start })
+
+    const contexts = yield* SessionContext.Service
+    const selected = yield* contexts.select(sessionID)
+    const loads = yield* withWarnings(
+      Effect.gen(function* () {
+        return {
+          latest: view(yield* SessionHistory.load(s.db, sessionID, "latest")),
+          local: view(yield* SessionHistory.load(s.db, sessionID, "local")),
+          provenance: view(yield* SessionHistory.load(s.db, sessionID, target)),
+          other: view(yield* SessionHistory.load(s.db, sessionID, { ...target, modelID: "some-other-model" })),
+          preview: view((yield* SessionHistory.preview(s.db, sessionID, selected.instructions, "latest")).messages),
+          context: view(yield* s.context),
+        }
+      }),
+    )
+    // The span runs from the start to the new checkpoint, with the native checkpoint left out, and every reader agrees.
+    const kept = loads.value.local
+    expect(kept).toHaveLength(7)
+    expect(kept[0]).toBe(start)
+    expect(loads.value).toEqual({
+      latest: kept,
+      local: kept,
+      provenance: kept,
+      other: kept,
+      preview: kept,
+      context: kept,
+    })
+    expect(loads.logged).toEqual([])
+  },
+)
+
+scenario("a chain of retained checkpoints loads a view without walking down it", function* (s) {
+  yield* grow(s, 2)
+  yield* s.llm.push(summaryReply("one"))
+  yield* compactWith(s, { retain: yield* userID(s, "prompt 2") })
+  yield* grow(s, 2, { from: 3 })
+  yield* s.llm.push(summaryReply("two"))
+  yield* compactWith(s, { retain: yield* userID(s, "prompt 3") })
+  yield* grow(s, 2, { from: 5 })
+  yield* s.llm.push(summaryReply("three"))
+  yield* compactWith(s, { retain: yield* userID(s, "prompt 5") })
+  const [first, , third] = yield* completedCheckpoints(s)
+  const start = yield* userID(s, "prompt 5")
+
+  const clean = yield* withWarnings(SessionHistory.load(s.db, sessionID, "latest"))
+  expect(clean.value[0]!.id).toBe(start)
+  expect(clean.value.at(-1)!.id).toBe(third!.id)
+  expect(clean.logged).toEqual([])
+
+  // The newest start lies after the checkpoint before it, so the first checkpoint is never asked where its view begins:
+  // forging its reference changes nothing and logs nothing. A walk down the chain would log it.
+  yield* s.db
+    .update(SessionMessageTable)
+    .set({ data: sql`json_set(${SessionMessageTable.data}, '$.retain', 'msg_forged_first')` })
+    .where(eq(SessionMessageTable.id, first!.id))
+    .run()
+    .pipe(Effect.orDie)
+  const forged = yield* withWarnings(SessionHistory.load(s.db, sessionID, "latest"))
+  expect(forged.value.map((message) => message.id)).toEqual(clean.value.map((message) => message.id))
+  expect(forged.logged).toEqual([])
+})
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Derived reminders after a retained checkpoint
+
+// A derived reminder names a run of the epoch (`start`, an assistant message's ID or `tail`). After a retained checkpoint
+// the epoch's first run follows the last kept assistant message, so a reminder for the newest prompt stands right before
+// it, after the kept messages, as it does in a history that kept nothing.
+scenario("a derived reminder keyed to the epoch's first or newest run stands next to the newest prompt", function* (s) {
+  const probe = (after: "start" | "tail"): SessionReminders.Derived => ({
+    name: "probe",
+    run: () => [{ after, kind: "probe", text: "PROBE" }],
+  })
+  const lines = (request: LLMRequest | undefined) =>
+    labelled(shape(request)).map((line) => (line.includes("PROBE") ? "PROBE" : line))
+  for (const after of ["tail", "start"] as const) {
+    s.reminders.derived = [probe(after)]
+    const id = yield* newSession(s, `probe_${after}`)
+    const run = yield* retained(s, id)
+    // No new assistant message yet: both keys name the run of the newest prompt.
+    expect({ after, lines: lines(run.request) }).toEqual({
+      after,
+      lines: [
+        "[first summary]",
+        "user: prompt 3",
+        "assistant: answer 3",
+        "user: prompt 4",
+        "assistant: answer 4",
+        "PROBE",
+        "user: prompt 5",
+      ],
+    })
+    // The compaction's own request carries no derived reminder.
+    expect(lines(s.requests.find((request) => JSON.stringify(request).includes("summary-first")))).not.toContain(
+      "PROBE",
+    )
+    // One step later `tail` follows that step, and `start` stays with the epoch's first run.
+    yield* grow(s, 1, { id, from: 6 })
+    expect({ after, lines: lines(s.requests.at(-1)) }).toEqual({
+      after,
+      lines:
+        after === "tail"
+          ? [
+              "[first summary]",
+              "user: prompt 3",
+              "assistant: answer 3",
+              "user: prompt 4",
+              "assistant: answer 4",
+              "user: prompt 5",
+              "assistant: answer 5",
+              "PROBE",
+              "user: prompt 6",
+            ]
+          : [
+              "[first summary]",
+              "user: prompt 3",
+              "assistant: answer 3",
+              "user: prompt 4",
+              "assistant: answer 4",
+              "PROBE",
+              "user: prompt 5",
+              "assistant: answer 5",
+              "user: prompt 6",
+            ],
+    })
+  }
+})
+
+// Each production producer names its run from `ReminderText.runs`: this pins the key each one emits on a retained history
+// (the placement of each key is pinned above and in session-runner-message.test.ts).
+scenario("every production derived reminder keeps its key on a retained history", function* (s) {
+  const created = DateTime.makeUnsafe(0)
+  const user = (name: string) =>
+    SessionMessage.User.make({
+      id: SessionMessage.ID.make(`msg_dk_${name}`),
+      type: "user",
+      text: name,
+      time: { created },
+    })
+  const assistant = (name: string, agent: string, content: ReadonlyArray<unknown>) =>
+    Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: `msg_dk_${name}`,
+      type: "assistant",
+      agent,
+      model: { id: "fake-model", providerID: "fake" },
+      content,
+      time: { created: 0, completed: 0 },
+    })
+  const checkpoint = SessionMessage.Compaction.make({
+    id: SessionMessage.ID.make("msg_dk_checkpoint"),
+    type: "compaction",
+    status: "completed",
+    reason: "manual",
+    summary: "Earlier work",
+    recent: "",
+    time: { created },
+  })
+  const said = (count: number) => Array.from({ length: count }, (_, index) => ({ type: "text", text: `part ${index}` }))
+  const closing = {
+    type: "tool",
+    id: "close",
+    name: "TaskUpdate",
+    state: {
+      status: "completed",
+      input: { status: "completed" },
+      content: [{ type: "text", text: "Updated" }],
+      metadata: { todos: ["one", "two", "three"].map((content) => ({ content, status: "completed" })) },
+    },
+    time: { created: 0 },
+  }
+  const kept = [user("kept"), assistant("kept_answer", Agent.defaultID, said(1))]
+  const given = { tools: ["TodoWrite", "TaskUpdate"], session: { id: sessionID, parentID: undefined } }
+  const anchors = (insertions: ReadonlyArray<{ readonly after: string }>) =>
+    insertions.map((insertion) => insertion.after)
+
+  for (const history of [[checkpoint], [...kept, checkpoint]]) {
+    const retainedHistory = history.length > 1
+    // todo: the run after a step with ten parts
+    const todo = [...history, assistant("todo_step", Agent.defaultID, said(10)), user("newest")]
+    expect({ retainedHistory, todo: anchors(TodoReminders.insertions({ ...given, messages: todo })) }).toEqual({
+      retainedHistory,
+      todo: ["tail"],
+    })
+    // verification: the run after a step that closed a list
+    const closed = [...history, assistant("closed_step", Agent.defaultID, [closing]), user("newest")]
+    expect({ retainedHistory, verification: anchors(Verification.insertions({ messages: closed })) }).toEqual({
+      retainedHistory,
+      verification: ["tail"],
+    })
+    // plan: the first run of the epoch when a step follows it, else the newest run
+    const first = [
+      ...history,
+      assistant("plan_step", PlanMode.agent, [{ type: "text", text: "plan step" }]),
+      user("newest"),
+    ]
+    const plan = (messages: ReadonlyArray<SessionMessage.Info>) =>
+      anchors(PlanReminders.insertions({ ...given, agent: { id: PlanMode.agent }, messages }, "/home"))
+    expect({ retainedHistory, plan: plan(first) }).toEqual({ retainedHistory, plan: ["start"] })
+    expect({ retainedHistory, plan: plan([...history, user("newest")]) }).toEqual({ retainedHistory, plan: ["tail"] })
+    // The lowering places a `start` reminder next to the first new message, after anything kept.
+    const lowered = toLLMMessages(first, fakeModel, undefined, [{ after: "start", text: "PLAN" }]).map(textOf)
+    expect(lowered.findIndex((line) => line === "PLAN")).toBe(lowered.findIndex((line) => line === "plan step") - 1)
+    if (retainedHistory) expect(lowered.indexOf("PLAN")).toBeGreaterThan(lowered.findIndex((line) => line === "kept"))
+  }
 })
