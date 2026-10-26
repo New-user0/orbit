@@ -4,6 +4,7 @@
 // of the main system prompt only, and a system prompt that replaces Orbit's (`system_prompt`) drops it while the index
 // stays; an agent that leaves the instruction files out (`context.instructions: false`) gets no index.
 import { describe, expect } from "bun:test"
+import fsSync from "fs"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -40,6 +41,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
 import { location } from "./fixture/location"
+import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
 import { noScratchpad } from "./lib/scratchpad"
@@ -50,6 +52,7 @@ const directory = AbsolutePath.make(FSUtil.resolve("/repo"))
 const GUIDE = "core/memory-guide"
 const INDEX = "core/memory-index"
 const TEAM_INDEX = "core/team-memory-index"
+const AGENT_MEMORY = "core/agent-memory"
 const ids = {
   main: SessionSchema.ID.make("ses_mem_ctx_main"),
   sub: SessionSchema.ID.make("ses_mem_ctx_sub"),
@@ -79,7 +82,10 @@ const models = Layer.mock(SessionRunnerModel.Service)({
     ),
 })
 
-const harness = (entries: Entry[] = []) =>
+const harness = (
+  entries: Entry[] = [],
+  at = Layer.succeed(Location.Service, Location.Service.of(location({ directory }, { projectDirectory: directory }))),
+) =>
   testEffect(
     AppNodeBuilder.build(
       LayerNode.group([
@@ -125,12 +131,7 @@ const harness = (entries: Entry[] = []) =>
               Effect.succeed(stubSnapshot({ definitions: [], execute: () => Effect.die(new Error("unused")) })),
           }),
         ),
-        Location.node.replace(
-          Layer.succeed(
-            Location.Service,
-            Location.Service.of(location({ directory }, { projectDirectory: directory })),
-          ),
-        ),
+        Location.node.replace(at),
       ],
     ),
   )
@@ -214,7 +215,11 @@ describe("memory in a session's baseline", () => {
       // The team index follows the private one, as the reference loads the team MEMORY.md after the private one
       // (context-memory-11); with team memory off it holds no value.
       expect(main.keys.indexOf(TEAM_INDEX)).toBe(main.keys.indexOf(INDEX) + 1)
-      expect(main.keys.indexOf("core/date")).toBe(main.keys.indexOf(TEAM_INDEX) + 1)
+      // The block of an agent with a memory scope comes last in the memory group (context-memory-10); this agent has
+      // none, so it holds no value.
+      expect(main.keys.indexOf(AGENT_MEMORY)).toBe(main.keys.indexOf(TEAM_INDEX) + 1)
+      expect(main.keys.indexOf("core/date")).toBe(main.keys.indexOf(AGENT_MEMORY) + 1)
+      expect(main.present).not.toContain(AGENT_MEMORY)
       expect(main.present).toContain(GUIDE)
       expect(main.present).toContain(INDEX)
       expect(main.present).not.toContain(TEAM_INDEX)
@@ -351,5 +356,155 @@ describe("memory for an agent with a prompt of its own", () => {
       expect(plain.present).toContain(GUIDE)
       expect(plain.present).toContain(INDEX)
     }),
+  )
+})
+
+// context-memory-10, class 12: the block of an agent with a memory scope goes with the agent, wherever it runs: as the
+// main thread, as a subagent and in a fork, under the agent's own prompt, under the person's system prompt and without
+// the instruction files, as the reference appends it to the agent's own prompt. It follows the private memory sources.
+// The session folder is a real one, made for each row by the layer, since the project scope makes its folder there.
+const temporaryLocation = Layer.effect(
+  Location.Service,
+  tmpdirScoped("orbit-agent-memory-").pipe(
+    Effect.orDie,
+    Effect.map((tmp) => {
+      const at = AbsolutePath.make(tmp.path)
+      return Location.Service.of(location({ directory: at }, { projectDirectory: at }))
+    }),
+  ),
+)
+const withAgent = harness([], temporaryLocation)
+const withAgentPrompt = harness(
+  [
+    new Document({
+      type: "document",
+      scope: "user",
+      path: AbsolutePath.make(FSUtil.resolve("/config/orbit.json")),
+      info: Schema.decodeUnknownSync(Info)({ system_prompt: "You are a custom assistant." }),
+    }),
+  ],
+  temporaryLocation,
+)
+// The test config keeps this array as its entries, so the switch row turns memory off by pushing a document into it.
+// Only that row uses it, and it empties the array first, so no other row sees memory off.
+const switchEntries: Entry[] = []
+const withAgentSwitch = harness(switchEntries, temporaryLocation)
+
+const agentIds = {
+  main: SessionSchema.ID.make("ses_agent_mem_main"),
+  sub: SessionSchema.ID.make("ses_agent_mem_sub"),
+  fork: SessionSchema.ID.make("ses_agent_mem_fork"),
+  plain: SessionSchema.ID.make("ses_agent_mem_plain"),
+  own: SessionSchema.ID.make("ses_agent_mem_own"),
+  bare: SessionSchema.ID.make("ses_agent_mem_bare"),
+}
+
+const seedAgents = Effect.gen(function* () {
+  const agents = yield* Agent.Service
+  yield* agents.transform((editor) => {
+    editor.update(Agent.ID.make("keeper"), (agent) => {
+      agent.mode = "all"
+      agent.memory = "project"
+    })
+    editor.update(Agent.ID.make("keeper-own"), (agent) => {
+      agent.mode = "all"
+      agent.memory = "user"
+      agent.system = "You are an agent with a prompt of its own."
+    })
+    editor.update(Agent.ID.make("keeper-bare"), (agent) => {
+      agent.mode = "all"
+      agent.memory = "local"
+      agent.context = { instructions: false }
+    })
+    editor.update(Agent.ID.make("build"), (agent) => {
+      agent.mode = "primary"
+    })
+  })
+  const located = yield* Location.Service
+  const options = { directory: located.directory }
+  yield* insertSession({ id: agentIds.main, agent: "keeper", ...options })
+  yield* insertSession({ id: agentIds.sub, parentID: agentIds.main, agent: "keeper", ...options })
+  yield* insertSession({ id: agentIds.fork, fork: agentIds.main, agent: "keeper", ...options })
+  yield* insertSession({ id: agentIds.plain, agent: "build", ...options })
+  yield* insertSession({ id: agentIds.own, agent: "keeper-own", ...options })
+  yield* insertSession({ id: agentIds.bare, agent: "keeper-bare", ...options })
+})
+
+describe("the memory of an agent with a memory scope", () => {
+  withAgent.live("gives an agent with memory its block on the main thread, as a subagent and in a fork", () =>
+    Effect.gen(function* () {
+      yield* seedAgents
+      for (const id of [agentIds.main, agentIds.sub, agentIds.fork]) {
+        const view = yield* sources(id)
+        expect({ id, present: view.present.includes(AGENT_MEMORY) }).toEqual({ id, present: true })
+        expect(view.keys.indexOf(AGENT_MEMORY)).toBe(view.keys.indexOf(TEAM_INDEX) + 1)
+      }
+      const plain = yield* sources(agentIds.plain)
+      expect(plain.keys).toContain(AGENT_MEMORY)
+      expect(plain.present).not.toContain(AGENT_MEMORY)
+      const located = yield* Location.Service
+      expect(fsSync.existsSync(path.join(located.directory, ".orbit", "agent-memory", "keeper"))).toBe(true)
+    }),
+  )
+
+  withAgentPrompt.live(
+    "keeps the agent block under the agent's own prompt, the person's system prompt and without instruction files",
+    () =>
+      Effect.gen(function* () {
+        yield* seedAgents
+        const own = yield* sources(agentIds.own)
+        const bare = yield* sources(agentIds.bare)
+        const main = yield* sources(agentIds.main)
+        expect(own.present).toContain(AGENT_MEMORY)
+        expect(own.present).not.toContain(GUIDE)
+        expect(bare.present).toContain(AGENT_MEMORY)
+        expect(bare.present).not.toContain(INDEX)
+        expect(main.present).toContain(AGENT_MEMORY)
+        expect(main.present).not.toContain(GUIDE)
+      }),
+  )
+
+  // A switch to an agent without a scope takes the block away and says only that it no longer applies; memory is still
+  // on. Turning memory off takes it away with the words that memory is off. The agent with its own prompt has no guide,
+  // so what the update says there is the block's own.
+  withAgentSwitch.live(
+    "removes the agent block on a switch to an agent without memory, and says memory is off only when it is",
+    () =>
+      Effect.gen(function* () {
+        switchEntries.length = 0
+        yield* seedAgents
+        const select = (id: SessionSchema.ID) =>
+          SessionContext.Service.pipe(
+            Effect.flatMap((context) => context.select(id)),
+            Effect.map((selected) => selected.instructions),
+          )
+        const before = yield* readInitial(yield* select(agentIds.main))
+        expect(Object.keys(before.values)).toContain(AGENT_MEMORY)
+        const database = yield* Database.Service
+        yield* database.db
+          .update(SessionTable)
+          .set({ agent: "build" })
+          .where(eq(SessionTable.id, agentIds.main))
+          .run()
+          .pipe(Effect.orDie)
+        const switched = yield* readUpdate(yield* select(agentIds.main), before)
+        expect(Object.keys(switched.values)).not.toContain(AGENT_MEMORY)
+        expect(switched.text).toContain("agent memory given earlier no longer applies")
+        expect(switched.text).not.toContain("switched off")
+        const own = yield* readInitial(yield* select(agentIds.own))
+        expect(Object.keys(own.values)).toContain(AGENT_MEMORY)
+        switchEntries.push(
+          new Document({
+            type: "document",
+            scope: "user",
+            path: AbsolutePath.make(FSUtil.resolve("/config/orbit.json")),
+            info: Schema.decodeUnknownSync(Info)({ memory: { enabled: false } }),
+          }),
+        )
+        const off = yield* readUpdate(yield* select(agentIds.own), own)
+        expect(Object.keys(off.values)).not.toContain(AGENT_MEMORY)
+        expect(off.text).toContain("switched off")
+        expect(off.text).not.toContain("agent memory given earlier no longer applies")
+      }),
   )
 })

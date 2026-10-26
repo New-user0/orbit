@@ -17,18 +17,23 @@ import { SessionEvent } from "../session/event.js"
 import type { SessionSchema } from "../session/schema.js"
 import { MemoryStore } from "./store.js"
 import { MemoryTeam } from "./team.js"
+import { MemoryAgent } from "./agent.js"
+import { ConfigAgent } from "@orbit/schema/config/agent"
 
 /**
  * The instruction sources of memory. `core/memory-guide` tells the main thread how memory works and where its folder
  * is; `core/memory-index` carries `MEMORY.md`, which the model keeps itself, and `core/team-memory-index` the team
- * folder's own `MEMORY.md` while team memory is on (`MemoryTeam`). A session keeps each index it first read until its
- * compaction completes or the instruction files are rescanned, so a note the model writes during a session does not
- * come back to it as an update, and a later session or the next epoch sees it.
+ * folder's own `MEMORY.md` while team memory is on (`MemoryTeam`). `core/agent-memory` is the memory of an agent with a
+ * memory scope (`MemoryAgent`): the guide under a heading of its own, naming the agent's folder, with the agent's own
+ * `MEMORY.md`; it goes with the agent wherever it runs, as the reference appends it to the agent's own prompt. A session
+ * keeps each index it first read until its compaction completes or the instruction files are rescanned, so a note the
+ * model writes during a session does not come back to it as an update, and a later session or the next epoch sees it.
  */
 
 const GUIDE = Instructions.Key.make("core/memory-guide")
 const INDEX = Instructions.Key.make("core/memory-index")
 const TEAM_INDEX = Instructions.Key.make("core/team-memory-index")
+const AGENT = Instructions.Key.make("core/agent-memory")
 
 // The events after which a session's frozen index goes: a completed compaction moves its epoch, and a session that is
 // deleted or moves to another place no longer reads this Location's index.
@@ -41,12 +46,23 @@ type Index = typeof Index.Type
 const Guide = Schema.Union([Schema.String, Schema.Struct({ folder: Schema.String, team: Schema.String })])
 type Guide = typeof Guide.Type
 
+// An agent's memory: its id and scope, its folder as spelled, and its index (empty when there is none to read).
+const AgentBlock = Schema.Struct({
+  agent: Schema.String,
+  scope: ConfigAgent.Memory,
+  folder: Schema.String,
+  index: Schema.String,
+})
+type AgentBlock = typeof AgentBlock.Type
+
 export interface LoadInput {
   readonly sessionID: SessionSchema.ID
   /** The guide is for the main thread, and not under a system prompt that replaces Orbit's. */
   readonly guide: boolean
   /** The index goes wherever instruction files do. */
   readonly index: boolean
+  /** The session's agent: an agent with a memory scope gets its block wherever it runs. */
+  readonly agent?: { readonly id: string; readonly memory?: MemoryAgent.Scope }
 }
 
 export interface Interface {
@@ -64,6 +80,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* MemoryStore.Service
     const teams = yield* MemoryTeam.Service
+    const agents = yield* MemoryAgent.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
@@ -87,11 +104,13 @@ const layer = Layer.effect(
     // inside the publish of the event, so the next read after a completed compaction finds the entry gone.
     const frozen = new Map<string, Index | Instructions.Removed>()
     const frozenTeam = new Map<string, Index | Instructions.Removed>()
+    const frozenAgent = new Map<string, AgentBlock>()
     const unsubscribe = yield* bus.listen((event) =>
       released(event)
         ? Effect.sync(() => {
             frozen.delete(event.data.sessionID)
             frozenTeam.delete(event.data.sessionID)
+            frozenAgent.delete(event.data.sessionID)
           })
         : Effect.void,
     )
@@ -100,6 +119,7 @@ const layer = Layer.effect(
       Effect.sync(() => {
         frozen.clear()
         frozenTeam.clear()
+        frozenAgent.clear()
       }),
     )
 
@@ -121,15 +141,16 @@ const layer = Layer.effect(
       )
 
     // An index is read only where it really is, when that is inside its real folder (`real`, or undefined when it is
-    // not), and its front matter is split off without being run (class 11).
-    const readIndex = (file: string, real: string | undefined) =>
+    // not), and its front matter is split off without being run (class 11). One that cannot be read is empty (class 7).
+    const indexText = (real: string | undefined) =>
       Effect.gen(function* () {
-        if (real === undefined) return Instructions.removed
+        if (real === undefined) return ""
         const text = yield* fs.readFileString(real).pipe(Effect.orElseSucceed(() => ""))
         const content = ConfigInstructionFile.parse(text, { frontmatter: true }).content
-        if (content.trim() === "") return Instructions.removed
-        return { path: file, content: MemoryStore.truncateIndex(content).content }
+        return content.trim() === "" ? "" : MemoryStore.truncateIndex(content).content
       })
+    const readIndex = (file: string, real: string | undefined) =>
+      indexText(real).pipe(Effect.map((content) => (content === "" ? Instructions.removed : { path: file, content })))
 
     const load = Effect.fn("MemoryInstructions.load")(function* (input: LoadInput) {
       // Read once, for both sources and for what the guide says when it goes: it also goes while memory stays on, when
@@ -193,7 +214,40 @@ const layer = Layer.effect(
           removed: () => "The team memory index loaded earlier no longer applies.",
         },
       })
-      return Instructions.combine([guide, memoryIndex, teamIndex])
+      const agentMemory = Instructions.make({
+        key: AGENT,
+        codec: Schema.toCodecJson(AgentBlock),
+        read: Effect.gen(function* () {
+          const agent = input.agent
+          if (!on || agent?.memory === undefined) return Instructions.removed
+          // A session keeps the block it first read while its agent and scope stay the same.
+          const kept = frozenAgent.get(input.sessionID)
+          if (kept !== undefined && kept.agent === agent.id && kept.scope === agent.memory) return kept
+          const resolved = yield* agents.folder(agent.id, agent.memory)
+          if (resolved === undefined) return Instructions.removed
+          // The block says the folder exists. What is made, and what the index is read from, is the real place that
+          // `MemoryAgent` checked, while the block names the folder as it is spelled (class 3).
+          yield* ensureFolder(resolved.real)
+          const file = path.join(resolved.folder, MemoryStore.ENTRYPOINT)
+          const value = {
+            agent: agent.id,
+            scope: agent.memory,
+            folder: resolved.folder,
+            index: yield* indexText(yield* MemoryStore.locate(fs, resolved.real, file)),
+          }
+          frozenAgent.set(input.sessionID, value)
+          return value
+        }),
+        render: {
+          initial: renderAgentMemory,
+          changed: (_previous, value) => `The agent memory changed.\n\n${renderAgentMemory(value)}`,
+          removed: () =>
+            on
+              ? "The agent memory given earlier no longer applies."
+              : "Memory is switched off for this session, so this agent's memory is off as well: do not read or write its files.",
+        },
+      })
+      return Instructions.combine([guide, memoryIndex, teamIndex, agentMemory])
     })
 
     return Service.of({ load })
@@ -278,8 +332,6 @@ function summary(text: string) {
 const renderGuide = (value: Guide) => {
   const folder = typeof value === "string" ? value : value.folder
   const team = typeof value === "string" ? undefined : value.team
-  // A line that only the combined guide has, with the line break that puts it after the line before it.
-  const scope = (text: string) => (team === undefined ? "" : `\n- Scope: ${text}`)
   return `# Memory
 
 ${
@@ -288,7 +340,38 @@ ${
     : `You have a memory that lasts between conversations, kept in two folders of Markdown files: a private one at \`${heading(folder)}\` and a team one at \`${heading(team)}\`. Both folders already exist, so write to them directly with Write and Edit; do not create them or check that they are there.`
 }
 
-Use it to build up, over time, a picture of who the person is, how they like to work, what to repeat and what to avoid, and the context of the work you do together, so that a later conversation starts where this one leaves off.
+${guideBody(team)}`
+}
+
+// The block of an agent with a memory scope: the private guide under a heading of its own that names the agent's folder,
+// with one line after its last section on how far the scope reaches, and then the agent's own index, as the reference
+// builds it. The index is the agent's to keep, so look-alikes of the reminder envelope in it are escaped (class 9).
+const renderAgentMemory = (value: AgentBlock) => `# Persistent agent memory
+
+You have a persistent memory of your own as this agent, kept between conversations: a folder of Markdown files at \`${heading(value.folder)}\`. The folder already exists, so write to it directly with Write and Edit; do not create it or check that it is there.
+
+${guideBody(undefined)}
+
+${AGENT_SCOPES[value.scope]}
+
+## ${MemoryStore.ENTRYPOINT}
+
+${value.index === "" ? `Your ${MemoryStore.ENTRYPOINT} is empty. It fills as you save memories.` : neutralize(value.index)}`
+
+const AGENT_SCOPES: Record<MemoryAgent.Scope, string> = {
+  user: "This memory has the user scope: it goes with you into every project, so keep what you save general, true wherever you work.",
+  project:
+    "This memory has the project scope: it is committed with the repository and shared with the team through version control, so fit what you save to this project.",
+  local:
+    "This memory has the local scope: it stays in this project but is not committed to version control, so fit what you save to this project and this machine.",
+}
+
+// What the guide says after its opening paragraph, which the agent block shares. With a team folder it is the combined
+// guide's.
+const guideBody = (team: string | undefined) => {
+  // A line that only the combined guide has, with the line break that puts it after the line before it.
+  const scope = (text: string) => (team === undefined ? "" : `\n- Scope: ${text}`)
+  return `Use it to build up, over time, a picture of who the person is, how they like to work, what to repeat and what to avoid, and the context of the work you do together, so that a later conversation starts where this one leaves off.
 
 When the person asks you to remember something, save it right away. When they ask you to forget something, find it and remove it.
 ${
@@ -404,6 +487,7 @@ export const node = makeLocationNode({
   deps: [
     MemoryStore.node,
     MemoryTeam.node,
+    MemoryAgent.node,
     FSUtil.node,
     Global.node,
     Location.node,
