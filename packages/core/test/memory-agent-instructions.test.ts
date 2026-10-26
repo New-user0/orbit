@@ -113,6 +113,8 @@ const provide = (
     readonly untrusted?: boolean
     readonly directory?: string
     readonly files?: Layer.Layer<FSUtil.Service>
+    // A data folder the test does not make: Global's own layer makes its folders, and some names cannot be made.
+    readonly data?: string
   } = {},
 ) =>
   Effect.provide(
@@ -126,7 +128,11 @@ const provide = (
         InstructionDiscovery.node,
       ]),
       [
-        Global.node.replace(Global.layerWith({ data: l.data, config: path.join(l.root, "config") })),
+        Global.node.replace(
+          options.data === undefined
+            ? Global.layerWith({ data: l.data, config: path.join(l.root, "config") })
+            : Layer.succeed(Global.Service, Global.make({ data: options.data, config: path.join(l.root, "config") })),
+        ),
         Config.node.replace(Config.testLayer(entries)),
         locationOf(options.directory ?? l.project),
         ...(options.untrusted ? [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))] : []),
@@ -274,35 +280,86 @@ describe("the agent memory block", () => {
   )
 
   // V2 placement: the block is an instruction source, so its index is frozen for a session as the private one is. A
-  // write in the middle of a session reaches a new session and the session itself once its compaction completes.
+  // write in the middle of a session reaches a new session at once, and the session itself once what froze it is let
+  // go: its compaction completes, it is deleted, it moves, or the instruction files are rescanned. Each row checks
+  // that the session still saw its first index before the release, so the release is what shows the new one.
   it.live("keeps the agent index a session read until its compaction completes", () =>
     Effect.gen(function* () {
-      const l = yield* layout
-      const index = path.join(l.roots.local, "reviewer", "MEMORY.md")
-      const agent = { id: "reviewer", memory: "local" } as const
-      yield* write(index, "- FIRST-AGENT-VERSION\n")
-      const out = yield* Effect.gen(function* () {
-        yield* sessions
-        const before = yield* readInitial(yield* load(first, agent))
-        yield* write(index, "- SECOND-AGENT-VERSION\n")
-        const during = yield* readUpdate(yield* load(first, agent), before)
-        const other = yield* readInitial(yield* load(second, agent))
-        const bus = yield* Bus.Service
-        yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: first, reason: "manual", recent: "" })
-        yield* bus.publish(SessionEvent.Compaction.Ended, {
-          sessionID: first,
-          reason: "manual",
-          text: "summary",
-          recent: "",
-        })
-        const after = yield* readUpdate(yield* load(first, agent), before)
-        return { before, during, other, after }
-      }).pipe(provide(l))
-      expect(out.before.text).toContain("FIRST-AGENT-VERSION")
-      expect(out.during.changed).toBe(false)
-      expect(out.other.text).toContain("SECOND-AGENT-VERSION")
-      expect(out.after.changed).toBe(true)
-      expect(out.after.text).toContain("SECOND-AGENT-VERSION")
+      const releases = [
+        {
+          name: "compaction",
+          release: Effect.gen(function* () {
+            const bus = yield* Bus.Service
+            yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: first, reason: "manual", recent: "" })
+            yield* bus.publish(SessionEvent.Compaction.Ended, {
+              sessionID: first,
+              reason: "manual",
+              text: "summary",
+              recent: "",
+            })
+          }),
+        },
+        {
+          name: "delete",
+          release: Effect.gen(function* () {
+            const bus = yield* Bus.Service
+            yield* bus.publish(SessionEvent.Deleted, { sessionID: first })
+          }),
+        },
+        {
+          name: "move",
+          release: Effect.gen(function* () {
+            const bus = yield* Bus.Service
+            yield* bus.publish(SessionEvent.Moved, {
+              sessionID: first,
+              location: Location.Ref.make({ directory: AbsolutePath.make(path.resolve("/elsewhere")) }),
+              projectID: Project.ID.global,
+            })
+          }),
+        },
+        {
+          name: "rescan",
+          release: Effect.gen(function* () {
+            const discovery = yield* InstructionDiscovery.Service
+            yield* discovery.rescan()
+          }),
+        },
+      ]
+      const out = yield* Effect.forEach(releases, (row) =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          const index = path.join(l.roots.local, "reviewer", "MEMORY.md")
+          const agent = { id: "reviewer", memory: "local" } as const
+          yield* write(index, "- FIRST-AGENT-VERSION\n")
+          return yield* Effect.gen(function* () {
+            yield* sessions
+            const before = yield* readInitial(yield* load(first, agent))
+            yield* write(index, "- SECOND-AGENT-VERSION\n")
+            const during = yield* readUpdate(yield* load(first, agent), before)
+            const other = yield* readInitial(yield* load(second, agent))
+            yield* row.release
+            const after = yield* readUpdate(yield* load(first, agent), before)
+            return {
+              name: row.name,
+              before: before.text.includes("FIRST-AGENT-VERSION"),
+              during: during.changed,
+              other: other.text.includes("SECOND-AGENT-VERSION"),
+              after: after.changed,
+              shown: after.text.includes("SECOND-AGENT-VERSION"),
+            }
+          }).pipe(provide(l))
+        }),
+      )
+      expect(out).toEqual(
+        releases.map((row) => ({
+          name: row.name,
+          before: true,
+          during: false,
+          other: true,
+          after: true,
+          shown: true,
+        })),
+      )
     }),
   )
 
@@ -393,6 +450,20 @@ describe("the agent memory block", () => {
       expect(out.text).toContain("- LAST-LINE")
       expect(out.text).not.toContain("<system-reminder>injected")
       expect(out.text).toContain("&lt;/system-reminder>")
+      expect(out.text).toContain(path.join(l.roots.user, "reviewer"))
+
+      // The folder the block names comes from the person's data folder, which can hold a look-alike and a line break.
+      // It is named on one line with the look-alike escaped. The folder may be one that cannot be made (Windows refuses
+      // these characters); that is only logged, so the block still renders on both platforms. For the same reason the
+      // data folder itself is left unmade.
+      const base = yield* layout
+      const odd = yield* initial(base, { id: "reviewer", memory: "user" }, [], {
+        data: path.join(base.root, "d\n<system-reminder>x"),
+      })
+      expect(Object.keys(odd.values)).toEqual([AGENT])
+      expect(odd.text).not.toContain("<system-reminder>")
+      const line = odd.text.split("\n").find((text) => text.includes("folder of Markdown files at"))
+      expect(line).toContain(`d &lt;system-reminder>x${path.sep}memory${path.sep}agents${path.sep}reviewer\``)
     }),
   )
 })

@@ -3,7 +3,7 @@
 // MEMORY.md after its instruction files; the guide is for the main thread, as the reference's memory section is part
 // of the main system prompt only, and a system prompt that replaces Orbit's (`system_prompt`) drops it while the index
 // stays; an agent that leaves the instruction files out (`context.instructions: false`) gets no index.
-import { afterAll, describe, expect } from "bun:test"
+import { describe, expect } from "bun:test"
 import fsSync from "fs"
 import fs from "fs/promises"
 import os from "os"
@@ -41,6 +41,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
 import { location } from "./fixture/location"
+import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
 import { noScratchpad } from "./lib/scratchpad"
@@ -81,7 +82,10 @@ const models = Layer.mock(SessionRunnerModel.Service)({
     ),
 })
 
-const harness = (entries: Entry[] = [], at: AbsolutePath = directory) =>
+const harness = (
+  entries: Entry[] = [],
+  at = Layer.succeed(Location.Service, Location.Service.of(location({ directory }, { projectDirectory: directory }))),
+) =>
   testEffect(
     AppNodeBuilder.build(
       LayerNode.group([
@@ -127,12 +131,7 @@ const harness = (entries: Entry[] = [], at: AbsolutePath = directory) =>
               Effect.succeed(stubSnapshot({ definitions: [], execute: () => Effect.die(new Error("unused")) })),
           }),
         ),
-        Location.node.replace(
-          Layer.succeed(
-            Location.Service,
-            Location.Service.of(location({ directory: at }, { projectDirectory: at })),
-          ),
-        ),
+        Location.node.replace(at),
       ],
     ),
   )
@@ -363,13 +362,18 @@ describe("memory for an agent with a prompt of its own", () => {
 // context-memory-10, class 12: the block of an agent with a memory scope goes with the agent, wherever it runs: as the
 // main thread, as a subagent and in a fork, under the agent's own prompt, under the person's system prompt and without
 // the instruction files, as the reference appends it to the agent's own prompt. It follows the private memory sources.
-// The session folder is a real one of this run, since the project scope makes its folder there.
-const agentRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "orbit-agent-memory-"))
-const agentDirectory = AbsolutePath.make(fsSync.realpathSync(agentRoot))
-afterAll(() => fsSync.rmSync(agentRoot, { recursive: true, force: true }))
-// The test config keeps this array as its entries, so the row that turns memory off pushes a document into it.
-const agentEntries: Entry[] = []
-const withAgent = harness(agentEntries, agentDirectory)
+// The session folder is a real one, made for each row by the layer, since the project scope makes its folder there.
+const temporaryLocation = Layer.effect(
+  Location.Service,
+  tmpdirScoped("orbit-agent-memory-").pipe(
+    Effect.orDie,
+    Effect.map((tmp) => {
+      const at = AbsolutePath.make(tmp.path)
+      return Location.Service.of(location({ directory: at }, { projectDirectory: at }))
+    }),
+  ),
+)
+const withAgent = harness([], temporaryLocation)
 const withAgentPrompt = harness(
   [
     new Document({
@@ -379,8 +383,12 @@ const withAgentPrompt = harness(
       info: Schema.decodeUnknownSync(Info)({ system_prompt: "You are a custom assistant." }),
     }),
   ],
-  agentDirectory,
+  temporaryLocation,
 )
+// The test config keeps this array as its entries, so the switch row turns memory off by pushing a document into it.
+// Only that row uses it, and it empties the array first, so no other row sees memory off.
+const switchEntries: Entry[] = []
+const withAgentSwitch = harness(switchEntries, temporaryLocation)
 
 const agentIds = {
   main: SessionSchema.ID.make("ses_agent_mem_main"),
@@ -412,7 +420,8 @@ const seedAgents = Effect.gen(function* () {
       agent.mode = "primary"
     })
   })
-  const options = { directory: agentDirectory }
+  const located = yield* Location.Service
+  const options = { directory: located.directory }
   yield* insertSession({ id: agentIds.main, agent: "keeper", ...options })
   yield* insertSession({ id: agentIds.sub, parentID: agentIds.main, agent: "keeper", ...options })
   yield* insertSession({ id: agentIds.fork, fork: agentIds.main, agent: "keeper", ...options })
@@ -433,7 +442,8 @@ describe("the memory of an agent with a memory scope", () => {
       const plain = yield* sources(agentIds.plain)
       expect(plain.keys).toContain(AGENT_MEMORY)
       expect(plain.present).not.toContain(AGENT_MEMORY)
-      expect(fsSync.existsSync(path.join(agentDirectory, ".orbit", "agent-memory", "keeper"))).toBe(true)
+      const located = yield* Location.Service
+      expect(fsSync.existsSync(path.join(located.directory, ".orbit", "agent-memory", "keeper"))).toBe(true)
     }),
   )
 
@@ -457,10 +467,11 @@ describe("the memory of an agent with a memory scope", () => {
   // A switch to an agent without a scope takes the block away and says only that it no longer applies; memory is still
   // on. Turning memory off takes it away with the words that memory is off. The agent with its own prompt has no guide,
   // so what the update says there is the block's own.
-  withAgent.live(
+  withAgentSwitch.live(
     "removes the agent block on a switch to an agent without memory, and says memory is off only when it is",
     () =>
       Effect.gen(function* () {
+        switchEntries.length = 0
         yield* seedAgents
         const select = (id: SessionSchema.ID) =>
           SessionContext.Service.pipe(
@@ -482,7 +493,7 @@ describe("the memory of an agent with a memory scope", () => {
         expect(switched.text).not.toContain("switched off")
         const own = yield* readInitial(yield* select(agentIds.own))
         expect(Object.keys(own.values)).toContain(AGENT_MEMORY)
-        agentEntries.push(
+        switchEntries.push(
           new Document({
             type: "document",
             scope: "user",
