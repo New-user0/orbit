@@ -1923,6 +1923,89 @@ it.effect("a native compaction rejected as too large resends its history as text
   }),
 )
 
+// context-memory-4: a checkpoint that keeps messages is stored after them, so the newest completed compaction is not
+// the first message of the history. The text fallback still sends its summary as the lead message.
+it.effect("a native compaction resent as text keeps the summary of a retained checkpoint in front", () =>
+  Effect.gen(function* () {
+    const endpoint = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:1" }).responses("gpt-5.4-mini")
+    checkpoints = [
+      () =>
+        Effect.fail(
+          new AIError({ reason: new InvalidRequestError({ message: "Too large", classification: "payload-too-large" }) }),
+        ),
+      () =>
+        Effect.succeed(
+          CompactionCheckpointResponse.make({
+            responseID: "resp_cm4_retained_text",
+            checkpoint: { type: "compaction", provider: endpoint.provider, encrypted: "native-text" },
+          }),
+        ),
+    ]
+    const kept = userText("Kept request")
+    const retainedCheckpoint = Schema.decodeUnknownSync(SessionMessage.CompactionCompleted)({
+      id: SessionMessage.ID.create(),
+      type: "compaction",
+      status: "completed",
+      reason: "manual",
+      summary: "RETAINED-SUMMARY",
+      recent: "",
+      retain: kept.id,
+      time: { created: 0, completed: 0 },
+    })
+    const run = yield* scripted(
+      "ses_cm4_retained_text",
+      [kept, assistantText("Kept answer"), retainedCheckpoint, userText("Newest request")],
+      [],
+      {
+        context: (context) => ({ ...context, model: { ...context.model, model: endpoint, compaction: { type: "native" } } }),
+      },
+    ).pipe(Effect.ensuring(Effect.sync(() => (checkpoints = []))))
+
+    expect(run.outcome).toEqual({ status: "completed" })
+    expect(run.sent).toHaveLength(2)
+    const resent = run.sent[1]?.messages ?? []
+    // The summary is its own lead message, and the transcript after it neither repeats it nor drops the kept exchange.
+    expect(textOf(resent[0])).toContain("RETAINED-SUMMARY")
+    const transcript = textOf(resent.at(-1))
+    expect(transcript).not.toContain("RETAINED-SUMMARY")
+    expect(transcript).toContain("Kept request")
+    expect(transcript).toContain("Newest request")
+  }),
+)
+
+// A view that failed open can hold two completed compactions; the text fallback leads with the newest one.
+it.effect("a native compaction resent as text leads with the newest of two checkpoints", () =>
+  Effect.gen(function* () {
+    const endpoint = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:1" }).responses("gpt-5.4-mini")
+    checkpoints = [
+      () =>
+        Effect.fail(
+          new AIError({ reason: new InvalidRequestError({ message: "Too large", classification: "payload-too-large" }) }),
+        ),
+      () =>
+        Effect.succeed(
+          CompactionCheckpointResponse.make({
+            responseID: "resp_cm4_two_checkpoints",
+            checkpoint: { type: "compaction", provider: endpoint.provider, encrypted: "native-text" },
+          }),
+        ),
+    ]
+    const run = yield* scripted(
+      "ses_cm4_two_checkpoints",
+      [previousCheckpoint("OLDER-SUMMARY"), userText("Kept request"), previousCheckpoint("NEWER-SUMMARY"), userText("Newest request")],
+      [],
+      {
+        context: (context) => ({ ...context, model: { ...context.model, model: endpoint, compaction: { type: "native" } } }),
+      },
+    ).pipe(Effect.ensuring(Effect.sync(() => (checkpoints = []))))
+
+    expect(run.outcome).toEqual({ status: "completed" })
+    const resent = run.sent[1]?.messages ?? []
+    expect(textOf(resent[0])).toContain("NEWER-SUMMARY")
+    expect(textOf(resent[0])).not.toContain("OLDER-SUMMARY")
+  }),
+)
+
 it.effect("a reply with text and a tool call uses the text and runs no tool", () =>
   Effect.gen(function* () {
     const both = () =>

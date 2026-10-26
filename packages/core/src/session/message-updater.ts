@@ -475,6 +475,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
               summary: event.data.text,
               providerContext: event.data.providerContext,
               recent: event.data.recent,
+              retain: event.data.retain,
               cost: event.data.cost,
               tokens: event.data.tokens,
             })
@@ -492,6 +493,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
               summary: event.data.text,
               providerContext: event.data.providerContext,
               recent: event.data.recent,
+              retain: event.data.retain,
               cost: event.data.cost,
               tokens: event.data.tokens,
               time: { created },

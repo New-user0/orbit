@@ -604,7 +604,8 @@ export const makeSessionGroup = <
         OpenApi.annotations({
           identifier: "session.context",
           summary: "Get session context",
-          description: "Retrieve the active context messages for a session (all messages after the last compaction).",
+          description:
+            "Retrieve the active context messages for a session: the latest checkpoint, the messages it keeps and everything after it, in the order they were recorded.",
         }),
       ),
     )

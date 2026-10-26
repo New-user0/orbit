@@ -920,6 +920,41 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the config key), `test/memory-team.test.ts` (each tool, spellings, a link into the folder, a folder that leads onto
   the project or out of it, a Patch that takes a line out beside a key, an untrusted project, the config watch),
   `test/config/watch.test.ts` and `packages/util/test/secret-scan.test.ts`.
+- Agent memory (`MemoryAgent`, `packages/core/src/memory/agent.ts`): an agent whose definition names `memory: user`,
+  `project` or `local` keeps notes in `<data>/memory/agents/<id>/`, `.orbit/agent-memory/<id>/` or
+  `.orbit/agent-memory-local/<id>/` of the Location's own folder (a worktree's included). The two roots in the folder
+  are the repository's, so a clone chooses their files and links. `current` and `folder` ask `ProjectTrust.trusted()`
+  before anything of those roots is resolved (class 1); each root is then resolved once for the Location:
+  `LinkShare.blocked` is asked about it before anything resolves it (class 6), an `.orbit` or root that is a link and
+  has no real path (it points at nothing, or loops) is refused, and the real root must be exactly
+  `.orbit/agent-memory[-local]` of the real Location folder, compared with `FSUtil.contains` both ways on two real
+  paths, so neither part may be a link (class 4); a refused root turns its scope off with one log line and costs
+  nothing else (class 7). The user root is the person's own and is taken at its real path. An agent id, which the
+  `Agent.ID` brand does not check, becomes a folder only when `ConfigAgent.isName` accepts it at the join (class 5, one
+  log line per id); a part of the id that is a link leading nowhere, or a folder whose real path is not in the real
+  root, gives no folder (class 4). That one `{ folder, real }` is what the block names, what is made (the real place,
+  after `LinkShare.blocked`), what the index is read from (`MemoryStore.locate`) and what the carve-out decides (class
+  3). The block (`core/agent-memory` in `MemoryInstructions`) loads only while memory is on, takes front matter off the
+  index through `ConfigInstructionFile.parse` (class 11), cuts it to 200 lines and 25,000 characters and escapes
+  envelope look-alikes in it (class 9). The carve-out is the memory folder's (`inMemory` in
+  `Permission`, given the accepted roots, for every agent and scope, whether memory is on or not, as the reference's),
+  so a deny still decides, a call marked `escaped` and a shell command are not covered, and every real lead must be in
+  a real root (classes 4, 8); Orbit's own memory allow is placed for the accepted roots too, so an agent that keeps
+  Orbit's folders after a deny of everything (Explore) can read there while its deny of edits stands. `memory` from an
+  untrusted folder is withheld as a permission (`ConfigTrust`, class 8). The config watch of a project or home `.orbit`
+  leaves out `agent-memory` and `agent-memory-local` at its top (`ConfigWatch.plan`). Proof:
+  `test/memory-agent.test.ts` (the folders of each scope and a nested id, ids that are not plain names, `.orbit` or a
+  root linked out, onto the project, `.orbit`, `.git` or `src`, dangling or in a loop, an id segment linked out or
+  dangling, a root linked to a share with the recorded file system, an untrusted project with the recorded file
+  system, a worktree's Location), `test/memory-agent-instructions.test.ts` (each scope's block, the empty and
+  unreadable index, the caps, the session read, memory off, front matter with a marker file, the envelope escape, a
+  `MEMORY.md` link out, an editor-added id that is not a plain name, an untrusted project, one folder for block, disk
+  and carve-out through a linked session folder), `test/permission-agent-memory.test.ts` (every agent and scope under
+  ask rules, spellings, places beside the roots, a mode's deny, deny by either spelling, managed rules, `escaped`,
+  links in a folder, roots that are links under ask rules and a mode's deny, an untrusted project, the shell, Explore,
+  memory off), `test/session-context-memory.test.ts` (main thread, subagent, fork, own prompt, the person's system
+  prompt, no instruction files, an agent switch), `test/config/agent-definition.test.ts` (the added tools) and
+  `test/config/watch.test.ts`.
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and
@@ -972,6 +1007,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/compaction.test.ts`; in `packages/tui`, `test/feature-plugins/context-cleared.test.tsx` (a drawn frame)
   and the `context-cleared` row of `test/mini/stream-v2.transport.test.ts`; in `packages/cli`, the `context-cleared` row of
   `test/acp/translate.test.ts`.
+- Retained checkpoints (`retain` on a completed compaction; `SessionHistory`, `SessionCompaction`, `toLLMMessages`): the
+  field names the first message the checkpoint keeps, and no production path sets it yet. It reads, spawns and fetches
+  nothing, and writes only the session's own rows. The stored value comes from the session's own events, an import or
+  an edited database, so it is hostile: history selection uses it only as a bound lookup parameter scoped to the
+  session, so a value that is not an ID finds no row and fails open, and the row decode refuses a stored value that is
+  not an ID (it fails the load as any malformed row does). The value is never joined into a path, a ref, a glob or a log
+  line. A value that names no row of the session, a row at or after the checkpoint, an instruction update or a
+  compaction, or a row before the view of the summary checkpoint before it fails open to the earlier history with one
+  warning, so a forged value never hides more than the checkpoint would. That floor ignores the reader's boundary, so
+  every reader accepts or refuses the same value, and a start at or after the previous checkpoint is accepted without
+  walking down the chain (classes 5 and 7). An import decodes it as a message ID, so `../x` refuses the document. A fork remaps it to the copy
+  and a committed revert removes the checkpoint with the span (class 12). The one new refusal, a compaction that names
+  a message outside the active history, travels as `session.compaction.failed` with the typed `compaction.unavailable`
+  error to every client (class 13). Proof: `test/session-retained-checkpoint.test.ts` (the forged, fork, revert, restart,
+  export and import rows, one span for every reader, the chain walk and the reminder placement), `test/session-runner-message.test.ts`,
+  `test/session-projector.test.ts`; the import doors with a control: `packages/cli/test/import-export.test.ts` and
+  `packages/server/test/session-import.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,

@@ -290,9 +290,13 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
 
 /**
  * The data a row is copied with: a clearing marker names the copies of its calls' messages, and is dropped when none of
- * them was copied. Every other row is copied as it is, apart from an escalation notice.
+ * them was copied. A checkpoint's kept start follows to its copy. Every other row is copied as it is, apart from an
+ * escalation notice.
  */
 function copiedData(row: typeof SessionMessageTable.$inferSelect, copiedIDs: ReadonlyMap<string, SessionMessage.ID>) {
+  // The kept start comes before its checkpoint, so it is among the copies whenever the checkpoint is.
+  if (row.type === "compaction" && "retain" in row.data && row.data.retain !== undefined)
+    return { ...row.data, retain: copiedIDs.get(row.data.retain) ?? row.data.retain }
   if (row.type !== "context-cleared" || !("tools" in row.data)) return replacedToCopy(row, copiedIDs)
   const [first, ...rest] = row.data.tools.flatMap((tool) => {
     const copy = copiedIDs.get(tool.assistantMessageID)

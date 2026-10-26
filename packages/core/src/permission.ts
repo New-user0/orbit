@@ -24,6 +24,7 @@ import { MemoryStore } from "./memory/store.js"
 import { Bom } from "@orbit/util/bom"
 import { fileDiff } from "./tool/plugin/file-diff.js"
 import { MemoryTeam } from "./memory/team.js"
+import { MemoryAgent } from "./memory/agent.js"
 
 const PermissionEffect = Permission.Effect
 export { PermissionEffect as Effect }
@@ -258,6 +259,7 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const memory = yield* MemoryStore.Service
     const teams = yield* MemoryTeam.Service
+    const agentMemory = yield* MemoryAgent.Service
     // The session folder and the project's worktree as written and as the disk has them. A session reached through a link
     // gets real-path leads, so a lead is also written in the project's own spelling before rules are matched against it.
     const spelled = [location.directory, path.resolve(location.project.directory)]
@@ -301,12 +303,14 @@ const layer = Layer.effect(
       const canonical = ToolNames.canonical(action)
       return canonical === "external_directory" || canonical === "Read" || canonical === "Edit"
     }
-    // The memory folders a request is decided against: the project's private folder, and the team folder while team
-    // memory is on (context-memory-11), as `MemoryTeam` resolved it once for the Location (class 3). Only a file tool's
-    // request can be for one, so no other request asks whether team memory is on.
+    // The memory folders a request is decided against: the project's private folder, the team folder while team
+    // memory is on (context-memory-11), as `MemoryTeam` resolved it once for the Location (class 3), and the roots of
+    // every agent's memory that `MemoryAgent` accepted (context-memory-10). Only a file tool's request can be for one,
+    // so no other request asks about them.
     const memoryFolders = Effect.fnUntraced(function* (action: string) {
-      const team = fileAction(action) ? yield* teams.current() : undefined
-      return team === undefined ? [memory] : [memory, team]
+      if (!fileAction(action)) return [memory]
+      const team = yield* teams.current()
+      return [memory, ...(team === undefined ? [] : [team]), ...(yield* agentMemory.current())]
     })
     // The memory folder a file tool's request is for (context-memory-9), if any: the place it names is in the folder by
     // one of its spellings, and every real place it leads to is in the real folder, so a link inside the folder that
@@ -433,13 +437,14 @@ const layer = Layer.effect(
         rules: merge(
           // The allow for editing in a scratchpad names the scratchpad of this session's lineage and no other, the allow for
           // saved tool results names this session's own folder and no other, and the allow for the memory folder names the
-          // folder of this Location.
+          // folder of this Location and the agent memory roots it accepted, so an agent that keeps Orbit's own folders
+          // after a deny of everything, as Explore does, can reach an agent's memory folder outside the project too.
           Agent.placeMemory(
             Agent.narrowToolOutput(
               Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
               session.id,
             ),
-            memory,
+            [memory, ...(yield* agentMemory.current())],
           ),
           managed.current().restrictions.managed_permissions_only ? own.filter((rule) => rule.effect !== "allow") : own,
         ),
@@ -848,6 +853,9 @@ export const node = makeLocationNode({
     Global.node,
     FSUtil.node,
     MemoryStore.node,
+    // Before `MemoryTeam`: with it after, a Location whose config cannot be read failed with an interruption in place
+    // of the config's own error (test/location-layer.test.ts, "retries after repairing config reference").
+    MemoryAgent.node,
     MemoryTeam.node,
   ],
 })

@@ -3982,7 +3982,7 @@
             }
           }
         },
-        "description": "Retrieve the active context messages for a session (all messages after the last compaction).",
+        "description": "Retrieve the active context messages for a session: the latest checkpoint, the messages it keeps and everything after it, in the order they were recorded.",
         "summary": "Get session context"
       }
     },
@@ -14668,7 +14668,7 @@
       "Agent.Memory": {
         "type": "string",
         "enum": ["user", "project", "local"],
-        "description": "Which memory scope the agent keeps its notes in"
+        "description": "Which memory scope the agent keeps its notes in: user in <data>/memory/agents/<id>, project in .orbit/agent-memory/<id> (committed with the repository) or local in .orbit/agent-memory-local/<id> (not committed)"
       },
       "Agent.ModelTier": {
         "type": "string",
@@ -21226,6 +21226,11 @@
           },
           "recent": {
             "type": "string"
+          },
+          "retain": {
+            "type": "string",
+            "pattern": "^msg_",
+            "description": "The first message this checkpoint keeps verbatim after its summary. Unset when it keeps none."
           },
           "providerContext": {
             "$ref": "#/components/schemas/Session.ProviderContext"

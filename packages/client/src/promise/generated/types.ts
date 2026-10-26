@@ -2145,6 +2145,7 @@ export type SessionMessageCompactionCompleted = {
   providerState?: SessionMessageProviderState
   summary: string
   recent: string
+  retain?: string
   providerContext?: SessionProviderContext
   cost?: MoneyUSD
   tokens?: TokenUsageInfo
@@ -2165,6 +2166,7 @@ export type SessionCompactionEnded = {
     providerContext?: SessionProviderContext
     text: string
     recent: string
+    retain?: string
     cost?: MoneyUSD
     tokens?: TokenUsageInfo
   }
@@ -3906,6 +3908,7 @@ export type SessionImportInput = {
               readonly providerState?: { readonly [x: string]: JsonValue }
               readonly summary: string
               readonly recent: string
+              readonly retain?: string
               readonly providerContext?: {
                 readonly version: 1
                 readonly provenance: {
@@ -4276,6 +4279,7 @@ export type SessionImportInput = {
               readonly providerState?: { readonly [x: string]: JsonValue }
               readonly summary: string
               readonly recent: string
+              readonly retain?: string
               readonly providerContext?: {
                 readonly version: 1
                 readonly provenance: {
@@ -4646,6 +4650,7 @@ export type SessionImportInput = {
               readonly providerState?: { readonly [x: string]: JsonValue }
               readonly summary: string
               readonly recent: string
+              readonly retain?: string
               readonly providerContext?: {
                 readonly version: 1
                 readonly provenance: {
