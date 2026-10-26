@@ -3944,6 +3944,31 @@ untrusted folder cannot set the key (`tool_output` is withheld whole).
 
 **What to do:** Nothing. Set `tool_output.max_message_chars` in your own config to change the budget.
 
+### An agent's memory scope gives it a memory folder of its own
+
+An agent definition's `memory` field (`user`, `project` or `local`) used to be read and then ignored. While memory is
+on it now gives the agent a folder of its own: `user` keeps it in `<data>/memory/agents/<agent id>/` for every project
+(`memory.directory` does not move it), `project` in `.orbit/agent-memory/<agent id>/` of the session's folder, meant to
+be committed, and `local` in `.orbit/agent-memory-local/<agent id>/`, meant to stay out of version control (Orbit
+writes no ignore entry for it). The agent gets a block with the memory guide, a line on its scope and its own
+`MEMORY.md` (cut at 200 lines and 25,000 characters), as the main thread, as a subagent and in a fork, also under its
+own prompt, under your `system_prompt` and with `context.instructions: false`; its folder is made with the block, and a
+change to its `MEMORY.md` reaches a session from its next compaction or in a new session. An agent with a `tools` list
+gets `Write`, `Edit` and `Read` added to it where they are missing; `disallowed_tools` is left as written. Read,
+Write and Edit in every agent's memory folder, in all three scopes, ask no question, while a deny rule still wins and a
+shell command is asked about as before; this holds whether or not memory is on. The `project` and `local` folders count
+only once the project is trusted and only while `.orbit` and the scope's folder are plain folders: a link there (out of
+the project, onto its own files, to a network share or to nothing) turns that scope off. An agent whose id is not a
+plain name gets no folder. The config watch of a project's `.orbit` no longer reloads anything when a file below
+`agent-memory` or `agent-memory-local` changes.
+
+**Affects:** people with agents that set `memory`, and anyone with permission rules that ask before edits under
+`.orbit/agent-memory`, `.orbit/agent-memory-local` or `<data>/memory/agents`.
+
+**What to do:** Nothing. Commit `.orbit/agent-memory/` to share an agent's project memory, and add
+`.orbit/agent-memory-local/` to your ignore file if you keep local scopes. To keep an agent from writing its memory
+without a question, write a deny rule for its folder.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.
