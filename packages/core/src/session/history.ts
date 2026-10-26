@@ -36,7 +36,7 @@ export const latestCompaction = Effect.fnUntraced(function* (
     .select({
       id: SessionMessageTable.id,
       seq: SessionMessageTable.seq,
-      retain: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.retain')`,
+      retain: sql<SessionMessage.ID | null>`json_extract(${SessionMessageTable.data}, '$.retain')`,
     })
     .from(SessionMessageTable)
     .where(
@@ -105,17 +105,13 @@ const viewStart = (
     if (checkpoint.retain === null) return { start: checkpoint.seq, kept: false }
     const previous = yield* latestCompaction(db, sessionID, boundary, checkpoint.seq)
     const floor = previous ? (yield* viewStart(db, sessionID, boundary, previous)).start : 0
-    // A stored row is not decoded here, so the value is checked before it is used as a key.
-    const retain = Schema.is(SessionMessage.ID)(checkpoint.retain) ? checkpoint.retain : undefined
-    const row =
-      retain === undefined
-        ? undefined
-        : yield* db
-            .select({ seq: SessionMessageTable.seq, type: SessionMessageTable.type })
-            .from(SessionMessageTable)
-            .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, retain)))
-            .get()
-            .pipe(Effect.orDie)
+    // A stored row is not decoded here: the value is only a bound parameter, so one that names no row fails open below.
+    const row = yield* db
+      .select({ seq: SessionMessageTable.seq, type: SessionMessageTable.type })
+      .from(SessionMessageTable)
+      .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, checkpoint.retain)))
+      .get()
+      .pipe(Effect.orDie)
     if (row && row.seq < checkpoint.seq && row.seq >= floor && row.type !== "compaction" && row.type !== "system")
       return { start: row.seq, kept: true }
     yield* Effect.logWarning("retained checkpoint skipped", { sessionID, checkpointID: checkpoint.id })
@@ -138,7 +134,7 @@ const messageEntries = Effect.fnUntraced(function* (
         view ? gte(SessionMessageTable.seq, view.start) : undefined,
         // Rows from before the checkpoint that its summary or baseline supersedes: instruction updates, and (when it
         // keeps a span) earlier compaction rows too.
-        compaction && view && view.start < compaction.seq
+        compaction && view
           ? or(
               gte(SessionMessageTable.seq, compaction.seq),
               notInArray(SessionMessageTable.type, view.kept ? KEPT_LEFT_OUT : FAILED_OPEN_LEFT_OUT),

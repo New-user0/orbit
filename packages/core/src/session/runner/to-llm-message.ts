@@ -756,7 +756,7 @@ export const toLLMMessages = (
   // view that failed open keep their places.
   const latest = active.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
   const history =
-    latest > 0 ? [active[latest]!, ...active.slice(0, latest), ...active.slice(latest + 1)] : active
+    latest === -1 ? active : [active[latest]!, ...active.slice(0, latest), ...active.slice(latest + 1)]
   const lowering = {
     queued: queuedInput(history),
     minimal: options.minimal === true,
