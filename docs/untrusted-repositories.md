@@ -133,9 +133,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   a make that fails for any reason but something already being there (a permission, a read-only volume) is a write
   failure, not a refusal (class 7; proof: "answers a memory folder that cannot be made as a write failure, not a
   refusal").
-  `InstructionNotes.ensure` asks the note's `outside` question before and under the file's lock, creates the file empty
-  with the same link-aware exclusive create as `add`, and answers only a real path inside the folder the target named; it
-  never changes an existing file. Refusals reach clients as `InvalidRequestError` (field `target`, kind the reason) and a
+  `InstructionNotes.ensure` asks the note's `outside` question once, before the file's lock, and answers an existing file
+  at its real path, as the loader reads it (proof: "refuses a root file that leads outside an untrusted project, and
+  answers the real file once trusted"). For a missing file it takes the lock and creates the file empty with the same
+  link-aware exclusive create as `add`, which never creates through a link at the file's place, even a dangling one
+  (proof: "never creates through a dangling link at the file's place, in a trusted project"). The real-path check after
+  the create then answers the file it made, or one that appeared meanwhile, only at a real path inside the target's folder
+  (proof: "ensure creates and returns the file a note would be added to, and add then appends to it" and "keeps a file
+  that appears while ensure waits for its lock, and does not claim to have created it"), and refuses as `outside` a link
+  out that was swapped in after the question (class 4; proof: "refuses a link to a file outside that appears while ensure
+  waits for its lock"). It never changes an existing file. Refusals reach clients as `InvalidRequestError` (field `target`, kind the reason) and a
   file or folder that cannot be made as `ServiceUnavailableError` for `memory` (class 13). Proof: `test/memory-listing.test.ts`
   (each row of the class matrix: listing order and roles, folders while memory and team memory are on, refused agents,
   links and a planted file at each root, a share with the recorded file system, the dangling project file, targets the
