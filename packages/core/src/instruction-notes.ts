@@ -263,12 +263,11 @@ export const layer = Layer.effect(
       const failed = (error: { readonly message: string }) => new WriteError({ scope, path: item.path, message: error.message })
       return yield* mutation.withLock([item.path])(
         Effect.gen(function* () {
-          // A link may have been swapped in since the question above.
-          if (yield* outside(item)) return yield* leads()
           yield* fs.ensureDir(folder).pipe(Effect.mapError(failed))
           const made = yield* exclusive(item.path, "", failed)
           // What is there now, the file this made or one that appeared, must really be in the folder the target named, and
-          // a link that leads nowhere is not (class 4).
+          // a link that leads nowhere is not (class 4). So a link out that was swapped in since the question above is refused
+          // here: the exclusive create never writes through it, and where it leads is not in that folder.
           const real = yield* fs.realPath(item.path).pipe(Effect.orElseSucceed(() => undefined))
           const base = yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => undefined))
           if (real === undefined || base === undefined || !FSUtil.contains(base, real)) return yield* leads()
