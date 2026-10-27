@@ -53,7 +53,9 @@ export function DialogMemory(props: {
   const display = (file: string) => {
     const relativeTo = (base: string, mark: string) => {
       const rest = path.relative(base, file)
-      return rest === "" || rest.startsWith("..") || path.isAbsolute(rest) ? undefined : `${mark}${path.sep}${rest}`
+      return rest === "" || rest === ".." || rest.startsWith(`..${path.sep}`) || path.isAbsolute(rest)
+        ? undefined
+        : `${mark}${path.sep}${rest}`
     }
     const found = [relativeTo(paths.home, "~"), relativeTo(ref().directory, ".")].filter((item) => item !== undefined)
     return plain(found.toSorted((a, b) => a.length - b.length)[0] ?? file)
