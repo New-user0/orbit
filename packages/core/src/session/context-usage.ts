@@ -104,6 +104,7 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
     const request = (yield* contexts.request.primary({
       session,
       agent: selection.agent.id,
+      analysis: true,
       model,
       tools: selection.tools,
       system: transcript.system,

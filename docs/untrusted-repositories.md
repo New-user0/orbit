@@ -1032,7 +1032,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   would read from it and no more, and nothing is stored; an unavailable source fails with the typed
   `Instructions.InitializationBlocked` as a step would (class 7). The request is built by the `context` hooks the runner
   runs, so `system_prompt_file` and `append_system_prompt` count only as `PromptConfigPlugin` reads them, under its
-  scope rule. It writes no event, inbox row or wake, clears nothing at 61 minutes idle and makes no model request, so
+  scope rule. It writes no event, inbox row or wake, clears nothing at 61 minutes idle and makes no model request (the `context` event carries `analysis`, which the warming hook skips, so the analysis starts
+  no session warming), so
   every entry point that will call it starts no work (class 12). Only a main session of the Location it runs in is
   analysed: another Location's session interrupts at selection (class 3) and a child session fails before any source is
   touched with the typed `Session.MainSessionOnlyError` (classes 7 and 13; the HTTP and client cells are

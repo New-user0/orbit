@@ -15,6 +15,7 @@ import { Instructions } from "@orbit/core/instructions/index"
 import { Mcp } from "@orbit/core/mcp/index"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PromptConfigPlugin } from "@orbit/core/plugin/prompt-config"
+import { WarmingPlugin } from "@orbit/core/plugin/warming"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionCompaction } from "@orbit/core/session/compaction"
@@ -721,6 +722,30 @@ scenario("the analysis records nothing and calls no model", function* (s) {
   // An hour of quiet clears old results at a step, and the analysis is not a step.
   const rows = yield* s.session.messages({ sessionID, order: "asc" })
   expect(rows.some((message) => message.type === "context-cleared")).toBe(false)
+})
+
+// U12, class 12: the built-in warming hook sees the analysis's `context` event and must not start its loop.
+scenario("the analysis does not start session warming", function* (s) {
+  yield* s.llm.push(TestLLM.text("answer", "answer-1"))
+  yield* s.runPrompt("first")
+  // Two hours of quiet: any warming the step started has expired.
+  yield* TestClock.adjust(120 * MINUTE)
+  const hooks = yield* PluginHooks.Service
+  const generated: string[] = []
+  yield* WarmingPlugin.Plugin.effect(
+    host({
+      session: {
+        hook: (name, callback) => hooks.register("session", name, callback),
+        get: (input) => s.session.get(input.sessionID),
+        generate: (input) => Effect.sync(() => void generated.push(input.prompt)) as never,
+      },
+    }),
+  )
+  yield* s.configControl!.setEntries([userConfig({ warming: true })])
+  yield* analyze(sessionID)
+  yield* TestClock.adjust(5 * MINUTE)
+  yield* Effect.yieldNow
+  expect(generated).toEqual([])
 })
 
 // U13, S7 and class 5.
