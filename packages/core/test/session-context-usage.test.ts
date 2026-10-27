@@ -845,6 +845,9 @@ scenario("only a main session in this Location is analysed", function* (s) {
   const child = yield* Effect.flip(analyze(Session.ID.make("ses_usage_child")))
   expect(child).toBeInstanceOf(Session.MainSessionOnlyError)
   expect(child).toMatchObject({ sessionID: "ses_usage_child", parentID: sessionID })
+  expect((child as Session.MainSessionOnlyError).message).toBe(
+    `Session ses_usage_child belongs to ${sessionID}; ask for the main session instead`,
+  )
   expect(events).toBe(0)
   expect(yield* count(s, InstructionStateTable)).toBe(states)
 
