@@ -361,6 +361,28 @@ describe("MemoryListing.ensure", () => {
     }),
   )
 
+  it.live("makes the team folder while team memory is on at the checked real path and returns that path", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      // As for an agent's folder, the Location is reached through a link.
+      const spelled = path.join(l.root, "spelled")
+      yield* Effect.promise(() => fs.symlink(l.project, spelled, linkType))
+      const out = yield* Effect.gen(function* () {
+        const memory = yield* start
+        const listing = yield* memory.list()
+        const first = yield* memory.ensure({ type: "team" })
+        const second = yield* memory.ensure({ type: "team" })
+        return { listed: listing.folders.find((item) => item.type === "team")?.path, first, second }
+      }).pipe(provide(l, { spelled, entries: [settings({ team: true })] }))
+      const real = path.join(yield* realOf(l.project), ".orbit", "team-memory")
+      expect(out.listed).toBe(path.join(spelled, ".orbit", "team-memory"))
+      expect(out.first).toMatchObject({ created: true, type: "folder" })
+      expect(out.second).toMatchObject({ path: out.first.path, created: false, type: "folder" })
+      expect(same(out.first.path, real)).toBe(true)
+      expect(yield* isDirectory(l.team)).toBe(true)
+    }),
+  )
+
   it.live("refuses a memory folder that is a link or a file, and makes nothing through it", () =>
     Effect.gen(function* () {
       type Row = {

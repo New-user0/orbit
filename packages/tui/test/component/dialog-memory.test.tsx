@@ -333,6 +333,29 @@ test("a refused ensure shows the server's message and opens nothing", async () =
   }
 })
 
+test("an editor that cannot start closes the dialog with an error naming the file", async () => {
+  await using tmp = await project()
+  const tried: string[] = []
+  const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
+  await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
+  show(setup, () => (
+    <DialogMemory
+      edit={async (input) => {
+        tried.push(input.file)
+        throw new Error("No editor was found on PATH \u001b[31m")
+      }}
+      open={async () => {}}
+    />
+  ))
+  await until(setup, "Project memory")
+  setup.mockInput.pressEnter()
+  await wait(() => setup.dialog.stack.length === 0 && toasts.current?.currentToast != null)
+  expect(tried).toEqual([path.join(tmp.dir, "AGENTS.md")])
+  expect(setup.dialog.stack).toHaveLength(0)
+  expect(toasts.current?.currentToast).toMatchObject({ variant: "error" })
+  expect(toasts.current?.currentToast?.message).toBe(`Could not open ${dot("AGENTS.md")}: No editor was found on PATH \\x1b[31m`)
+})
+
 test("the toggle writes memory.enabled and redraws from the server's answer", async () => {
   await using tmp = await project()
   // The server reports memory as on whatever is written, as it does when an environment switch wins.

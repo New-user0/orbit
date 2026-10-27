@@ -237,6 +237,51 @@ test("location.trust.update sends the trust and its persistence, and decodes the
   expect(requests[0]!.body).toEqual({ trust: true, persist: false })
 })
 
+// clients-ux-42: `/memory` lists rows and names one to make by its target, never by a place; the toggle's patch carries
+// `memory.enabled`.
+test("location.memory and the memory toggle use the public HTTP contract and decode the answers", async () => {
+  const requests: Array<{ method: string; url: URL; body: unknown }> = []
+  const listing = {
+    files: [{ path: "/repo/AGENTS.md", kind: "project", chars: 4, role: "project", exists: true, target: { type: "file", path: "/repo/AGENTS.md" } }],
+    warnings: [{ path: "/repo/CLAUDE.md", type: "outside", message: "left out" }],
+    folders: [{ type: "agent", agent: "review", scope: "project", path: "/repo/.orbit/agent-memory/review", exists: false, target: { type: "agent", agent: "review" } }],
+    enabled: true,
+    git: true,
+    available: true,
+  }
+  const ensured = { path: "/repo/.orbit/agent-memory/review", created: true, type: "folder" }
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: new URL(request.url),
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    if (request.method === "PATCH") return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 204 })))
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: request.method === "GET" ? listing : ensured })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const listed = yield* client.location.memory.list({ location: { directory: "/repo" } })
+    const made = yield* client.location.memory.ensure({
+      location: { directory: "/repo" },
+      target: { type: "agent", agent: "review" },
+    })
+    // The Effect client puts every key of the patch in the body, and one left undefined does not encode, so each is named.
+    yield* client.config.update({ shell: null, output_style: null, language: null, memory: { enabled: false } })
+    return { listed, made }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result.listed).toEqual(listing)
+  expect(result.made).toEqual(ensured)
+  expect(requests.map((request) => [request.method, request.url.pathname])).toEqual([
+    ["GET", "/api/location/memory"],
+    ["POST", "/api/location/memory"],
+    ["PATCH", "/api/experimental/config"],
+  ])
+  expect(requests[1]!.body).toEqual({ target: { type: "agent", agent: "review" } })
+  expect(requests[2]!.body).toEqual({ shell: null, output_style: null, language: null, memory: { enabled: false } })
+})
+
 test("event.subscribe exposes and decodes the native Effect event stream", async () => {
   const httpClient = HttpClient.make((request) =>
     Effect.succeed(

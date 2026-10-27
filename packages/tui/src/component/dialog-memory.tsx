@@ -1,6 +1,7 @@
 import { useRenderer } from "@opentui/solid"
 import type { InstructionMemoryListing, InstructionMemoryTarget } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
+import { openPath } from "@orbit/util/open"
 import path from "node:path"
 import { createMemo, createResource } from "solid-js"
 import { useClient } from "../context/client"
@@ -158,7 +159,7 @@ export function DialogMemory(props: {
     // A folder opener on a file named like a program would run it, so only a folder answer is opened (class 4).
     if (row.type === "folder") {
       if (made.type !== "folder") return failed(new Error("the server did not answer with a folder"))
-      return (props.open ?? openFolder)(made.path).catch(failed)
+      return (props.open ?? openPath)(made.path).catch(failed)
     }
     if (made.type !== "file") return failed(new Error("the server did not answer with a file"))
     const opened = await (props.edit ?? editFile)({ file: made.path, renderer }).catch((error: unknown) => {
@@ -197,9 +198,4 @@ export function DialogMemory(props: {
 // Rows are told apart by what they name, so the remembered file is found again whatever moved around it.
 function key(row: { readonly type: string; readonly target?: InstructionMemoryTarget; readonly path?: string }, extra = "") {
   return JSON.stringify([row.type, row.target, row.path, extra])
-}
-
-async function openFolder(folder: string) {
-  const { openPath } = await import("@orbit/util/open")
-  return openPath(folder)
 }

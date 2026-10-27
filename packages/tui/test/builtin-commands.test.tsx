@@ -34,6 +34,8 @@ function render(state: string, config: Record<string, unknown> = {}) {
       if (url.pathname === "/api/provider") return json({ location, data: [{ id: "provider", name: "Provider" }] })
       if (url.pathname === "/api/model")
         return json({ location, data: [{ id: "model", providerID: "provider", name: "Model", variants: [] }] })
+      if (url.pathname === "/api/location/memory")
+        return json({ data: { files: [], warnings: [], folders: [], enabled: false, git: false, available: true } })
     },
   })
 }
@@ -58,6 +60,13 @@ test.each([
   await using setup = await render(state.path)
   await command(setup, slash)
   await setup.waitForFrame((frame) => frame.includes(title))
+})
+
+test("/memory opens the memory dialog with what the server lists", async () => {
+  await using state = await tmpdir()
+  await using setup = await render(state.path)
+  await command(setup, "/memory")
+  await setup.waitForFrame((frame) => frame.includes("Auto memory: off"))
 })
 
 test("/todos on the home route says there is no session", async () => {
