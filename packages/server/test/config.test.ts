@@ -185,6 +185,53 @@ it.live("updates the global shell without replacing unrelated JSONC", () =>
   }),
 )
 
+// clients-ux-42: the `/memory` toggle writes `memory.enabled` into the person's own config and nowhere else (class 8): a
+// project's `orbit.json` beside it stays byte for byte.
+it.live("writes memory.enabled to the person's own config and leaves the project's alone", () =>
+  Effect.gen(function* () {
+    const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-config-memory-")))
+    const global = path.join(tmp.path, "global")
+    const config = path.join(global, "orbit.jsonc")
+    const project = path.join(tmp.path, "project")
+    const projectConfig = path.join(project, "orbit.json")
+    const projectText = `{ "memory": { "enabled": true, "team": true } }\n`
+    yield* Effect.promise(async () => {
+      await fs.mkdir(global, { recursive: true })
+      await fs.mkdir(project, { recursive: true })
+      await fs.writeFile(config, `{\n  // keep this comment\n  "shell": "bash"\n}\n`)
+      await fs.writeFile(projectConfig, projectText)
+    })
+    const server = yield* startServer(global)
+    const patch = (value: unknown) =>
+      Effect.promise(() =>
+        fetch(new URL("/api/experimental/config", server.base), {
+          method: "PATCH",
+          headers: { ...server.headers, "content-type": "application/json" },
+          body: JSON.stringify(value),
+        }),
+      )
+
+    expect((yield* patch({ memory: { enabled: false } })).status).toBe(204)
+    const written = yield* Effect.promise(() => fs.readFile(config, "utf8"))
+    expect(written).toContain("// keep this comment")
+    expect(written).toContain('"shell": "bash"')
+    expect(written.replace(/\s+/g, "")).toContain('"memory":{"enabled":false}')
+    expect(yield* Effect.promise(() => fs.readFile(projectConfig, "utf8"))).toBe(projectText)
+
+    expect((yield* patch({ memory: { enabled: true } })).status).toBe(204)
+    expect((yield* Effect.promise(() => fs.readFile(config, "utf8"))).replace(/\s+/g, "")).toContain('"memory":{"enabled":true}')
+
+    // null removes the key, and a patch without it leaves the key alone.
+    expect((yield* patch({ shell: "zsh" })).status).toBe(204)
+    expect((yield* Effect.promise(() => fs.readFile(config, "utf8"))).replace(/\s+/g, "")).toContain('"enabled":true')
+    expect((yield* patch({ memory: { enabled: null } })).status).toBe(204)
+    expect(yield* Effect.promise(() => fs.readFile(config, "utf8"))).not.toContain('"enabled"')
+    expect(yield* Effect.promise(() => fs.readFile(projectConfig, "utf8"))).toBe(projectText)
+    // A value of another type is refused.
+    expect((yield* patch({ memory: { enabled: "no" } })).status).toBe(400)
+  }),
+)
+
 // Sets environment variables for the rest of the test's scope, where undefined removes one.
 const environment = (values: Record<string, string | undefined>) =>
   Effect.acquireRelease(

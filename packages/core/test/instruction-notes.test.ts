@@ -941,6 +941,65 @@ describe("InstructionNotes.add", () => {
   })
 })
 
+// `/memory` opens the file a `#` note would be added to: one resolution, so the two never pick different files (class 3).
+describe("InstructionNotes.ensure", () => {
+  it.live("ensure creates and returns the file a note would be added to, and add then appends to it", () =>
+    Effect.gen(function* () {
+      for (const scope of ["project", "user"] as const) {
+        const where = yield* scratch
+        yield* Effect.gen(function* () {
+          const { notes } = yield* start
+          const named = (yield* notes.targets()).find((item) => item.scope === scope)!
+          expect(named.exists).toBe(false)
+          const ensured = yield* notes.ensure(scope)
+          expect(ensured).toEqual({ path: yield* Effect.promise(() => fs.realpath(named.path)), created: true })
+          expect(yield* read(ensured.path)).toBe("")
+          // A second call finds it and creates nothing.
+          expect(yield* notes.ensure(scope)).toEqual({ path: ensured.path, created: false })
+          const added = yield* notes.add({ scope, text: "after" })
+          expect(yield* Effect.promise(() => fs.realpath(added.path))).toBe(ensured.path)
+          expect(yield* read(ensured.path)).toBe("- after\n")
+        }).pipe(Effect.provide(layerFor(where)))
+      }
+
+      // With ORBIT.md at the root, both pick it and AGENTS.md is never made.
+      const both = yield* scratch
+      const orbit = path.join(both.root, "ORBIT.md")
+      yield* write(orbit, "orbit\n")
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* notes.ensure("project")).toEqual({ path: orbit, created: false })
+        expect((yield* notes.add({ scope: "project", text: "x" })).path).toBe(orbit)
+        expect(yield* read(orbit)).toBe("orbit\n- x\n")
+        expect(yield* exists(path.join(both.root, "AGENTS.md"))).toBe(false)
+      }).pipe(Effect.provide(layerFor(both)))
+    }),
+  )
+
+  // An exclusive create on Windows follows a link at the file's own place, even one that leads nowhere, so neither ensure
+  // nor add may create through one, in a trusted project as well (class 4). The plain project is the control.
+  it.live("never creates through a dangling link at the file's place, in a trusted project", () =>
+    Effect.gen(function* () {
+      if (!canLinkFile) return
+      const where = yield* scratch
+      const outside = path.join(where.base, "outside.md")
+      yield* Effect.promise(() => fs.symlink(outside, path.join(where.root, "AGENTS.md"), "file"))
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* outcome(notes.ensure("project"))).toBe("outside")
+        expect(yield* outcome(notes.add({ scope: "project", text: "n" }))).toBe("outside")
+      }).pipe(Effect.provide(layerFor({ ...where, trusted: true })))
+      expect(yield* exists(outside)).toBe(false)
+
+      const control = yield* scratch
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect((yield* notes.ensure("project")).created).toBe(true)
+      }).pipe(Effect.provide(layerFor({ ...control, trusted: true })))
+    }),
+  )
+})
+
 describe("InstructionNotes.format", () => {
   test("is pure over the file's text", () => {
     expect(InstructionNotes.format("", "a")).toBe("- a\n")

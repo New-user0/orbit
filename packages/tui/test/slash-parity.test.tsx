@@ -130,7 +130,7 @@ const base = registered([
   { name: "sessions", aliases: ["resume", "continue"] },
 ])
 const small = slashParity.filter((entry) =>
-  entry.state === "present" ? ["agents", "resume", "continue", "sessions"].includes(entry.name) : entry.name === "memory",
+  entry.state === "present" ? ["agents", "resume", "continue", "sessions"].includes(entry.name) : entry.name === "pr-comments",
 )
 
 test("an agreeing small list has no problems", () => {
@@ -158,11 +158,11 @@ test("a pending entry that is already registered is reported", () => {
   const early = registered([
     { name: "agents", aliases: [] },
     { name: "sessions", aliases: ["resume", "continue"] },
-    { name: "memory", aliases: [] },
+    { name: "pr-comments", aliases: [] },
   ])
   expect(problems(early, small)).toEqual([
-    "memory is registered but not listed",
-    "memory is pending (clients-ux-42) but already registered",
+    "pr-comments is registered but not listed",
+    "pr-comments is pending (agents-extensibility-41) but already registered",
   ])
 })
 

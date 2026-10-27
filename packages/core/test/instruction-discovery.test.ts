@@ -2209,6 +2209,39 @@ describe("ConfigInstructionPlugin.Plugin keeps a link in a wide project from lea
             }),
         )
 
+  // FU-M4-163: a file of the walk or a rule that is left out for leading outside is told to a person as an `outside`
+  // warning naming the file as it is spelled, and still never reaches the model. A link that stays inside the started
+  // folder loads with no warning (the control).
+  linked("warns about a walk file and a rule that a wide project leaves out for leading outside", () =>
+    Effect.gen(function* () {
+      const base = yield* folders
+      const directory = path.join(base.home, "Downloads", "x")
+      const where = { ...base, repo: base.home, directory }
+      const secret = path.join(base.home, ".ssh", "id_rsa")
+      yield* write(secret, "PRIVATE KEY MARKER")
+      yield* write(path.join(directory, "docs", "inside.md"), "INSIDE RULE MARKER")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(directory, ".orbit", "rules"), { recursive: true })
+        await fs.symlink(secret, path.join(directory, "AGENTS.md"), "file")
+        await fs.symlink(secret, path.join(directory, ".orbit", "rules", "key.md"), "file")
+        await fs.symlink(path.join(directory, "docs", "inside.md"), path.join(directory, ".orbit", "rules", "inside.md"), "file")
+      })
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const text = (yield* readBody(yield* discovery.load())).text
+        expect(text).not.toContain("PRIVATE KEY MARKER")
+        expect(text).toContain("INSIDE RULE MARKER")
+        const warnings = (yield* discovery.status()).warnings
+        expect(warnings.filter((warning) => warning.type === "outside").map((warning) => warning.path).toSorted()).toEqual(
+          [path.join(directory, ".orbit", "rules", "key.md"), path.join(directory, "AGENTS.md")].toSorted(),
+        )
+        for (const warning of warnings) expect(warning.message).toContain("outside")
+        expect(warnings.some((warning) => warning.path.endsWith("inside.md"))).toBe(false)
+        expect(JSON.stringify(placesOf(yield* discovery.list())).replaceAll("\\\\", "/")).not.toContain(slashed(secret))
+      }).pipe(scoped(where, false))
+    }),
+  )
+
   // The control: the same names as plain files in the started folder are sent, so the rows above fail only because of the link.
   for (const link of links)
     it.live(`home project, not trusted: ${link.name} as a plain file in the started folder is sent`, () =>

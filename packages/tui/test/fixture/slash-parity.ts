@@ -56,7 +56,7 @@ export const slashParity: readonly SlashEntry[] = [
   pending("add-dir", "clients-ux-39"),
   pending("permissions", "clients-ux-39"),
   pending("hooks", "clients-ux-41"),
-  pending("memory", "clients-ux-42"),
+  present("memory"),
   present("rewind", "rewind", "checkpoint"),
   pending("statusline", "agents-extensibility-38"),
   pending("pr-comments", "agents-extensibility-41"),
