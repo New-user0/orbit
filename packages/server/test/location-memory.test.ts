@@ -10,11 +10,15 @@ import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
 import { llmClient } from "@orbit/core/effect/app-node-platform"
 import { Watcher } from "@orbit/core/filesystem/watcher"
+import { Location } from "@orbit/core/location"
+import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { ModelsDev } from "@orbit/core/models-dev"
+import { Project } from "@orbit/core/project"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { AbsolutePath } from "@orbit/schema/schema"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
-import { Context, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Schedule } from "effect"
 import { HttpEffect, HttpRouter, HttpServer } from "effect/unstable/http"
 import { LLMClient } from "../../ai/src"
 import { TestLLM } from "../../ai/src/testing"
@@ -25,7 +29,9 @@ import { createEmbeddedRoutes } from "../src/routes"
 
 const linkType = process.platform === "win32" ? "junction" : "dir"
 
-const server = (options: { readonly untrusted?: boolean; readonly watch?: boolean } = {}) =>
+const server = (
+  options: { readonly untrusted?: boolean; readonly watch?: boolean; readonly replacements?: LayerNode.Replacements } = {},
+) =>
   Effect.gen(function* () {
     const root = (yield* tmpdirScoped("orbit-memory-")).path
     const home = path.join(root, "home")
@@ -65,6 +71,7 @@ const server = (options: { readonly untrusted?: boolean; readonly watch?: boolea
       ...(options.watch ? [] : [Watcher.node.replace(Watcher.configured({ enabled: false }))]),
       WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: !options.untrusted })),
       llmClient.replace(Layer.succeed(LLMClient.Service, llm)),
+      ...(options.replacements ?? []),
     ]
     const context = yield* Layer.build(createEmbeddedRoutes({}, replacements).pipe(Layer.provide(HttpServer.layerServices)))
     const handler = Context.get(context, HttpRouter.HttpRouter)
@@ -76,6 +83,7 @@ const server = (options: { readonly untrusted?: boolean; readonly watch?: boolea
       config,
       data,
       project,
+      locations: Context.get(context, LocationServiceMap.Service),
       list: () => Effect.promise(() => handler(new Request(url))),
       ensure: (target: unknown) =>
         Effect.promise(() =>
@@ -157,6 +165,59 @@ it.live("lists the value the toggle wrote as soon as the write answers, in every
       expect((yield* s.patch(s.project, { memory: { enabled: true } })).status).toBe(204)
       expect((yield* listed).enabled).toBe(true)
     }
+  }).pipe(Effect.scoped),
+)
+
+// A Location still being built when the write answers is reloaded by waiting for its build. A build that then fails has
+// already failed its own request, and it must not turn the write, which happened, into a failed answer.
+it.live("answers a config write that happened even when a Location being built then fails", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>()
+    const gate = yield* Deferred.make<void>()
+    const broken = { directory: "" }
+    // The broken Location's build stops in its first service until the gate opens, and then dies.
+    const failing = Project.node.mapLayer((layer) =>
+      Layer.flatMap(layer, (context) => {
+        const project = Context.get(context, Project.Service)
+        return Layer.succeedContext(
+          Context.add(
+            context,
+            Project.Service,
+            Project.Service.of({
+              ...project,
+              resolve: (input) =>
+                path.resolve(input) !== path.resolve(broken.directory)
+                  ? project.resolve(input)
+                  : Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(gate)),
+                      Effect.andThen(Effect.die(new Error("this Location cannot be built"))),
+                    ),
+            }),
+          ),
+        )
+      }),
+    )
+    const s = yield* server({ replacements: [Project.node.replace(failing)] })
+    broken.directory = path.join(s.root, "broken")
+    yield* Effect.promise(() => fs.mkdir(broken.directory))
+    // The project's own Location is built and reloads as usual.
+    expect((yield* s.list()).status).toBe(200)
+    const build = yield* Effect.scoped(s.locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(broken.directory) }))).pipe(
+      Effect.exit,
+      Effect.forkChild,
+    )
+    yield* Deferred.await(entered)
+    const write = yield* s.patch(s.project, { memory: { enabled: false } }).pipe(Effect.forkChild)
+    // The write waits for the broken build once it holds the build as well; only then does the build fail.
+    yield* Effect.gen(function* () {
+      const state = s.locations.rcMap.state
+      const held = state._tag === "Open" ? [...state.map].find(([ref]) => ref.directory === broken.directory)?.[1].refCount : 0
+      if ((held ?? 0) < 2) return yield* Effect.fail("not yet")
+    }).pipe(Effect.retry(Schedule.spaced("5 millis")))
+    yield* Deferred.succeed(gate, undefined)
+    expect(Exit.isFailure(yield* Fiber.join(build))).toBe(true)
+    expect((yield* Fiber.join(write)).status).toBe(204)
+    expect(((yield* body(yield* s.list())) as unknown as Listing).data.enabled).toBe(false)
   }).pipe(Effect.scoped),
 )
 

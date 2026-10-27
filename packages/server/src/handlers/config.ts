@@ -72,11 +72,7 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
           const roots = yield* Effect.promise(() =>
             Promise.all(
               entries
-                .flatMap((entry) =>
-                  entry.type === "directory" && entry.scope && ["user", "project", "local"].includes(entry.scope)
-                    ? [entry.path]
-                    : [],
-                )
+                .flatMap((entry) => (entry.type === "directory" && entry.scope && ["user", "project", "local"].includes(entry.scope) ? [entry.path] : []))
                 .map(realPath),
             ),
           )

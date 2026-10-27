@@ -441,6 +441,47 @@ describe("MemoryListing.ensure", () => {
     }),
   )
 
+  // The folder is made at the real path that was checked, not through its spelling: a link in the spelling that leads
+  // somewhere else by the time of the make takes nothing there (class 3, 4).
+  it.live("makes the checked real folder even when the link in its spelling leads elsewhere at the make", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const spelled = path.join(l.root, "spelled")
+      yield* Effect.promise(() => fs.symlink(l.project, spelled, linkType))
+      const swapped: string[] = []
+      const swapping = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return new Proxy(real, {
+            get: (target, key) => {
+              const value: unknown = (target as unknown as Record<string | symbol, unknown>)[key]
+              if (typeof value !== "function") return value
+              if (key !== "makeDirectory") return value.bind(target)
+              return (folder: string, ...rest: unknown[]) =>
+                Effect.promise(async () => {
+                  if (path.basename(folder) !== "deep" || swapped.length > 0) return
+                  await fs.unlink(spelled).catch(() => fs.rmdir(spelled))
+                  await fs.symlink(l.outside, spelled, linkType)
+                  swapped.push(folder)
+                }).pipe(Effect.andThen(value.apply(target, [folder, ...rest]) as Effect.Effect<void, unknown>))
+            },
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const made = yield* Effect.gen(function* () {
+        const memory = yield* start
+        yield* withAgents([{ id: "deep", memory: "project" }])
+        return yield* memory.ensure({ type: "agent", agent: "deep" })
+      }).pipe(provide(l, { spelled, files: swapping }))
+      expect(swapped).toHaveLength(1)
+      expect(made).toMatchObject({ created: true, type: "folder" })
+      expect(same(made.path, path.join(yield* realOf(l.project), ".orbit", "agent-memory", "deep"))).toBe(true)
+      expect(yield* isDirectory(made.path)).toBe(true)
+      expect(yield* entries(l.outside)).toEqual([])
+    }),
+  )
+
   it.live("refuses a memory folder that is a link or a file, and makes nothing through it", () =>
     Effect.gen(function* () {
       type Row = {
