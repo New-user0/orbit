@@ -976,6 +976,47 @@ describe("InstructionNotes.ensure", () => {
     }),
   )
 
+  // A file that appears while ensure waits for the file's lock (an edit tool writing it) is kept as it is, and ensure
+  // says it made nothing.
+  it.live("keeps a file that appears while ensure waits for its lock, and does not claim to have created it", () =>
+    Effect.gen(function* () {
+      const where = yield* scratch
+      const file = path.join(where.root, "AGENTS.md")
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        const mutation = yield* FileMutation.Service
+        const writer = mutation.withLock([file])(Effect.sleep("150 millis").pipe(Effect.andThen(write(file, "written meanwhile\n"))))
+        const [, ensured] = yield* Effect.all(
+          [writer, Effect.sleep("30 millis").pipe(Effect.andThen(notes.ensure("project")))],
+          { concurrency: 2 },
+        )
+        expect(ensured).toEqual({ path: file, created: false })
+        expect(yield* read(file)).toBe("written meanwhile\n")
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
+  // `/memory` opens what ensure answers, so a file that leads out of a project that is not trusted is refused as a note
+  // there is, and the place it leads to is never named; a trusted project follows its own link (the control).
+  it.live("refuses a root file that leads outside an untrusted project, and answers the real file once trusted", () =>
+    Effect.gen(function* () {
+      if (!canLinkFile) return
+      const where = yield* scratch
+      const outside = path.join(where.base, "outside.md")
+      yield* write(outside, "secret\n")
+      yield* Effect.promise(() => fs.symlink(outside, path.join(where.root, "AGENTS.md")))
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* outcome(notes.ensure("project"))).toBe("outside")
+      }).pipe(Effect.provide(layerFor({ ...where, trusted: false })))
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* notes.ensure("project")).toEqual({ path: outside, created: false })
+      }).pipe(Effect.provide(layerFor({ ...where, trusted: true })))
+      expect(yield* read(outside)).toBe("secret\n")
+    }),
+  )
+
   // An exclusive create on Windows follows a link at the file's own place, even one that leads nowhere, so neither ensure
   // nor add may create through one, in a trusted project as well (class 4). The plain project is the control.
   it.live("never creates through a dangling link at the file's place, in a trusted project", () =>

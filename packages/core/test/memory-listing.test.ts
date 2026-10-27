@@ -296,6 +296,21 @@ describe("MemoryListing.list", () => {
       expect(off.folders).toEqual([])
       expect(off.files.map((file) => file.role)).toEqual(["user", "project"])
 
+      // A folder that is not listed is not made: the team folder while team memory is off, and every folder while
+      // memory is off. The rows that are listed are made (the control).
+      const attempt = (entries: Entry[], targets: Instruction.MemoryTarget[]) =>
+        Effect.gen(function* () {
+          const memory = yield* start
+          yield* withAgents(agents)
+          return yield* Effect.forEach(targets, (target) => outcome(memory.ensure(target)))
+        }).pipe(provide(l, { entries }))
+      expect(yield* attempt([], [{ type: "team" }, { type: "memory" }])).toEqual(["unknown", "ok"])
+      expect(
+        yield* attempt([settings({ enabled: false, team: true })], [{ type: "memory" }, { type: "team" }, { type: "agent", agent: "review" }]),
+      ).toEqual(["unknown", "unknown", "unknown"])
+      expect(yield* exists(l.team)).toBe(false)
+      expect(yield* exists(path.join(l.data, "memory", "agents"))).toBe(false)
+
       // A folder that is there is listed as there.
       yield* Effect.promise(() => fs.mkdir(path.join(l.local, "local1"), { recursive: true }))
       const made = yield* run([])

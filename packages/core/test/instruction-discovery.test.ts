@@ -2239,6 +2239,18 @@ describe("ConfigInstructionPlugin.Plugin keeps a link in a wide project from lea
         expect(warnings.some((warning) => warning.path.endsWith("inside.md"))).toBe(false)
         expect(JSON.stringify(placesOf(yield* discovery.list())).replaceAll("\\\\", "/")).not.toContain(slashed(secret))
       }).pipe(scoped(where, false))
+
+      // A plain file that is left out is no link anyone made: a file above a project that is not trusted is not named.
+      const narrow = yield* folders
+      yield* write(path.join(path.dirname(narrow.repo), "AGENTS.md"), "ABOVE MARKER")
+      yield* write(narrow.rootFile, "ROOT MARKER")
+      yield* Effect.gen(function* () {
+        const discovery = yield* start()
+        const text = (yield* readBody(yield* discovery.load())).text
+        expect(text).not.toContain("ABOVE MARKER")
+        expect(text).toContain("ROOT MARKER")
+        expect((yield* discovery.status()).warnings).toEqual([])
+      }).pipe(scoped(narrow, false))
     }),
   )
 
