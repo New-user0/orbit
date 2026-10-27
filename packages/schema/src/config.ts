@@ -209,6 +209,11 @@ export const Patch = Schema.Struct({
   shell: Schema.optionalKey(Schema.NullOr(Schema.String)),
   output_style: Schema.optionalKey(Schema.NullOr(Schema.String)),
   language: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  memory: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+    }),
+  ),
 }).annotate({ identifier: "Config.Patch" })
 export interface Patch extends Schema.Schema.Type<typeof Patch> {}
 

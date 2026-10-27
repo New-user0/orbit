@@ -2011,6 +2011,28 @@ trusted with `UntrustedFolderError`.
 
 **What to do:** Nothing. Pass the flags to get the lines; escape the text before you print it, as for any model text.
 
+### `/memory` lists and opens instruction files and memory folders
+
+The terminal UI has a `/memory` command. It lists the instruction files the folder loaded, in load order with each
+import under the file that imported it, then your own `ORBIT.md` and the project's `AGENTS.md` when they are missing,
+and the warnings about the files. While memory is on it also lists the memory folder, the team memory folder (while
+`memory.team` is on) and one folder per agent with a memory scope. Choosing a file creates it empty when it is not there
+and opens it in `$VISUAL`, `$EDITOR`, or else notepad on Windows or the first of `code`, `vi` and `nano` found on PATH;
+choosing a folder makes it and opens it in the system's file manager. A file is never handed to the system's opener. The
+first row turns memory on or off by writing `memory.enabled` to your own config. The file you open is focused the next
+time, also when it was just created from the user or project row. Rows that open something say they are unavailable
+when the server is not on this machine, and when the server cannot list (a folder that is not trusted, an older server)
+the dialog closes with its message. The server answers at `GET /api/location/memory` and
+`POST /api/location/memory`, both refusing a folder that is not trusted (the `POST` answers 503 when the file or
+folder cannot be made), and `PATCH /api/experimental/config` takes
+`memory.enabled` (`null` removes it). That `PATCH` now answers only after every folder the server has open has reloaded
+its config, so a setting read back right after the write already has the new value; before, it showed the old value
+until the file watch caught up, or for good with watching off.
+
+**Affects:** terminal UI users, and SDK callers that read the new routes or the new key.
+
+**What to do:** Nothing. Set `$VISUAL` or `$EDITOR` to choose the editor `/memory` opens.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -3629,6 +3651,18 @@ model's window is not known, and is not sent to subagents or by `orb run --bare`
 **Affects:** people who set the variable.
 
 **What to do:** Nothing; set the variable to turn the reminder on.
+
+### An instruction file left out for leading outside is named, and a note never goes through a link to nothing
+
+A file of the walk (such as `AGENTS.md`) or a rule that is a link and was left out because it leads outside the
+project's folders used to be dropped with a log line only. The instruction status now lists it as a warning of type
+`outside`, which `/memory` shows as a row of its own; nothing about it reaches the model. Separately, a `#` note whose
+file is a link that leads nowhere is now refused as `outside` in a trusted project too: before, on Windows, the note
+created the file the link pointed at.
+
+**Affects:** people whose instruction file is a link out of the project, and clients that read the instruction status.
+
+**What to do:** Nothing. To load such a file, put the file itself in the project in place of the link.
 
 ## Shell sandbox
 

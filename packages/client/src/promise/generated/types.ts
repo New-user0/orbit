@@ -41,6 +41,28 @@ export type InstructionNoteAdded = {
   loaded: boolean
 }
 
+export type InstructionMemoryTargetFile = { type: "file"; path: string }
+
+export type InstructionMemoryTargetScope = { type: "scope"; scope: "user" | "project" | "local" }
+
+export type InstructionMemoryTargetMemory = { type: "memory" }
+
+export type InstructionMemoryTargetTeam = { type: "team" }
+
+export type InstructionMemoryTargetAgent = { type: "agent"; agent: string }
+
+export type InstructionStatusWarning = {
+  path: string
+  type: "size" | "import-untrusted" | "import-external" | "outside"
+  message: string
+  chars?: number | undefined
+  limit?: number | undefined
+  target?: string | undefined
+  directory?: string | undefined
+}
+
+export type InstructionMemoryEnsured = { path: string; created: boolean; type: "file" | "folder" }
+
 export type TrustGrant = { directory: string; time: number; via: string }
 
 export type LocationPublicRef = { directory: string }
@@ -284,16 +306,6 @@ export type InstructionStatusFile = {
   chars: number
   importedBy?: string | undefined
   paths?: Array<string> | undefined
-}
-
-export type InstructionStatusWarning = {
-  path: string
-  type: "size" | "import-untrusted" | "import-external"
-  message: string
-  chars?: number | undefined
-  limit?: number | undefined
-  target?: string | undefined
-  directory?: string | undefined
 }
 
 export type InstructionEntryKey = string
@@ -604,6 +616,13 @@ export type ConfigEffective = {
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
 export type TrustWithheld = { path: string; kinds: Array<TrustKind> }
+
+export type InstructionMemoryTarget =
+  | InstructionMemoryTargetFile
+  | InstructionMemoryTargetScope
+  | InstructionMemoryTargetMemory
+  | InstructionMemoryTargetTeam
+  | InstructionMemoryTargetAgent
 
 export type SessionMessageLocationSwitched = {
   id: string
@@ -2022,6 +2041,25 @@ export type TrustStatus = {
   withheld: Array<TrustWithheld>
 }
 
+export type InstructionMemoryFile = {
+  path: string
+  kind: "managed" | "user" | "project" | "local"
+  chars: number
+  importedBy?: string | undefined
+  role?: "user" | "project" | undefined
+  exists: boolean
+  target: InstructionMemoryTarget
+}
+
+export type InstructionMemoryFolder = {
+  type: "memory" | "team" | "agent"
+  agent?: string | undefined
+  scope?: "user" | "project" | "local" | undefined
+  path: string
+  exists: boolean
+  target: InstructionMemoryTarget
+}
+
 export type SessionInboxMove = {
   id: string
   sessionID: string
@@ -2297,6 +2335,15 @@ export type ReferenceInfo = {
   description?: string
   hidden?: boolean
   source: ReferenceSource
+}
+
+export type InstructionMemoryListing = {
+  files: Array<InstructionMemoryFile>
+  warnings: Array<InstructionStatusWarning>
+  folders: Array<InstructionMemoryFolder>
+  enabled: boolean
+  git: boolean
+  available: boolean
 }
 
 export type ModelInfo = {
@@ -3325,6 +3372,26 @@ export type LocationInstructionNoteAddInput = {
 }
 
 export type LocationInstructionNoteAddOutput = { data: InstructionNoteAdded }["data"]
+
+export type LocationMemoryListInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type LocationMemoryListOutput = { data: InstructionMemoryListing }["data"]
+
+export type LocationMemoryEnsureInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+  readonly target: {
+    readonly target:
+      | { readonly type: "file"; readonly path: string }
+      | { readonly type: "scope"; readonly scope: "user" | "project" | "local" }
+      | { readonly type: "memory" }
+      | { readonly type: "team" }
+      | { readonly type: "agent"; readonly agent: string }
+  }["target"]
+}
+
+export type LocationMemoryEnsureOutput = { data: InstructionMemoryEnsured }["data"]
 
 export type LocationTrustListOutput = Array<TrustGrant>
 
@@ -7560,17 +7627,26 @@ export type ConfigUpdateInput = {
     readonly shell?: string | null
     readonly output_style?: string | null
     readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
   }["shell"]
   readonly output_style?: {
     readonly shell?: string | null
     readonly output_style?: string | null
     readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
   }["output_style"]
   readonly language?: {
     readonly shell?: string | null
     readonly output_style?: string | null
     readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
   }["language"]
+  readonly memory?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
+  }["memory"]
 }
 
 export type ConfigUpdateOutput = void

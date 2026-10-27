@@ -74,6 +74,7 @@ import { DialogPair } from "./component/dialog-pair"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
+import { DialogMemory } from "./component/dialog-memory"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogOpen, DialogOpenKey, moveOpenSession } from "./component/dialog-open"
 import { SessionTabs } from "./component/session-tabs"
@@ -941,6 +942,16 @@ function App() {
         slash: { name: "agents" },
         run: () => {
           dialog.replace(() => <DialogAgent />)
+        },
+      },
+      {
+        name: "memory.list",
+        title: "Memory files",
+        category: "Agent",
+        slash: { name: "memory" },
+        run: () => {
+          // Paths are long, so the dialog takes the large width.
+          dialog.replace(() => <DialogMemory />, undefined, { size: "large" })
         },
       },
       {

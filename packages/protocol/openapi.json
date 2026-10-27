@@ -648,6 +648,218 @@
         }
       }
     },
+    "/api/location/memory": {
+      "get": {
+        "tags": ["location"],
+        "operationId": "memory.list",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Instruction.MemoryListingEncoded"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "What /memory shows for the location: the instruction files it loaded at start-up in load order (each import with the file that imported it), then the user and project files a note would be added to when neither is among them, the warnings about the files, and, while memory is on, the memory folder, the team memory folder while team memory is on, and one folder for each agent with a memory scope. Folder paths are as spelled; ensure answers where each really is. The instruction files are read from disk again first, and nothing is created. A folder that is not trusted is refused with an untrusted-folder error.",
+        "summary": "List memory files and folders"
+      },
+      "post": {
+        "tags": ["location"],
+        "operationId": "memory.ensure",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Instruction.MemoryEnsuredEncoded"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Make the file or folder a row of the memory listing names when it is not there, and answer where it really is, which is the path a client opens. A file is created empty and an existing one is never changed; the user and project files are the ones a note would be added to. A folder is made at the real path its checks resolved and checked again afterwards. A target the listing does not hold is refused with kind unknown, a folder or file that is a link or no longer what was listed with kind refused, and a file that leads outside the project with kind outside; nothing is made for any of them. A file that cannot be created is a service-unavailable error for the memory service. A folder that is not trusted is refused with an untrusted-folder error, and nothing is made.",
+        "summary": "Make a memory file or folder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "$ref": "#/components/schemas/Instruction.MemoryTarget_1"
+                  }
+                },
+                "required": ["target"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/api/trust": {
       "get": {
         "tags": ["location"],
@@ -16537,6 +16749,22 @@
                 "type": "null"
               }
             ]
+          },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -17683,6 +17911,246 @@
         "required": ["data"],
         "additionalProperties": false
       },
+      "Instruction.MemoryEnsuredEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["file", "folder"]
+          }
+        },
+        "required": ["path", "created", "type"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryFileEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["managed", "user", "project", "local"]
+          },
+          "chars": {
+            "type": "integer"
+          },
+          "importedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["user", "project"]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget"
+          }
+        },
+        "required": ["path", "kind", "chars", "exists", "target"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryFolderEncoded": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["memory", "team", "agent"]
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["user", "project", "local"]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget"
+          }
+        },
+        "required": ["type", "path", "exists", "target"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryListingEncoded": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.MemoryFileEncoded"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.StatusWarningEncoded"
+            }
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.MemoryFolderEncoded"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "git": {
+            "type": "boolean"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": ["files", "warnings", "folders", "enabled", "git", "available"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.File"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Scope"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Memory"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Team"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Agent"
+          }
+        ]
+      },
+      "Instruction.MemoryTarget.Agent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["agent"]
+          },
+          "agent": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "agent"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.File": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["file"]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "path"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.Memory": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["memory"]
+          }
+        },
+        "required": ["type"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.Scope": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["scope"]
+          },
+          "scope": {
+            "type": "string",
+            "enum": ["user", "project", "local"]
+          }
+        },
+        "required": ["type", "scope"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.Team": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["team"]
+          }
+        },
+        "required": ["type"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget_1": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.File"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Scope"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Memory"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Team"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Agent"
+          }
+        ],
+        "description": "The row of the listing to make: a loaded file by its listed path, the user or project file, the memory or team memory folder, or an agent's folder by the agent's id."
+      },
       "Instruction.NoteAddedEncoded": {
         "type": "object",
         "properties": {
@@ -17796,7 +18264,7 @@
           },
           "type": {
             "type": "string",
-            "enum": ["size", "import-untrusted", "import-external"]
+            "enum": ["size", "import-untrusted", "import-external", "outside"]
           },
           "message": {
             "type": "string"
