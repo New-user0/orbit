@@ -737,6 +737,40 @@ export interface LoweredInsertion {
 }
 
 /**
+ * The history in the order a request carries it. A checkpoint that keeps messages is stored after them, but the request
+ * opens with it; earlier checkpoints of a view that failed open keep their places.
+ */
+const arrange = (
+  messages: readonly SessionMessage.Info[],
+  options: { readonly minimal?: boolean; readonly toolOutput?: string },
+) => {
+  const active = withoutReplaced(messages)
+  const latest = active.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+  const history = latest === -1 ? active : [active[latest]!, ...active.slice(0, latest), ...active.slice(latest + 1)]
+  const lowering: Lowering = {
+    queued: queuedInput(history),
+    minimal: options.minimal === true,
+    toolOutput: options.toolOutput,
+    cleared: clearedCalls(history),
+  }
+  return { active, latest, history, lowering }
+}
+
+/**
+ * Each row of a history with what lowering sends for it, in the order `toLLMMessages` sends them, under the same rules
+ * (queued input, clearings, saved results). Derived reminders are not placed: they belong to a step, not to a row.
+ */
+export const lowerEach = (
+  messages: readonly SessionMessage.Info[],
+  model: Model.Ref,
+  providerMetadataKey: string = model.providerID,
+  options: { readonly minimal?: boolean; readonly toolOutput?: string } = {},
+) => {
+  const { history, lowering } = arrange(messages, options)
+  return history.map((message) => ({ message, lowered: toLLMMessage(message, model, providerMetadataKey, lowering) }))
+}
+
+/**
  * Translate projected Session history into canonical @orbit/ai context.
  *
  * History falls into runs: the messages after one assistant message (or the epoch start) up to the next. In each run
@@ -753,17 +787,7 @@ export const toLLMMessages = (
   insertions: readonly LoweredInsertion[] = [],
   options: { readonly minimal?: boolean; readonly toolOutput?: string } = {},
 ) => {
-  const active = withoutReplaced(messages)
-  // A checkpoint that keeps messages is stored after them, but the request opens with it. Earlier checkpoints of a
-  // view that failed open keep their places.
-  const latest = active.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
-  const history = latest === -1 ? active : [active[latest]!, ...active.slice(0, latest), ...active.slice(latest + 1)]
-  const lowering = {
-    queued: queuedInput(history),
-    minimal: options.minimal === true,
-    toolOutput: options.toolOutput,
-    cleared: clearedCalls(history),
-  }
+  const { active, latest, history, lowering } = arrange(messages, options)
   if (insertions.length === 0 && !history.some(ReminderText.isReminder))
     return history.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, lowering))
 

@@ -1045,13 +1045,7 @@ export const estimateContext = (context: SessionContext.Loaded, minimal?: boolea
 /** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
 export const estimatePrompt = (context: SessionContext.Loaded, minimal?: boolean, toolOutput?: string) => {
   const messages = withoutReplaced(context.messages)
-  // The messages a checkpoint keeps are stored before it and still carry the usage of the large request they were
-  // answered in, so only a response after the latest checkpoint can anchor the count.
-  const measured = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
-  const anchorIndex =
-    measured > messages.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
-      ? measured
-      : -1
+  const anchorIndex = measuredAnchor(messages, context.model.ref)
   const anchor = messages[anchorIndex]
   // A clearing recorded after the response left out results the response was measured with. Those of the response itself
   // are lowered as the placeholder below, so only the calls before it are taken off, and only the ones no earlier
@@ -1121,6 +1115,22 @@ export const estimateFreed = (
 }
 
 /**
+ * The index of the response that anchors the measured prompt size in `messages` (already without replaced attempts), or
+ * -1. The messages a checkpoint keeps are stored before it and still carry the usage of the large request they were
+ * answered in, so only a response after the latest completed checkpoint can anchor the count. The estimate and the
+ * context analysis both anchor here, so they cannot disagree about which response is the measurement.
+ */
+export const measuredAnchor = (
+  messages: ReadonlyArray<SessionMessage.Info>,
+  model: SessionContext.Loaded["model"]["ref"],
+) => {
+  const measured = messages.findLastIndex((message) => hasMeasuredPrompt(message, model))
+  return measured > messages.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+    ? measured
+    : -1
+}
+
+/**
  * Another provider's count may describe a native window this model cannot replay. History then holds the original
  * messages that window stood for, which the count leaves out, so only the current provider's counts are trusted.
  */
@@ -1137,7 +1147,7 @@ export const estimateRequest = (request: Pick<LLMRequest, "system" | "tools" | "
   request.messages.reduce((sum, message) => sum + estimateMessage(message), 0)
 
 /** Only what providers receive; `metadata` and `native` stay local. */
-const estimateTool = (tool: ToolEntry): number => {
+export const estimateTool = (tool: ToolEntry): number => {
   if (tool.type === "tool") return Token.estimate(tool.name + tool.description + JSON.stringify(tool.inputSchema))
   return (
     Token.estimate(tool.name + (tool.description ?? "")) +
@@ -1145,9 +1155,9 @@ const estimateTool = (tool: ToolEntry): number => {
   )
 }
 
-const estimateMessage = (message: Message) => message.content.reduce((sum, part) => sum + estimatePart(part), 0)
+export const estimateMessage = (message: Message) => message.content.reduce((sum, part) => sum + estimatePart(part), 0)
 
-const estimatePart = (part: ContentPart): number => {
+export const estimatePart = (part: ContentPart): number => {
   // An encrypted native compaction has no locally measurable size.
   if (part.type === "compaction") return Token.estimate(part.text ?? "")
   if (part.type === "effort") return 0

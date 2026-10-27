@@ -337,6 +337,9 @@ const labels: Record<Kind, string> = {
   rule: "a rule file from a rules folder",
 }
 
+/** What the baseline carries for one file: its place and label, then its text. */
+export const entryText = (file: File) => render([file])
+
 function renderInitial(files: ReadonlyArray<File>) {
   return `${HEADER}\n\n${render(files)}`
 }
