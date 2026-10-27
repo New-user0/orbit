@@ -267,7 +267,10 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
       measured: usage !== undefined,
       auto: settings.auto,
       ...(settings.thresholds === undefined ? {} : { threshold: settings.thresholds.threshold }),
-      categories: rows.filter((row) => row.tokens > 0),
+      // A row with nothing in it is left out, except the reserve and the free space, which are always there with a window.
+      categories: rows.filter(
+        (row) => row.tokens > 0 || row.kind === "auto-buffer" || row.kind === "compact-buffer" || row.kind === "free",
+      ),
       files,
       mcp: mcpTools,
       agents: customAgents,

@@ -47,8 +47,9 @@ import { TestClock } from "effect/testing"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { LanguageModel, SystemPart } from "@orbit/ai"
-import { OpenAIChat } from "@orbit/ai/protocols"
+import { CompactionPart, LanguageModel, Message, SystemPart } from "@orbit/ai"
+import { OpenAIChat, OpenAIResponses } from "@orbit/ai/protocols"
+import { SessionProviderContext } from "@orbit/core/session/provider-context"
 import { Bus } from "@orbit/core/bus"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { ConfigInstructionPlugin } from "@orbit/core/config/plugin/instruction"
@@ -181,12 +182,12 @@ const storeBaseline = (id: Session.ID, values: Readonly<Record<string, Schema.Js
   })
 
 /** A source under a production key whose rendered text is `chars` characters long, and whose value is `value`. */
-const source = (key: string, chars: number, value: Schema.Json = "value") =>
+const source = (key: string, chars: number, value: Schema.Json = "value", fill = "i") =>
   Instructions.make({
     key: Instructions.Key.make(key),
     codec: Schema.toCodecJson(Schema.Json),
     read: Effect.succeed(value),
-    render: { initial: () => "i".repeat(chars), changed: () => "c".repeat(chars) },
+    render: { initial: () => fill.repeat(chars), changed: () => "c".repeat(chars) },
   })
 
 const withUsage = (
@@ -304,13 +305,18 @@ scenario("rows, reserve and free space sum to the window when free space is abov
 
 // U2, S4: each token is counted once, and the counted rows are what the runner estimates for the request it builds.
 scenario("the counted rows equal the runner's estimate of the request it would build", function* (s) {
-  // Odd lengths, so that the shares of the baseline do not fall on token boundaries by luck.
-  s.extraSources = Instructions.combine([
-    source("core/language", 37),
-    source("core/skill-guidance", 51),
-    source("core/memory-index", 29, { path: "/m/MEMORY.md", content: "m" }),
-    source("core/date", 13),
-  ])
+  // Lengths of 2 modulo 4, so that where a key sits in the baseline decides how many tokens its share is.
+  const table = [
+    ["core/language", 38, "l"],
+    ["core/skill-guidance", 50, "s"],
+    ["core/memory-index", 30, "m"],
+    ["core/date", 14, "d"],
+  ] as const
+  s.extraSources = Instructions.combine(
+    table.map(([key, chars, fill]) =>
+      source(key, chars, key === "core/memory-index" ? { path: "/m/MEMORY.md", content: "m" } : "value", fill),
+    ),
+  )
   yield* registerDeferred("lookup")
   yield* prompt(s, "first")
   yield* seedStep(s.bus, sessionID, { id: "msg_u2", calls: [read("u2c", 1_001)] })
@@ -318,8 +324,17 @@ scenario("the counted rows equal the runner's estimate of the request it would b
   const prepared = yield* requested(sessionID)
 
   expect(countedSum(info)).toBe(SessionCompaction.estimateRequest(prepared.request))
-  expect(tokensOf(info, "skills")).toBeGreaterThan(0)
-  expect(tokensOf(info, "instructions")).toBeGreaterThan(0)
+  // A key's share is its place in the one baseline part, found here by searching for its text.
+  const baseline = prepared.request.system.find((part) => part.text.includes("s".repeat(50)))!.text
+  const shareOf = ([, chars, fill]: (typeof table)[number]) => {
+    const at = baseline.indexOf(fill.repeat(chars))
+    return Token.estimateLength(at + chars) - Token.estimateLength(at)
+  }
+  const sections = Object.fromEntries(info.sections.map((section) => [section.name, section.tokens]))
+  expect(sections["core/language"]).toBe(shareOf(table[0]))
+  expect(tokensOf(info, "skills")).toBe(shareOf(table[1]))
+  expect(tokensOf(info, "instructions")).toBe(shareOf(table[2]))
+  expect(sections["core/date"]).toBe(shareOf(table[3]))
 })
 
 // U3, S8: the total is what the provider reported for the prompt, and not what it generated.
@@ -507,6 +522,11 @@ scenario("custom agents are counted in their own row, once", function* (s) {
       agent.description = description
       agent.source = { scope: "project" }
     })
+    // An agent type Orbit ships has no source: its line stays with the tool guidance.
+    editor.update(Agent.ID.make("shipped"), (agent) => {
+      agent.mode = "subagent"
+      agent.description = "Ships with Orbit"
+    })
   })
   yield* prompt(s, "first")
   const info = yield* analyze(sessionID)
@@ -607,6 +627,71 @@ scenario("a cleared result counts as its placeholder", function* (s) {
   expect(stored.every((content) => content[0]?.type === "text" && content[0].text.length === 400)).toBe(true)
 })
 
+// S7: a result the step saved reaches the model as its short wrapper, and the analysis counts what the request carries.
+scenario("a saved result counts as the wrapper the request carries", function* (s) {
+  yield* prompt(s, "first")
+  yield* seedStep(s.bus, sessionID, {
+    id: "msg_saved",
+    calls: [
+      {
+        id: "saved1",
+        name: "Read",
+        text: "s".repeat(40_000),
+        metadata: {
+          persisted: { session: sessionID, name: "msg_0123abc-saved1-1a2b3c4d.txt", size: 40_000, format: 1 },
+        },
+      },
+    ],
+  })
+  const info = yield* analyze(sessionID)
+  const prepared = yield* requested(sessionID)
+  const results = prepared.request.messages
+    .flatMap((message) => message.content)
+    .filter((part) => part.type === "tool-result")
+    .reduce((sum, part) => sum + SessionCompaction.estimatePart(part), 0)
+
+  expect(results).toBeLessThan(2_000)
+  expect(info.messages.toolResults).toBe(results)
+  expect(tokensOf(info, "messages")).toBe(
+    prepared.request.messages.reduce((sum, message) => sum + SessionCompaction.estimateMessage(message), 0),
+  )
+})
+
+// A native window of another provider cannot be replayed by this model, so history keeps the original messages and the
+// analysis counts them, as the runner loads them.
+scenario("a native checkpoint of another provider is not counted", function* (s) {
+  yield* prompt(s, "first")
+  const native = SessionRunnerModel.resolved(
+    LanguageModel.make({ id: "deployment", provider: "openai", route: OpenAIResponses.route }),
+    {
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      cost: [],
+      limit: { context: 128_000, output: 4096 },
+    },
+  )
+  const context = SessionProviderContext.encode(SessionProviderContext.provenance(native)!, [
+    Message.user("retained request ".repeat(200)),
+    Message.assistant(
+      CompactionPart.make({ provider: native.model.provider, encrypted: "opaque-checkpoint", id: "cp_1" }),
+    ),
+  ])
+  yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+  yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+    sessionID,
+    reason: "manual",
+    text: "",
+    recent: "",
+    providerContext: context,
+  })
+  const info = yield* analyze(sessionID)
+  const prepared = yield* requested(sessionID)
+
+  expect(tokensOf(info, "messages")).toBe(
+    prepared.request.messages.reduce((sum, message) => sum + SessionCompaction.estimateMessage(message), 0),
+  )
+  expect(tokensOf(info, "messages")).toBeLessThan(800)
+})
+
 // U12, class 12, class 6 and V2 read-only.
 scenario("the analysis records nothing and calls no model", function* (s) {
   yield* registerDeferred("lookup")
@@ -668,10 +753,16 @@ scenario("the message breakdown attributes calls and results per canonical tool 
   const kinds = Object.fromEntries(info.messages.attachmentKinds.map((item) => [item.name, item.tokens]))
   expect(kinds["todo"]).toBe(Token.estimate("A reminder of the todo kind"))
   expect(kinds["instructions"]).toBeGreaterThan(0)
+  // Largest first.
+  expect(info.messages.attachmentKinds.map((item) => item.name)).toEqual(["todo", "instructions"])
   expect(info.messages.attachments).toBe(info.messages.attachmentKinds.reduce((sum, item) => sum + item.tokens, 0))
   expect(info.messages.user).toBeGreaterThan(0)
   expect(info.messages.assistant).toBeGreaterThan(0)
   expect(info.files).toEqual([])
+  // The baseline is the stored one, not the changed text that the update row carries.
+  expect(info.sections.find((section) => section.name === "test/context")?.tokens).toBe(
+    Token.estimate("Initial context"),
+  )
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -703,6 +794,11 @@ scenario(
       expect(info.threshold).toBe(threshold)
       expect(tokensOf(info, "auto-buffer")).toBe(200_000 - threshold)
     }
+
+    // The configured output cap shrinks the room kept for the reply, so the threshold moves up with it.
+    yield* s.configControl!.setEntries([userConfig({ output_token_cap: 4_000 })])
+    yield* compaction.transform((editor) => editor.configure({ auto: true, buffer: undefined }))
+    expect((yield* analyze(sessionID)).threshold).toBe(200_000 - 4_000 - 13_000)
   },
 )
 
@@ -728,7 +824,7 @@ scenario("free space never goes below 0", function* (s) {
   const info = yield* analyze(sessionID)
 
   expect(info.window).toBe(1)
-  expect(tokensOf(info, "free")).toBe(0)
+  expect(info.categories.find((item) => item.kind === "free")).toEqual({ kind: "free", tokens: 0 })
   expect(countedSum(info) + tokensOf(info, "auto-buffer")).toBeGreaterThan(info.window!)
 })
 
