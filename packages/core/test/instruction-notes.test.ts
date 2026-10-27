@@ -52,6 +52,8 @@ type Setup = {
   readonly spelled?: string
   readonly vcs?: "git" | "hg"
   readonly filesystem?: Layer.Layer<FSUtil.Service>
+  /** Runs once, after the writer has looked at the file and just before it asks for the file's lock. */
+  readonly beforeLock?: Effect.Effect<void>
 }
 
 const layerFor = (input: Setup) => {
@@ -97,6 +99,7 @@ const layerFor = (input: Setup) => {
           ),
         ),
         ...(input.filesystem ? [FSUtil.node.replace(input.filesystem)] : []),
+        ...(input.beforeLock ? [FileMutation.node.replace(lockingAfter(input.beforeLock))] : []),
         Watcher.node.replace(watcher),
         ManagedSettings.node.replace(emptyManagedNode),
         Environment.node.replace(Layer.mock(Environment.Service, { files: {} as never, spawner: {} as never })),
@@ -107,6 +110,24 @@ const layerFor = (input: Setup) => {
     watcher,
   )
 }
+
+// The real file locks, with `before` run once in the gap between the writer's look at the file and its lock. A change
+// made there is one the writer can only meet under the lock, ordered without a clock.
+const lockingAfter = (before: Effect.Effect<void>) =>
+  Layer.effect(
+    FileMutation.Service,
+    Effect.gen(function* () {
+      const real = yield* FileMutation.Service
+      const first = yield* Effect.cached(before)
+      return FileMutation.Service.of({ ...real, withLock: (targets) => (effect) => first.pipe(Effect.andThen(real.withLock(targets)(effect))) })
+    }),
+  ).pipe(
+    Layer.provide(
+      LayerNode.compile(FileMutation.node, {
+        replacements: [Environment.node.replace(Layer.mock(Environment.Service, { files: {} as never, spawner: {} as never }))],
+      }),
+    ),
+  )
 
 const start = Effect.gen(function* () {
   yield* ConfigInstructionPlugin.Plugin.effect(host())
@@ -976,28 +997,23 @@ describe("InstructionNotes.ensure", () => {
     }),
   )
 
-  // A file that appears while ensure waits for the file's lock (an edit tool writing it) is kept as it is, and ensure
-  // says it made nothing.
+  // A file that appears after ensure looked and before it holds the file's lock (an edit tool writing it) is kept as it
+  // is, and ensure says it made nothing.
   it.live("keeps a file that appears while ensure waits for its lock, and does not claim to have created it", () =>
     Effect.gen(function* () {
       const where = yield* scratch
       const file = path.join(where.root, "AGENTS.md")
       yield* Effect.gen(function* () {
         const { notes } = yield* start
-        const mutation = yield* FileMutation.Service
-        const writer = mutation.withLock([file])(Effect.sleep("150 millis").pipe(Effect.andThen(write(file, "written meanwhile\n"))))
-        const [, ensured] = yield* Effect.all(
-          [writer, Effect.sleep("30 millis").pipe(Effect.andThen(notes.ensure("project")))],
-          { concurrency: 2 },
-        )
-        expect(ensured).toEqual({ path: file, created: false })
+        expect(yield* notes.ensure("project")).toEqual({ path: file, created: false })
         expect(yield* read(file)).toBe("written meanwhile\n")
-      }).pipe(Effect.provide(layerFor(where)))
+      }).pipe(Effect.provide(layerFor({ ...where, beforeLock: write(file, "written meanwhile\n") })))
     }),
   )
 
-  // What ensure answers must really be in the folder the target named: a link to a file outside that appears while ensure
-  // waits for the lock is refused, in a trusted project as well, and the file it leads to is left alone (class 4).
+  // What ensure answers must really be in the folder the target named: a link to a file outside that appears after ensure
+  // looked and before it holds the lock is refused, in a trusted project as well, and the file it leads to is left alone
+  // (class 4). The control: with nothing appearing there, ensure makes the file in the project.
   it.live("refuses a link to a file outside that appears while ensure waits for its lock", () =>
     Effect.gen(function* () {
       if (!canLinkFile) return
@@ -1007,17 +1023,18 @@ describe("InstructionNotes.ensure", () => {
       yield* write(outside, "secret\n")
       yield* Effect.gen(function* () {
         const { notes } = yield* start
-        const mutation = yield* FileMutation.Service
-        const linker = mutation.withLock([file])(
-          Effect.sleep("150 millis").pipe(Effect.andThen(Effect.promise(() => fs.symlink(outside, file)))),
-        )
-        const [, reason] = yield* Effect.all(
-          [linker, Effect.sleep("30 millis").pipe(Effect.andThen(outcome(notes.ensure("project"))))],
-          { concurrency: 2 },
-        )
-        expect(reason).toBe("outside")
-      }).pipe(Effect.provide(layerFor(where)))
+        expect(yield* outcome(notes.ensure("project"))).toBe("outside")
+      }).pipe(Effect.provide(layerFor({ ...where, beforeLock: Effect.promise(() => fs.symlink(outside, file)) })))
       expect(yield* read(outside)).toBe("secret\n")
+
+      const control = yield* scratch
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* notes.ensure("project")).toEqual({
+          path: yield* Effect.promise(() => fs.realpath(path.join(control.root, "AGENTS.md"))),
+          created: true,
+        })
+      }).pipe(Effect.provide(layerFor({ ...control, beforeLock: Effect.void })))
     }),
   )
 
