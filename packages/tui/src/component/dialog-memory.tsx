@@ -21,7 +21,9 @@ import { onThisMachine } from "./dialog-agent"
 // a file in the person's editor and a folder in the system's file manager (class 3). Every name, path and message the
 // server sends is drawn through `plain`, since a repository chooses its file names and an agent its id (class 9).
 
-// The file chosen last, focused the next time the dialog opens, as long as the process runs. Folder rows are not kept.
+// Where the file chosen last really is, as the server answered, focused the next time the dialog opens while the process
+// runs. The place is kept rather than the row, since a user or project file that a choice made comes back as a loaded
+// file with another target and its real path. Folder rows are not kept.
 let last: string | undefined
 
 type Row =
@@ -47,7 +49,16 @@ export function DialogMemory(props: {
   const toast = useToast()
 
   const ref = () => location.ref ?? data.location.default()
-  const [listing, { refetch }] = createResource(() => client.api.location.memory.list({ location: ref() }))
+  // Reading a resource in its error state throws again, up to the root ErrorBoundary, which would replace the whole UI.
+  // So a listing that fails (a folder nobody trusted, an older server without the route, a lost connection), at the
+  // start or after the toggle, closes the dialog with the server's message instead (class 7, 13).
+  const [listing, { refetch }] = createResource(() =>
+    client.api.location.memory.list({ location: ref() }).catch((error: unknown) => {
+      dialog.clear()
+      toast.show({ variant: "error", message: `Could not list memory: ${plain(errorMessage(error))}` })
+      return undefined
+    }),
+  )
   const here = () => onThisMachine(client.url, ref().directory)
 
   // A path as a person reads it: below the home folder or the location's folder, whichever is shorter, else whole.
@@ -131,8 +142,8 @@ export function DialogMemory(props: {
 
   const current = () => {
     const files = listing()?.files ?? []
-    const remembered = files.find((file) => key({ type: "file", target: file.target, path: file.path }) === last)
-    const first = remembered ?? files[0]
+    const chosen = last
+    const first = files.find((file) => chosen !== undefined && path.relative(file.path, chosen) === "") ?? files[0]
     return first === undefined ? undefined : key({ type: "file", target: first.target, path: first.path })
   }
 
@@ -141,12 +152,13 @@ export function DialogMemory(props: {
     if (row.type === "toggle") {
       const value = listing()
       if (value === undefined) return
-      await client.api.config.update({ memory: { enabled: !value.enabled } }).catch(toast.error)
+      await client.api.config
+        .update({ memory: { enabled: !value.enabled } })
+        .catch((error: unknown) => toast.show({ variant: "error", message: plain(errorMessage(error)) }))
       // What the server reports is shown, which an environment switch or a managed setting may decide.
       return refetch()
     }
     if (!here()) return
-    if (row.type === "file") last = key(row)
     const failed = (error: unknown) => {
       if (row.type === "file") dialog.clear()
       toast.show({ variant: "error", message: `Could not open ${display(row.path)}: ${plain(errorMessage(error))}` })
@@ -162,6 +174,8 @@ export function DialogMemory(props: {
       return (props.open ?? openPath)(made.path).catch(failed)
     }
     if (made.type !== "file") return failed(new Error("the server did not answer with a file"))
+    // The answer is the real place, which is where the next listing names a file this choice made.
+    last = made.path
     const opened = await (props.edit ?? editFile)({ file: made.path, renderer }).catch((error: unknown) => {
       failed(error)
       return undefined
@@ -195,7 +209,7 @@ export function DialogMemory(props: {
   )
 }
 
-// Rows are told apart by what they name, so the remembered file is found again whatever moved around it.
+// Rows are told apart by what they name, so a chosen option finds its row again whatever moved around it.
 function key(row: { readonly type: string; readonly target?: InstructionMemoryTarget; readonly path?: string }, extra = "") {
   return JSON.stringify([row.type, row.target, row.path, extra])
 }

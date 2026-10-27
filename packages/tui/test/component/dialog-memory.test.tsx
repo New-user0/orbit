@@ -153,6 +153,10 @@ const dot = (...parts: string[]) => `.${path.sep}${path.join(...parts)}`
 
 // The dialog as `/memory` opens it, at the large width, with the toasts drawn beside it and readable after it closes.
 const toasts: { current?: ReturnType<typeof useToast> } = {}
+// Forgets the toasts of an earlier render, so a wait for a toast reads only the next dialog's.
+const forget = () => {
+  toasts.current = undefined
+}
 function ToastProbe() {
   toasts.current = useToast()
   return <box />
@@ -451,4 +455,153 @@ test("draws a warning whose file did not load as its own row, and Enter on it do
   expect(recorded.posted).toEqual([])
   expect(editor.edited).toEqual([])
   expect(setup.dialog.stack).toHaveLength(1)
+})
+
+// A listing the server refuses or cannot answer is read as an error, never left in the resource: reading an errored
+// resource throws again, and the root ErrorBoundary would replace the whole UI (class 7, 13). Each failure closes the
+// dialog with its message written out through `plain`; a listing that answers is the control.
+test("a listing that fails closes the dialog with the server's message and throws nothing", async () => {
+  const failures: [string, () => Response][] = [
+    [
+      "not trusted",
+      () => json({ _tag: "UntrustedFolderError", message: "not trusted \u001b[31m", directory: "x", persistent: true }, { status: 403 }),
+    ],
+    ["older server", () => new Response("Not Found", { status: 404 })],
+    ["server error", () => json({ _tag: "UnknownError", message: "broke \u001b[2J" }, { status: 500 })],
+    [
+      "lost connection",
+      () => {
+        throw new TypeError("connection refused \u0007")
+      },
+    ],
+  ]
+  for (const [name, fail] of failures) {
+    await using tmp = await project()
+    const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
+    await using setup = await renderLocal({
+      directory: tmp.dir,
+      url: "http://127.0.0.1:4096",
+      fetch: (url, request) =>
+        url.pathname === "/api/location/memory" && request.method === "GET" ? fail() : recorded.fetch(url, request),
+    })
+    forget()
+    show(setup, () => <DialogMemory open={async () => {}} />)
+    await wait(() => setup.dialog.stack.length === 0 && toasts.current?.currentToast != null)
+    const frame = await settle(setup)
+    expect({ name, stack: setup.dialog.stack.length, variant: toasts.current?.currentToast?.variant }).toEqual({
+      name,
+      stack: 0,
+      variant: "error",
+    })
+    expect(toasts.current?.currentToast?.message).toStartWith("Could not list memory: ")
+    expect(frame).not.toContain("\u001b")
+    expect(frame).not.toContain("\u0007")
+    expect(recorded.posted).toEqual([])
+    if (name === "not trusted") expect(toasts.current?.currentToast?.message).toContain("not trusted \\x1b[31m")
+    // An answer the API does not declare reaches the client as its status alone.
+    if (name === "server error") expect(toasts.current?.currentToast?.message).toContain("500")
+    if (name === "lost connection") expect(toasts.current?.currentToast?.message).toContain("connection refused \\x07")
+  }
+
+  // The control: the same dialog over a listing that answers stays open and draws it.
+  await using tmp = await project()
+  const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
+  await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
+  show(setup, () => <DialogMemory open={async () => {}} />)
+  await until(setup, "Project memory")
+  expect(setup.dialog.stack).toHaveLength(1)
+})
+
+test("a listing that fails after the toggle closes the dialog with its message", async () => {
+  await using tmp = await project()
+  const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
+  await using setup = await renderLocal({
+    directory: tmp.dir,
+    url: "http://127.0.0.1:4096",
+    // The first listing answers; the one the toggle asks for afterwards fails.
+    fetch: (url, request) =>
+      url.pathname === "/api/location/memory" && request.method === "GET" && recorded.listed() >= 1
+        ? json({ _tag: "UnknownError", message: "gone \u001b[2J" }, { status: 500 })
+        : recorded.fetch(url, request),
+  })
+  forget()
+  show(setup, () => <DialogMemory open={async () => {}} />)
+  await until(setup, "Auto memory: on")
+  setup.mockInput.pressArrow("up")
+  setup.mockInput.pressEnter()
+  await wait(() => setup.dialog.stack.length === 0)
+  await settle(setup)
+  expect(recorded.patched).toEqual([{ memory: { enabled: false } }])
+  expect(setup.dialog.stack).toHaveLength(0)
+  expect(toasts.current?.currentToast).toMatchObject({ variant: "error" })
+  expect(toasts.current?.currentToast?.message).toStartWith("Could not list memory: ")
+  expect(toasts.current?.currentToast?.message).toContain("500")
+})
+
+test("a toggle whose write is refused shows the server's message through plain and keeps the dialog", async () => {
+  await using tmp = await project()
+  const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
+  await using setup = await renderLocal({
+    directory: tmp.dir,
+    url: "http://127.0.0.1:4096",
+    fetch: (url, request) =>
+      url.pathname === "/api/experimental/config" && request.method === "PATCH"
+        ? json({ _tag: "InvalidRequestError", message: "cannot write \u001b[31m", field: "memory", kind: "refused" }, { status: 400 })
+        : recorded.fetch(url, request),
+  })
+  forget()
+  show(setup, () => <DialogMemory open={async () => {}} />)
+  await until(setup, "Auto memory: on")
+  setup.mockInput.pressArrow("up")
+  setup.mockInput.pressEnter()
+  await wait(() => recorded.listed() >= 2 && toasts.current?.currentToast != null)
+  const frame = await settle(setup)
+  expect(toasts.current?.currentToast?.variant).toBe("error")
+  expect(toasts.current?.currentToast?.message).toContain("cannot write \\x1b[31m")
+  expect(frame).not.toContain("\u001b")
+  expect(setup.dialog.stack).toHaveLength(1)
+})
+
+// As the reference does, the chosen place is kept rather than the row: a project file made from the Project memory row
+// comes back as a loaded file with a file target, and that file is focused the next time.
+test("a user or project file made from its row is focused the next time, now listed as a loaded file", async () => {
+  await using tmp = await project()
+  const editor = editing()
+  const agents = path.join(tmp.dir, "AGENTS.md")
+  const other = path.join(tmp.dir, "x.md")
+  // The missing file is listed at its default spelling, through a link; the server answers, and then lists, its real place.
+  const spelled = path.join(tmp.dir, "link", "AGENTS.md")
+  const state = { made: false }
+  const recorded = server(tmp.dir, {
+    listing: () =>
+      listing(tmp.dir, {
+        files: [
+          { path: other, kind: "project", chars: 1, exists: true, target: fileTarget(other) },
+          state.made
+            ? { path: agents, kind: "project", chars: 0, role: "project", exists: true, target: fileTarget(agents) }
+            : { path: spelled, kind: "project", chars: 0, role: "project", exists: false, target: { type: "scope", scope: "project" } },
+        ],
+        folders: [],
+      }),
+    answer: (target) => {
+      state.made = true
+      return json({ data: { path: target.type === "scope" ? agents : target.path, created: target.type === "scope", type: "file" } })
+    },
+  })
+  await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
+  const dialog = () => <DialogMemory edit={editor.edit} open={async () => {}} />
+  show(setup, dialog)
+  await until(setup, "Project memory")
+  // No earlier choice names a file here, so the first file is focused and one step down is Project memory.
+  setup.mockInput.pressArrow("down")
+  setup.mockInput.pressEnter()
+  await wait(() => editor.edited.length > 0 && setup.dialog.stack.length === 0)
+  expect(recorded.posted).toEqual([{ type: "scope", scope: "project" }])
+
+  show(setup, dialog)
+  await until(setup, "Project memory")
+  setup.mockInput.pressEnter()
+  await wait(() => editor.edited.length > 1)
+  expect(recorded.posted).toEqual([{ type: "scope", scope: "project" }, fileTarget(agents)])
+  expect(editor.edited).toEqual([agents, agents])
 })
