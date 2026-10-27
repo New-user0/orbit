@@ -996,6 +996,31 @@ describe("InstructionNotes.ensure", () => {
     }),
   )
 
+  // What ensure answers must really be in the folder the target named: a link to a file outside that appears while ensure
+  // waits for the lock is refused, in a trusted project as well, and the file it leads to is left alone (class 4).
+  it.live("refuses a link to a file outside that appears while ensure waits for its lock", () =>
+    Effect.gen(function* () {
+      if (!canLinkFile) return
+      const where = yield* scratch
+      const file = path.join(where.root, "AGENTS.md")
+      const outside = path.join(where.base, "outside.md")
+      yield* write(outside, "secret\n")
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        const mutation = yield* FileMutation.Service
+        const linker = mutation.withLock([file])(
+          Effect.sleep("150 millis").pipe(Effect.andThen(Effect.promise(() => fs.symlink(outside, file)))),
+        )
+        const [, reason] = yield* Effect.all(
+          [linker, Effect.sleep("30 millis").pipe(Effect.andThen(outcome(notes.ensure("project"))))],
+          { concurrency: 2 },
+        )
+        expect(reason).toBe("outside")
+      }).pipe(Effect.provide(layerFor(where)))
+      expect(yield* read(outside)).toBe("secret\n")
+    }),
+  )
+
   // `/memory` opens what ensure answers, so a file that leads out of a project that is not trusted is refused as a note
   // there is, and the place it leads to is never named; a trusted project follows its own link (the control).
   it.live("refuses a root file that leads outside an untrusted project, and answers the real file once trusted", () =>

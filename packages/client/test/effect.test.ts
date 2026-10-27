@@ -243,7 +243,7 @@ test("location.memory and the memory toggle use the public HTTP contract and dec
   const requests: Array<{ method: string; url: URL; body: unknown }> = []
   const listing = {
     files: [{ path: "/repo/AGENTS.md", kind: "project", chars: 4, role: "project", exists: true, target: { type: "file", path: "/repo/AGENTS.md" } }],
-    warnings: [{ path: "/repo/CLAUDE.md", type: "outside", message: "left out" }],
+    warnings: [{ path: "/repo/ORBIT.local.md", type: "outside", message: "left out" }],
     folders: [{ type: "agent", agent: "review", scope: "project", path: "/repo/.orbit/agent-memory/review", exists: false, target: { type: "agent", agent: "review" } }],
     enabled: true,
     git: true,

@@ -8,6 +8,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
+import { NodeFileSystem } from "@effect/platform-node"
 import { Effect, Layer, Schema } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
@@ -383,6 +384,43 @@ describe("MemoryListing.ensure", () => {
     }),
   )
 
+  // The folder is checked again once it is made: a link put at its place after its service checked it (the file system
+  // below plants one just before the make) is refused, and nothing is made where it leads (class 4).
+  it.live("refuses a folder that a link took the place of between its check and its make", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const planted: string[] = []
+      const swapping = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return new Proxy(real, {
+            get: (target, key) => {
+              const value: unknown = (target as unknown as Record<string | symbol, unknown>)[key]
+              if (typeof value !== "function") return value
+              if (key !== "makeDirectory") return value.bind(target)
+              return (folder: string, ...rest: unknown[]) =>
+                Effect.promise(async () => {
+                  if (path.basename(folder) !== "deep" || planted.length > 0) return
+                  await fs.mkdir(path.dirname(folder), { recursive: true })
+                  await fs.symlink(l.outside, folder, linkType)
+                  planted.push(folder)
+                }).pipe(Effect.andThen(value.apply(target, [folder, ...rest]) as Effect.Effect<void, unknown>))
+            },
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const reason = yield* Effect.gen(function* () {
+        const memory = yield* start
+        yield* withAgents([{ id: "deep", memory: "project" }])
+        return yield* outcome(memory.ensure({ type: "agent", agent: "deep" }))
+      }).pipe(provide(l, { files: swapping }))
+      expect(planted).toHaveLength(1)
+      expect(reason).toBe("refused")
+      expect(yield* entries(l.outside)).toEqual([])
+    }),
+  )
+
   it.live("refuses a memory folder that is a link or a file, and makes nothing through it", () =>
     Effect.gen(function* () {
       type Row = {
@@ -520,6 +558,37 @@ describe("MemoryListing.ensure", () => {
           expect(yield* isDirectory(control.path)).toBe(true)
         }),
       // Room for the 15 s bound above to be the check that fails when a share is resolved.
+      30_000,
+    )
+
+  // The memory folder is decided when the Location starts; a link to a share that appears on its way afterwards is asked
+  // about before ensure stats or makes anything below it (class 6).
+  if (process.platform === "win32" && canLinkFile)
+    it.live(
+      "asks about a share before it makes the memory folder, when a link to one appears after the start",
+      () =>
+        Effect.gen(function* () {
+          const share = "\\\\203.0.113.171\\share\\x"
+          const l = yield* layout
+          yield* Effect.promise(() => fs.mkdir(l.data, { recursive: true }))
+          const recorded = recordedFileSystem()
+          const started = Date.now()
+          const reason = yield* Effect.gen(function* () {
+            const memory = yield* start
+            yield* Effect.promise(() => fs.symlink(share, path.join(l.data, "memory"), "dir"))
+            // Only what ensure touches counts; the start read the folder before the link was there.
+            recorded.calls.length = 0
+            return yield* outcome(memory.ensure({ type: "memory" }))
+          }).pipe(provide(l, { files: recorded.layer }))
+          expect(Date.now() - started).toBeLessThan(15_000)
+          const named = [path.join(l.data, "memory"), path.join(yield* realOf(l.data), "memory")].map((item) => item.toLowerCase())
+          const calls = recorded.calls.filter((call) => {
+            const arg = call.slice(call.indexOf(" ") + 1).toLowerCase()
+            return named.some((item) => arg === item || arg.startsWith(`${item}${path.sep}`))
+          })
+          expect(calls.filter((call) => !call.startsWith("readLink "))).toEqual([])
+          expect(reason).toBe("refused")
+        }),
       30_000,
     )
 
