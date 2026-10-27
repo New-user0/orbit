@@ -110,7 +110,37 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   stay inside the verified common directory, and no git process starts while the folder is untrusted (the "already
   ignored" question is asked of git, with fsmonitor off, only once it is trusted). A failure of that step is logged and
   keeps the note. The text is the person's own and is not filtered; an import token in it meets the import gate when the
-  file loads. Proof: `test/instruction-notes.test.ts`, `server/test/instruction-note.test.ts`.
+  file loads. A link at the file's own place that cannot be read through (a dangling one) is never created through,
+  trusted or not: `wx` on Windows makes the file the link points at, so a link there counts as something present and the
+  note is refused as `outside` (proof: "never creates through a dangling link at the file's place, in a trusted
+  project"; dropping the `readLink` check fails it). Proof: `test/instruction-notes.test.ts`,
+  `server/test/instruction-note.test.ts`.
+- `MemoryListing` (`packages/core/src/memory/listing.ts`, served at `GET` and `POST /api/location/memory`) lists what
+  `/memory` shows and makes one listed row. Both routes ask `requireTrusted()` before the service runs (classes 1, 12;
+  proof: "refuses both routes in a folder that is not trusted, and makes nothing" in
+  `server/test/location-memory.test.ts`, with `implicit: false` and a trusted control). The listing reads nothing new: the
+  files are `InstructionDiscovery.status()` after a rescan (the start-up list, so no nested file loaded on demand and no
+  conditional rule), the user and project rows come from `InstructionNotes.targets` (a target that did not load is never
+  resolved, since it may be a link to a share), and the folders are the values `MemoryStore`, `MemoryTeam.current` and
+  `MemoryAgent.folder` already checked; an agent whose folder is refused is left out (class 7). A folder's `exists` is a
+  `stat` of its real path after `LinkShare.blocked` (class 6). `ensure` takes a target, never a place: a `file` must be a
+  path the status lists now and is refused unless it is still a regular file at that very place (`realPath` gives the
+  same path); `scope` is `InstructionNotes.ensure` for user or project, so `/memory` and a `#` note pick the same file
+  (class 3); `memory`, `team` and `agent` are re-derived from those services (an agent id must be one `Agent.list` holds
+  with a memory scope and that `ConfigAgent.isName` accepts) and anything else is `unknown`, so no client string is
+  joined into a path (class 5). A folder is asked about a share, made at its checked real path and checked afterwards
+  (`realPath` names the same place and `stat` says directory), so a file or a link planted there is `refused` (class 4).
+  `InstructionNotes.ensure` asks the note's `outside` question before and under the file's lock, creates the file empty
+  with the same link-aware exclusive create as `add`, and answers only a real path inside the folder the target named; it
+  never changes an existing file. Refusals reach clients as `InvalidRequestError` (field `target`, kind the reason) and a
+  file that cannot be made as `ServiceUnavailableError` for `memory` (class 13). Proof: `test/memory-listing.test.ts`
+  (each row of the class matrix: listing order and roles, folders while memory and team memory are on, refused agents,
+  links and a planted file at each root, a share with the recorded file system, the dangling project file, targets the
+  listing does not hold), `test/instruction-notes.test.ts` ("ensure" rows), `server/test/location-memory.test.ts`.
+- The instruction loader's `outside` warning (`packages/core/src/config/plugin/instruction.ts`): a walk file or a rule
+  that is a link and is left out for leading outside is named in `InstructionDiscovery.status()` by the spelling the walk
+  built; a plain file left out is not named. Like every warning it never reaches the model. Proof: "warns about a walk
+  file and a rule that a wide project leaves out for leading outside" in `test/instruction-discovery.test.ts`.
 - `system_prompt_file` in `PromptConfigPlugin` (`packages/core/src/plugin/prompt-config.ts`) reads a UTF-8 file into
   `system[0]` of each request of the main thread, so `ConfigTrust` withholds the key (kind `settings`) from an untrusted
   project or local document, and the gate is the config's own, at each request. The loader also refuses, for every
@@ -1332,7 +1362,7 @@ every other extension):
 - Config above the project: none is read (D7), so the question names none. Proof: `test/trust.test.ts` ("asks about a
   repository below an untrusted folder on its own").
 
-**Built-in commands of the terminal UI** (`/ide`, `/terminal-setup`, `/agents` create and edit, and the route they use):
+**Built-in commands of the terminal UI** (`/ide`, `/terminal-setup`, `/agents` create and edit, `/memory`, and the routes they use):
 
 - `/ide` lists the locks in the state folder that `readLocks` accepts, so nothing is read from a project folder; the name
   and folders an editor chose reach the dialog and its toasts written out: the lock's name is escaped where the lock is
@@ -1365,6 +1395,20 @@ every other extension):
   creates the target of a dangling link under `wx`), then opened exclusive (`wx`), so nothing is overwritten. Errors block the save. Proof:
   `test/util/agent-file.test.ts` (a junction at `.orbit/agents` and at `.orbit`, a file link at the path to a missing and to an existing outside file, the existing file, the hostile
   descriptions, every refused name), `test/component/dialog-agent-create.test.tsx`.
+- `/memory` (`packages/tui/src/component/dialog-memory.tsx`) draws the `memory.list` answer and decides no place itself:
+  Enter posts the row's target to `memory.ensure` and opens only the path the server answered, a file in the editor and
+  a folder in the system's file manager, and the folder only when the server answered `folder` (classes 3, 4). Rows that
+  open do nothing while the server is not on this machine. Every path, agent id, scope and message from the server is
+  drawn through `plain` (class 9). The editor is `editFile` (`packages/tui/src/editor.ts`): `VISUAL`, then `EDITOR`, then
+  notepad on Windows or the first of code, vi and nano elsewhere, each found with `which` (PATH only) and started by the
+  found path through cross-spawn with the file as one argument; when none is found it rejects and never hands the file to
+  the system opener, which on Windows runs a `.bat` or `.cmd` instruction file instead of showing it (class 10). The
+  toggle writes `memory.enabled` through `Config.update`, which edits only the person's own global config document (class
+  8). Proof: `test/component/dialog-memory.test.tsx` (drawn frames with escape sequences, line breaks and bidi controls,
+  the returned path, a folder answered as a file, refusals, a remote server), `test/editor-program.test.ts` (decoys
+  `notepad`, `code` and `vi` as `.exe` and `.cmd` in the working folder with `NoDefaultCurrentDirectoryInExePath`
+  removed, a `run.bat` with no editor on PATH, a file name with shell characters), and "writes memory.enabled to the
+  person's own config and leaves the project's alone" in `server/test/config.test.ts`.
 - `config.sources.changed` takes at most 100 paths of at most 4096 characters, keeps those that are absolute, exist and
   whose real path lies inside the real path of a user, project or local config directory entry, and passes them to
   `Config.notify`, which reports them to `changes()` and reloads nothing. A forged path costs at most one more rebuild of
