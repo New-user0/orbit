@@ -494,7 +494,15 @@ scenario(
   function* (s) {
     const hooks = yield* PluginHooks.Service
     const long = "This opening line of the prompt is longer than forty characters."
-    const parts = [`Intro\n\n# Plain heading\nThe rest of the part.`, `\n\n${long}\nMore.`, "Short line"]
+    const exact = "x".repeat(40)
+    const over = "y".repeat(41)
+    const parts = [
+      `Intro\n\n# Plain heading\nThe rest of the part.`,
+      `\n\n${long}\nMore.`,
+      "Short line",
+      exact,
+      over,
+    ]
     yield* hooks.register("session", "context", (event) =>
       Effect.sync(() => void event.system.push(...parts.map((text) => SystemPart.make(text)))),
     )
@@ -505,6 +513,9 @@ scenario(
     expect(sections["Plain heading"]).toBe(Token.estimate(parts[0]!))
     expect(sections[`${long.slice(0, 40)}…`]).toBe(Token.estimate(parts[1]!))
     expect(sections["Short line"]).toBe(Token.estimate(parts[2]!))
+    // A line of exactly 40 characters is kept whole; one more character is cut.
+    expect(sections[exact]).toBe(Token.estimate(exact))
+    expect(sections[`${over.slice(0, 40)}…`]).toBe(Token.estimate(over))
     // The baseline's own sections are named by their key.
     expect(sections["test/context"]).toBe(Token.estimate("Initial context"))
   },
