@@ -2019,9 +2019,12 @@ and the warnings about the files. While memory is on it also lists the memory fo
 `memory.team` is on) and one folder per agent with a memory scope. Choosing a file creates it empty when it is not there
 and opens it in `$VISUAL`, `$EDITOR`, or else notepad on Windows or the first of `code`, `vi` and `nano` found on PATH;
 choosing a folder makes it and opens it in the system's file manager. A file is never handed to the system's opener. The
-first row turns memory on or off by writing `memory.enabled` to your own config. Rows that open something say they are
-unavailable when the server is not on this machine. The server answers at `GET /api/location/memory` and
-`POST /api/location/memory`, both refusing a folder that is not trusted, and `PATCH /api/experimental/config` takes
+first row turns memory on or off by writing `memory.enabled` to your own config. The file you open is focused the next
+time, also when it was just created from the user or project row. Rows that open something say they are unavailable
+when the server is not on this machine, and when the server cannot list (a folder that is not trusted, an older server)
+the dialog closes with its message. The server answers at `GET /api/location/memory` and
+`POST /api/location/memory`, both refusing a folder that is not trusted (the `POST` answers 503 when the file or
+folder cannot be made), and `PATCH /api/experimental/config` takes
 `memory.enabled` (`null` removes it).
 
 **Affects:** terminal UI users, and SDK callers that read the new routes or the new key.
