@@ -1,6 +1,7 @@
 import { InstructionNotes } from "@orbit/core/instruction-notes"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
+import { MemoryListing } from "@orbit/core/memory/listing"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
@@ -55,6 +56,33 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
                   Effect.fail(new InvalidRequestError({ message: error.message, kind: error.reason, field: "scope" })),
                 "InstructionNotes.WriteError": (error) =>
                   Effect.fail(new ServiceUnavailableError({ message: error.message, service: "instructions" })),
+              }),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "memory.list",
+        Effect.fn(function* () {
+          // The listing reads the folder's instruction files and agents, so a folder nobody trusted is refused first (class 1).
+          yield* requireTrusted()
+          const memory = yield* MemoryListing.Service
+          return { data: yield* memory.list() }
+        }),
+      )
+      .handle(
+        "memory.ensure",
+        Effect.fn(function* (ctx) {
+          // Making a file or folder changes the folder, and a folder nobody trusted stays as it is (class 12).
+          yield* requireTrusted()
+          const memory = yield* MemoryListing.Service
+          return {
+            data: yield* memory.ensure(ctx.payload.target).pipe(
+              Effect.catchTags({
+                "MemoryListing.TargetError": (error) =>
+                  Effect.fail(new InvalidRequestError({ message: error.message, kind: error.reason, field: "target" })),
+                "MemoryListing.WriteError": (error) =>
+                  Effect.fail(new ServiceUnavailableError({ message: error.message, service: "memory" })),
               }),
             ),
           }

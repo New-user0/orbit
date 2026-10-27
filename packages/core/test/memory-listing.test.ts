@@ -23,6 +23,7 @@ import { ManagedSettings } from "@orbit/core/managed-settings"
 import { MemoryAgent } from "@orbit/core/memory/agent"
 import { MemoryListing } from "@orbit/core/memory/listing"
 import { Plugin } from "@orbit/core/plugin"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Document, Info, type Entry } from "@orbit/schema/config"
@@ -79,7 +80,23 @@ const provide = (
   return Effect.provide(
     Layer.mergeAll(
       config,
-      AppNodeBuilder.build(LayerNode.group([MemoryListing.node, Database.node, Bus.node, Watcher.node]), [
+      AppNodeBuilder.build(
+        LayerNode.group([
+          MemoryListing.node,
+          MemoryAgent.node,
+          Agent.node,
+          InstructionDiscovery.node,
+          Database.node,
+          Bus.node,
+          FSUtil.node,
+          Global.node,
+          Location.node,
+          ProjectTrust.node,
+          WorkspaceTrust.node,
+          Watcher.node,
+          ManagedSettings.node,
+        ]),
+        [
         Config.node.replace(config),
         WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: true })),
         Global.node.replace(Global.layerWith({ config: l.config, home: l.home, data: l.data })),
@@ -103,7 +120,8 @@ const provide = (
         // The instruction plugin is started by the test itself, so there is nothing to wait for.
         Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
         ...(options.files ? [FSUtil.node.replace(options.files)] : []),
-      ]),
+        ],
+      ),
       watcher,
     ),
   )
@@ -188,7 +206,7 @@ describe("MemoryListing.list", () => {
       expect(listing).toMatchObject({ enabled: true, git: false, available: true })
       // Listing makes nothing.
       expect(yield* exists(path.join(l.project, "AGENTS.md"))).toBe(false)
-      expect(yield* exists(l.config)).toBe(false)
+      expect(yield* exists(path.join(l.config, "ORBIT.md"))).toBe(false)
     }),
   )
 

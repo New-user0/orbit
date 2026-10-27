@@ -49,6 +49,7 @@ import { AgentInstructions } from "./agent/instructions.js"
 import { Snapshot } from "./snapshot.js"
 import { InstructionDiscovery } from "./instruction-discovery.js"
 import { InstructionNotes } from "./instruction-notes.js"
+import { MemoryListing } from "./memory/listing.js"
 import { InstructionBuiltIns } from "./instructions/builtins.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
 import { SessionInstructions } from "./session/instructions.js"
@@ -95,6 +96,7 @@ const nodes = [
   InstructionBuiltIns.node,
   InstructionDiscovery.node,
   InstructionNotes.node,
+  MemoryListing.node,
   FileAccess.node,
   FileMutation.node,
   Formatter.node,

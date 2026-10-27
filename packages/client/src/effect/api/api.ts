@@ -163,6 +163,70 @@ export type LocationInstructionNoteAddOperation<E = never> = (
   input: LocationInstructionNoteAddInput,
 ) => Effect.Effect<LocationInstructionNoteAddOutput, E>
 
+export type LocationMemoryListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
+export type LocationMemoryListOutput = {
+  readonly files: ReadonlyArray<{
+    readonly path: string
+    readonly kind: "managed" | "user" | "project" | "local"
+    readonly chars: number
+    readonly importedBy?: string | undefined
+    readonly role?: "user" | "project" | undefined
+    readonly exists: boolean
+    readonly target:
+      | { readonly type: "file"; readonly path: string }
+      | { readonly type: "scope"; readonly scope: "user" | "project" | "local" }
+      | { readonly type: "memory" }
+      | { readonly type: "team" }
+      | { readonly type: "agent"; readonly agent: string }
+  }>
+  readonly warnings: ReadonlyArray<{
+    readonly path: string
+    readonly type: "size" | "import-untrusted" | "import-external" | "outside"
+    readonly message: string
+    readonly chars?: number | undefined
+    readonly limit?: number | undefined
+    readonly target?: string | undefined
+    readonly directory?: string | undefined
+  }>
+  readonly folders: ReadonlyArray<{
+    readonly type: "memory" | "team" | "agent"
+    readonly agent?: string | undefined
+    readonly scope?: "user" | "project" | "local" | undefined
+    readonly path: string
+    readonly exists: boolean
+    readonly target:
+      | { readonly type: "file"; readonly path: string }
+      | { readonly type: "scope"; readonly scope: "user" | "project" | "local" }
+      | { readonly type: "memory" }
+      | { readonly type: "team" }
+      | { readonly type: "agent"; readonly agent: string }
+  }>
+  readonly enabled: boolean
+  readonly git: boolean
+  readonly available: boolean
+}
+export type LocationMemoryListOperation<E = never> = (
+  input?: LocationMemoryListInput,
+) => Effect.Effect<LocationMemoryListOutput, E>
+
+export type LocationMemoryEnsureInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+  readonly target:
+    | { readonly type: "file"; readonly path: string }
+    | { readonly type: "scope"; readonly scope: "user" | "project" | "local" }
+    | { readonly type: "memory" }
+    | { readonly type: "team" }
+    | { readonly type: "agent"; readonly agent: string }
+}
+export type LocationMemoryEnsureOutput = {
+  readonly path: string
+  readonly created: boolean
+  readonly type: "file" | "folder"
+}
+export type LocationMemoryEnsureOperation<E = never> = (
+  input: LocationMemoryEnsureInput,
+) => Effect.Effect<LocationMemoryEnsureOutput, E>
+
 export type LocationTrustListOutput = ReadonlyArray<{
   readonly directory: AbsolutePath
   readonly time: number
@@ -191,6 +255,7 @@ export interface LocationApi<E = never> {
       readonly add: LocationInstructionNoteAddOperation<E>
     }
   }
+  readonly memory: { readonly list: LocationMemoryListOperation<E>; readonly ensure: LocationMemoryEnsureOperation<E> }
 }
 
 export type AgentListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
@@ -547,7 +612,7 @@ export type SessionInstructionsPreviewOutput = {
     }>
     readonly warnings: ReadonlyArray<{
       readonly path: string
-      readonly type: "size" | "import-untrusted" | "import-external"
+      readonly type: "size" | "import-untrusted" | "import-external" | "outside"
       readonly message: string
       readonly chars?: number | undefined
       readonly limit?: number | undefined
@@ -2703,6 +2768,7 @@ export type ConfigUpdateInput = {
   readonly shell?: string | null
   readonly output_style?: string | null
   readonly language?: string | null
+  readonly memory?: { readonly enabled?: boolean | null }
 }
 export type ConfigUpdateOutput = void
 export type ConfigUpdateOperation<E = never> = (input?: ConfigUpdateInput) => Effect.Effect<ConfigUpdateOutput, E>

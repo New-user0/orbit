@@ -20,6 +20,10 @@ import type {
   LocationInstructionNoteTargetsOutput,
   LocationInstructionNoteAddInput,
   LocationInstructionNoteAddOutput,
+  LocationMemoryListInput,
+  LocationMemoryListOutput,
+  LocationMemoryEnsureInput,
+  LocationMemoryEnsureOutput,
   LocationTrustListOutput,
   LocationTrustRevokeInput,
   LocationTrustRevokeOutput,
@@ -370,6 +374,22 @@ const EndpointLocationInstructionNoteAdd =
       ),
     )
 
+const EndpointLocationMemoryList = (raw: RawClient["server.location"]) => (input?: LocationMemoryListInput) =>
+  preserveEffect<LocationMemoryListOutput>()(
+    raw["memory.list"]({ query: { location: input?.["location"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointLocationMemoryEnsure = (raw: RawClient["server.location"]) => (input: LocationMemoryEnsureInput) =>
+  preserveEffect<LocationMemoryEnsureOutput>()(
+    raw["memory.ensure"]({ query: { location: input["location"] }, payload: { target: input["target"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointLocationTrustList = (raw: RawClient["server.location"]) => () =>
   preserveEffect<LocationTrustListOutput>()(raw["trust.list"]({}).pipe(Effect.mapError(mapClientError)))
 
@@ -390,6 +410,7 @@ const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
   instruction: {
     note: { targets: EndpointLocationInstructionNoteTargets(raw), add: EndpointLocationInstructionNoteAdd(raw) },
   },
+  memory: { list: EndpointLocationMemoryList(raw), ensure: EndpointLocationMemoryEnsure(raw) },
 })
 
 const EndpointAgentList = (raw: RawClient["server.agent"]) => (input?: AgentListInput) =>
@@ -1706,7 +1727,12 @@ const EndpointConfigShells = (raw: RawClient["server.config"]) => () =>
 const EndpointConfigUpdate = (raw: RawClient["server.config"]) => (input?: ConfigUpdateInput) =>
   preserveEffect<ConfigUpdateOutput>()(
     raw["config.update"]({
-      payload: { shell: input?.["shell"], output_style: input?.["output_style"], language: input?.["language"] },
+      payload: {
+        shell: input?.["shell"],
+        output_style: input?.["output_style"],
+        language: input?.["language"],
+        memory: input?.["memory"],
+      },
     }).pipe(Effect.mapError(mapClientError)),
   )
 

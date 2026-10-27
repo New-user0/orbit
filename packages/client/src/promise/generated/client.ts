@@ -14,6 +14,10 @@ import type {
   LocationInstructionNoteTargetsOutput,
   LocationInstructionNoteAddInput,
   LocationInstructionNoteAddOutput,
+  LocationMemoryListInput,
+  LocationMemoryListOutput,
+  LocationMemoryEnsureInput,
+  LocationMemoryEnsureOutput,
   LocationTrustListOutput,
   LocationTrustRevokeInput,
   LocationTrustRevokeOutput,
@@ -562,6 +566,33 @@ export function make(options: ClientOptions) {
               requestOptions,
             ).then((value) => value.data),
         },
+      },
+      memory: {
+        list: (input?: LocationMemoryListInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: LocationMemoryListOutput }>(
+            {
+              method: "GET",
+              path: `/api/location/memory`,
+              query: { location: input?.["location"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401, 403],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        ensure: (input: LocationMemoryEnsureInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: LocationMemoryEnsureOutput }>(
+            {
+              method: "POST",
+              path: `/api/location/memory`,
+              query: { location: input["location"] },
+              body: { target: input["target"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401, 403, 503],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
       },
     },
     agent: {
@@ -2381,7 +2412,12 @@ export function make(options: ClientOptions) {
           {
             method: "PATCH",
             path: `/api/experimental/config`,
-            body: { shell: input?.["shell"], output_style: input?.["output_style"], language: input?.["language"] },
+            body: {
+              shell: input?.["shell"],
+              output_style: input?.["output_style"],
+              language: input?.["language"],
+              memory: input?.["memory"],
+            },
             successStatus: 204,
             declaredStatuses: [400, 401],
             empty: true,

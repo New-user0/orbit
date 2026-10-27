@@ -146,6 +146,46 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
         ),
     )
     .add(
+      HttpApiEndpoint.get("memory.list", "/api/location/memory", {
+        query: LocationQuery,
+        success: Schema.Struct({ data: Instruction.MemoryListing }),
+        error: UntrustedFolderError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.list",
+            summary: "List memory files and folders",
+            description:
+              "What /memory shows for the location: the instruction files it loaded at start-up in load order (each import with the file that imported it), then the user and project files a note would be added to when neither is among them, the warnings about the files, and, while memory is on, the memory folder, the team memory folder while team memory is on, and one folder for each agent with a memory scope. Folder paths are as spelled; ensure answers where each really is. The instruction files are read from disk again first, and nothing is created. A folder that is not trusted is refused with an untrusted-folder error.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.ensure", "/api/location/memory", {
+        query: LocationQuery,
+        payload: Schema.Struct({
+          target: Instruction.MemoryTarget.annotate({
+            description:
+              "The row of the listing to make: a loaded file by its listed path, the user or project file, the memory or team memory folder, or an agent's folder by the agent's id.",
+          }),
+        }),
+        success: Schema.Struct({ data: Instruction.MemoryEnsured }),
+        error: [InvalidRequestError, ServiceUnavailableError, UntrustedFolderError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.ensure",
+            summary: "Make a memory file or folder",
+            description:
+              "Make the file or folder a row of the memory listing names when it is not there, and answer where it really is, which is the path a client opens. A file is created empty and an existing one is never changed; the user and project files are the ones a note would be added to. A folder is made at the real path its checks resolved and checked again afterwards. A target the listing does not hold is refused with kind unknown, a folder or file that is a link or no longer what was listed with kind refused, and a file that leads outside the project with kind outside; nothing is made for any of them. A file that cannot be created is a service-unavailable error for the memory service. A folder that is not trusted is refused with an untrusted-folder error, and nothing is made.",
+          }),
+        ),
+    )
+    .add(
       // Grants belong to the server, not to a location, so this one boots none.
       HttpApiEndpoint.get("trust.list", "/api/trust", {
         success: Schema.Array(Trust.Grant),

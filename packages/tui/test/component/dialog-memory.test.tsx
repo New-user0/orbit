@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import os from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { plant } from "../../../core/test/fixture/decoy"
 import { DialogMemory } from "../../src/component/dialog-memory"
-import { Toast } from "../../src/ui/toast"
+import { Toast, useToast } from "../../src/ui/toast"
+import type { JSX } from "solid-js"
+import { tmpdir } from "../fixture/fixture"
 import { renderLocal } from "../fixture/local"
 import { json } from "../fixture/tui-client"
 
@@ -28,8 +29,8 @@ afterEach(() => {
 })
 
 async function project() {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "orbit-memory-dialog-"))
-  return { dir, [Symbol.asyncDispose]: () => rm(dir, { recursive: true, force: true }) }
+  const folder = await tmpdir()
+  return { dir: folder.path, [Symbol.asyncDispose]: () => folder[Symbol.asyncDispose]() }
 }
 
 type Target = Record<string, string>
@@ -150,12 +151,32 @@ function editing() {
 
 const dot = (...parts: string[]) => `.${path.sep}${path.join(...parts)}`
 
+// The dialog as `/memory` opens it, at the large width, with the toasts drawn beside it and readable after it closes.
+const toasts: { current?: ReturnType<typeof useToast> } = {}
+function ToastProbe() {
+  toasts.current = useToast()
+  return <box />
+}
+function show(setup: Awaited<ReturnType<typeof renderLocal>>, dialog: () => JSX.Element) {
+  setup.dialog.replace(
+    () => (
+      <>
+        {dialog()}
+        <Toast />
+        <ToastProbe />
+      </>
+    ),
+    undefined,
+    { size: "large" },
+  )
+}
+
 test("draws the toggle, the files in load order with imports indented, the user and project rows and the folder rows", async () => {
   await using tmp = await project()
   const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
   const editor = editing()
   await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-  setup.dialog.replace(() => <DialogMemory edit={editor.edit} open={async () => {}} />)
+  show(setup, () => <DialogMemory edit={editor.edit} open={async () => {}} />)
   const frame = await until(setup, "Open review agent memory")
   const lines = frame.split("\n")
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
@@ -183,7 +204,7 @@ test("describes the project file as checked in only in a git repository", async 
     await using tmp = await project()
     const recorded = server(tmp.dir, { listing: () => listing(tmp.dir, { git }) })
     await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-    setup.dialog.replace(() => <DialogMemory open={async () => {}} />)
+    show(setup, () => <DialogMemory open={async () => {}} />)
     const frame = flat(await until(setup, "Project memory"))
     expect(frame).toContain(`${git ? "Checked in at" : "Saved in"} ${dot("AGENTS.md")}`)
     expect(frame).not.toContain(git ? "Saved in ." : "Checked in at")
@@ -192,7 +213,7 @@ test("describes the project file as checked in only in a git repository", async 
 
 test("draws every name, path and message from the server through plain", async () => {
   await using tmp = await project()
-  const hostile = path.join(tmp.dir, "x\u001b[2Jy\nz‮w.md")
+  const hostile = path.join(tmp.dir, "x\u001b[2Jy\nz\u202ew.md")
   const recorded = server(tmp.dir, {
     listing: () =>
       listing(tmp.dir, {
@@ -202,7 +223,7 @@ test("draws every name, path and message from the server through plain", async (
           {
             type: "agent",
             agent: "ag\u001b]0;title\u0007ent",
-            scope: "user‮",
+            scope: "user\u202e",
             path: path.join(tmp.dir, "agent"),
             exists: false,
             target: { type: "agent", agent: "agent" },
@@ -211,14 +232,14 @@ test("draws every name, path and message from the server through plain", async (
       }),
   })
   await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-  setup.dialog.replace(() => <DialogMemory open={async () => {}} />)
+  show(setup, () => <DialogMemory open={async () => {}} />)
   const frame = await until(setup, "agent memory")
   expect(frame).toContain("x\\x1b[2Jy\\nz\\u{202e}w.md")
   expect(frame).toContain("too long\\x1b[31m red\\x07")
   expect(frame).toContain("ag\\x1b]0;title\\x07ent")
   expect(frame).toContain("user\\u{202e} scope")
   expect(frame).not.toContain("\u001b")
-  expect(frame).not.toContain("‮")
+  expect(frame).not.toContain("\u202e")
 })
 
 test("opens the path the server returned for a file and for a folder", async () => {
@@ -244,23 +265,8 @@ test("opens the path the server returned for a file and for a folder", async () 
   })
   const opened: string[] = []
   await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-  const show = () =>
-    setup.dialog.replace(() => (
-      <>
-        <DialogMemory open={async (folder) => void opened.push(folder)} />
-        <Toast />
-      </>
-    ))
-  show()
-  await until(setup, "Project memory")
-  // The listed spelling is AGENTS.md at the project; the server answers another, real place.
-  setup.mockInput.pressEnter()
-  const toast = flat(await until(setup, "VISUAL"))
-  expect((await ran()).map((line) => line.replace(/^orbit-memory-editor\.exe /, ""))).toEqual([path.join(real, "AGENTS.md")])
-  expect(toast).toContain(dot("real", "AGENTS.md"))
-  expect(setup.dialog.stack).toHaveLength(0)
-
-  show()
+  const dialog = () => <DialogMemory open={async (folder) => void opened.push(folder)} />
+  show(setup, dialog)
   await until(setup, "Open memory folder")
   // The rows below the files: memory folder, then team.
   for (let step = 0; step < 4; step++) setup.mockInput.pressArrow("down")
@@ -270,10 +276,22 @@ test("opens the path the server returned for a file and for a folder", async () 
   expect(setup.dialog.stack).toHaveLength(1)
   setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
-  await wait(() => recorded.posted.length >= 3)
-  await settle(setup)
-  expect(recorded.posted.map((target) => target.type)).toEqual(["file", "memory", "team"])
+  await wait(() => recorded.posted.length >= 2 && toasts.current?.currentToast != null)
+  expect(recorded.posted.map((target) => target.type)).toEqual(["memory", "team"])
   expect(opened).toEqual([path.join(real, "memory")])
+  expect(toasts.current?.currentToast?.variant).toBe("error")
+  expect(setup.dialog.stack).toHaveLength(1)
+
+  // The listed spelling is AGENTS.md at the project; the server answers another, real place. The editor hands the
+  // terminal back to a renderer that a test cannot draw again, so this row comes last and reads the toast it left.
+  show(setup, dialog)
+  await until(setup, "Project memory")
+  setup.mockInput.pressEnter()
+  await wait(() => setup.dialog.stack.length === 0)
+  expect((await ran()).map((line) => line.replace(/^orbit-memory-editor\.exe /, ""))).toEqual([path.join(real, "AGENTS.md")])
+  expect(toasts.current?.currentToast?.message).toContain(dot("real", "AGENTS.md"))
+  expect(toasts.current?.currentToast?.message).toContain("$VISUAL")
+  expect(recorded.posted.map((target) => target.type)).toEqual(["memory", "team", "file"])
 })
 
 test("a refused ensure shows the server's message and opens nothing", async () => {
@@ -293,16 +311,23 @@ test("a refused ensure shows the server's message and opens nothing", async () =
         ),
     })
     await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-    setup.dialog.replace(() => (
-      <>
-        <DialogMemory edit={editor.edit} open={async (folder) => void opened.push(folder)} />
-        <Toast />
-      </>
-    ))
+    show(setup, () => <DialogMemory edit={editor.edit} open={async (folder) => void opened.push(folder)} />)
     await until(setup, "Project memory")
+    // A folder row keeps the dialog open, so the toast is drawn beside it.
+    for (let step = 0; step < 4; step++) setup.mockInput.pressArrow("down")
     setup.mockInput.pressEnter()
-    const frame = await until(setup, `refused here \\x1b[31m${status}`)
+    // The toast wraps the message where it likes, so the frame holds the start of the written-out escape and the toast
+    // the whole of it.
+    const frame = await until(setup, "refused here \\x1b[")
     expect(frame).not.toContain("\u001b")
+    expect(toasts.current?.currentToast?.message).toContain(`refused here \\x1b[31m${status}`)
+    // A file row closes the dialog with the same message.
+    for (let step = 0; step < 4; step++) setup.mockInput.pressArrow("up")
+    setup.mockInput.pressEnter()
+    await wait(() => setup.dialog.stack.length === 0)
+    expect(toasts.current?.currentToast).toMatchObject({ variant: "error" })
+    expect(toasts.current?.currentToast?.message).toContain(`refused here \\x1b[31m${status}`)
+    expect(recorded.posted).toHaveLength(2)
     expect(editor.edited).toEqual([])
     expect(opened).toEqual([])
   }
@@ -313,7 +338,7 @@ test("the toggle writes memory.enabled and redraws from the server's answer", as
   // The server reports memory as on whatever is written, as it does when an environment switch wins.
   const recorded = server(tmp.dir, { listing: () => listing(tmp.dir, { enabled: true }) })
   await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-  setup.dialog.replace(() => <DialogMemory open={async () => {}} />)
+  show(setup, () => <DialogMemory open={async () => {}} />)
   await until(setup, "Auto memory: on")
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressEnter()
@@ -331,7 +356,7 @@ test("on a server not on this machine, rows that open say unavailable and Enter 
   const opened: string[] = []
   const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
   await using setup = await renderLocal({ directory: tmp.dir, url: "http://example.com:4096", fetch: recorded.fetch })
-  setup.dialog.replace(() => <DialogMemory edit={editor.edit} open={async (folder) => void opened.push(folder)} />)
+  show(setup, () => <DialogMemory edit={editor.edit} open={async (folder) => void opened.push(folder)} />)
   const frame = flat(await until(setup, "Open memory folder"))
   expect(frame).toContain("Unavailable")
   setup.mockInput.pressEnter()
@@ -349,20 +374,16 @@ test("Esc closes with a cancelled toast, and the file chosen last is focused nex
   const editor = editing()
   const recorded = server(tmp.dir, { listing: () => listing(tmp.dir) })
   await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-  const show = () =>
-    setup.dialog.replace(() => (
-      <>
-        <DialogMemory edit={editor.edit} open={async () => {}} />
-        <Toast />
-      </>
-    ))
-  show()
+  const dialog = () => <DialogMemory edit={editor.edit} open={async () => {}} />
+  show(setup, dialog)
   await until(setup, "Project memory")
   setup.mockInput.pressEscape()
-  await until(setup, "cancelled")
-  expect(setup.dialog.stack).toHaveLength(0)
+  await wait(() => setup.dialog.stack.length === 0)
+  expect(toasts.current?.currentToast).toMatchObject({ variant: "info" })
+  expect(toasts.current?.currentToast?.message).toContain("cancelled")
+  expect(recorded.posted).toEqual([])
 
-  show()
+  show(setup, dialog)
   await until(setup, "Project memory")
   setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
@@ -370,7 +391,7 @@ test("Esc closes with a cancelled toast, and the file chosen last is focused nex
   expect(editor.edited).toEqual([path.join(tmp.dir, "docs", "a.md")])
   await wait(() => setup.dialog.stack.length === 0)
 
-  show()
+  show(setup, dialog)
   await until(setup, "Project memory")
   setup.mockInput.pressEnter()
   await wait(() => editor.edited.length > 1)
@@ -397,7 +418,7 @@ test("draws a warning whose file did not load as its own row, and Enter on it do
       }),
   })
   await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
-  setup.dialog.replace(() => <DialogMemory edit={editor.edit} open={async () => {}} />)
+  show(setup, () => <DialogMemory edit={editor.edit} open={async () => {}} />)
   const frame = flat(await until(setup, "Left out"))
   expect(frame).toContain(dot("ORBIT.local.md"))
   expect(frame).toContain("Auto memory: off")

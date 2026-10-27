@@ -54,6 +54,17 @@ export class ImportWarning extends Schema.Class<ImportWarning>("InstructionDisco
 }) {}
 
 /**
+ * A file of the walk, or a rule, that is a link and was left out because it leads outside the project's folders. `path`
+ * is the file as the walk spelled it, which did not load. Like every warning it never reaches the model.
+ */
+export class OutsideWarning extends Schema.Class<OutsideWarning>("InstructionDiscovery.OutsideWarning")({
+  path: AbsolutePath,
+  kind: Schema.Literal("outside"),
+}) {}
+
+export type AnyWarning = Warning | ImportWarning | OutsideWarning
+
+/**
  * Which loaded files an instruction file imported. It is kept beside the files and not in them, so that a file that
  * becomes an import, or stops being one, with the same text changes no hash and starts no instruction update.
  */
@@ -84,7 +95,7 @@ export const Event = {
 
 export type Data = {
   files: Map<AbsolutePath, Types.DeepMutable<File>>
-  warnings: (Types.DeepMutable<Warning> | Types.DeepMutable<ImportWarning>)[]
+  warnings: Types.DeepMutable<AnyWarning>[]
   imports: Types.DeepMutable<Import>[]
   /** The scope of the files that have one. Kept beside the files for the same reason as `imports`. */
   kinds: Map<AbsolutePath, "user" | "project">
@@ -98,7 +109,7 @@ export type Editor = {
   // project's files from the farthest folder to the nearest, each folder's local file after its shared one; sibling
   // contributors interleave by transform registration order.
   add: (file: File) => void
-  warn: (warning: Warning | ImportWarning) => void
+  warn: (warning: AnyWarning) => void
   /** Records that `path`, which is also added as a file, was imported by `importedBy`. */
   imported: (path: string, importedBy: string) => void
   /** Records the scope `path`, which is also added as a file, comes from. A file with none counts as `user`. */
@@ -117,7 +128,7 @@ export interface Interface extends State.Transformable<Editor> {
   readonly global: boolean
   readonly list: () => Effect.Effect<File[] | Instructions.Unavailable>
   /** What is worth telling a person about the files that `list` returns. Nothing here reaches the model. */
-  readonly warnings: () => Effect.Effect<readonly (Warning | ImportWarning)[]>
+  readonly warnings: () => Effect.Effect<readonly AnyWarning[]>
   /** Which of the files that `list` returns an instruction file imported, and which file imported it. Nothing here reaches the model. */
   readonly imports: () => Effect.Effect<readonly Import[]>
   /**
@@ -183,9 +194,11 @@ export const layer = (options?: Options) =>
           add: (file) => editor.files.set(file.path, new File(file) as Types.DeepMutable<File>),
           warn: (warning) =>
             editor.warnings.push(
-              (warning.kind === "size" ? new Warning(warning) : new ImportWarning(warning)) as
-                | Types.DeepMutable<Warning>
-                | Types.DeepMutable<ImportWarning>,
+              (warning.kind === "size"
+                ? new Warning(warning)
+                : warning.kind === "import"
+                  ? new ImportWarning(warning)
+                  : new OutsideWarning(warning)) as Types.DeepMutable<AnyWarning>,
             ),
           imported: (path, importedBy) =>
             editor.imports.push(new Import({ path: AbsolutePath.make(path), importedBy: AbsolutePath.make(importedBy) })),
@@ -360,6 +373,13 @@ function status(data: Data) {
           chars: warning.characters,
           limit: warning.limit,
           message: `This file is ${warning.characters.toLocaleString("en-US")} characters, over the recommended ${warning.limit.toLocaleString("en-US")}. It is still sent whole and takes up context on every request. Shortening it, or moving parts that are rarely needed out of it, saves context.`,
+        })
+      if (warning.kind === "outside")
+        return new Instruction.StatusWarning({
+          path: warning.path,
+          type: "outside",
+          message:
+            "This file was not loaded: it is a link that leads outside the project's folders, which this project may not read from.",
         })
       return new Instruction.StatusWarning({
         path: warning.path,

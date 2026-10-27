@@ -25,7 +25,7 @@ import { createEmbeddedRoutes } from "../src/routes"
 
 const linkType = process.platform === "win32" ? "junction" : "dir"
 
-const server = (options: { readonly untrusted?: boolean; readonly configIsFile?: boolean } = {}) =>
+const server = (options: { readonly untrusted?: boolean } = {}) =>
   Effect.gen(function* () {
     const root = (yield* tmpdirScoped("orbit-memory-")).path
     const home = path.join(root, "home")
@@ -33,7 +33,7 @@ const server = (options: { readonly untrusted?: boolean; readonly configIsFile?:
     const data = path.join(root, "data")
     const project = path.join(root, "project")
     yield* Effect.promise(() => Promise.all([home, project].map((dir) => fs.mkdir(dir, { recursive: true }))))
-    yield* Effect.promise(() => (options.configIsFile ? fs.writeFile(config, "not a folder") : fs.mkdir(config)))
+    yield* Effect.promise(() => fs.mkdir(config))
     yield* Effect.promise(() =>
       fs.writeFile(
         path.join(project, "orbit.json"),
@@ -210,11 +210,15 @@ it.live("answers 400 with kind unknown for a target the listing does not hold", 
 
 it.live("answers 503 when the file cannot be created, and creates nothing", () =>
   Effect.gen(function* () {
-    const s = yield* server({ configIsFile: true })
+    const s = yield* server()
+    // A server whose config folder is a file does not start, so the user file's own place holds a folder instead.
+    const place = path.join(s.config, "ORBIT.md")
+    yield* Effect.promise(() => fs.mkdir(place))
     const response = yield* s.ensure({ type: "scope", scope: "user" })
     expect(response.status).toBe(503)
     expect(yield* body(response)).toMatchObject({ _tag: "ServiceUnavailableError", service: "memory" })
-    expect(yield* Effect.promise(() => fs.readFile(s.config, "utf8"))).toBe("not a folder")
+    expect(yield* Effect.promise(() => fs.readdir(place))).toEqual([])
+    expect(yield* Effect.promise(() => fs.readdir(s.config))).toEqual(["ORBIT.md"])
     // The control: the project's file is made on the same server.
     expect((yield* s.ensure({ type: "scope", scope: "project" })).status).toBe(200)
   }).pipe(Effect.scoped),
