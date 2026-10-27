@@ -39,7 +39,9 @@ export const seedStep = (
     readonly calls: ReadonlyArray<SeededCall>
     /** The prompt tokens the provider reports for the step. */
     readonly inputTokens?: number
-    readonly model?: typeof fakeModel
+    /** The whole usage the provider reports, for a test that tells its parts apart. It replaces `inputTokens`. */
+    readonly usage?: { readonly input: number; readonly output: number; readonly reasoning: number; readonly cache: { readonly read: number; readonly write: number } }
+    readonly model?: { readonly id: Model.ID; readonly providerID: Provider.ID }
     /** How the step ended; a step that made calls ends with `tool-calls`. */
     readonly finish?: "stop" | "tool-calls"
   },
@@ -87,7 +89,7 @@ export const seedStep = (
       assistantMessageID,
       finish: input.finish ?? "tool-calls",
       cost: Money.USD.zero,
-      tokens: {
+      tokens: input.usage ?? {
         input: input.inputTokens ?? 100,
         output: 10,
         reasoning: 0,
