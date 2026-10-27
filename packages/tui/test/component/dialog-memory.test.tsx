@@ -527,6 +527,45 @@ test("draws a warning whose file did not load as its own row, and Enter on it do
   expect(setup.dialog.stack).toHaveLength(1)
 })
 
+// Two imports of one file that both lead out give two warnings of the same type on the same file. Each is a row of its
+// own, so focusing one highlights that one only.
+test("two warnings of one type on one file are separate rows, and only the focused one is highlighted", async () => {
+  await using tmp = await project()
+  const agents = path.join(tmp.dir, "AGENTS.md")
+  const outside = (target: string) => ({
+    path: agents,
+    type: "import-external",
+    target,
+    message: `Left out the import of ${target}.`,
+  })
+  const recorded = server(tmp.dir, {
+    listing: () =>
+      listing(tmp.dir, {
+        files: [{ path: agents, kind: "project", chars: 1, role: "project", exists: true, target: fileTarget(agents) }],
+        warnings: [outside("first.md"), outside("second.md")],
+        folders: [],
+      }),
+  })
+  await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
+  show(setup, () => <DialogMemory edit={editing().edit} open={async () => {}} />)
+  await until(setup, "second.md")
+  const background = (text: string) =>
+    setup
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes(text))!.bg
+  // The project file is focused first; one step down is the first warning.
+  setup.mockInput.pressArrow("down")
+  await settle(setup)
+  const resting = background("Auto memory")
+  expect(background("first.md")).not.toEqual(resting)
+  expect(background("second.md")).toEqual(resting)
+  setup.mockInput.pressArrow("down")
+  await settle(setup)
+  expect(background("first.md")).toEqual(resting)
+  expect(background("second.md")).not.toEqual(resting)
+})
+
 // A listing the server refuses or cannot answer is read as an error, never left in the resource: reading an errored
 // resource throws again, and the root ErrorBoundary would replace the whole UI (class 7, 13). Each failure closes the
 // dialog with its message written out through `plain`; a listing that answers is the control.

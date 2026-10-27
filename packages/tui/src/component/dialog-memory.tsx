@@ -101,16 +101,21 @@ export function DialogMemory(props: {
     ]
   })
 
-  // Each warning about `file` as a row of its own; one whose file did not load is named by that file.
+  // Each warning about `file` as a row of its own; one whose file did not load is named by that file. A file can carry
+  // several warnings of one type (two imports that lead out), so a row is told apart by its place in the listing.
   const warnings = (value: InstructionMemoryListing, file: string, alone = false) =>
-    value.warnings
-      .filter((warning) => warning.path === file)
-      .map((warning) => ({
-        value: key({ type: "warning" }, `${warning.path}\n${warning.type}`),
-        title: alone ? `! ${display(warning.path)}` : `  ! ${plain(warning.message)}`,
-        description: alone ? plain(warning.message) : undefined,
-        fg: theme.text.feedback.warning.base,
-      }))
+    value.warnings.flatMap((warning, index) =>
+      warning.path !== file
+        ? []
+        : [
+            {
+              value: key({ type: "warning" }, String(index)),
+              title: alone ? `! ${display(warning.path)}` : `  ! ${plain(warning.message)}`,
+              description: alone ? plain(warning.message) : undefined,
+              fg: theme.text.feedback.warning.base,
+            },
+          ],
+    )
 
   // An import sits under its importer, one step deeper for each level of importing.
   const indent = (value: InstructionMemoryListing, file: string) => {
