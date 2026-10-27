@@ -33,7 +33,7 @@ export class TargetError extends Schema.TaggedError<TargetError>()("MemoryListin
   message: Schema.String,
 }) {}
 
-/** The file could not be made: a permission, a read-only folder, a folder where the file should be. */
+/** The file or folder could not be made: a permission, a read-only volume, a folder where the file should be. */
 export class WriteError extends Schema.TaggedError<WriteError>()("MemoryListing.WriteError", {
   path: Schema.String,
   message: Schema.String,
@@ -217,8 +217,12 @@ const layer = Layer.effect(
       // Resolving or making a path that crosses a link to a share connects to its host (class 6).
       if (yield* LinkShare.blocked(fs, folder.folder)) return yield* refused(`${folder.folder} leads to a network share.`)
       const before = yield* fs.isDir(folder.real)
-      // A failure shows in the check below, which says what is there instead.
-      yield* fs.makeDirectory(folder.real, { recursive: true }).pipe(Effect.ignore)
+      // Something already at the place is judged by the check below, which refuses a link or a file there. Any other
+      // failure (a permission, a read-only volume) is a write that did not happen, not a refusal (class 7).
+      yield* fs.makeDirectory(folder.real, { recursive: true }).pipe(
+        Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.void),
+        Effect.mapError((error) => new WriteError({ path: folder.real, message: error.message })),
+      )
       const real = yield* fs.realPath(folder.real).pipe(Effect.orElseSucceed(() => undefined))
       const info = real === undefined ? undefined : yield* fs.stat(real).pipe(Effect.orElseSucceed(() => undefined))
       if (real === undefined || !same(real, folder.real) || info?.type !== "Directory")

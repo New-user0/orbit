@@ -9,7 +9,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { NodeFileSystem } from "@effect/platform-node"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, PlatformError, Schema } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
@@ -591,6 +591,56 @@ describe("MemoryListing.ensure", () => {
         }),
       30_000,
     )
+
+  // A folder that cannot be made (a permission, a read-only volume) is a write failure, which the server answers with 503,
+  // not a refusal that blames the place (class 7). The file system below denies the make of one folder; another agent's
+  // folder in the same run is the control that is made.
+  it.live("answers a memory folder that cannot be made as a write failure, not a refusal", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const denying = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return new Proxy(real, {
+            get: (target, key) => {
+              const value: unknown = (target as unknown as Record<string | symbol, unknown>)[key]
+              if (typeof value !== "function") return value
+              if (key !== "makeDirectory") return value.bind(target)
+              return (folder: string, ...rest: unknown[]) =>
+                path.basename(folder) === "denied"
+                  ? Effect.fail(
+                      PlatformError.systemError({
+                        _tag: "PermissionDenied",
+                        module: "FileSystem",
+                        method: "makeDirectory",
+                        description: "permission denied",
+                        pathOrDescriptor: folder,
+                      }),
+                    )
+                  : (value.apply(target, [folder, ...rest]) as Effect.Effect<void, unknown>)
+            },
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const out = yield* Effect.gen(function* () {
+        const memory = yield* start
+        yield* withAgents([
+          { id: "denied", memory: "project" },
+          { id: "other", memory: "project" },
+        ])
+        return {
+          denied: yield* memory.ensure({ type: "agent", agent: "denied" }).pipe(Effect.flip),
+          control: yield* outcome(memory.ensure({ type: "agent", agent: "other" })),
+        }
+      }).pipe(provide(l, { files: denying }))
+      expect(out.denied).toBeInstanceOf(MemoryListing.WriteError)
+      expect(out.denied.message).toContain("permission denied")
+      expect(out.control).toBe("ok")
+      expect(yield* exists(path.join(l.shared, "denied"))).toBe(false)
+      expect(yield* isDirectory(path.join(l.shared, "other"))).toBe(true)
+    }),
+  )
 
   it.live("creates a missing project file empty, once, never through a link and never over a file that appeared", () =>
     Effect.gen(function* () {
