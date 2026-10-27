@@ -98,6 +98,8 @@ export interface Input {
   readonly inputTokens?: { readonly measured: number; readonly estimated: number }
   /** The configured `output_token_cap`. Lowers the primary request's default limit before hooks see it. */
   readonly outputTokenCap?: number
+  /** The request is only measured and never sent; the `context` hook event carries it so side effects can skip it. */
+  readonly analysis?: true
   /** Ignore `outputTokenCap` and ask for the model's maximum (the cap was escalated earlier in this response). */
   readonly outputEscalated?: boolean
   /**
@@ -497,9 +499,9 @@ export const layer = Layer.effect(
     })
 
     const agentHook =
-      (name: "context" | "compaction" | "generate", agent: Agent.ID, outputTokenCap?: number) =>
+      (name: "context" | "compaction" | "generate", agent: Agent.ID, outputTokenCap?: number, analysis?: true) =>
       (draft: SessionRequest, tools: Definitions) =>
-        hooks.trigger("session", name, { ...draft, agent, tools, outputTokenCap })
+        hooks.trigger("session", name, { ...draft, agent, tools, outputTokenCap, ...(analysis && { analysis }) })
 
     return Service.of({
       // Hooks see the cap only when it lowered the limit, so a cap above the model's own maximum leaves the default.
@@ -515,6 +517,7 @@ export const layer = Layer.effect(
               input.outputTokenCap < modelOutputMax(input.model.limit)
               ? input.outputTokenCap
               : undefined,
+            input.analysis,
           ),
         ),
       compaction: (input) => prepare("compaction", input, agentHook("compaction", input.agent)),

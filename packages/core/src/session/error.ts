@@ -52,6 +52,16 @@ export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()
   }
 }
 
+/** An analysis that is for a conversation's main session was asked of a subagent's session, which has a parent. */
+export class MainSessionOnlyError extends Schema.TaggedError<MainSessionOnlyError>()("Session.MainSessionOnlyError", {
+  sessionID: SessionSchema.ID,
+  parentID: SessionSchema.ID,
+}) {
+  override get message() {
+    return `Session ${this.sessionID} belongs to ${this.parentID}; ask for the main session instead`
+  }
+}
+
 export class StepFailedError extends Schema.TaggedError<StepFailedError>()("Session.StepFailedError", {
   error: SessionError.Error,
 }) {
