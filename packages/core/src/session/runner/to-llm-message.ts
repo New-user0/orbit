@@ -736,13 +736,15 @@ export interface LoweredInsertion {
   readonly text: string
 }
 
+/**
+ * The history in the order a request carries it. A checkpoint that keeps messages is stored after them, but the request
+ * opens with it; earlier checkpoints of a view that failed open keep their places.
+ */
 const arrange = (
   messages: readonly SessionMessage.Info[],
   options: { readonly minimal?: boolean; readonly toolOutput?: string },
 ) => {
   const active = withoutReplaced(messages)
-  // A checkpoint that keeps messages is stored after them, but the request opens with it. Earlier checkpoints of a
-  // view that failed open keep their places.
   const latest = active.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
   const history = latest === -1 ? active : [active[latest]!, ...active.slice(0, latest), ...active.slice(latest + 1)]
   const lowering: Lowering = {
