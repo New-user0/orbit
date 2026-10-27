@@ -197,6 +197,10 @@ test("draws the toggle, the files in load order with imports indented, the user 
   // An import sits under its importer, one step deeper for each level.
   const column = (text: string) => lines[at(text)]!.indexOf(text)
   expect(column(path.join("docs", "b.md"))).toBeGreaterThan(column(path.join("docs", "a.md")))
+  // A direct import starts where the other titles start, and each level more is two columns further in.
+  const branch = (text: string) => lines[at(text)]!.indexOf("└")
+  expect(branch(path.join("docs", "a.md"))).toBe(column("User memory"))
+  expect(branch(path.join("docs", "b.md"))).toBe(column("User memory") + 2)
   // The first file row is focused, not the toggle: Enter asks for that file.
   setup.mockInput.pressEnter()
   await wait(() => recorded.posted.length > 0)
@@ -213,6 +217,70 @@ test("describes the project file as checked in only in a git repository", async 
     expect(frame).toContain(`${git ? "Checked in at" : "Saved in"} ${dot("AGENTS.md")}`)
     expect(frame).not.toContain(git ? "Saved in ." : "Checked in at")
   }
+})
+
+test("names a file below the home or the location's folder from there, and any other file whole", async () => {
+  await using tmp = await project()
+  const home = "/tmp/orbit/home/.config/orbit/ORBIT.md"
+  const elsewhere = "/tmp/orbit/elsewhere/ORBIT.md"
+  const recorded = server(tmp.dir, {
+    listing: () =>
+      listing(tmp.dir, {
+        files: [
+          { path: home, kind: "user", chars: 1, role: "user", exists: true, target: fileTarget(home) },
+          { path: elsewhere, kind: "user", chars: 1, importedBy: home, exists: true, target: fileTarget(elsewhere) },
+        ],
+        folders: [],
+      }),
+  })
+  await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
+  show(setup, () => <DialogMemory open={async () => {}} />)
+  const frame = flat(await until(setup, "User memory"))
+  expect(frame).toContain(`Saved in ~${path.sep}${path.join(".config", "orbit", "ORBIT.md")}`)
+  expect(frame).toContain(`Saved in ${elsewhere}`)
+  expect(frame).not.toContain(`~${path.sep}..`)
+})
+
+// A server that names its imports in a loop (a bug, or a server that is not Orbit's) still gets a dialog: the depth of an
+// import stops at the number of files. The case runs in a child process with a deadline, since a depth that followed the
+// loop would block the event loop and the runner's own timeout would never fire.
+test(
+  "draws a listing whose imports name each other without looping",
+  async () => {
+    const child = Bun.spawn([process.execPath, "test", "./test/component/dialog-memory-cycle.case.tsx"], {
+      cwd: path.join(import.meta.dir, "..", ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 20_000)
+    const output = (await new Response(child.stdout).text()) + (await new Response(child.stderr).text())
+    const code = await child.exited
+    clearTimeout(timer)
+    expect({ code, output }).toMatchObject({ code: 0, output: expect.stringContaining("1 pass") })
+  },
+  30_000,
+)
+
+// The editor is given only a file: a file row the server answers with a folder is refused, and nothing is opened.
+test("a file row the server answers with a folder opens nothing and says so", async () => {
+  await using tmp = await project()
+  const editor = editing()
+  const opened: string[] = []
+  const recorded = server(tmp.dir, {
+    listing: () => listing(tmp.dir),
+    answer: () => json({ data: { path: path.join(tmp.dir, "made"), created: false, type: "folder" } }),
+  })
+  await using setup = await renderLocal({ directory: tmp.dir, url: "http://127.0.0.1:4096", fetch: recorded.fetch })
+  forget()
+  show(setup, () => <DialogMemory edit={editor.edit} open={async (folder) => void opened.push(folder)} />)
+  await until(setup, "Project memory")
+  setup.mockInput.pressEnter()
+  await wait(() => setup.dialog.stack.length === 0 && toasts.current?.currentToast != null)
+  expect(recorded.posted).toEqual([fileTarget(path.join(tmp.dir, "AGENTS.md"))])
+  expect(editor.edited).toEqual([])
+  expect(opened).toEqual([])
+  expect(toasts.current?.currentToast).toMatchObject({ variant: "error" })
+  expect(toasts.current?.currentToast?.message).toBe(`Could not open ${dot("AGENTS.md")}: the server did not answer with a file`)
 })
 
 test("draws every name, path and message from the server through plain", async () => {
@@ -386,6 +454,8 @@ test("on a server not on this machine, rows that open say unavailable and Enter 
   show(setup, () => <DialogMemory edit={editor.edit} open={async (folder) => void opened.push(folder)} />)
   const frame = flat(await until(setup, "Open memory folder"))
   expect(frame).toContain("Unavailable")
+  // The file rows say so too, in place of where the file is saved.
+  expect(frame).not.toContain("Checked in at")
   setup.mockInput.pressEnter()
   for (let step = 0; step < 4; step++) setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()

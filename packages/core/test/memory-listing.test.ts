@@ -231,6 +231,26 @@ describe("MemoryListing.list", () => {
     }),
   )
 
+  // A project file that is a link to another file of the project loads as that file. The listing names it once, where it
+  // really is and with its role, and adds no row for the spelling the walk built (class 3).
+  if (canLinkFile)
+    it.live("marks a project file that is a link to another file of the project with its role", () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const shared = path.join(l.project, "docs", "shared.md")
+        yield* write(shared, "ours")
+        yield* Effect.promise(() => fs.symlink(shared, path.join(l.project, "AGENTS.md"), "file"))
+        const listing = yield* Effect.gen(function* () {
+          const memory = yield* start
+          return yield* memory.list()
+        }).pipe(provide(l))
+        expect(listing.files.map((file) => [file.path, file.role, file.target.type])).toEqual([
+          [yield* realOf(shared), "project", "file"],
+          [path.join(l.config, "ORBIT.md"), "user", "scope"],
+        ])
+      }),
+    )
+
   it.live("lists no nested file loaded on demand and no conditional rule", () =>
     Effect.gen(function* () {
       const l = yield* layout
@@ -562,10 +582,10 @@ describe("MemoryListing.ensure", () => {
     )
 
   // The memory folder is decided when the Location starts; a link to a share that appears on its way afterwards is asked
-  // about before ensure stats or makes anything below it (class 6).
+  // about before the listing stats it, and before ensure stats or makes anything below it (class 6).
   if (process.platform === "win32" && canLinkFile)
     it.live(
-      "asks about a share before it makes the memory folder, when a link to one appears after the start",
+      "asks about a share before it lists or makes the memory folder, when a link to one appears after the start",
       () =>
         Effect.gen(function* () {
           const share = "\\\\203.0.113.171\\share\\x"
@@ -573,12 +593,13 @@ describe("MemoryListing.ensure", () => {
           yield* Effect.promise(() => fs.mkdir(l.data, { recursive: true }))
           const recorded = recordedFileSystem()
           const started = Date.now()
-          const reason = yield* Effect.gen(function* () {
+          const out = yield* Effect.gen(function* () {
             const memory = yield* start
             yield* Effect.promise(() => fs.symlink(share, path.join(l.data, "memory"), "dir"))
-            // Only what ensure touches counts; the start read the folder before the link was there.
+            // Only what the listing and ensure touch counts; the start read the folder before the link was there.
             recorded.calls.length = 0
-            return yield* outcome(memory.ensure({ type: "memory" }))
+            const listing = yield* memory.list()
+            return { listing, reason: yield* outcome(memory.ensure({ type: "memory" })) }
           }).pipe(provide(l, { files: recorded.layer }))
           expect(Date.now() - started).toBeLessThan(15_000)
           const named = [path.join(l.data, "memory"), path.join(yield* realOf(l.data), "memory")].map((item) => item.toLowerCase())
@@ -587,7 +608,62 @@ describe("MemoryListing.ensure", () => {
             return named.some((item) => arg === item || arg.startsWith(`${item}${path.sep}`))
           })
           expect(calls.filter((call) => !call.startsWith("readLink "))).toEqual([])
-          expect(reason).toBe("refused")
+          // The folder is listed, as one that is not there to open.
+          expect(out.listing.folders.map((item) => [item.type, item.exists])).toEqual([["memory", false]])
+          expect(out.reason).toBe("refused")
+        }),
+      30_000,
+    )
+
+  // A project file that is a link to a share is listed as there and never resolved, and a listed file that a link to a
+  // share took the place of is refused before anything resolves it (class 6). A plain listed file is the control.
+  if (process.platform === "win32" && canLinkFile)
+    it.live(
+      "asks about a share before it resolves the project file or a listed file",
+      () =>
+        Effect.gen(function* () {
+          const share = "\\\\203.0.113.171\\share\\x.md"
+          const touching = (calls: readonly string[], file: string) =>
+            calls.filter((call) => call.slice(call.indexOf(" ") + 1).toLowerCase() === file.toLowerCase())
+
+          const l = yield* layout
+          const agents = path.join(l.project, "AGENTS.md")
+          yield* Effect.promise(() => fs.symlink(share, agents, "file"))
+          const recorded = recordedFileSystem()
+          const started = Date.now()
+          const linked = yield* Effect.gen(function* () {
+            const memory = yield* start
+            recorded.calls.length = 0
+            const listing = yield* memory.list()
+            return { listing, reason: yield* outcome(memory.ensure({ type: "scope", scope: "project" })) }
+          }).pipe(provide(l, { files: recorded.layer }))
+          expect(touching(recorded.calls, agents).filter((call) => !call.startsWith("readLink "))).toEqual([])
+          expect(linked.listing.files.find((file) => file.role === "project")).toMatchObject({
+            path: agents,
+            exists: true,
+            target: { type: "scope", scope: "project" },
+          })
+          expect(linked.reason).toBe("outside")
+
+          const swapped = yield* layout
+          yield* write(path.join(swapped.project, "AGENTS.md"), "ours")
+          const later = recordedFileSystem()
+          const listed = yield* Effect.gen(function* () {
+            const memory = yield* start
+            const listing = yield* memory.list()
+            const file = listing.files.find((item) => item.target.type === "file")!.path
+            const control = yield* outcome(memory.ensure({ type: "file", path: file }))
+            yield* Effect.promise(async () => {
+              await fs.rm(file)
+              await fs.symlink(share, file, "file")
+            })
+            later.calls.length = 0
+            return { file, control, reason: yield* outcome(memory.ensure({ type: "file", path: file })) }
+          }).pipe(provide(swapped, { files: later.layer }))
+          expect(Date.now() - started).toBeLessThan(15_000)
+          expect(listed.control).toBe("ok")
+          expect(touching(later.calls, listed.file).filter((call) => !call.startsWith("readLink "))).toEqual([])
+          expect(listed.reason).toBe("refused")
         }),
       30_000,
     )
@@ -690,6 +766,8 @@ describe("MemoryListing.ensure", () => {
       expect(yield* exists(l.config)).toBe(false)
       const ensured = yield* Effect.gen(function* () {
         const memory = yield* start
+        // The config folder may be made as the server starts; one removed while it runs is made again.
+        yield* Effect.promise(() => fs.rm(l.config, { recursive: true, force: true }))
         return yield* memory.ensure({ type: "scope", scope: "user" })
       }).pipe(provide(l))
       const file = path.join(l.config, "ORBIT.md")

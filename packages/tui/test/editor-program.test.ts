@@ -232,6 +232,27 @@ test("editFile never hands a file to the system opener", async () => {
   expect(await Bun.file(mark).exists()).toBe(false)
 })
 
+// `code` returns at once unless it is told to wait, and the dialog says the file was opened only once the editor closed.
+// An editor that exits with an error is still an editor that opened the file, as the person may simply have quit it.
+test("editFile asks code to wait until the file is closed, and an editor that exits with an error still opened it", async () => {
+  await using root = await tmpdir()
+  const bin = path.join(root.path, "bin")
+  await mkdir(bin)
+  const file = path.join(root.path, "AGENTS.md")
+  await writeFile(file, "x")
+  const ran = await recorder(bin, "code")
+  process.env.PATH = `${bin}${path.delimiter}${search}`
+  process.env.VISUAL = "code"
+  expect(await editFile({ file, renderer: screen() })).toEqual({ source: "VISUAL", editor: "code" })
+  expect(await ran()).toEqual([["--wait", file]])
+
+  const record = path.join(root.path, "recorded.txt")
+  await fake(bin, "orbit-fails", record, 2)
+  process.env.VISUAL = "orbit-fails"
+  expect(await editFile({ file, renderer: screen() })).toEqual({ source: "VISUAL", editor: "orbit-fails" })
+  expect((await Bun.file(record).text()).replaceAll('"', "").trim()).toBe(file)
+})
+
 test("editFile passes the file as one argument whatever its name", async () => {
   await using root = await tmpdir()
   const bin = path.join(root.path, "bin")
