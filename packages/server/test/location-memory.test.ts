@@ -25,7 +25,7 @@ import { createEmbeddedRoutes } from "../src/routes"
 
 const linkType = process.platform === "win32" ? "junction" : "dir"
 
-const server = (options: { readonly untrusted?: boolean } = {}) =>
+const server = (options: { readonly untrusted?: boolean; readonly watch?: boolean } = {}) =>
   Effect.gen(function* () {
     const root = (yield* tmpdirScoped("orbit-memory-")).path
     const home = path.join(root, "home")
@@ -62,7 +62,7 @@ const server = (options: { readonly untrusted?: boolean } = {}) =>
       App.node.replace(App.node),
       Bus.node.replace(Bus.node),
       ModelsDev.node.replace(ModelsDev.configured({ fetch: false })),
-      Watcher.node.replace(Watcher.configured({ enabled: false })),
+      ...(options.watch ? [] : [Watcher.node.replace(Watcher.configured({ enabled: false }))]),
       WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: !options.untrusted })),
       llmClient.replace(Layer.succeed(LLMClient.Service, llm)),
     ]
@@ -84,6 +84,17 @@ const server = (options: { readonly untrusted?: boolean } = {}) =>
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ target }),
+            }),
+          ),
+        ),
+      // The `/memory` toggle's write, sent from the Location in `directory`.
+      patch: (directory: string, value: unknown) =>
+        Effect.promise(() =>
+          handler(
+            new Request("http://orbit.local/api/experimental/config", {
+              method: "PATCH",
+              headers: { "content-type": "application/json", "x-orbit-directory": encodeURIComponent(directory) },
+              body: JSON.stringify(value),
             }),
           ),
         ),
@@ -124,6 +135,28 @@ it.live("lists the location's instruction files and memory folders", () =>
     for (const item of [...listing.data.files, ...listing.data.folders]) expect(path.isAbsolute(item.path)).toBe(true)
     // Listing makes nothing.
     expect(yield* exists(path.join(s.project, ".orbit"))).toBe(false)
+  }).pipe(Effect.scoped),
+)
+
+// The `/memory` toggle writes `memory.enabled` and lists again straight away. The listing must already answer the value
+// written, from the Location the write came from and from another one, with the file watcher on (the default) and off.
+it.live("lists the value the toggle wrote as soon as the write answers, in every Location", () =>
+  Effect.gen(function* () {
+    for (const watch of [false, true]) {
+      const s = yield* server({ watch })
+      const listed = Effect.gen(function* () {
+        const response = yield* s.list()
+        expect(response.status).toBe(200)
+        return ((yield* body(response)) as unknown as Listing).data
+      })
+      expect((yield* listed).enabled).toBe(true)
+      // Written from another Location: the project's own one reads it at once, and drops the folders.
+      expect((yield* s.patch(s.root, { memory: { enabled: false } })).status).toBe(204)
+      expect(yield* listed).toMatchObject({ enabled: false, folders: [] })
+      // Written from the project's Location, back on.
+      expect((yield* s.patch(s.project, { memory: { enabled: true } })).status).toBe(204)
+      expect((yield* listed).enabled).toBe(true)
+    }
   }).pipe(Effect.scoped),
 )
 

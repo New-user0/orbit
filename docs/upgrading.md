@@ -2025,7 +2025,9 @@ when the server is not on this machine, and when the server cannot list (a folde
 the dialog closes with its message. The server answers at `GET /api/location/memory` and
 `POST /api/location/memory`, both refusing a folder that is not trusted (the `POST` answers 503 when the file or
 folder cannot be made), and `PATCH /api/experimental/config` takes
-`memory.enabled` (`null` removes it).
+`memory.enabled` (`null` removes it). That `PATCH` now answers only after every folder the server has open has reloaded
+its config, so a setting read back right after the write already has the new value; before, it showed the old value
+until the file watch caught up, or for good with watching off.
 
 **Affects:** terminal UI users, and SDK callers that read the new routes or the new key.
 
