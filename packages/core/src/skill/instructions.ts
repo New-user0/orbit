@@ -46,7 +46,7 @@ const cap = (text: string) => {
   return kept + "…"
 }
 
-const line = (skill: Summary) =>
+export const line = (skill: { readonly id: string; readonly description?: string }) =>
   skill.description === undefined ? `- ${skill.id}` : `- ${skill.id}: ${skill.description}`
 
 /**

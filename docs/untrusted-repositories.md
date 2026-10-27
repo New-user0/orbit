@@ -1024,6 +1024,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   export and import rows, one span for every reader, the chain walk and the reminder placement), `test/session-runner-message.test.ts`,
   `test/session-projector.test.ts`; the import doors with a control: `packages/cli/test/import-export.test.ts` and
   `packages/server/test/session-import.test.ts`.
+- Context usage (`SessionContextUsage.analyze`, `packages/core/src/session/context-usage.ts`; the endpoint, headless
+  report and SDK call are clients-ux-23's): it counts what the next request would carry, by category, and adds no reader.
+  A session that holds a baseline is counted from its stored values and reads no source (class 1; a file changed on disk
+  after the baseline was stored is reported with its stored text and size). A session with no baseline yet goes through
+  the step's own instruction sources under their own gates, so a folder that is not trusted contributes what a step
+  would read from it and no more, and nothing is stored; an unavailable source fails with the typed
+  `Instructions.InitializationBlocked` as a step would (class 7). The request is built by the `context` hooks the runner
+  runs, so `system_prompt_file` and `append_system_prompt` count only as `PromptConfigPlugin` reads them, under its
+  scope rule. It writes no event, inbox row or wake, clears nothing at 61 minutes idle and makes no model request, so
+  every entry point that will call it starts no work (class 12). Only a main session of the Location it runs in is
+  analysed: another Location's session interrupts at selection (class 3) and a child session fails before any source is
+  touched with the typed `Session.MainSessionOnlyError` (classes 7 and 13; the HTTP and client cells are
+  clients-ux-23's). Recorded tool names, reminder kinds and file paths are only labels in the result, never joined into
+  a path (class 5), and are carried raw, so each client escapes them at its own sink (class 9; clients-ux-23). Proof:
+  `test/session-context-usage.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,

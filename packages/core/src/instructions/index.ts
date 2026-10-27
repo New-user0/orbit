@@ -170,14 +170,23 @@ export function diff(observed: ReadResult, previous?: Values): Effect.Effect<Adm
 }
 
 export function renderInitial(value: List, values: Readonly<Record<string, Schema.Json>>) {
-  return render(
-    value.flatMap((source) => {
-      if (!Object.hasOwn(values, source.key)) return []
-      const text = source.initial(values[source.key])
-      return text === undefined ? [] : [text]
-    }),
-  )
+  return render(renderEach(value, values).map((entry) => entry.text))
 }
+
+/**
+ * The text each source contributes to the baseline, in order. A source with no value, or whose value no longer decodes,
+ * contributes nothing. `renderInitial` joins exactly these, so the parts are the baseline's own.
+ */
+export function renderEach(value: List, values: Readonly<Record<string, Schema.Json>>) {
+  return value.flatMap((source) => {
+    if (!Object.hasOwn(values, source.key)) return []
+    const text = source.initial(values[source.key])
+    return text === undefined ? [] : [{ key: source.key, text }]
+  })
+}
+
+/** The string `renderInitial` puts between the parts of the baseline. */
+export const SEPARATOR = "\n\n"
 
 export function renderUpdate(
   value: List,
@@ -238,7 +247,7 @@ export function diffByKey<A>(
 }
 
 function render(parts: ReadonlyArray<string>) {
-  return parts.join("\n\n")
+  return parts.join(SEPARATOR)
 }
 
 // Reference-equality guards: `A` in a typed source may itself be JSON shaped

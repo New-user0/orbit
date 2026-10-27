@@ -40,7 +40,6 @@ import { ToolOutput } from "@orbit/core/tool-output"
 import { Token } from "@orbit/core/util/token"
 import { Model } from "@orbit/schema/model"
 import { Provider } from "@orbit/schema/provider"
-import { SessionContextUsage as UsageSchema } from "@orbit/schema/session-context-usage"
 import { Document, Info } from "@orbit/schema/config"
 import { and, eq } from "drizzle-orm"
 import { DateTime, Effect, Exit, Schema } from "effect"
@@ -48,7 +47,7 @@ import { TestClock } from "effect/testing"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { LanguageModel } from "@orbit/ai"
+import { LanguageModel, SystemPart } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Bus } from "@orbit/core/bus"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -71,6 +70,7 @@ import { SessionStore } from "@orbit/core/session/store"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Global } from "@orbit/util/global"
 import { Layer } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
 import { location } from "./fixture/location"
@@ -80,10 +80,17 @@ import { seedStep, type SeededCall } from "./lib/context-history"
 import { testEffect } from "./lib/effect"
 import { noMemory } from "./lib/memory"
 import { insertSession } from "./lib/session-row"
-import { scenario, sessionID, transformTools, undersizedContextModel, unknownContextModel, type Scenario } from "./lib/runner"
+import {
+  scenario,
+  sessionID,
+  transformTools,
+  undersizedContextModel,
+  unknownContextModel,
+  type Scenario,
+} from "./lib/runner"
 import { stubSnapshot } from "./lib/tool"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
-import { host } from "./plugin/host"
+import { agentHost, host } from "./plugin/host"
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Helpers
@@ -92,8 +99,7 @@ import { host } from "./plugin/host"
 const here: Instance.Interface = {
   provide: () => (effect) => effect as never,
 }
-const analyze = (id: Session.ID) =>
-  SessionContextUsage.analyze(id).pipe(Effect.provideService(Instance.Service, here))
+const analyze = (id: Session.ID) => SessionContextUsage.analyze(id).pipe(Effect.provideService(Instance.Service, here))
 
 const MINUTE = 60_000
 const NOTHING = { type: "object" as const }
@@ -108,14 +114,14 @@ const tool = (name: string) => ({
 const abs = (name: string) => AbsolutePath.make(path.resolve("/usage", name))
 
 /** Tokens of one category, 0 when it is not listed. */
-const tokensOf = (info: UsageSchema.Info, kind: UsageSchema.CategoryKind) =>
+const tokensOf = (info: SessionContextUsage.Info, kind: SessionContextUsage.CategoryKind) =>
   info.categories.find((item) => item.kind === kind)?.tokens ?? 0
-const RESERVE: ReadonlyArray<UsageSchema.CategoryKind> = ["auto-buffer", "compact-buffer", "free"]
-const DEFERRED: ReadonlyArray<UsageSchema.CategoryKind> = ["mcp-deferred", "tools-deferred"]
+const RESERVE: ReadonlyArray<SessionContextUsage.CategoryKind> = ["auto-buffer", "compact-buffer", "free"]
+const DEFERRED: ReadonlyArray<SessionContextUsage.CategoryKind> = ["mcp-deferred", "tools-deferred"]
 /** The rows that are counted in the request: no deferred row, no reserve and no free space. */
-const counted = (info: UsageSchema.Info) =>
+const counted = (info: SessionContextUsage.Info) =>
   info.categories.filter((item) => !RESERVE.includes(item.kind) && !DEFERRED.includes(item.kind))
-const countedSum = (info: UsageSchema.Info) => counted(info).reduce((sum, item) => sum + item.tokens, 0)
+const countedSum = (info: SessionContextUsage.Info) => counted(info).reduce((sum, item) => sum + item.tokens, 0)
 
 const answer = (label: string) => TestLLM.text(`answer ${label}`, `answer-${label}`)
 const prompt = (s: Scenario, text: string) =>
@@ -183,7 +189,10 @@ const source = (key: string, chars: number, value: Schema.Json = "value") =>
     render: { initial: () => "i".repeat(chars), changed: () => "c".repeat(chars) },
   })
 
-const withUsage = (s: Scenario, tokens: { input: number; output: number; reasoning: number; read: number; write: number }) =>
+const withUsage = (
+  s: Scenario,
+  tokens: { input: number; output: number; reasoning: number; read: number; write: number },
+) =>
   seedStep(s.bus, sessionID, {
     id: `msg_usage_${tokens.input}`,
     calls: [],
@@ -215,7 +224,10 @@ const failedStep = (s: Scenario, id: Session.ID, input: number) =>
     })
   })
 
-const count = (s: Scenario, table: typeof SessionMessageTable | typeof SessionInboxTable | typeof InstructionStateTable | typeof EventTable) =>
+const count = (
+  s: Scenario,
+  table: typeof SessionMessageTable | typeof SessionInboxTable | typeof InstructionStateTable | typeof EventTable,
+) =>
   s.db
     .select()
     .from(table)
@@ -259,8 +271,10 @@ const userConfig = (info: unknown, scope: "user" | "project" = "user") =>
 const activatePromptConfig = (s: Scenario) =>
   Effect.gen(function* () {
     const hooks = yield* PluginHooks.Service
+    const agents = yield* Agent.Service
     yield* PromptConfigPlugin.Plugin.effect(
       host({
+        agent: agentHost(agents),
         session: {
           hook: (name, callback) => hooks.register("session", name, callback),
           get: (input) => s.session.get(input.sessionID),
@@ -272,237 +286,248 @@ const activatePromptConfig = (s: Scenario) =>
 // ---------------------------------------------------------------------------------------------------------------------
 // The sum and the total
 
-describe("the rows", () => {
-  // U1, Q1: the counted rows, the reserve and the free space fill the window; a deferred row is listed and left out.
-  scenario("rows, reserve and free space sum to the window when free space is above 0", function* (s) {
-    yield* registerDeferred("lookup")
-    yield* prompt(s, "look at the file")
-    yield* seedStep(s.bus, sessionID, { id: "msg_u1", calls: [read("u1c", 2_000)], inputTokens: 50_000 })
-    const info = yield* analyze(sessionID)
+// U1, Q1: the counted rows, the reserve and the free space fill the window; a deferred row is listed and left out.
+scenario("rows, reserve and free space sum to the window when free space is above 0", function* (s) {
+  yield* registerDeferred("lookup")
+  yield* prompt(s, "look at the file")
+  yield* seedStep(s.bus, sessionID, { id: "msg_u1", calls: [read("u1c", 2_000)], inputTokens: 50_000 })
+  const info = yield* analyze(sessionID)
 
-    expect(info.window).toBe(200_000)
-    expect(tokensOf(info, "tools-deferred")).toBeGreaterThan(0)
-    const reserve = tokensOf(info, "auto-buffer")
-    const free = tokensOf(info, "free")
-    expect(reserve).toBeGreaterThan(0)
-    expect(free).toBeGreaterThan(0)
-    expect(countedSum(info) + reserve + free).toBe(info.window!)
+  expect(info.window).toBe(200_000)
+  expect(tokensOf(info, "tools-deferred")).toBeGreaterThan(0)
+  const reserve = tokensOf(info, "auto-buffer")
+  const free = tokensOf(info, "free")
+  expect(reserve).toBeGreaterThan(0)
+  expect(free).toBeGreaterThan(0)
+  expect(countedSum(info) + reserve + free).toBe(info.window!)
+})
+
+// U2, S4: each token is counted once, and the counted rows are what the runner estimates for the request it builds.
+scenario("the counted rows equal the runner's estimate of the request it would build", function* (s) {
+  // Odd lengths, so that the shares of the baseline do not fall on token boundaries by luck.
+  s.extraSources = Instructions.combine([
+    source("core/language", 37),
+    source("core/skill-guidance", 51),
+    source("core/memory-index", 29, { path: "/m/MEMORY.md", content: "m" }),
+    source("core/date", 13),
+  ])
+  yield* registerDeferred("lookup")
+  yield* prompt(s, "first")
+  yield* seedStep(s.bus, sessionID, { id: "msg_u2", calls: [read("u2c", 1_001)] })
+  const info = yield* analyze(sessionID)
+  const prepared = yield* requested(sessionID)
+
+  expect(countedSum(info)).toBe(SessionCompaction.estimateRequest(prepared.request))
+  expect(tokensOf(info, "skills")).toBeGreaterThan(0)
+  expect(tokensOf(info, "instructions")).toBeGreaterThan(0)
+})
+
+// U3, S8: the total is what the provider reported for the prompt, and not what it generated.
+scenario("the total is the newest measured input plus cache read and cache write, without output", function* (s) {
+  yield* prompt(s, "first")
+  yield* withUsage(s, { input: 1_000, output: 400, reasoning: 30, read: 200, write: 50 })
+  const info = yield* analyze(sessionID)
+
+  expect(info.measured).toBe(true)
+  expect(info.total).toBe(1_250)
+  expect(info.percentage).toBe(Math.round((1_250 / info.window!) * 100))
+})
+
+// U4, class 7: no response yet, or a failed one, leaves the estimate.
+scenario("with no measured response the total is the sum of the counted rows", function* (s) {
+  yield* s.admit("not answered yet")
+  yield* failedStep(s, sessionID, 7_000)
+  const info = yield* analyze(sessionID)
+
+  expect(info.measured).toBe(false)
+  expect(info.total).toBe(countedSum(info))
+  expect(info.total).not.toBe(7_000)
+})
+
+// U5, class 7: another provider's count may describe a window this model cannot replay.
+scenario("a response of another provider is not the measurement", function* (s) {
+  yield* prompt(s, "first")
+  yield* seedStep(s.bus, sessionID, {
+    id: "msg_other",
+    calls: [],
+    finish: "stop",
+    inputTokens: 90_000,
+    model: { id: Model.ID.make("their-model"), providerID: Provider.ID.make("theirs") },
   })
+  const info = yield* analyze(sessionID)
 
-  // U2, S4: each token is counted once, and the counted rows are what the runner estimates for the request it builds.
-  scenario("the counted rows equal the runner's estimate of the request it would build", function* (s) {
-    // Odd lengths, so that the shares of the baseline do not fall on token boundaries by luck.
-    s.extraSources = Instructions.combine([
-      source("core/language", 37),
-      source("core/skill-guidance", 51),
-      source("core/memory-index", 29, { path: "/m/MEMORY.md", content: "m" }),
-      source("core/date", 13),
-    ])
-    yield* registerDeferred("lookup")
-    yield* prompt(s, "first")
-    yield* seedStep(s.bus, sessionID, { id: "msg_u2", calls: [read("u2c", 1_001)] })
-    const info = yield* analyze(sessionID)
-    const prepared = yield* requested(sessionID)
-
-    expect(countedSum(info)).toBe(SessionCompaction.estimateRequest(prepared.request))
-    expect(tokensOf(info, "skills")).toBeGreaterThan(0)
-    expect(tokensOf(info, "instructions")).toBeGreaterThan(0)
-  })
-
-  // U3, S8: the total is what the provider reported for the prompt, and not what it generated.
-  scenario("the total is the newest measured input plus cache read and cache write, without output", function* (s) {
-    yield* prompt(s, "first")
-    yield* withUsage(s, { input: 1_000, output: 400, reasoning: 30, read: 200, write: 50 })
-    const info = yield* analyze(sessionID)
-
-    expect(info.measured).toBe(true)
-    expect(info.total).toBe(1_250)
-    expect(info.percentage).toBe(Math.round((1_250 / info.window!) * 100))
-  })
-
-  // U4, class 7: no response yet, or a failed one, leaves the estimate.
-  scenario("with no measured response the total is the sum of the counted rows", function* (s) {
-    yield* s.admit("not answered yet")
-    yield* failedStep(s, sessionID, 7_000)
-    const info = yield* analyze(sessionID)
-
-    expect(info.measured).toBe(false)
-    expect(info.total).toBe(countedSum(info))
-    expect(info.total).not.toBe(7_000)
-  })
-
-  // U5, class 7: another provider's count may describe a window this model cannot replay.
-  scenario("a response of another provider is not the measurement", function* (s) {
-    yield* prompt(s, "first")
-    yield* seedStep(s.bus, sessionID, {
-      id: "msg_other",
-      calls: [],
-      finish: "stop",
-      inputTokens: 90_000,
-      model: { id: Model.ID.make("their-model"), providerID: Provider.ID.make("theirs") },
-    })
-    const info = yield* analyze(sessionID)
-
-    expect(info.measured).toBe(false)
-    expect(info.total).toBe(countedSum(info))
-  })
+  expect(info.measured).toBe(false)
+  expect(info.total).toBe(countedSum(info))
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Where each row comes from
 
-describe("the instruction rows", () => {
-  const File = Schema.toCodecJson(Schema.Array(InstructionDiscovery.File))
-  const files = [
-    new InstructionDiscovery.File({ path: abs("ORBIT.md"), content: "project rules", kind: "local" }),
-    new InstructionDiscovery.File({ path: abs("docs/more.md"), content: "more rules" }),
+const File = Schema.toCodecJson(Schema.Array(InstructionDiscovery.File))
+const files = [
+  new InstructionDiscovery.File({ path: abs("ORBIT.md"), content: "project rules", kind: "local" }),
+  new InstructionDiscovery.File({ path: abs("docs/more.md"), content: "more rules" }),
+]
+const filesSource = (chars: number) =>
+  Instructions.make({
+    key: Instructions.Key.make("core/instructions"),
+    codec: File,
+    read: Effect.succeed(files),
+    render: { initial: () => "f".repeat(chars), changed: () => "f".repeat(chars) },
+  })
+
+// U8, S1 and class 1 (hook): the system prompt row counts what the context hooks build, which only the person's own
+// settings may change.
+scenario("the system prompt row counts what the context hooks build", function* (s) {
+  yield* activatePromptConfig(s)
+  const config = s.configControl!
+  const file = path.join(os.tmpdir(), `orbit-usage-prompt-${crypto.randomUUID()}.md`)
+  yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(file, { force: true })))
+  yield* Effect.promise(() => fs.writeFile(file, "w".repeat(20_000)))
+  yield* prompt(s, "first")
+
+  const control = tokensOf(yield* analyze(sessionID), "system")
+  // 3,998 characters and the two of the separator: exactly 1,000 more tokens, whatever the base's length.
+  yield* config.setEntries([userConfig({ append_system_prompt: "a".repeat(3_998) })])
+  expect(tokensOf(yield* analyze(sessionID), "system")).toBe(control + 1_000)
+  // A project's own settings never supply it.
+  yield* config.setEntries([userConfig({ append_system_prompt: "a".repeat(3_998) }, "project")])
+  expect(tokensOf(yield* analyze(sessionID), "system")).toBe(control)
+  // The replacement file counts as the hook reads it, and only from the person's own settings.
+  yield* config.setEntries([userConfig({ system_prompt_file: file }, "project")])
+  expect(tokensOf(yield* analyze(sessionID), "system")).toBe(control)
+  yield* config.setEntries([userConfig({ system_prompt_file: file })])
+  expect(tokensOf(yield* analyze(sessionID), "system")).toBeGreaterThanOrEqual(5_000)
+})
+
+// U9, S4, S5 and class 7 (a value that does not decode).
+scenario("each baseline key lands in its category", function* (s) {
+  const table: ReadonlyArray<
+    readonly [key: string, chars: number, kind: SessionContextUsage.CategoryKind, value?: Schema.Json]
+  > = [
+    ["core/memory-index", 48, "instructions", { path: "/m/MEMORY.md", content: "m" }],
+    ["core/team-memory-index", 52, "instructions", { path: "/t/MEMORY.md", content: "t" }],
+    ["core/skill-guidance", 60, "skills", [{ id: "alpha", description: "does alpha" }]],
+    ["core/reference-guidance", 64, "system"],
+    ["core/memory-guide", 68, "system"],
+    ["core/language", 72, "system"],
+    ["core/date", 76, "system"],
+    ["core/environment", 80, "system"],
+    ["core/vcs-snapshot", 84, "system"],
+    ["core/scratchpad", 88, "system"],
+    ["api/x", 92, "system"],
   ]
-  const filesSource = (chars: number) =>
-    Instructions.make({
-      key: Instructions.Key.make("core/instructions"),
-      codec: File,
-      read: Effect.succeed(files),
-      render: { initial: () => "f".repeat(chars), changed: () => "f".repeat(chars) },
-    })
+  s.extraSources = Instructions.combine([
+    filesSource(40),
+    ...table.map(([key, chars, , value]) => source(key, chars, value)),
+  ])
+  yield* s.admit("a fresh session")
+  const info = yield* analyze(sessionID)
 
-  // U8, S1 and class 1 (hook): the system prompt row counts what the context hooks build, which only the person's own
-  // settings may change.
-  scenario("the system prompt row counts what the context hooks build", function* (s) {
-    yield* activatePromptConfig(s)
-    const config = s.configControl!
-    const file = path.join(os.tmpdir(), `orbit-usage-prompt-${crypto.randomUUID()}.md`)
-    yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(file, { force: true })))
-    yield* Effect.promise(() => fs.writeFile(file, "w".repeat(20_000)))
-    yield* prompt(s, "first")
+  expect(tokensOf(info, "instructions")).toBe(
+    (40 + table.filter((row) => row[2] === "instructions").reduce((sum, row) => sum + row[1], 0)) / 4,
+  )
+  expect(tokensOf(info, "skills")).toBe(15)
+  // A system key is a section of its own, named by the key; the instruction and skill keys are not.
+  const sections = Object.fromEntries(info.sections.map((section) => [section.name, section.tokens]))
+  for (const [key, chars, kind] of table) {
+    if (kind === "system") expect(sections[key]).toBe(chars / 4)
+    else expect(key in sections).toBe(false)
+  }
+  expect("core/instructions" in sections).toBe(false)
+  expect(info.files.map((item) => [item.path, item.type])).toEqual([
+    [files[0]!.path, "local"],
+    [files[1]!.path, "file"],
+    ["/m/MEMORY.md", "memory"],
+    ["/t/MEMORY.md", "team-memory"],
+  ])
+  expect(info.files.map((item) => item.tokens).every((tokens) => tokens > 0)).toBe(true)
+  // An index is one entry of the key, so its size is the key's share.
+  expect(info.files.slice(2).map((item) => item.tokens)).toEqual([12, 13])
+  expect(info.skills.map((item) => item.id)).toEqual(["alpha"])
+  expect(info.skills[0]!.tokens).toBe(
+    Token.estimate(SkillInstructions.line({ id: "alpha", description: "does alpha" })),
+  )
+})
 
-    const control = tokensOf(yield* analyze(sessionID), "system")
-    // 3,998 characters and the two of the separator: exactly 1,000 more tokens, whatever the base's length.
-    yield* config.setEntries([userConfig({ append_system_prompt: "a".repeat(3_998) })])
-    expect(tokensOf(yield* analyze(sessionID), "system")).toBe(control + 1_000)
-    // A project's own settings never supply it.
-    yield* config.setEntries([userConfig({ append_system_prompt: "a".repeat(3_998) }, "project")])
-    expect(tokensOf(yield* analyze(sessionID), "system")).toBe(control)
-    // The replacement file counts as the hook reads it, and only from the person's own settings.
-    yield* config.setEntries([userConfig({ system_prompt_file: file }, "project")])
-    expect(tokensOf(yield* analyze(sessionID), "system")).toBe(control)
-    yield* config.setEntries([userConfig({ system_prompt_file: file })])
-    expect(tokensOf(yield* analyze(sessionID), "system")).toBeGreaterThan(control + 4_000)
-  })
+scenario("a stored value that does not decode renders nothing and lists no file", function* (s) {
+  s.extraSources = Instructions.combine([filesSource(40)])
+  yield* s.admit("a session with a stored baseline")
+  yield* storeBaseline(sessionID, { "core/instructions": "this is not a list of files" })
+  const info = yield* analyze(sessionID)
 
-  // U9, S4, S5 and class 7 (a value that does not decode).
-  scenario("each baseline key lands in its category", function* (s) {
-    const table: ReadonlyArray<readonly [key: string, chars: number, kind: UsageSchema.CategoryKind, value?: Schema.Json]> = [
-      ["core/memory-index", 48, "instructions", { path: "/m/MEMORY.md", content: "m" }],
-      ["core/team-memory-index", 52, "instructions", { path: "/t/MEMORY.md", content: "t" }],
-      ["core/skill-guidance", 60, "skills", [{ id: "alpha", description: "does alpha" }]],
-      ["core/reference-guidance", 64, "system"],
-      ["core/memory-guide", 68, "system"],
-      ["core/language", 72, "system"],
-      ["core/date", 76, "system"],
-      ["core/environment", 80, "system"],
-      ["core/vcs-snapshot", 84, "system"],
-      ["core/scratchpad", 88, "system"],
-      ["api/x", 92, "system"],
-    ]
-    s.extraSources = Instructions.combine([
-      filesSource(40),
-      ...table.map(([key, chars, , value]) => source(key, chars, value)),
-    ])
-    yield* s.admit("a fresh session")
-    const info = yield* analyze(sessionID)
+  expect(info.files).toEqual([])
+  expect(tokensOf(info, "instructions")).toBe(0)
+})
 
-    expect(tokensOf(info, "instructions")).toBe(
-      (40 + table.filter((row) => row[2] === "instructions").reduce((sum, row) => sum + row[1], 0)) / 4,
-    )
-    expect(tokensOf(info, "skills")).toBe(15)
-    // A system key is a section of its own, named by the key; the instruction and skill keys are not.
-    const sections = Object.fromEntries(info.sections.map((section) => [section.name, section.tokens]))
-    for (const [key, chars, kind] of table)
-      expect(sections[key]).toBe(kind === "system" ? chars / 4 : undefined)
-    expect(sections["core/instructions"]).toBeUndefined()
-    expect(info.files.map((item) => [item.path, item.type])).toEqual([
-      [files[0]!.path, "local"],
-      [files[1]!.path, "file"],
-    ])
-    expect(info.files.map((item) => item.tokens).every((tokens) => tokens > 0)).toBe(true)
-    expect(info.skills.map((item) => item.id)).toEqual(["alpha"])
-    expect(info.skills[0]!.tokens).toBe(Token.estimate(SkillInstructions.line({ id: "alpha", description: "does alpha" })))
-  })
+// U20, class 7.
+scenario("a fresh session whose source is unavailable fails with InitializationBlocked", function* (s) {
+  s.systemUnavailable = true
+  yield* s.admit("a fresh session")
+  const failure = yield* Effect.flip(analyze(sessionID))
 
-  scenario("a stored value that does not decode renders nothing and lists no file", function* (s) {
-    s.extraSources = Instructions.combine([filesSource(40)])
-    yield* s.admit("a session with a stored baseline")
-    yield* storeBaseline(sessionID, { "core/instructions": "this is not a list of files" })
-    const info = yield* analyze(sessionID)
+  expect(failure).toBeInstanceOf(Instructions.InitializationBlocked)
+  expect((failure as Instructions.InitializationBlocked).keys).toEqual([Instructions.Key.make("test/context")])
+  expect(yield* count(s, InstructionStateTable)).toBe(0)
+})
 
-    expect(info.files).toEqual([])
-    expect(tokensOf(info, "instructions")).toBe(0)
-  })
-
-  // U20, class 7.
-  scenario("a fresh session whose source is unavailable fails with InitializationBlocked", function* (s) {
-    s.systemUnavailable = true
-    yield* s.admit("a fresh session")
-    const failure = yield* Effect.flip(analyze(sessionID))
-
-    expect(failure).toBeInstanceOf(Instructions.InitializationBlocked)
-    expect((failure as Instructions.InitializationBlocked).keys).toEqual([Instructions.Key.make("test/context")])
-    expect(yield* count(s, InstructionStateTable)).toBe(0)
-  })
-
-  // U21, S10.
-  scenario("system prompt sections are named by the first heading or the first line cut to 40 characters, and baseline sections by key", function* (s) {
-    yield* activatePromptConfig(s)
-    const config = s.configControl!
-    yield* prompt(s, "first")
-    const named = (info: UsageSchema.Info) => info.sections.map((section) => section.name)
-
-    yield* config.setEntries([userConfig({ system_prompt: "\n# Plain heading\nThe rest of the prompt." })])
-    expect(named(yield* analyze(sessionID))).toContain("Plain heading")
-
+// U21, S10.
+scenario(
+  "system prompt sections are named by the first heading or the first line cut to 40 characters, and baseline sections by key",
+  function* (s) {
+    const hooks = yield* PluginHooks.Service
     const long = "This opening line of the prompt is longer than forty characters."
-    yield* config.setEntries([userConfig({ system_prompt: `${long}\nMore.` })])
-    const info = yield* analyze(sessionID)
-    expect(named(info)).toContain(`${long.slice(0, 40)}…`)
-    // The baseline's own sections are named by their key.
-    expect(info.sections.find((section) => section.name === "test/context")?.tokens).toBe(Token.estimate("Initial context"))
-  })
-
-  scenario("custom agents are counted in their own row, once", function* (s) {
-    const registry = yield* Tool.Service
-    yield* transformTools(registry, { Agent: tool("Agent") })
-    const agents = yield* Agent.Service
-    // The listing line is `- custom: <description> (all tools)`; pad it to a whole number of tokens so that its share of
-    // the baseline is exact wherever it falls.
-    let description = "Reviews the code"
-    while (AgentInstructions.line({ id: "custom", description, tools: "all tools" }).length % 4 !== 0) description += "."
-    yield* agents.transform((editor) => {
-      editor.update(Agent.ID.make("custom"), (agent) => {
-        agent.mode = "subagent"
-        agent.description = description
-        agent.source = { scope: "project" }
-      })
-    })
+    const parts = [`Intro\n\n# Plain heading\nThe rest of the part.`, `\n\n${long}\nMore.`, "Short line"]
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => void event.system.push(...parts.map((text) => SystemPart.make(text)))),
+    )
     yield* prompt(s, "first")
     const info = yield* analyze(sessionID)
-    const prepared = yield* requested(sessionID)
 
-    expect(info.agents.map((item) => [item.id, item.scope])).toEqual([["custom", "project"]])
-    expect(info.agents[0]!.tokens).toBe(
-      Token.estimate(AgentInstructions.line({ id: "custom", description, tools: "all tools" })),
-    )
-    expect(tokensOf(info, "agents")).toBe(info.agents[0]!.tokens)
-    // The agent types Orbit ships stay in the tools row, with the rest of the listing, so nothing is counted twice.
-    expect(countedSum(info)).toBe(SessionCompaction.estimateRequest(prepared.request))
+    const sections = Object.fromEntries(info.sections.map((section) => [section.name, section.tokens]))
+    expect(sections["Plain heading"]).toBe(Token.estimate(parts[0]!))
+    expect(sections[`${long.slice(0, 40)}…`]).toBe(Token.estimate(parts[1]!))
+    expect(sections["Short line"]).toBe(Token.estimate(parts[2]!))
+    // The baseline's own sections are named by their key.
+    expect(sections["test/context"]).toBe(Token.estimate("Initial context"))
+  },
+)
+
+scenario("custom agents are counted in their own row, once", function* (s) {
+  const registry = yield* Tool.Service
+  yield* transformTools(registry, { Agent: tool("Agent") }, { codemode: false })
+  const agents = yield* Agent.Service
+  // The listing line is `- custom: <description> (all tools)`; pad it to a whole number of tokens so that its share of
+  // the baseline is exact wherever it falls.
+  let description = "Reviews the code"
+  while (AgentInstructions.line({ id: "custom", description, tools: "all tools" }).length % 4 !== 0) description += "."
+  yield* agents.transform((editor) => {
+    editor.update(Agent.ID.make("custom"), (agent) => {
+      agent.mode = "subagent"
+      agent.description = description
+      agent.source = { scope: "project" }
+    })
   })
+  yield* prompt(s, "first")
+  const info = yield* analyze(sessionID)
+  const prepared = yield* requested(sessionID)
+
+  expect(info.agents.map((item) => [item.id, item.scope])).toEqual([["custom", "project"]])
+  expect(info.agents[0]!.tokens).toBe(
+    Token.estimate(AgentInstructions.line({ id: "custom", description, tools: "all tools" })),
+  )
+  expect(tokensOf(info, "agents")).toBe(info.agents[0]!.tokens)
+  // The agent types Orbit ships stay in the tools row, with the rest of the listing, so nothing is counted twice.
+  expect(countedSum(info)).toBe(SessionCompaction.estimateRequest(prepared.request))
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
 // History
 
-describe("the messages row", () => {
-  // U10, context-memory-4 hand-off and S8.
-  scenario("a retained checkpoint's kept span counts in Messages, and only a response after the checkpoint is the measurement", function* (s) {
+// U10, context-memory-4 hand-off and S8.
+scenario(
+  "a retained checkpoint's kept span counts in Messages, and only a response after the checkpoint is the measurement",
+  function* (s) {
     for (const n of [1, 2, 3, 4]) {
       yield* s.llm.push(TestLLM.textWithUsage(`answer ${n}`, `answer-${n}`, 150_000))
       yield* s.session.prompt({ sessionID, text: `prompt ${n}`, resume: false })
@@ -539,281 +564,280 @@ describe("the messages row", () => {
     const next = yield* analyze(sessionID)
     expect(next.measured).toBe(true)
     expect(next.total).toBe(21_000)
-  })
+  },
+)
 
-  // U11, context-memory-3 hand-off and S7.
-  scenario("a cleared result counts as its placeholder", function* (s) {
-    const compaction = yield* SessionCompaction.Service
-    const analyzed = (name: string, clear: boolean) =>
-      Effect.gen(function* () {
-        yield* compaction.transform((editor) => editor.configure({ clear }))
-        const id = Session.ID.make(`ses_usage_${name}`)
-        yield* newSession(id)
-        yield* seedStep(s.bus, id, { id: `msg_${name}`, calls: Array.from({ length: 8 }, (_, n) => read(`${name}${n + 1}`)) })
-        yield* TestClock.adjust(61 * MINUTE)
-        yield* s.llm.push(answer(name))
-        yield* s.session.prompt({ sessionID: id, text: "next", resume: false })
-        yield* s.session.resume(id)
-        return { id, info: yield* analyze(id) }
+// U11, context-memory-3 hand-off and S7.
+scenario("a cleared result counts as its placeholder", function* (s) {
+  const compaction = yield* SessionCompaction.Service
+  const analyzed = (name: string, clear: boolean) =>
+    Effect.gen(function* () {
+      yield* compaction.transform((editor) => editor.configure({ clear }))
+      const id = Session.ID.make(`ses_usage_${name}`)
+      yield* newSession(id)
+      yield* seedStep(s.bus, id, {
+        id: `msg_${name}`,
+        calls: Array.from({ length: 8 }, (_, n) => read(`${name}${n + 1}`)),
       })
-    const kept = yield* analyzed("kept", false)
-    const cleared = yield* analyzed("cleared", true)
-
-    const rows = yield* s.session.messages({ sessionID: cleared.id, order: "asc" })
-    expect(rows.some((message) => message.type === "context-cleared")).toBe(true)
-    // Three results of 100 tokens each go out as the 13 tokens of the placeholder.
-    const saved = 3 * (Token.estimate("c".repeat(400)) - Token.estimate(CLEARED_RESULT))
-    expect(tokensOf(kept.info, "messages") - tokensOf(cleared.info, "messages")).toBe(saved)
-    const readsOf = (info: UsageSchema.Info) => info.messages.tools.find((item) => item.name === "Read")!.results
-    expect(readsOf(kept.info) - readsOf(cleared.info)).toBe(saved)
-    // The stored output is still whole.
-    const stored = rows.flatMap((message) =>
-      message.type === "assistant"
-        ? message.content.flatMap((part) =>
-            part.type === "tool" && part.state.status === "completed" ? [part.state.content] : [],
-          )
-        : [],
-    )
-    expect(stored).toHaveLength(8)
-    expect(stored.every((content) => content[0]?.type === "text" && content[0].text.length === 400)).toBe(true)
-  })
-
-  // U12, class 12, class 6 and V2 read-only.
-  scenario("the analysis records nothing and calls no model", function* (s) {
-    yield* registerDeferred("lookup")
-    yield* seedStep(s.bus, sessionID, { id: "msg_idle", calls: Array.from({ length: 8 }, (_, n) => read(`idle${n + 1}`)) })
-    yield* TestClock.adjust(61 * MINUTE)
-    const before = {
-      messages: yield* count(s, SessionMessageTable),
-      events: yield* count(s, EventTable),
-      inbox: yield* count(s, SessionInboxTable),
-      state: yield* count(s, InstructionStateTable),
-      requests: s.requests.length,
-    }
-    yield* analyze(sessionID)
-    yield* analyze(sessionID)
-
-    expect({
-      messages: yield* count(s, SessionMessageTable),
-      events: yield* count(s, EventTable),
-      inbox: yield* count(s, SessionInboxTable),
-      state: yield* count(s, InstructionStateTable),
-      requests: s.requests.length,
-    }).toEqual(before)
-    // An hour of quiet clears old results at a step, and the analysis is not a step.
-    const rows = yield* s.session.messages({ sessionID, order: "asc" })
-    expect(rows.some((message) => message.type === "context-cleared")).toBe(false)
-  })
-
-  // U13, S7 and class 5.
-  scenario("the message breakdown attributes calls and results per canonical tool name", function* (s) {
-    yield* prompt(s, "first")
-    s.systemBaseline = "Initial context, changed"
-    yield* prompt(s, "second")
-    yield* seedStep(s.bus, sessionID, {
-      id: "msg_names",
-      calls: [
-        { id: "n1", name: "shell", text: "s".repeat(40) },
-        { id: "n2", name: "read", text: "r".repeat(4_000) },
-        { id: "n3", name: "../x", text: "x".repeat(80) },
-      ],
+      yield* TestClock.adjust(61 * MINUTE)
+      yield* s.llm.push(TestLLM.text("done", `done-${name}`))
+      yield* s.session.prompt({ sessionID: id, text: "next", resume: false })
+      yield* s.session.resume(id)
+      return { id, info: yield* analyze(id) }
     })
-    yield* s.bus.publish(SessionEvent.Synthetic, {
-      sessionID,
-      text: "A reminder of the todo kind",
-      metadata: { reminder: { kind: "todo" } },
-    })
-    const info = yield* analyze(sessionID)
+  const kept = yield* analyzed("kept", false)
+  const cleared = yield* analyzed("cleared", true)
 
-    // The old spellings are lowered under the current names, and the largest tool is first.
-    expect(info.messages.tools.map((item) => item.name)).toEqual(["Read", "../x", "Bash"])
-    const read = info.messages.tools.find((item) => item.name === "Read")!
-    expect(read.results).toBe(Token.estimate("r".repeat(4_000)))
-    expect(read.calls).toBeGreaterThan(0)
-    expect(info.messages.toolCalls).toBe(info.messages.tools.reduce((sum, item) => sum + item.calls, 0))
-    expect(info.messages.toolResults).toBe(info.messages.tools.reduce((sum, item) => sum + item.results, 0))
-    // A reminder counts under its kind, and the update of an instruction under attachments, not as a file.
-    const kinds = Object.fromEntries(info.messages.attachmentKinds.map((item) => [item.name, item.tokens]))
-    expect(kinds["todo"]).toBe(Token.estimate("A reminder of the todo kind"))
-    expect(kinds["instructions"]).toBeGreaterThan(0)
-    expect(info.messages.attachments).toBe(info.messages.attachmentKinds.reduce((sum, item) => sum + item.tokens, 0))
-    expect(info.messages.user).toBeGreaterThan(0)
-    expect(info.messages.assistant).toBeGreaterThan(0)
-    expect(info.files).toEqual([])
+  const rows = yield* s.session.messages({ sessionID: cleared.id, order: "asc" })
+  expect(rows.some((message) => message.type === "context-cleared")).toBe(true)
+  // Three results of 100 tokens each go out as the 13 tokens of the placeholder.
+  const saved = 3 * (Token.estimate("c".repeat(400)) - Token.estimate(CLEARED_RESULT))
+  expect(tokensOf(kept.info, "messages") - tokensOf(cleared.info, "messages")).toBe(saved)
+  const readsOf = (info: SessionContextUsage.Info) => info.messages.tools.find((item) => item.name === "Read")!.results
+  expect(readsOf(kept.info) - readsOf(cleared.info)).toBe(saved)
+  // The stored output is still whole.
+  const stored = rows.flatMap((message) =>
+    message.type === "assistant"
+      ? message.content.flatMap((part) =>
+          part.type === "tool" && part.state.status === "completed" ? [part.state.content] : [],
+        )
+      : [],
+  )
+  expect(stored).toHaveLength(8)
+  expect(stored.every((content) => content[0]?.type === "text" && content[0].text.length === 400)).toBe(true)
+})
+
+// U12, class 12, class 6 and V2 read-only.
+scenario("the analysis records nothing and calls no model", function* (s) {
+  yield* registerDeferred("lookup")
+  yield* seedStep(s.bus, sessionID, {
+    id: "msg_idle",
+    calls: Array.from({ length: 8 }, (_, n) => read(`idle${n + 1}`)),
   })
+  yield* TestClock.adjust(61 * MINUTE)
+  const before = {
+    messages: yield* count(s, SessionMessageTable),
+    events: yield* count(s, EventTable),
+    inbox: yield* count(s, SessionInboxTable),
+    state: yield* count(s, InstructionStateTable),
+    requests: s.requests.length,
+  }
+  yield* analyze(sessionID)
+  yield* analyze(sessionID)
+
+  expect({
+    messages: yield* count(s, SessionMessageTable),
+    events: yield* count(s, EventTable),
+    inbox: yield* count(s, SessionInboxTable),
+    state: yield* count(s, InstructionStateTable),
+    requests: s.requests.length,
+  }).toEqual(before)
+  // An hour of quiet clears old results at a step, and the analysis is not a step.
+  const rows = yield* s.session.messages({ sessionID, order: "asc" })
+  expect(rows.some((message) => message.type === "context-cleared")).toBe(false)
+})
+
+// U13, S7 and class 5.
+scenario("the message breakdown attributes calls and results per canonical tool name", function* (s) {
+  yield* prompt(s, "first")
+  s.systemBaseline = "Initial context, changed"
+  yield* prompt(s, "second")
+  yield* seedStep(s.bus, sessionID, {
+    id: "msg_names",
+    calls: [
+      { id: "n1", name: "shell", text: "s".repeat(40) },
+      { id: "n2", name: "read", text: "r".repeat(4_000) },
+      { id: "n3", name: "../x", text: "x".repeat(80) },
+    ],
+  })
+  yield* s.bus.publish(SessionEvent.Synthetic, {
+    sessionID,
+    text: "A reminder of the todo kind",
+    metadata: { reminder: { kind: "todo" } },
+  })
+  const info = yield* analyze(sessionID)
+
+  // The old spellings are lowered under the current names, and the largest tool is first.
+  expect(info.messages.tools.map((item) => item.name)).toEqual(["Read", "../x", "Bash"])
+  const read = info.messages.tools.find((item) => item.name === "Read")!
+  expect(read.results).toBe(Token.estimate("r".repeat(4_000)))
+  expect(read.calls).toBeGreaterThan(0)
+  expect(info.messages.toolCalls).toBe(info.messages.tools.reduce((sum, item) => sum + item.calls, 0))
+  expect(info.messages.toolResults).toBe(info.messages.tools.reduce((sum, item) => sum + item.results, 0))
+  // A reminder counts under its kind, and the update of an instruction under attachments, not as a file.
+  const kinds = Object.fromEntries(info.messages.attachmentKinds.map((item) => [item.name, item.tokens]))
+  expect(kinds["todo"]).toBe(Token.estimate("A reminder of the todo kind"))
+  expect(kinds["instructions"]).toBeGreaterThan(0)
+  expect(info.messages.attachments).toBe(info.messages.attachmentKinds.reduce((sum, item) => sum + item.tokens, 0))
+  expect(info.messages.user).toBeGreaterThan(0)
+  expect(info.messages.assistant).toBeGreaterThan(0)
+  expect(info.files).toEqual([])
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The window
 
-describe("the window", () => {
-  // U14, S9.
-  const table = [
-    ["automatic compaction on with the default buffer", undefined, true, "auto-buffer"],
-    ["automatic compaction on with a larger buffer", 30_000, true, "auto-buffer"],
-    ["automatic compaction off", undefined, false, "compact-buffer"],
-  ] as const
-  for (const [name, buffer, auto, kind] of table)
-    scenario(`the reserve is the window minus the threshold or the compact buffer: ${name}`, function* (s) {
-      const compaction = yield* SessionCompaction.Service
-      yield* compaction.transform((editor) => editor.configure({ auto, ...(buffer === undefined ? {} : { buffer }) }))
-      yield* prompt(s, "first")
+// U14, S9.
+scenario(
+  "the reserve is window minus the threshold with automatic compaction on, and the 3,000 compact buffer with it off",
+  function* (s) {
+    const compaction = yield* SessionCompaction.Service
+    yield* prompt(s, "first")
+    const table = [
+      ["automatic compaction on with the default buffer", undefined, true, "auto-buffer"],
+      ["automatic compaction on with a larger buffer", 30_000, true, "auto-buffer"],
+      ["automatic compaction off", undefined, false, "compact-buffer"],
+    ] as const
+    for (const [, buffer, auto, kind] of table) {
+      yield* compaction.transform((editor) => editor.configure({ auto, buffer }))
       const info = yield* analyze(sessionID)
 
       expect(info.auto).toBe(auto)
       expect(RESERVE.filter((item) => item !== "free").filter((item) => tokensOf(info, item) > 0)).toEqual([kind])
       if (!auto) {
         expect(tokensOf(info, "compact-buffer")).toBe(3_000)
-        return
+        continue
       }
       // 200,000 less the room for a 32,000-token reply capped at 20,000, less the buffer.
       const threshold = Math.max(200_000 - 20_000 - (buffer ?? 13_000), 100_000)
       expect(info.threshold).toBe(threshold)
       expect(tokensOf(info, "auto-buffer")).toBe(200_000 - threshold)
-    })
+    }
+  },
+)
 
-  // U15, Differ 6 and class 7.
-  scenario("an unknown window gives rows and the total but no percentage, reserve or free space", function* (s) {
-    s.currentModel = unknownContextModel
-    yield* prompt(s, "first")
-    yield* withUsage(s, { input: 900, output: 10, reasoning: 0, read: 0, write: 0 })
-    const info = yield* analyze(sessionID)
+// U15, Differ 6 and class 7.
+scenario("an unknown window gives rows and the total but no percentage, reserve or free space", function* (s) {
+  s.currentModel = unknownContextModel
+  yield* prompt(s, "first")
+  yield* withUsage(s, { input: 900, output: 10, reasoning: 0, read: 0, write: 0 })
+  const info = yield* analyze(sessionID)
 
-    expect(info.window).toBeUndefined()
-    expect(info.percentage).toBeUndefined()
-    expect(info.threshold).toBeUndefined()
-    expect(info.total).toBe(900)
-    expect(countedSum(info)).toBeGreaterThan(0)
-    expect(info.categories.filter((item) => RESERVE.includes(item.kind))).toEqual([])
-  })
+  expect(info.window).toBeUndefined()
+  expect(info.percentage).toBeUndefined()
+  expect(info.threshold).toBeUndefined()
+  expect(info.total).toBe(900)
+  expect(countedSum(info)).toBeGreaterThan(0)
+  expect(info.categories.filter((item) => RESERVE.includes(item.kind))).toEqual([])
+})
 
-  // U16, Q1 floor.
-  scenario("free space never goes below 0", function* (s) {
-    s.currentModel = undersizedContextModel
-    yield* prompt(s, "first")
-    const info = yield* analyze(sessionID)
+// U16, Q1 floor.
+scenario("free space never goes below 0", function* (s) {
+  s.currentModel = undersizedContextModel
+  yield* prompt(s, "first")
+  const info = yield* analyze(sessionID)
 
-    expect(info.window).toBe(1)
-    expect(tokensOf(info, "free")).toBe(0)
-    expect(countedSum(info) + tokensOf(info, "auto-buffer")).toBeGreaterThan(info.window!)
-  })
+  expect(info.window).toBe(1)
+  expect(tokensOf(info, "free")).toBe(0)
+  expect(countedSum(info) + tokensOf(info, "auto-buffer")).toBeGreaterThan(info.window!)
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Which session
 
-describe("which session is analysed", () => {
-  // U17, Q4 and classes 3, 7 and 13.
-  scenario("a child session fails with MainSessionOnlyError and touches no source", function* (s) {
-    yield* prompt(s, "first")
-    yield* newSession("ses_usage_child", { parentID: sessionID })
-    let events = 0
-    const hooks = yield* PluginHooks.Service
-    yield* hooks.register("session", "context", () => Effect.sync(() => void events++))
-    const states = yield* count(s, InstructionStateTable)
-    const failure = yield* Effect.flip(analyze(Session.ID.make("ses_usage_child")))
+// U17, Q4 and classes 3, 7 and 13: a table of sessions, each with its own explicit result.
+scenario("only a main session in this Location is analysed", function* (s) {
+  yield* prompt(s, "first")
+  const hooks = yield* PluginHooks.Service
+  let events = 0
+  yield* hooks.register("session", "context", () => Effect.sync(() => void events++))
 
-    expect(failure).toBeInstanceOf(Session.MainSessionOnlyError)
-    expect(failure).toMatchObject({ sessionID: "ses_usage_child", parentID: sessionID })
-    expect(events).toBe(0)
-    expect(yield* count(s, InstructionStateTable)).toBe(states)
-  })
+  // A child session: refused before any source or hook is touched.
+  yield* newSession("ses_usage_child", { parentID: sessionID })
+  const states = yield* count(s, InstructionStateTable)
+  const child = yield* Effect.flip(analyze(Session.ID.make("ses_usage_child")))
+  expect(child).toBeInstanceOf(Session.MainSessionOnlyError)
+  expect(child).toMatchObject({ sessionID: "ses_usage_child", parentID: sessionID })
+  expect(events).toBe(0)
+  expect(yield* count(s, InstructionStateTable)).toBe(states)
 
-  scenario("an unknown session fails with NotFoundError", function* () {
-    const failure = yield* Effect.flip(analyze(Session.ID.make("ses_usage_missing")))
-    expect(failure).toBeInstanceOf(Session.NotFoundError)
-  })
+  // An unknown session.
+  expect(yield* Effect.flip(analyze(Session.ID.make("ses_usage_missing")))).toBeInstanceOf(Session.NotFoundError)
 
-  scenario("a model or an agent that does not resolve fails with its own error", function* (s) {
-    yield* s.admit("first")
-    s.modelResolveHook = Effect.fail(new SessionRunnerModel.ModelNotSelectedError({ sessionID }))
-    expect(yield* Effect.flip(analyze(sessionID))).toBeInstanceOf(SessionRunnerModel.ModelNotSelectedError)
-    s.modelResolveHook = Effect.void
+  // A model that does not resolve, and an agent that does not.
+  s.modelResolveHook = Effect.fail(new SessionRunnerModel.ModelNotSelectedError({ sessionID }))
+  expect(yield* Effect.flip(analyze(sessionID))).toBeInstanceOf(SessionRunnerModel.ModelNotSelectedError)
+  s.modelResolveHook = Effect.void
+  yield* newSession("ses_usage_agent", { agent: "no-such-agent" })
+  expect(yield* Effect.flip(analyze(Session.ID.make("ses_usage_agent")))).toBeInstanceOf(AgentNotFoundError)
 
-    yield* newSession("ses_usage_agent", { agent: "no-such-agent" })
-    expect(yield* Effect.flip(analyze(Session.ID.make("ses_usage_agent")))).toBeInstanceOf(AgentNotFoundError)
-  })
+  // A session of another Location is not analysed from this one: its selection interrupts.
+  yield* newSession("ses_usage_elsewhere", { directory: "/elsewhere" })
+  const elsewhere = yield* Effect.exit(analyze(Session.ID.make("ses_usage_elsewhere")))
+  expect(Exit.isFailure(elsewhere) && Exit.hasInterrupts(elsewhere)).toBe(true)
 
-  scenario("a session of another Location is not analysed from this one", function* () {
-    yield* newSession("ses_usage_elsewhere", { directory: "/elsewhere" })
-    const exit = yield* Effect.exit(analyze(Session.ID.make("ses_usage_elsewhere")))
-    expect(Exit.isFailure(exit) && Exit.hasInterrupts(exit)).toBe(true)
-  })
-
-  scenario("a fork is a main session and is analysed", function* (s) {
-    yield* prompt(s, "first")
-    yield* newSession("ses_usage_fork", { fork: sessionID })
-    const info = yield* analyze(Session.ID.make("ses_usage_fork"))
-    expect(info.window).toBe(200_000)
-  })
+  // A fork is a main session.
+  yield* newSession("ses_usage_fork", { fork: sessionID })
+  expect((yield* analyze(Session.ID.make("ses_usage_fork"))).window).toBe(200_000)
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Tools
 
-describe("the tool rows", () => {
-  // U18, S6 and class 7.
-  scenario("MCP tools are split by their server and deferred tools are listed but not counted", function* (s) {
-    yield* registerDeferred("lookup")
-    yield* discover(s, [mcpTool("alpha", "direct", false), mcpTool("alpha", "later", true)])
-    yield* prompt(s, "first")
-    const info = yield* analyze(sessionID)
-    const prepared = yield* requested(sessionID)
+// U18, S6 and class 7.
+scenario("MCP tools are split by their server and deferred tools are listed but not counted", function* (s) {
+  yield* registerDeferred("lookup")
+  yield* discover(s, [mcpTool("alpha", "direct", false), mcpTool("alpha", "later", true)])
+  yield* prompt(s, "first")
+  const info = yield* analyze(sessionID)
+  const prepared = yield* requested(sessionID)
 
-    expect(info.mcp.map((item) => [item.name, item.server, item.deferred])).toEqual([
-      ["alpha_direct", "alpha", false],
-      ["alpha_later", "alpha", true],
-    ])
-    const direct = prepared.request.tools.find((item) => item.name === "alpha_direct")!
-    expect(tokensOf(info, "mcp")).toBe(SessionCompaction.estimateTool(direct))
-    expect(info.mcp[0]!.tokens).toBe(tokensOf(info, "mcp"))
-    expect(tokensOf(info, "mcp-deferred")).toBe(info.mcp[1]!.tokens)
-    expect(info.deferredTools.map((item) => item.name)).toEqual(["lookup"])
-    expect(tokensOf(info, "tools-deferred")).toBe(info.deferredTools[0]!.tokens)
-    expect(info.systemTools.map((item) => item.name)).not.toContain("alpha_direct")
-    expect(countedSum(info)).toBe(SessionCompaction.estimateRequest(prepared.request))
-    const total = counted(info).reduce((sum, item) => sum + item.tokens, 0) + tokensOf(info, "auto-buffer") + tokensOf(info, "free")
-    expect(total).toBe(info.window!)
+  expect(info.mcp.map((item) => [item.name, item.server, item.deferred])).toEqual([
+    ["alpha_direct", "alpha", false],
+    ["alpha_later", "alpha", true],
+  ])
+  const direct = prepared.request.tools.find((item) => item.name === "alpha_direct")!
+  expect(tokensOf(info, "mcp")).toBe(SessionCompaction.estimateTool(direct))
+  expect(info.mcp[0]!.tokens).toBe(tokensOf(info, "mcp"))
+  expect(tokensOf(info, "mcp-deferred")).toBe(info.mcp[1]!.tokens)
+  expect(info.deferredTools.map((item) => item.name)).toEqual(["lookup"])
+  expect(tokensOf(info, "tools-deferred")).toBe(info.deferredTools[0]!.tokens)
+  expect(info.systemTools.map((item) => item.name)).not.toContain("alpha_direct")
+  expect(countedSum(info)).toBe(SessionCompaction.estimateRequest(prepared.request))
+  const total =
+    counted(info).reduce((sum, item) => sum + item.tokens, 0) + tokensOf(info, "auto-buffer") + tokensOf(info, "free")
+  expect(total).toBe(info.window!)
+})
+
+scenario("an empty discovery gives no MCP rows, and denying Execute gives no deferred rows", function* (s) {
+  yield* registerDeferred("lookup")
+  yield* prompt(s, "first")
+  const empty = yield* analyze(sessionID)
+  expect(empty.mcp).toEqual([])
+  expect(tokensOf(empty, "mcp")).toBe(0)
+  expect(tokensOf(empty, "mcp-deferred")).toBe(0)
+  expect(tokensOf(empty, "tools-deferred")).toBeGreaterThan(0)
+
+  yield* s.db
+    .update(SessionTable)
+    .set({ permission: [{ action: "Execute", resource: "*", effect: "deny" }] })
+    .where(eq(SessionTable.id, sessionID))
+    .run()
+    .pipe(Effect.orDie)
+  const denied = yield* analyze(sessionID)
+  expect(denied.deferredTools).toEqual([])
+  expect(tokensOf(denied, "tools-deferred")).toBe(0)
+})
+
+// U19, class 9 (core half).
+scenario("strings from files and servers are carried unchanged", function* (s) {
+  const hostile = "\u001b[31m\u0007‮evil"
+  s.extraSources = Instructions.make({
+    key: Instructions.Key.make("core/instructions"),
+    codec: Schema.toCodecJson(Schema.Array(InstructionDiscovery.File)),
+    read: Effect.succeed([
+      new InstructionDiscovery.File({ path: AbsolutePath.make(`/usage/${hostile}.md`), content: "x" }),
+    ]),
+    render: { initial: () => "files", changed: () => "files" },
   })
+  yield* discover(s, [mcpTool(`srv${hostile}`, `tool${hostile}`, false)])
+  yield* prompt(s, "first")
+  const info = yield* analyze(sessionID)
 
-  scenario("an empty discovery gives no MCP rows, and denying Execute gives no deferred rows", function* (s) {
-    yield* registerDeferred("lookup")
-    yield* prompt(s, "first")
-    const empty = yield* analyze(sessionID)
-    expect(empty.mcp).toEqual([])
-    expect(tokensOf(empty, "mcp")).toBe(0)
-    expect(tokensOf(empty, "mcp-deferred")).toBe(0)
-    expect(tokensOf(empty, "tools-deferred")).toBeGreaterThan(0)
-
-    yield* s.db
-      .update(SessionTable)
-      .set({ permission: [{ action: "Execute", resource: "*", effect: "deny" }] })
-      .where(eq(SessionTable.id, sessionID))
-      .run()
-      .pipe(Effect.orDie)
-    const denied = yield* analyze(sessionID)
-    expect(denied.deferredTools).toEqual([])
-    expect(tokensOf(denied, "tools-deferred")).toBe(0)
-  })
-
-  // U19, class 9 (core half).
-  scenario("strings from files and servers are carried unchanged", function* (s) {
-    const hostile = "\u001b[31m\u0007‮evil"
-    s.extraSources = Instructions.make({
-      key: Instructions.Key.make("core/instructions"),
-      codec: Schema.toCodecJson(Schema.Array(InstructionDiscovery.File)),
-      read: Effect.succeed([new InstructionDiscovery.File({ path: AbsolutePath.make(`/usage/${hostile}.md`), content: "x" })]),
-      render: { initial: () => "files", changed: () => "files" },
-    })
-    yield* discover(s, [mcpTool(`srv${hostile}`, `tool${hostile}`, false)])
-    yield* prompt(s, "first")
-    const info = yield* analyze(sessionID)
-
-    expect(info.files[0]!.path).toBe(`/usage/${hostile}.md`)
-    expect(info.mcp[0]!.server).toBe(`srv${hostile}`)
-    const encoded = Schema.encodeSync(UsageSchema.Info)(info)
-    expect(Schema.decodeUnknownSync(UsageSchema.Info)(JSON.parse(JSON.stringify(encoded)))).toEqual(info)
-  })
+  expect(info.files[0]!.path).toBe(`/usage/${hostile}.md`)
+  expect(info.mcp[0]!.server).toBe(`srv${hostile}`)
+  const encoded = Schema.encodeSync(SessionContextUsage.Info)(info)
+  expect(Schema.decodeUnknownSync(SessionContextUsage.Info)(JSON.parse(JSON.stringify(encoded)))).toEqual(info)
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -844,6 +868,10 @@ const usageLayer = (trusted: boolean) => {
         Agent.node,
         InstructionEntry.node,
         InstructionDiscovery.node,
+        Global.node,
+        WorkspaceTrust.node,
+        Watcher.node,
+        ManagedSettings.node,
         ProjectTrust.node,
         SessionCompaction.node,
         SessionContext.node,
@@ -934,76 +962,73 @@ const scan = Effect.fnUntraced(function* () {
   yield* ConfigInstructionPlugin.Plugin.effect(host())
 })
 
-describe("the instruction files", () => {
-  const trusted = testEffect(usageLayer(true))
-  const untrusted = testEffect(usageLayer(false))
-  const listed = (info: UsageSchema.Info) => info.files.map((item) => item.path)
-  const states = Effect.gen(function* () {
-    const { db } = yield* Database.Service
-    return (yield* db.select().from(InstructionStateTable).all().pipe(Effect.orDie)).length
-  })
-
-  // U7, classes 1 (fresh) and 14: what trust holds back from a step is held back from the analysis, with a trusted
-  // control that lists the same file. The analysis goes through the step's own sources and stores nothing.
-  const rows = [
-    ["a file in the project", projectFile],
-    ["a file in the folder above the project", aboveFile],
-  ] as const
-  for (const [name, file] of rows)
-    trusted.live(`${name}: the trusted control lists it`, () =>
-      Effect.gen(function* () {
-        yield* folders
-        yield* Effect.promise(() => fs.writeFile(file, MARKER))
-        yield* scan()
-        const info = yield* analyze(sessionID)
-
-        expect(listed(info)).toContain(file)
-        expect(info.files.find((item) => item.path === file)!.tokens).toBeGreaterThan(0)
-        expect(tokensOf(info, "instructions")).toBeGreaterThanOrEqual(Token.estimate(MARKER))
-        expect(yield* states).toBe(0)
-      }),
-    )
-
-  untrusted.live("a file above the project is held back, and the project's own file is read", () =>
-    Effect.gen(function* () {
-      yield* folders
-      yield* Effect.promise(() => fs.writeFile(aboveFile, MARKER))
-      yield* Effect.promise(() => fs.writeFile(projectFile, "the project's own rules"))
-      yield* scan()
-      const info = yield* analyze(sessionID)
-
-      expect(listed(info)).toEqual([projectFile])
-      expect(JSON.stringify(info)).not.toContain(MARKER)
-      expect(yield* states).toBe(0)
-    }),
-  )
-
-  // U6, class 1 (stored): once a session holds a baseline, the analysis reports it and reads no source.
-  trusted.live("instruction categories come from the stored baseline, not from the files", () =>
-    Effect.gen(function* () {
-      yield* folders
-      yield* Effect.promise(() => fs.writeFile(projectFile, "original rules"))
-      yield* scan()
-      const { db } = yield* Database.Service
-      const bus = yield* Bus.Service
-      const contexts = yield* SessionContext.Service
-      const selection = yield* contexts.select(sessionID)
-      yield* InstructionState.prepare(db, bus, selection.instructions, sessionID)
-      const stored = yield* analyze(sessionID)
-      expect(stored.files.find((item) => item.path === projectFile)).toBeDefined()
-
-      // The file changes after the baseline was stored; the discovery now holds the new text.
-      const discovery = yield* InstructionDiscovery.Service
-      yield* discovery.transform((editor) =>
-        editor.update(projectFile, (file) => void (file.content = "c".repeat(4_000))),
-      )
-      const events = (yield* db.select().from(EventTable).all().pipe(Effect.orDie)).length
-      const after = yield* analyze(sessionID)
-
-      expect(after.files).toEqual(stored.files)
-      expect(tokensOf(after, "instructions")).toBe(tokensOf(stored, "instructions"))
-      expect(JSON.stringify(after)).not.toContain("c".repeat(100))
-      expect((yield* db.select().from(EventTable).all().pipe(Effect.orDie)).length).toBe(events)
-    }),
-  )
+const plain = testEffect(Layer.empty)
+const listed = (info: SessionContextUsage.Info) => info.files.map((item) => item.path)
+const states = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  return (yield* db.select().from(InstructionStateTable).all().pipe(Effect.orDie)).length
 })
+
+// One fresh session over the real discovery, in a folder that is trusted or not, with `written` on disk.
+const fresh = (trusted: boolean, written: ReadonlyArray<readonly [file: string, text: string]>) =>
+  Effect.gen(function* () {
+    yield* folders
+    yield* Effect.forEach(written, ([file, text]) => Effect.promise(() => fs.writeFile(file, text)), { discard: true })
+    yield* scan()
+    return { info: yield* analyze(sessionID), states: yield* states }
+  }).pipe(Effect.scoped, Effect.provide(usageLayer(trusted)))
+
+// U7, classes 1 (fresh) and 14. What trust holds back from a step is held back from the analysis, and a trusted control
+// lists the same file. The analysis goes through the step's own sources and stores nothing. The project's own files are
+// read whether or not the folder is trusted (`instruction-discovery.test.ts` pins that), so the file that trust holds
+// back here is the one in the folder above the project.
+plain.live("a fresh session lists the instruction files the step would read, and none from an untrusted folder", () =>
+  Effect.gen(function* () {
+    const control = yield* fresh(true, [[aboveFile, MARKER]])
+    expect(listed(control.info)).toContain(aboveFile)
+    expect(control.info.files.find((item) => item.path === aboveFile)!.tokens).toBeGreaterThan(0)
+    expect(tokensOf(control.info, "instructions")).toBeGreaterThanOrEqual(Token.estimate(MARKER))
+    expect(control.states).toBe(0)
+
+    const held = yield* fresh(false, [
+      [aboveFile, MARKER],
+      [projectFile, "the project's own rules"],
+    ])
+    expect(listed(held.info)).toEqual([projectFile])
+    expect(JSON.stringify(held.info)).not.toContain(MARKER)
+    expect(held.states).toBe(0)
+
+    // The same marker in a file of the project is read, trusted or not.
+    for (const trusted of [true, false])
+      expect(listed((yield* fresh(trusted, [[projectFile, MARKER]])).info)).toEqual([projectFile])
+  }),
+)
+
+// U6, class 1 (stored): once a session holds a baseline, the analysis reports it and reads no source.
+plain.live("instruction categories come from the stored baseline, not from the files", () =>
+  Effect.gen(function* () {
+    yield* folders
+    yield* Effect.promise(() => fs.writeFile(projectFile, "original rules"))
+    yield* scan()
+    const { db } = yield* Database.Service
+    const bus = yield* Bus.Service
+    const contexts = yield* SessionContext.Service
+    const selection = yield* contexts.select(sessionID)
+    yield* InstructionState.prepare(db, bus, selection.instructions, sessionID)
+    const stored = yield* analyze(sessionID)
+    expect(stored.files.find((item) => item.path === projectFile)).toBeDefined()
+
+    // The file changes after the baseline was stored; the discovery now holds the new text.
+    const discovery = yield* InstructionDiscovery.Service
+    yield* discovery.transform((editor) =>
+      editor.update(projectFile, (file) => void (file.content = "c".repeat(4_000))),
+    )
+    const events = (yield* db.select().from(EventTable).all().pipe(Effect.orDie)).length
+    const after = yield* analyze(sessionID)
+
+    expect(after.files).toEqual(stored.files)
+    expect(tokensOf(after, "instructions")).toBe(tokensOf(stored, "instructions"))
+    expect(JSON.stringify(after)).not.toContain("c".repeat(100))
+    expect((yield* db.select().from(EventTable).all().pipe(Effect.orDie)).length).toBe(events)
+  }).pipe(Effect.scoped, Effect.provide(usageLayer(true))),
+)
