@@ -473,7 +473,8 @@ scenario("a stored value that does not decode renders nothing and lists no file"
 
   expect(info.files).toEqual([])
   expect(tokensOf(info, "instructions")).toBe(0)
-})
+  // A source the stored baseline has no value for contributes no part.
+  expect(info.sections.map((section) => section.name)).not.toContain("test/context")})
 
 // U20, class 7.
 scenario("a fresh session whose source is unavailable fails with InitializationBlocked", function* (s) {
@@ -903,6 +904,9 @@ scenario("an empty discovery gives no MCP rows, and denying Execute gives no def
   expect(tokensOf(empty, "mcp")).toBe(0)
   expect(tokensOf(empty, "mcp-deferred")).toBe(0)
   expect(tokensOf(empty, "tools-deferred")).toBeGreaterThan(0)
+  // A row with nothing in it is left out.
+  expect(empty.categories.map((item) => item.kind)).not.toContain("mcp")
+  expect(empty.categories.map((item) => item.kind)).not.toContain("mcp-deferred")
 
   yield* s.db
     .update(SessionTable)
@@ -913,6 +917,30 @@ scenario("an empty discovery gives no MCP rows, and denying Execute gives no def
   const denied = yield* analyze(sessionID)
   expect(denied.deferredTools).toEqual([])
   expect(tokensOf(denied, "tools-deferred")).toBe(0)
+  expect(denied.categories.map((item) => item.kind)).not.toContain("tools-deferred")
+})
+
+scenario("the catalog of deferred tools is counted as tools, not as a system section", function* (s) {
+  yield* registerDeferred("lookup")
+  yield* prompt(s, "first")
+  const info = yield* analyze(sessionID)
+
+  expect(tokensOf(info, "tools")).toBeGreaterThan(info.systemTools.reduce((sum, item) => sum + item.tokens, 0))
+  expect(info.sections.map((section) => section.name)).not.toContain("core/codemode")
+})
+
+scenario("a completed checkpoint counts under attachments as a checkpoint", function* (s) {
+  yield* prompt(s, "first")
+  yield* s.bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+  yield* s.bus.publish(SessionEvent.Compaction.Ended, {
+    sessionID,
+    reason: "manual",
+    text: "S".repeat(400),
+    recent: "",
+  })
+  const info = yield* analyze(sessionID)
+
+  expect(info.messages.attachmentKinds.map((item) => item.name)).toContain("checkpoint")
 })
 
 // U19, class 9 (core half).

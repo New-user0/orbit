@@ -125,7 +125,7 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
     const scopes = new Map(
       known.flatMap((agent) => (agent.source === undefined ? [] : ([[agent.id, agent.source.scope]] as const))),
     )
-    const baseline = initial.length === 0 ? -1 : request.system.findIndex((part) => part.text === initial)
+    const baseline = request.system.findIndex((part) => part.text === initial)
     request.system.forEach((part, index) => {
       if (index !== baseline) {
         totals.system += Token.estimate(part.text)
@@ -166,7 +166,7 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
             const scope = scopes.get(agent.id as Agent.ID)
             const line = AgentInstructions.line(agent)
             const at = entry.text.indexOf(line, cursor)
-            if (scope === undefined || at < 0) return []
+            if (scope === undefined) return []
             cursor = at + line.length
             customAgents.push({ id: agent.id, scope, tokens: Token.estimate(line) })
             return [share(start + at, start + cursor)]
@@ -203,15 +203,13 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
       mcpTools.push({ name: entry.name, server: found.server, tokens, deferred: false })
     })
     const callable = new Map<string, Mcp.Tool>(
-      discovered
-        .filter((found) => found.codemode !== false)
-        .map((found) => {
-          const registered = McpTool.name(found.server, found.name)
-          return [
-            `${McpTool.namespace(found.server)}.${registered.slice(McpTool.namespace(found.server).length + 1)}`,
-            found,
-          ] as const
-        }),
+      discovered.map((found) => {
+        const registered = McpTool.name(found.server, found.name)
+        return [
+          `${McpTool.namespace(found.server)}.${registered.slice(McpTool.namespace(found.server).length + 1)}`,
+          found,
+        ] as const
+      }),
     )
     const deferredTools: Array<{ name: string; tokens: number }> = []
     const deferred = { mcp: 0, tools: 0 }
